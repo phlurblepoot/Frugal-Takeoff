@@ -1,19 +1,23 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
 import { getProject, saveProject, getImage, saveImage, saveFile, getFile, deleteFile, getTemplates } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS } from '../utils/math';
 import { loadPdfAllPagesAsImages } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
+import * as XLSX from 'xlsx';
+import { createWorker } from 'tesseract.js';
 
 export const ProjectView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
+  const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showDeletePrintoutConfirm, setShowDeletePrintoutConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts'>('pages');
   const [isLoading, setIsLoading] = useState(true);
@@ -32,6 +36,7 @@ export const ProjectView: React.FC = () => {
 
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -47,6 +52,8 @@ export const ProjectView: React.FC = () => {
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingPageName, setEditingPageName] = useState('');
+  const [editingPageNumber, setEditingPageNumber] = useState('');
+  const [editingPageDescription, setEditingPageDescription] = useState('');
   const [isAddingPages, setIsAddingPages] = useState(false);
   const [addProgress, setAddProgress] = useState({ current: 0, total: 0, currentFile: 0, totalFiles: 0 });
   const [selectedPlanSetId, setSelectedPlanSetId] = useState<string>('');
@@ -54,6 +61,17 @@ export const ProjectView: React.FC = () => {
   const [addPagesStep, setAddPagesStep] = useState<'details' | 'name_pages'>('details');
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
+  const [previewPageId, setPreviewPageId] = useState<string | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractionRect, setExtractionRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [newPlanSetName, setNewPlanSetName] = useState('');
   const [newPlanSetDate, setNewPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
@@ -199,15 +217,16 @@ export const ProjectView: React.FC = () => {
   };
 
   const handleEditTakeoff = (takeoff: MeasurementTakeoff) => {
-    setEditingTakeoff(takeoff);
-    setEditTakeoffName(takeoff.name);
-    setEditTakeoffColor(takeoff.color);
-    setEditTakeoffUnit(takeoff.unit || '');
-    setEditTakeoffCostPerUnit(takeoff.costPerUnit ?? '');
-    setEditTakeoffLaborPercent(takeoff.laborPercent ?? '');
-    setEditTakeoffMaterialsPercent(takeoff.materialsPercent ?? '');
-    setEditTakeoffEquipmentPercent(takeoff.equipmentPercent ?? '');
-    setEditTakeoffProfitPercent(takeoff.profitPercent ?? '');
+    const rawTakeoff = project?.takeoffs.find(t => t.id === takeoff.id) || takeoff;
+    setEditingTakeoff(rawTakeoff);
+    setEditTakeoffName(rawTakeoff.name);
+    setEditTakeoffColor(rawTakeoff.color);
+    setEditTakeoffUnit(rawTakeoff.unit || '');
+    setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit ?? '');
+    setEditTakeoffLaborPercent(rawTakeoff.laborPercent ?? '');
+    setEditTakeoffMaterialsPercent(rawTakeoff.materialsPercent ?? '');
+    setEditTakeoffEquipmentPercent(rawTakeoff.equipmentPercent ?? '');
+    setEditTakeoffProfitPercent(rawTakeoff.profitPercent ?? '');
   };
 
   const handleSaveEditTakeoff = async () => {
@@ -257,16 +276,29 @@ export const ProjectView: React.FC = () => {
     e.stopPropagation();
     setEditingPageId(page.id);
     setEditingPageName(page.name);
+    setEditingPageNumber(page.pageNumber || '');
+    setEditingPageDescription(page.description || '');
   };
 
   const handleSaveRenamePage = async (e: React.MouseEvent, pageId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!project || !editingPageName.trim()) return;
+    if (!project) return;
+
+    const num = editingPageNumber.trim();
+    const desc = editingPageDescription.trim();
+    const newName = num && desc ? `${num} - ${desc}` : (num || desc || editingPageName.trim());
+
+    if (!newName) return;
 
     const updatedProject = {
       ...project,
-      pages: project.pages.map(p => p.id === pageId ? { ...p, name: editingPageName.trim() } : p)
+      pages: project.pages.map(p => p.id === pageId ? { 
+        ...p, 
+        name: newName,
+        pageNumber: num,
+        description: desc
+      } : p)
     };
 
     await saveProject(updatedProject);
@@ -308,6 +340,8 @@ export const ProjectView: React.FC = () => {
           extractedPages.push({
             id: uuidv4(),
             name: pageData.suggestedName || `Page ${startingPageNum}`,
+            pageNumber: '',
+            description: pageData.suggestedName || `Page ${startingPageNum}`,
             imageId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
@@ -435,13 +469,13 @@ export const ProjectView: React.FC = () => {
             const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
             if (isSurfaceArea) {
               const pxArea = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, page.scaleConfig);
-              text = formatMeasurement(pxArea, 'area', page.scaleConfig);
+              text = formatMeasurement(pxArea, 'area', page.scaleConfig, takeoff);
             } else if (m.type === 'length') {
               const pxLen = calculatePolylineLength(m.points);
-              text = formatMeasurement(pxLen, 'length', page.scaleConfig);
+              text = formatMeasurement(pxLen, 'length', page.scaleConfig, takeoff);
             } else {
               const pxArea = calculatePolygonArea(m.points);
-              text = formatMeasurement(pxArea, 'area', page.scaleConfig);
+              text = formatMeasurement(pxArea, 'area', page.scaleConfig, takeoff);
             }
 
             if (text) {
@@ -479,6 +513,7 @@ export const ProjectView: React.FC = () => {
           name: `Printout - ${new Date().toLocaleString()}`,
           fileId,
           createdAt: Date.now(),
+          type: 'pdf',
         };
         
         const updatedProject = {
@@ -499,22 +534,101 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const handleDeletePrintout = async (printoutId: string) => {
-    if (!project) return;
-    
-    const printout = project.printouts?.find(p => p.id === printoutId);
-    if (!printout) return;
+  const handleExportExcel = async () => {
+    if (!project || selectedTakeoffIds.size === 0) return;
+    setIsExportingExcel(true);
 
-    if (!confirm('Are you sure you want to delete this printout?')) return;
+    try {
+      const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
+      
+      const data = selectedTakeoffs.map(t => {
+        const baseCost = t.totalRealValue * (t.costPerUnit || 0);
+        const laborCost = baseCost * ((t.laborPercent || 0) / 100);
+        const materialsCost = baseCost * ((t.materialsPercent || 0) / 100);
+        const equipmentCost = baseCost * ((t.equipmentPercent || 0) / 100);
+        const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
+        const profit = subtotal * ((t.profitPercent || 0) / 100);
+        const totalCost = subtotal + profit;
+
+        return {
+          'Takeoff Name': t.name,
+          'Type': t.type,
+          'Total Quantity': t.totalRealValue,
+          'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
+          'Cost Per Unit': t.costPerUnit || 0,
+          'Labor %': t.laborPercent || 0,
+          'Materials %': t.materialsPercent || 0,
+          'Equipment %': t.equipmentPercent || 0,
+          'Profit %': t.profitPercent || 0,
+          'Total Cost': totalCost
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Takeoffs");
+      
+      const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const excelBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      
+      const reader = new FileReader();
+      reader.readAsDataURL(excelBlob);
+      reader.onloadend = async () => {
+        const base64data = reader.result as string;
+        const fileId = uuidv4();
+        await saveFile(fileId, base64data);
+        
+        const newPrintout: Printout = {
+          id: uuidv4(),
+          name: `Excel Export - ${new Date().toLocaleString()}`,
+          fileId,
+          createdAt: Date.now(),
+          type: 'excel',
+        };
+        
+        const updatedProject = {
+          ...project,
+          printouts: [...(project.printouts || []), newPrintout],
+        };
+        
+        await saveProject(updatedProject);
+        setProject(updatedProject);
+        setIsExportingExcel(false);
+        setSelectedTakeoffIds(new Set());
+        setActiveTab('printouts');
+      };
+    } catch (error) {
+      console.error('Error generating Excel:', error);
+      alert('Failed to generate Excel.');
+      setIsExportingExcel(false);
+    }
+  };
+
+  const handleDeletePrintout = (printoutId: string) => {
+    setPrintoutToDelete(printoutId);
+    setShowDeletePrintoutConfirm(true);
+  };
+
+  const confirmDeletePrintout = async () => {
+    if (!project || !printoutToDelete) return;
+    
+    const printout = project.printouts?.find(p => p.id === printoutToDelete);
+    if (!printout) {
+      setShowDeletePrintoutConfirm(false);
+      setPrintoutToDelete(null);
+      return;
+    }
 
     const updatedProject = {
       ...project,
-      printouts: project.printouts?.filter(p => p.id !== printoutId) || [],
+      printouts: project.printouts?.filter(p => p.id !== printoutToDelete) || [],
     };
 
     await saveProject(updatedProject);
     await deleteFile(printout.fileId);
     setProject(updatedProject);
+    setShowDeletePrintoutConfirm(false);
+    setPrintoutToDelete(null);
   };
 
   const handleDownloadPrintout = async (printout: Printout) => {
@@ -523,7 +637,9 @@ export const ProjectView: React.FC = () => {
 
     const link = document.createElement('a');
     link.href = dataUrl;
-    link.download = `${printout.name}.pdf`;
+    const isExcel = printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const extension = isExcel ? '.xlsx' : '.pdf';
+    link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -533,9 +649,19 @@ export const ProjectView: React.FC = () => {
     const dataUrl = await getFile(printout.fileId);
     if (!dataUrl) return;
 
-    const win = window.open();
-    if (win) {
-      win.document.write(`<iframe src="${dataUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+    if (printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
+      // For Excel files, trigger download since browsers can't preview them in iframe easily
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const win = window.open();
+      if (win) {
+        win.document.write(`<iframe src="${dataUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
+      }
     }
   };
 
@@ -546,7 +672,9 @@ export const ProjectView: React.FC = () => {
       const planSetId = useExistingPlanSet ? targetPlanSetId : uuidv4();
       const newPages: ProjectPage[] = pendingPages.map(p => ({
         id: p.id,
-        name: p.name,
+        name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+        pageNumber: p.pageNumber,
+        description: p.description,
         imageId: p.imageId,
         imageWidth: p.imageWidth,
         imageHeight: p.imageHeight,
@@ -602,8 +730,99 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const updatePendingPageName = (id: string, newName: string) => {
-    setPendingPages(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
+  const updatePendingPageField = (id: string, field: string, value: string) => {
+    setPendingPages(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, [field]: value };
+        // Auto-update name based on number and description
+        if (field === 'pageNumber' || field === 'description') {
+          const num = field === 'pageNumber' ? value : (p.pageNumber || '');
+          const desc = field === 'description' ? value : (p.description || '');
+          updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
+        }
+        return updated;
+      }
+      return p;
+    }));
+  };
+
+  const handleExtractText = async (applyToAll: boolean) => {
+    if (!previewPageId || !extractionRect || !extractionType) return;
+    
+    const page = pendingPages.find(p => p.id === previewPageId);
+    if (!page) return;
+
+    setIsExtracting(true);
+    try {
+      const worker = await createWorker('eng');
+      
+      const extractFromPage = async (targetPage: any) => {
+        const imageUrl = pendingThumbnails[targetPage.imageId];
+        if (!imageUrl) return null;
+
+        // Crop image to selection area for better OCR
+        const img = new Image();
+        img.src = imageUrl;
+        await new Promise(resolve => img.onload = resolve);
+
+        const canvas = document.createElement('canvas');
+        const scaleX = img.width / 100;
+        const scaleY = img.height / 100;
+        
+        canvas.width = extractionRect.width * scaleX;
+        canvas.height = extractionRect.height * scaleY;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        
+        ctx.drawImage(
+          img,
+          extractionRect.x * scaleX,
+          extractionRect.y * scaleY,
+          extractionRect.width * scaleX,
+          extractionRect.height * scaleY,
+          0, 0, canvas.width, canvas.height
+        );
+
+        const croppedDataUrl = canvas.toDataURL('image/png');
+        const { data: { text } } = await worker.recognize(croppedDataUrl);
+        
+        return text?.trim() || '';
+      };
+
+      if (applyToAll) {
+        // Extract for all pages
+        const updatedPages = [...pendingPages];
+        for (let i = 0; i < updatedPages.length; i++) {
+          const text = await extractFromPage(updatedPages[i]);
+          if (text !== null) {
+            updatedPages[i] = { 
+              ...updatedPages[i], 
+              [extractionType]: text,
+              name: extractionType === 'pageNumber' 
+                ? (text && updatedPages[i].description ? `${text} - ${updatedPages[i].description}` : (text || updatedPages[i].description || updatedPages[i].name))
+                : (updatedPages[i].pageNumber && text ? `${updatedPages[i].pageNumber} - ${text}` : (updatedPages[i].pageNumber || text || updatedPages[i].name))
+            };
+          }
+        }
+        setPendingPages(updatedPages);
+      } else {
+        // Extract for current page only
+        const text = await extractFromPage(page);
+        if (text !== null) {
+          updatePendingPageField(previewPageId, extractionType, text);
+        }
+      }
+      
+      await worker.terminate();
+      setExtractionRect(null);
+      setExtractionType(null);
+    } catch (error) {
+      console.error('Extraction error:', error);
+      alert('Failed to extract text. Please try again.');
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   // Calculate totals for takeoffs across all pages
@@ -614,7 +833,7 @@ export const ProjectView: React.FC = () => {
 
     return project.takeoffs.map(takeoff => {
       let totalRealValue = 0;
-      let unit = '';
+      let displayUnit = takeoff.unit || '';
       
       const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string }[] = [];
 
@@ -651,19 +870,20 @@ export const ProjectView: React.FC = () => {
               if (pixelValue > 0) {
                 const realVal = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
                 
-                // Convert to a consistent unit for the page if possible
-                const targetUnit = page.scaleConfig?.unit || currentScale.unit;
-                const convertedVal = convertUnit(realVal, currentScale.unit, targetUnit, takeoff.type as 'length' | 'area' | 'count');
+                // Convert to a consistent unit
+                // If takeoff has a specific unit, use that. Otherwise use page scale unit.
+                const targetUnit = takeoff.unit || page.scaleConfig?.unit || currentScale.unit;
+                const convertedVal = convertUnit(realVal, currentScale.unit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
                 
                 pageRealValue += convertedVal;
-                pageUnit = takeoff.type === 'area' ? `sq ${targetUnit}` : targetUnit;
+                pageUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
               }
             }
           });
 
           if (pageRealValue > 0) {
             totalRealValue += pageRealValue;
-            if (!unit) unit = pageUnit;
+            if (!displayUnit) displayUnit = pageUnit;
             
             pageBreakdown.push({
               pageId: page.id,
@@ -678,10 +898,22 @@ export const ProjectView: React.FC = () => {
       return {
         ...takeoff,
         totalRealValue,
-        unit,
+        unit: takeoff.unit || displayUnit, // Keep the original unit if it was set, otherwise use the detected one
         pageBreakdown
       };
     });
+  };
+
+  const handleToggleStatus = async (field: 'submitted' | 'responded' | 'accepted') => {
+    if (!project) return;
+    
+    const updatedProject = {
+      ...project,
+      [field]: !project[field]
+    };
+    
+    await saveProject(updatedProject);
+    setProject(updatedProject);
   };
 
   const handleSaveDueDate = async () => {
@@ -693,6 +925,20 @@ export const ProjectView: React.FC = () => {
     await saveProject(updatedProject);
     setProject(updatedProject);
     setIsEditingDueDate(false);
+  };
+
+  const getDueDateColor = () => {
+    if (!project || project.submitted || !project.bidDueDate) return 'text-slate-500';
+    
+    const now = Date.now();
+    const diff = project.bidDueDate - now;
+    const days = diff / (1000 * 60 * 60 * 24);
+
+    if (days < 0) return 'text-purple-600 font-bold';
+    if (days <= 3) return 'text-red-600 font-bold';
+    if (days <= 14) return 'text-amber-600 font-bold';
+    
+    return 'text-slate-500';
   };
 
   if (isLoading) {
@@ -709,6 +955,8 @@ export const ProjectView: React.FC = () => {
     const matchesPlanSet = !selectedPlanSetId || page.planSetId === selectedPlanSetId;
     const searchLower = searchTerm.toLowerCase();
     const matchesSearch = page.name.toLowerCase().includes(searchLower) || 
+                          (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
+                          (page.description && page.description.toLowerCase().includes(searchLower)) ||
                           (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
     return matchesPlanSet && matchesSearch;
   });
@@ -724,7 +972,41 @@ export const ProjectView: React.FC = () => {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">{project.name}</h1>
-            <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-slate-500">
+            
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button
+                onClick={() => handleToggleStatus('submitted')}
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
+                  project.submitted 
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                    : 'bg-white text-slate-400 border-slate-200 hover:border-blue-300 hover:text-blue-500'
+                }`}
+              >
+                Submitted
+              </button>
+              <button
+                onClick={() => handleToggleStatus('responded')}
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
+                  project.responded 
+                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm' 
+                    : 'bg-white text-slate-400 border-slate-200 hover:border-amber-300 hover:text-amber-500'
+                }`}
+              >
+                Responded
+              </button>
+              <button
+                onClick={() => handleToggleStatus('accepted')}
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
+                  project.accepted 
+                    ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm' 
+                    : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300 hover:text-emerald-500'
+                }`}
+              >
+                Accepted
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-slate-500">
               <span>Created on {new Date(project.createdAt).toLocaleDateString()}</span>
               {project.contractor && (
                 <span className="flex items-center gap-1">
@@ -751,7 +1033,7 @@ export const ProjectView: React.FC = () => {
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 group">
-                    <span className={`${project.bidDueDate && project.bidDueDate < Date.now() ? 'text-red-600 font-medium' : ''}`}>
+                    <span className={getDueDateColor()}>
                       Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
                     </span>
                     <button 
@@ -830,7 +1112,7 @@ export const ProjectView: React.FC = () => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                 <input
                   type="text"
-                  placeholder="Search pages..."
+                  placeholder="Search pages and text..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
@@ -888,25 +1170,42 @@ export const ProjectView: React.FC = () => {
                     <div className="p-4 flex-1 flex flex-col justify-between">
                       <div>
                         {editingPageId === page.id ? (
-                          <div className="flex items-center gap-2 mb-2" onClick={e => e.preventDefault()}>
-                            <input
-                              type="text"
-                              value={editingPageName}
-                              onChange={(e) => setEditingPageName(e.target.value)}
-                              className="flex-1 border border-blue-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              autoFocus
-                              onClick={e => e.stopPropagation()}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') handleSaveRenamePage(e as any, page.id);
-                                if (e.key === 'Escape') handleCancelRenamePage(e as any);
-                              }}
-                            />
-                            <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 p-1 rounded">
-                              <Check size={16} />
-                            </button>
-                            <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
-                              <X size={16} />
-                            </button>
+                          <div className="flex flex-col gap-2 mb-2" onClick={e => e.preventDefault()}>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase">Number</label>
+                              <input
+                                type="text"
+                                value={editingPageNumber}
+                                onChange={(e) => setEditingPageNumber(e.target.value)}
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. A-01"
+                                autoFocus
+                                onClick={e => e.stopPropagation()}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase">Description</label>
+                              <input
+                                type="text"
+                                value={editingPageDescription}
+                                onChange={(e) => setEditingPageDescription(e.target.value)}
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. Floor Plan"
+                                onClick={e => e.stopPropagation()}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') handleSaveRenamePage(e as any, page.id);
+                                  if (e.key === 'Escape') handleCancelRenamePage(e as any);
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-end gap-2 mt-1">
+                              <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <Check size={14} /> Save
+                              </button>
+                              <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <X size={14} /> Cancel
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
@@ -940,14 +1239,24 @@ export const ProjectView: React.FC = () => {
               <h2 className="text-xl font-bold text-slate-800">Takeoffs Inventory</h2>
               <div className="flex items-center gap-3">
                 {selectedTakeoffIds.size > 0 && (
-                  <button
-                    onClick={handlePrint}
-                    disabled={isPrinting}
-                    className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
-                  >
-                    {isPrinting ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
-                    {isPrinting ? 'Generating PDF...' : `Print Selected (${selectedTakeoffIds.size})`}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handlePrint}
+                      disabled={isPrinting || isExportingExcel}
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
+                    >
+                      {isPrinting ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
+                      {isPrinting ? 'Generating PDF...' : `Print PDF (${selectedTakeoffIds.size})`}
+                    </button>
+                    <button
+                      onClick={handleExportExcel}
+                      disabled={isPrinting || isExportingExcel}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
+                    >
+                      {isExportingExcel ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                      {isExportingExcel ? 'Generating Excel...' : `Export Excel (${selectedTakeoffIds.size})`}
+                    </button>
+                  </div>
                 )}
                 {project.takeoffs.length > 0 && (
                   <button
@@ -1032,7 +1341,7 @@ export const ProjectView: React.FC = () => {
                             {takeoff.type}
                           </td>
                           <td className="px-6 py-4 text-right font-bold text-slate-900">
-                            {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft') : '-'}
+                            {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                           </td>
                           <td className="px-6 py-4 text-right text-sm text-slate-600 font-medium">
                             {takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'}
@@ -1082,7 +1391,7 @@ export const ProjectView: React.FC = () => {
                                       {pb.pageName}
                                     </Link>
                                     <span className="text-sm font-bold text-slate-700">
-                                      {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft')}
+                                      {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
                                     </span>
                                   </div>
                                 ))}
@@ -1123,7 +1432,7 @@ export const ProjectView: React.FC = () => {
                 </div>
                 <h3 className="text-lg font-semibold text-slate-900 mb-1">No printouts yet</h3>
                 <p className="text-slate-500 text-sm max-w-xs mx-auto">
-                  Select takeoffs from the Takeoffs tab and click "Print" to generate a PDF report.
+                  Select takeoffs from the Takeoffs tab and click "Print PDF" or "Export Excel" to generate a report.
                 </p>
               </div>
             ) : (
@@ -1132,21 +1441,21 @@ export const ProjectView: React.FC = () => {
                   <div key={printout.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-all group">
                     <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
-                        <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
-                          <FileText size={24} />
+                        <div className={`w-12 h-12 ${printout.type === 'excel' ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600'} rounded-xl flex items-center justify-center`}>
+                          {printout.type === 'excel' ? <FileSpreadsheet size={24} /> : <FileText size={24} />}
                         </div>
                         <div className="flex items-center gap-1">
                           <button 
                             onClick={() => handleViewPrintout(printout)}
                             className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="View PDF"
+                            title={printout.type === 'excel' ? "Download Excel" : "View PDF"}
                           >
-                            <Eye size={18} />
+                            {printout.type === 'excel' ? <Download size={18} /> : <Eye size={18} />}
                           </button>
                           <button 
                             onClick={() => handleDownloadPrintout(printout)}
                             className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="Download PDF"
+                            title={printout.type === 'excel' ? "Download Excel" : "Download PDF"}
                           >
                             <Download size={18} />
                           </button>
@@ -1224,6 +1533,35 @@ export const ProjectView: React.FC = () => {
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
               >
                 Delete Takeoff
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeletePrintoutConfirm && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-900">Delete Printout</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-slate-600">
+                Are you sure you want to delete this printout? This action cannot be undone.
+              </p>
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowDeletePrintoutConfirm(false); setPrintoutToDelete(null); }}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeletePrintout}
+                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
+              >
+                Delete Printout
               </button>
             </div>
           </div>
@@ -1760,34 +2098,81 @@ export const ProjectView: React.FC = () => {
             ) : (
               <div className="flex flex-col overflow-hidden">
                 <div className="p-6 overflow-y-auto">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {pendingPages.map((page, index) => (
-                      <div key={page.id} className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col">
-                        <div className="h-40 bg-slate-200 relative flex-shrink-0 border-b border-slate-200">
+                      <div key={page.id} className="bg-white rounded-2xl border-2 border-slate-100 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
+                        {/* Thumbnail Section */}
+                        <div 
+                          className="h-48 bg-slate-100 relative flex-shrink-0 border-b border-slate-100 cursor-pointer overflow-hidden group"
+                          onClick={() => setPreviewPageId(page.id)}
+                        >
                           {pendingThumbnails[page.imageId] ? (
                             <img 
                               src={pendingThumbnails[page.imageId]} 
                               alt={`Page ${index + 1}`}
-                              className="w-full h-full object-contain"
+                              className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-400">
-                              <Loader2 size={24} className="animate-spin" />
+                              <Loader2 size={32} className="animate-spin" />
                             </div>
                           )}
-                          <div className="absolute top-2 left-2 bg-black/60 text-white text-xs font-medium px-2 py-1 rounded-md backdrop-blur-sm">
-                            {index + 1}
+                          
+                          {/* Hover Overlay */}
+                          <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
+                            <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300">
+                              <Eye size={24} />
+                            </div>
+                            <span className="text-white text-[10px] font-black uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0">
+                              Click to Preview
+                            </span>
+                          </div>
+
+                          {/* Page Badge */}
+                          <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-blue-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-blue-100">
+                            PAGE {index + 1}
                           </div>
                         </div>
-                        <div className="p-4 flex-grow flex flex-col justify-center">
-                          <label className="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wider">Page Name</label>
-                          <input
-                            type="text"
-                            value={page.name}
-                            onChange={(e) => updatePendingPageName(page.id, e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm font-medium"
-                            placeholder={`Page ${index + 1}`}
-                          />
+
+                        {/* Input Section */}
+                        <div className="p-5 space-y-5">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between px-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Page Number</label>
+                              {page.pageNumber && <Check size={12} className="text-green-500" />}
+                            </div>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <Hash size={14} />
+                              </div>
+                              <input
+                                type="text"
+                                value={page.pageNumber || ''}
+                                onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
+                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                                placeholder="e.g. A-101"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between px-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</label>
+                              {page.description && <Check size={12} className="text-green-500" />}
+                            </div>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <FileText size={14} />
+                              </div>
+                              <input
+                                type="text"
+                                value={page.description || ''}
+                                onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
+                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                                placeholder="e.g. Floor Plan"
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1813,6 +2198,189 @@ export const ProjectView: React.FC = () => {
                     ) : (
                       <><Check size={16} /> Add Pages</>
                     )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {previewPageId && (
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-4 sm:p-8">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => setPreviewPageId(null)}
+                  className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                >
+                  <ArrowLeft size={20} />
+                </button>
+                <h3 className="font-bold text-slate-900">Page Preview & Extraction</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 mr-2">
+                  <button 
+                    onClick={() => setZoom(prev => Math.max(1, prev - 0.5))}
+                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                    title="Zoom Out"
+                  >
+                    <ZoomOut size={16} />
+                  </button>
+                  <span className="text-xs font-bold text-slate-500 w-12 text-center">{Math.round(zoom * 100)}%</span>
+                  <button 
+                    onClick={() => setZoom(prev => Math.min(5, prev + 0.5))}
+                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                    title="Zoom In"
+                  >
+                    <ZoomIn size={16} />
+                  </button>
+                  <button 
+                    onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
+                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors ml-1 border-l border-slate-100"
+                    title="Reset Zoom"
+                  >
+                    <Maximize size={16} />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setExtractionType('pageNumber')}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                >
+                  Extract Number
+                </button>
+                <button
+                  onClick={() => setExtractionType('description')}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                >
+                  Extract Description
+                </button>
+                <div className="w-px h-6 bg-slate-200 mx-2" />
+                <button 
+                  onClick={() => setPreviewPageId(null)}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+            
+            <div 
+              className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${isPanning ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-crosshair'}`}
+              onWheel={(e) => {
+                if (e.ctrlKey || e.metaKey) {
+                  e.preventDefault();
+                  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                  setZoom(prev => Math.min(5, Math.max(1, prev + delta)));
+                }
+              }}
+            >
+              <div 
+                className="relative transition-transform duration-200 ease-out"
+                style={{ 
+                  transform: `scale(${zoom}) translate(${panOffset.x}px, ${panOffset.y}px)`,
+                  transformOrigin: 'center center'
+                }}
+                onMouseDown={(e) => {
+                  if (zoom > 1 && !extractionType) {
+                    setIsPanning(true);
+                    setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+                    return;
+                  }
+                  if (!extractionType) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = ((e.clientX - rect.left) / rect.width) * 100;
+                  const y = ((e.clientY - rect.top) / rect.height) * 100;
+                  setIsSelecting(true);
+                  setSelectionStart({ x, y });
+                  setExtractionRect({ x, y, width: 0, height: 0 });
+                }}
+                onMouseMove={(e) => {
+                  if (isPanning) {
+                    setPanOffset({
+                      x: e.clientX - panStart.x,
+                      y: e.clientY - panStart.y
+                    });
+                    return;
+                  }
+                  if (!isSelecting || !selectionStart) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = ((e.clientX - rect.left) / rect.width) * 100;
+                  const y = ((e.clientY - rect.top) / rect.height) * 100;
+                  
+                  setExtractionRect({
+                    x: Math.min(x, selectionStart.x),
+                    y: Math.min(y, selectionStart.y),
+                    width: Math.abs(x - selectionStart.x),
+                    height: Math.abs(y - selectionStart.y)
+                  });
+                }}
+                onMouseUp={() => {
+                  setIsSelecting(false);
+                  setIsPanning(false);
+                }}
+                onMouseLeave={() => {
+                  setIsSelecting(false);
+                  setIsPanning(false);
+                }}
+              >
+                <img 
+                  src={pendingThumbnails[pendingPages.find(p => p.id === previewPageId)?.imageId || '']} 
+                  alt="Preview"
+                  className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
+                  draggable={false}
+                />
+                {extractionRect && (
+                  <div 
+                    className="absolute border-2 border-blue-500 bg-blue-500/20 pointer-events-none"
+                    style={{
+                      left: `${extractionRect.x}%`,
+                      top: `${extractionRect.y}%`,
+                      width: `${extractionRect.width}%`,
+                      height: `${extractionRect.height}%`
+                    }}
+                  >
+                  </div>
+                )}
+                {!extractionType && zoom === 1 && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="bg-black/60 text-white px-6 py-3 rounded-xl backdrop-blur-md text-sm font-medium">
+                      Select "Extract Number" or "Extract Description" then highlight an area
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {extractionRect && (
+              <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  Area selected. Ready to extract {extractionType === 'pageNumber' ? 'page number' : 'description'}.
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setExtractionRect(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                  >
+                    Clear Selection
+                  </button>
+                  <button
+                    onClick={() => handleExtractText(false)}
+                    disabled={isExtracting}
+                    className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    Extract Current
+                  </button>
+                  <button
+                    onClick={() => handleExtractText(true)}
+                    disabled={isExtracting}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                  >
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    Extract All Pages
                   </button>
                 </div>
               </div>

@@ -108,6 +108,34 @@ export const ProjectsList: React.FC = () => {
     return sortDirection === 'asc' ? <ArrowUp size={14} className="text-blue-500" /> : <ArrowDown size={14} className="text-blue-500" />;
   };
 
+  const getDueDateColor = (project: Project) => {
+    if (project.submitted || !project.bidDueDate) return 'text-slate-600';
+    
+    const now = Date.now();
+    const diff = project.bidDueDate - now;
+    const days = diff / (1000 * 60 * 60 * 24);
+
+    if (days < 0) return 'text-purple-600 font-bold';
+    if (days <= 3) return 'text-red-600 font-bold';
+    if (days <= 14) return 'text-amber-600 font-bold';
+    
+    return 'text-slate-600';
+  };
+
+  const getDueDateIconColor = (project: Project) => {
+    if (project.submitted || !project.bidDueDate) return 'text-slate-400';
+    
+    const now = Date.now();
+    const diff = project.bidDueDate - now;
+    const days = diff / (1000 * 60 * 60 * 24);
+
+    if (days < 0) return 'text-purple-400';
+    if (days <= 3) return 'text-red-400';
+    if (days <= 14) return 'text-amber-400';
+    
+    return 'text-slate-400';
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans">
       <div className="max-w-6xl mx-auto">
@@ -254,8 +282,21 @@ export const ProjectsList: React.FC = () => {
                           className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
                         >
                           <td className="px-6 py-4">
-                            <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
-                              {project.name}
+                            <div className="flex flex-col gap-1">
+                              <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                                {project.name}
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1">
+                                {project.submitted && (
+                                  <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                                )}
+                                {project.responded && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
+                                )}
+                                {project.accepted && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Accepted</span>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="px-6 py-4">
@@ -271,8 +312,8 @@ export const ProjectsList: React.FC = () => {
                           <td className="px-6 py-4">
                             {project.bidDueDate ? (
                               <div className="flex items-center gap-2 text-sm">
-                                <Calendar size={14} className={project.bidDueDate < Date.now() ? 'text-red-400' : 'text-slate-400'} />
-                                <span className={project.bidDueDate < Date.now() ? 'text-red-600 font-medium' : 'text-slate-600'}>
+                                <Calendar size={14} className={getDueDateIconColor(project)} />
+                                <span className={getDueDateColor(project)}>
                                   {new Date(project.bidDueDate).toLocaleDateString()}
                                 </span>
                               </div>

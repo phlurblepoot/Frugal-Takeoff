@@ -47,6 +47,8 @@ export const CanvasView: React.FC = () => {
   const [selectedTakeoffId, setSelectedTakeoffId] = useState<string | undefined>(undefined);
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [measurementToDelete, setMeasurementToDelete] = useState<{id: string, targetPageId?: string} | null>(null);
 
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [newTakeoffName, setNewTakeoffName] = useState('');
@@ -78,7 +80,7 @@ export const CanvasView: React.FC = () => {
   const [heightsModalMeasurementId, setHeightsModalMeasurementId] = useState<string | null>(null);
   const [toolDisabledMessage, setToolDisabledMessage] = useState<string | null>(null);
 
-  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
 
@@ -300,8 +302,13 @@ export const CanvasView: React.FC = () => {
   };
 
   const deleteMeasurement = (id: string, targetPageId?: string) => {
-    if (!project) return;
-    if (!window.confirm('Are you sure you want to delete this measurement?')) return;
+    setMeasurementToDelete({ id, targetPageId });
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteMeasurement = async () => {
+    if (!project || !measurementToDelete) return;
+    const { id, targetPageId } = measurementToDelete;
     
     const pageToUpdateId = targetPageId || page?.id;
     if (!pageToUpdateId) return;
@@ -309,9 +316,9 @@ export const CanvasView: React.FC = () => {
     const pageToUpdate = project.pages.find(p => p.id === pageToUpdateId);
     if (!pageToUpdate) return;
 
-    const measurementToDelete = pageToUpdate.measurements.find(m => m.id === id);
-    if (measurementToDelete) {
-      pushToHistory({ type: 'delete', measurement: measurementToDelete });
+    const mToDelete = pageToUpdate.measurements.find(m => m.id === id);
+    if (mToDelete) {
+      pushToHistory({ type: 'delete', measurement: mToDelete });
     }
 
     const updatedProject = {
@@ -332,6 +339,9 @@ export const CanvasView: React.FC = () => {
     if (selectedMeasurementId === id) {
       setSelectedMeasurementId(null);
     }
+
+    setShowDeleteConfirm(false);
+    setMeasurementToDelete(null);
   };
 
   const handleCreateTakeoff = async () => {
@@ -416,15 +426,16 @@ export const CanvasView: React.FC = () => {
   };
 
   const handleEditTakeoff = (takeoff: MeasurementTakeoff) => {
-    setEditingTakeoff(takeoff);
-    setEditTakeoffName(takeoff.name);
-    setEditTakeoffColor(takeoff.color);
-    setEditTakeoffUnit(takeoff.unit || '');
-    setEditTakeoffCostPerUnit(takeoff.costPerUnit ?? '');
-    setEditTakeoffLaborPercent(takeoff.laborPercent ?? '');
-    setEditTakeoffMaterialsPercent(takeoff.materialsPercent ?? '');
-    setEditTakeoffEquipmentPercent(takeoff.equipmentPercent ?? '');
-    setEditTakeoffProfitPercent(takeoff.profitPercent ?? '');
+    const rawTakeoff = project?.takeoffs.find(t => t.id === takeoff.id) || takeoff;
+    setEditingTakeoff(rawTakeoff);
+    setEditTakeoffName(rawTakeoff.name);
+    setEditTakeoffColor(rawTakeoff.color);
+    setEditTakeoffUnit(rawTakeoff.unit || '');
+    setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit ?? '');
+    setEditTakeoffLaborPercent(rawTakeoff.laborPercent ?? '');
+    setEditTakeoffMaterialsPercent(rawTakeoff.materialsPercent ?? '');
+    setEditTakeoffEquipmentPercent(rawTakeoff.equipmentPercent ?? '');
+    setEditTakeoffProfitPercent(rawTakeoff.profitPercent ?? '');
   };
 
   const handleSaveEditTakeoff = async () => {
@@ -516,13 +527,13 @@ export const CanvasView: React.FC = () => {
         if (pixelValue > 0) {
           const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
           // Convert to the current page's unit so we have a consistent base unit for formatRealValue
-          const targetUnit = page.scaleConfig?.unit || 'ft';
+          const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
           const sourceUnit = currentScale?.unit || 'ft';
           
           if (takeoff.type === 'count') {
             totalRealValue += realValue;
           } else {
-            totalRealValue += convertUnit(realValue, sourceUnit, targetUnit, takeoff.type as 'length' | 'area' | 'count');
+            totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
           }
         }
       });
@@ -834,6 +845,92 @@ export const CanvasView: React.FC = () => {
 
       {/* Main Canvas Area */}
       <div className="flex-1 relative bg-slate-200 min-w-0 min-h-0">
+        {/* Floating Controls when sidebar is closed */}
+        {!isLeftSidebarOpen && (
+          <div className="absolute top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between">
+            <div className="pointer-events-auto">
+              <Link 
+                to={`/project/${project.id}`} 
+                className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
+              >
+                <ArrowLeft size={16} />
+                Back to Project
+              </Link>
+            </div>
+            
+            <div className="absolute left-1/2 -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1.5 shadow-sm">
+              <ToolButton
+                active={currentTool === 'pan'}
+                onClick={() => setCurrentTool('pan')}
+                icon={<Hand size={18} />}
+                label="Pan"
+              />
+              <ToolButton
+                active={currentTool === 'scale'}
+                onClick={() => setCurrentTool('scale')}
+                icon={<Settings size={18} />}
+                label="Set Scale"
+              />
+              <ToolButton
+                active={currentTool === 'length'}
+                onClick={() => setCurrentTool('length')}
+                icon={<Ruler size={18} />}
+                label="Length"
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'count'}
+                onDisabledClick={() => {
+                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Length tools are disabled for count takeoffs.");
+                }}
+              />
+              <ToolButton
+                active={currentTool === 'area'}
+                onClick={() => setCurrentTool('area')}
+                icon={<Square size={18} />}
+                label="Area"
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count'}
+                onDisabledClick={() => {
+                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Area tools are disabled for linear takeoffs.");
+                  else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Area tools are disabled for count takeoffs.");
+                }}
+              />
+              <ToolButton
+                active={currentTool === 'count'}
+                onClick={() => setCurrentTool('count')}
+                icon={<Hash size={18} />}
+                label="Count"
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area'}
+                onDisabledClick={() => {
+                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Count tools are disabled for linear takeoffs.");
+                  else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
+                }}
+              />
+              <div className="h-8 w-px bg-slate-200 mx-1" />
+              <ToolButton
+                active={currentTool === 'region'}
+                onClick={() => setCurrentTool('region')}
+                icon={<Layers size={18} />}
+                label="Region"
+                disabled={!page.isMultiRegion}
+                onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+              />
+              <div className="h-8 w-px bg-slate-200 mx-1" />
+              <button
+                onClick={handleUndo}
+                disabled={history.length === 0}
+                className={`p-2 rounded-lg transition-colors ${
+                  history.length === 0 
+                    ? 'text-slate-300 cursor-not-allowed' 
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+                }`}
+                title="Undo (Ctrl+Z)"
+              >
+                <Undo size={18} />
+              </button>
+            </div>
+          </div>
+        )}
         <PdfCanvas
           imageUrl={imageUrl}
           imageWidth={page.imageWidth}
@@ -1208,6 +1305,36 @@ export const CanvasView: React.FC = () => {
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
               >
                 Set Scale
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-900">Delete Measurement</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-slate-600">
+                Are you sure you want to delete this measurement? This action cannot be undone.
+              </p>
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowDeleteConfirm(false); setMeasurementToDelete(null); }}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteMeasurement}
+                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
+              >
+                Delete Measurement
               </button>
             </div>
           </div>

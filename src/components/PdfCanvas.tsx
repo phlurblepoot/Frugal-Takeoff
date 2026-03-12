@@ -482,15 +482,15 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       } else if (isSurfaceArea) {
         const pxArea = calculateSurfaceAreaPx(points, m.heights || [], m.isTwoSided || false, currentScale);
         const pxLen = calculatePolylineLength(points);
-        const areaText = formatMeasurement(pxArea, 'area', currentScale);
-        const lenText = formatMeasurement(pxLen, 'length', currentScale);
+        const areaText = formatMeasurement(pxArea, 'area', currentScale, takeoff);
+        const lenText = formatMeasurement(pxLen, 'length', currentScale, takeoff);
         text = `${areaText}\nLength: ${lenText}`;
       } else if (m.type === 'length') {
         const pxLen = calculatePolylineLength(points);
-        text = formatMeasurement(pxLen, 'length', currentScale);
+        text = formatMeasurement(pxLen, 'length', currentScale, takeoff);
       } else {
         const pxArea = calculatePolygonArea(points);
-        text = formatMeasurement(pxArea, 'area', currentScale);
+        text = formatMeasurement(pxArea, 'area', currentScale, takeoff);
       }
 
       const isSelected = selectedMeasurementId === m.id;

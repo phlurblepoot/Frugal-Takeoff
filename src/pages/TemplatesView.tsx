@@ -9,6 +9,8 @@ export const TemplatesView: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<TakeoffTemplate | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [templateToDelete, setTemplateToDelete] = useState<string | null>(null);
 
   // Form state
   const [name, setName] = useState('');
@@ -86,10 +88,17 @@ export const TemplatesView: React.FC = () => {
     loadTemplates();
   };
 
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this template?')) {
-      await deleteTemplate(id);
+  const handleDelete = (id: string) => {
+    setTemplateToDelete(id);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
+    if (templateToDelete) {
+      await deleteTemplate(templateToDelete);
       loadTemplates();
+      setShowDeleteConfirm(false);
+      setTemplateToDelete(null);
     }
   };
 
@@ -203,6 +212,36 @@ export const TemplatesView: React.FC = () => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h3 className="text-lg font-semibold text-slate-900">Delete Template</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-slate-600">
+                Are you sure you want to delete this template? This action cannot be undone.
+              </p>
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowDeleteConfirm(false); setTemplateToDelete(null); }}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
+              >
+                Delete Template
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -1,14 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucide-react';
+import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
 import { saveProject, saveImage, getImage } from '../utils/store';
 import { loadPdfAllPagesAsImages } from '../utils/pdf';
+import { createWorker } from 'tesseract.js';
 
 interface PendingPage {
   id: string;
   name: string;
+  pageNumber?: string;
+  description?: string;
   imageId: string;
   imageWidth: number;
   imageHeight: number;
@@ -30,6 +33,16 @@ export const NewProject: React.FC = () => {
   
   const [pendingPages, setPendingPages] = useState<PendingPage[]>([]);
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({});
+  const [previewPageId, setPreviewPageId] = useState<string | null>(null);
+  const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
+  const [extractionRect, setExtractionRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<{ x: number, y: number } | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -72,6 +85,8 @@ export const NewProject: React.FC = () => {
           extractedPages.push({
             id: uuidv4(),
             name: pageData.suggestedName || `Page ${globalPageNum}`,
+            pageNumber: '',
+            description: pageData.suggestedName || '',
             imageId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
@@ -101,6 +116,8 @@ export const NewProject: React.FC = () => {
       const pages: ProjectPage[] = pendingPages.map(p => ({
         id: p.id,
         name: p.name,
+        pageNumber: p.pageNumber,
+        description: p.description,
         imageId: p.imageId,
         imageWidth: p.imageWidth,
         imageHeight: p.imageHeight,
@@ -144,8 +161,101 @@ export const NewProject: React.FC = () => {
     }
   };
 
-  const updatePendingPageName = (id: string, newName: string) => {
-    setPendingPages(prev => prev.map(p => p.id === id ? { ...p, name: newName } : p));
+  const updatePendingPageField = (id: string, field: string, value: string) => {
+    setPendingPages(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, [field]: value };
+        if (field === 'pageNumber' || field === 'description') {
+          const num = field === 'pageNumber' ? value : (p.pageNumber || '');
+          const desc = field === 'description' ? value : (p.description || '');
+          updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
+        }
+        return updated;
+      }
+      return p;
+    }));
+  };
+
+  const handleExtractText = async (applyToAll: boolean) => {
+    if (!previewPageId || !extractionRect || !extractionType) return;
+    
+    setIsExtracting(true);
+    try {
+      if (applyToAll) {
+        const updatedPages = [...pendingPages];
+        const worker = await createWorker('eng');
+        
+        for (let i = 0; i < updatedPages.length; i++) {
+          const p = updatedPages[i];
+          const imageData = await getImage(p.imageId);
+          if (!imageData) continue;
+
+          const img = new Image();
+          img.src = imageData;
+          await new Promise(resolve => img.onload = resolve);
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+
+          const x = (extractionRect.x / 100) * img.width;
+          const y = (extractionRect.y / 100) * img.height;
+          const w = (extractionRect.width / 100) * img.width;
+          const h = (extractionRect.height / 100) * img.height;
+
+          canvas.width = w;
+          canvas.height = h;
+          ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+
+          const { data: { text } } = await worker.recognize(canvas.toDataURL());
+          const cleanedText = text.trim().replace(/\n/g, ' ');
+          
+          updatedPages[i] = { ...p, [extractionType]: cleanedText };
+          const num = extractionType === 'pageNumber' ? cleanedText : (p.pageNumber || '');
+          const desc = extractionType === 'description' ? cleanedText : (p.description || '');
+          updatedPages[i].name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
+        }
+        
+        setPendingPages(updatedPages);
+        await worker.terminate();
+      } else {
+        const worker = await createWorker('eng');
+        const page = pendingPages.find(p => p.id === previewPageId);
+        if (!page) return;
+
+        const imageData = await getImage(page.imageId);
+        if (!imageData) return;
+
+        const img = new Image();
+        img.src = imageData;
+        await new Promise(resolve => img.onload = resolve);
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const x = (extractionRect.x / 100) * img.width;
+        const y = (extractionRect.y / 100) * img.height;
+        const w = (extractionRect.width / 100) * img.width;
+        const h = (extractionRect.height / 100) * img.height;
+
+        canvas.width = w;
+        canvas.height = h;
+        ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+
+        const { data: { text } } = await worker.recognize(canvas.toDataURL());
+        const cleanedText = text.trim().replace(/\n/g, ' ');
+        
+        await worker.terminate();
+        updatePendingPageField(previewPageId, extractionType, cleanedText);
+      }
+
+      setExtractionRect(null);
+    } catch (error) {
+      console.error('OCR Error:', error);
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   if (step === 'name_pages') {
@@ -180,34 +290,81 @@ export const NewProject: React.FC = () => {
             </div>
 
             <div className="p-8">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {pendingPages.map((page, index) => (
-                  <div key={page.id} className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col">
-                    <div className="h-48 bg-slate-200 relative flex-shrink-0 border-b border-slate-200">
+                  <div key={page.id} className="bg-white rounded-2xl border-2 border-slate-100 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
+                    {/* Thumbnail Section */}
+                    <div 
+                      className="h-48 bg-slate-100 relative flex-shrink-0 border-b border-slate-100 cursor-pointer overflow-hidden group"
+                      onClick={() => setPreviewPageId(page.id)}
+                    >
                       {pageThumbnails[page.imageId] ? (
                         <img 
                           src={pageThumbnails[page.imageId]} 
                           alt={`Page ${index + 1}`}
-                          className="w-full h-full object-contain"
+                          className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-400">
-                          <Loader2 size={24} className="animate-spin" />
+                          <Loader2 size={32} className="animate-spin" />
                         </div>
                       )}
-                      <div className="absolute top-2 left-2 bg-black/60 text-white text-xs font-medium px-2 py-1 rounded-md backdrop-blur-sm">
-                        {index + 1}
+                      
+                      {/* Hover Overlay */}
+                      <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300">
+                          <Eye size={24} />
+                        </div>
+                        <span className="text-white text-[10px] font-black uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0">
+                          Click to Preview
+                        </span>
+                      </div>
+
+                      {/* Page Badge */}
+                      <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-blue-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-blue-100">
+                        PAGE {index + 1}
                       </div>
                     </div>
-                    <div className="p-4 flex-grow flex flex-col justify-center">
-                      <label className="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wider">Page Name</label>
-                      <input
-                        type="text"
-                        value={page.name}
-                        onChange={(e) => updatePendingPageName(page.id, e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm font-medium"
-                        placeholder={`Page ${index + 1}`}
-                      />
+
+                    {/* Input Section */}
+                    <div className="p-5 space-y-5">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between px-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Page Number</label>
+                          {page.pageNumber && <Check size={12} className="text-green-500" />}
+                        </div>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                            <Hash size={14} />
+                          </div>
+                          <input
+                            type="text"
+                            value={page.pageNumber || ''}
+                            onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                            placeholder="e.g. A-101"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between px-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</label>
+                          {page.description && <Check size={12} className="text-green-500" />}
+                        </div>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                            <FileText size={14} />
+                          </div>
+                          <input
+                            type="text"
+                            value={page.description || ''}
+                            onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                            placeholder="e.g. Floor Plan"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -215,6 +372,190 @@ export const NewProject: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {previewPageId && (
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-4 sm:p-8">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => setPreviewPageId(null)}
+                    className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                  >
+                    <ArrowLeft size={20} />
+                  </button>
+                  <h3 className="font-bold text-slate-900">Page Preview & Extraction</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 mr-2">
+                    <button 
+                      onClick={() => setZoom(prev => Math.max(1, prev - 0.5))}
+                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                      title="Zoom Out"
+                    >
+                      <ZoomOut size={16} />
+                    </button>
+                    <span className="text-xs font-bold text-slate-500 w-12 text-center">{Math.round(zoom * 100)}%</span>
+                    <button 
+                      onClick={() => setZoom(prev => Math.min(5, prev + 0.5))}
+                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                      title="Zoom In"
+                    >
+                      <ZoomIn size={16} />
+                    </button>
+                    <button 
+                      onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
+                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors ml-1 border-l border-slate-100"
+                      title="Reset Zoom"
+                    >
+                      <Maximize size={16} />
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setExtractionType('pageNumber')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  >
+                    Extract Number
+                  </button>
+                  <button
+                    onClick={() => setExtractionType('description')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  >
+                    Extract Description
+                  </button>
+                  <div className="w-px h-6 bg-slate-200 mx-2" />
+                  <button 
+                    onClick={() => setPreviewPageId(null)}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${isPanning ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-crosshair'}`}
+                onWheel={(e) => {
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                    setZoom(prev => Math.min(5, Math.max(1, prev + delta)));
+                  }
+                }}
+              >
+                <div 
+                  className="relative transition-transform duration-200 ease-out"
+                  style={{ 
+                    transform: `scale(${zoom}) translate(${panOffset.x}px, ${panOffset.y}px)`,
+                    transformOrigin: 'center center'
+                  }}
+                  onMouseDown={(e) => {
+                    if (zoom > 1 && !extractionType) {
+                      setIsPanning(true);
+                      setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+                      return;
+                    }
+                    if (!extractionType) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const x = ((e.clientX - rect.left) / rect.width) * 100;
+                    const y = ((e.clientY - rect.top) / rect.height) * 100;
+                    setIsSelecting(true);
+                    setSelectionStart({ x, y });
+                    setExtractionRect({ x, y, width: 0, height: 0 });
+                  }}
+                  onMouseMove={(e) => {
+                    if (isPanning) {
+                      setPanOffset({
+                        x: e.clientX - panStart.x,
+                        y: e.clientY - panStart.y
+                      });
+                      return;
+                    }
+                    if (!isSelecting || !selectionStart) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const x = ((e.clientX - rect.left) / rect.width) * 100;
+                    const y = ((e.clientY - rect.top) / rect.height) * 100;
+                    
+                    setExtractionRect({
+                      x: Math.min(x, selectionStart.x),
+                      y: Math.min(y, selectionStart.y),
+                      width: Math.abs(x - selectionStart.x),
+                      height: Math.abs(y - selectionStart.y)
+                    });
+                  }}
+                  onMouseUp={() => {
+                    setIsSelecting(false);
+                    setIsPanning(false);
+                  }}
+                  onMouseLeave={() => {
+                    setIsSelecting(false);
+                    setIsPanning(false);
+                  }}
+                >
+                  <img 
+                    src={pageThumbnails[pendingPages.find(p => p.id === previewPageId)?.imageId || '']} 
+                    alt="Preview"
+                    className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
+                    draggable={false}
+                  />
+                  {extractionRect && (
+                    <div 
+                      className="absolute border-2 border-blue-500 bg-blue-500/20 pointer-events-none"
+                      style={{
+                        left: `${extractionRect.x}%`,
+                        top: `${extractionRect.y}%`,
+                        width: `${extractionRect.width}%`,
+                        height: `${extractionRect.height}%`
+                      }}
+                    >
+                    </div>
+                  )}
+                  {!extractionType && zoom === 1 && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="bg-black/60 text-white px-6 py-3 rounded-xl backdrop-blur-md text-sm font-medium">
+                        Select "Extract Number" or "Extract Description" then highlight an area
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {extractionRect && (
+                <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+                  <div className="flex items-center gap-2 text-sm text-slate-600">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    Area selected. Ready to extract text.
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setExtractionRect(null)}
+                      className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                    >
+                      Clear Selection
+                    </button>
+                    <button
+                      onClick={() => handleExtractText(false)}
+                      disabled={isExtracting}
+                      className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      Extract Current
+                    </button>
+                    <button
+                      onClick={() => handleExtractText(true)}
+                      disabled={isExtracting}
+                      className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                    >
+                      {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                      Extract All Pages
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

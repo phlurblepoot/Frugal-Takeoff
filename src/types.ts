@@ -60,6 +60,7 @@ export interface Printout {
   name: string;
   fileId: string;
   createdAt: number;
+  type?: 'pdf' | 'excel';
 }
 
 export interface ScaleRegion {
@@ -73,6 +74,8 @@ export interface ScaleRegion {
 export interface ProjectPage {
   id: string;
   name: string;
+  pageNumber?: string;
+  description?: string;
   imageId: string; // Reference to the image stored separately
   imageWidth: number;
   imageHeight: number;
@@ -94,6 +97,9 @@ export interface Project {
   pages: ProjectPage[];
   takeoffs: MeasurementTakeoff[];
   printouts?: Printout[];
+  submitted?: boolean;
+  responded?: boolean;
+  accepted?: boolean;
 }
 
 export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';

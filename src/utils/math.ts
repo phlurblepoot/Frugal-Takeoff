@@ -246,15 +246,30 @@ export const convertUnit = (
   return value; // Fallback if conversion not supported
 };
 
+export const UNIT_LABELS: Record<string, string> = {
+  'in': 'in',
+  'ft': 'ft',
+  'yd': 'yd',
+  'cm': 'cm',
+  'm': 'm',
+  'sqin': 'sq in',
+  'sqft': 'sq ft',
+  'sqyd': 'sq yd',
+  'sqcm': 'sq cm',
+  'sqm': 'sq m',
+  'each': 'each'
+};
+
 export const formatRealValue = (
   realValue: number,
   type: 'length' | 'area' | 'count',
   unit: string,
-  takeoff?: MeasurementTakeoff
+  takeoff?: MeasurementTakeoff,
+  includeCost: boolean = true
 ): string => {
   if (type === 'count') {
     const count = Math.round(realValue);
-    if (takeoff?.costPerUnit) {
+    if (includeCost && takeoff?.costPerUnit) {
       const baseCost = count * takeoff.costPerUnit;
       const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
       const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
@@ -276,6 +291,8 @@ export const formatRealValue = (
   }
 
   let text = '';
+  const readableUnit = UNIT_LABELS[displayUnit] || displayUnit;
+
   if (!takeoff?.unit && type === 'length' && (unit === 'ft' || unit === 'in')) {
     const decimalFeet = unit === 'in' ? realValue / 12 : realValue;
     text = formatFeetAndInches(decimalFeet);
@@ -285,13 +302,14 @@ export const formatRealValue = (
     } else if (unit === 'in') {
       text = `${realValue.toFixed(2)} sq in`;
     } else {
-      text = `${realValue.toFixed(2)} sq ${unit}`;
+      const areaUnit = unit.startsWith('sq') ? readableUnit : `sq ${readableUnit}`;
+      text = `${realValue.toFixed(2)} ${areaUnit}`;
     }
   } else {
-    text = `${displayValue.toFixed(2)} ${displayUnit}`;
+    text = `${displayValue.toFixed(2)} ${readableUnit}`;
   }
 
-  if (takeoff?.costPerUnit) {
+  if (includeCost && takeoff?.costPerUnit) {
     const baseCost = displayValue * takeoff.costPerUnit;
     const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
     const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
@@ -310,10 +328,11 @@ export const formatMeasurement = (
   pixelValue: number,
   type: 'length' | 'area' | 'count',
   scale: ScaleConfig | null,
-  takeoff?: MeasurementTakeoff
+  takeoff?: MeasurementTakeoff,
+  includeCost: boolean = false
 ): string => {
   if (type === 'count') {
-    return formatRealValue(pixelValue, type, 'each', takeoff);
+    return formatRealValue(pixelValue, type, 'each', takeoff, includeCost);
   }
 
   if (!scale || scale.pixelDistance === 0) {
@@ -321,7 +340,7 @@ export const formatMeasurement = (
   }
 
   const realValue = calculateRealValue(pixelValue, type, scale);
-  return formatRealValue(realValue, type, scale.unit, takeoff);
+  return formatRealValue(realValue, type, scale.unit, takeoff, includeCost);
 };
 
 export const calculateRealValue = (
