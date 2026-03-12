@@ -27,6 +27,9 @@ interface PdfCanvasProps {
   onUpdateRegion?: (id: string, region: Partial<ScaleRegion>) => void;
   onDeleteRegion?: (id: string) => void;
   calibratingRegionId?: string | null;
+  remoteUsers?: any[];
+  onCursorMove?: (x: number, y: number) => void;
+  currentUserId?: string;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -51,6 +54,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onUpdateRegion,
   onDeleteRegion,
   calibratingRegionId,
+  remoteUsers = [],
+  onCursorMove,
+  currentUserId,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -147,6 +153,15 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   const handleMouseMove = (e: any) => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    
+    const pos = getRelativePointerPosition(stage.getLayers()[0]);
+    if (pos) {
+      setMousePos(pos);
+      onCursorMove?.(pos.x, pos.y);
+    }
+
     if (isMiddleMouseDown && lastMousePosRef.current) {
       // Prevent default to stop any built-in browser behavior like auto-scrolling
       if (e.evt && e.evt.preventDefault) {
@@ -159,9 +174,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       return;
     }
     if (currentTool === 'pan' || activePoints.length === 0) return;
-    const stage = stageRef.current;
-    const pos = getRelativePointerPosition(stage.getLayers()[0]);
-    setMousePos(pos);
   };
 
   const handleMouseDown = (e: any) => {
@@ -745,7 +757,45 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             {renderMeasurements()}
             {renderActiveDrawing()}
           </Layer>
-        </Stage>
+          <Layer>
+            {/* Remote Cursors */}
+            {remoteUsers
+              .filter(u => u.id !== currentUserId && u.cursor)
+              .map(u => (
+                <Group key={u.id} x={u.cursor!.x} y={u.cursor!.y}>
+                  <Line
+                    points={[0, 0, 10, 10, 4, 10, 0, 14]}
+                    closed
+                    fill={u.color}
+                    stroke="white"
+                    strokeWidth={1 / stageScale}
+                    scaleX={1 / stageScale}
+                    scaleY={1 / stageScale}
+                  />
+                  <Group y={16 / stageScale} scaleX={1 / stageScale} scaleY={1 / stageScale}>
+                    <Line
+                      points={[
+                        0, 0,
+                        u.name.length * 7 + 8, 0,
+                        u.name.length * 7 + 8, 16,
+                        0, 16
+                      ]}
+                      closed
+                      fill={u.color}
+                      opacity={0.8}
+                    />
+                    <Text
+                      text={u.name}
+                      fontSize={10}
+                      fill="white"
+                      padding={4}
+                      fontStyle="bold"
+                    />
+                  </Group>
+                </Group>
+              ))}
+          </Layer>
+      </Stage>
       )}
     </div>
   );

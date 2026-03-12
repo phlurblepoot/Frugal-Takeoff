@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { saveProject, saveImage, getImage } from '../utils/store';
+import { createProject, saveImage, getImage } from '../utils/store';
 import { loadPdfAllPagesAsImages } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 
@@ -151,7 +151,7 @@ export const NewProject: React.FC = () => {
         takeoffs: [],
       };
 
-      await saveProject(project);
+      await createProject(project);
       navigate(`/project/${projectId}`);
     } catch (error) {
       console.error('Error creating project:', error);

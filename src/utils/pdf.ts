@@ -20,7 +20,12 @@ export const loadPdfAllPagesAsImages = async (
   onProgress?: (pageNum: number, totalPages: number) => void
 ): Promise<PdfPageImage[]> => {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await pdfjsLib.getDocument({ 
+    data: arrayBuffer,
+    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/standard_fonts/',
+  }).promise;
   const totalPages = pdf.numPages;
   const pages: PdfPageImage[] = [];
 
@@ -71,56 +76,7 @@ export const loadPdfAllPagesAsImages = async (
     }
     
     let suggestedName = `Page ${i}`;
-    
-    // Try to find a sheet number in the extracted text
-    const sheetNumberPatterns = [
-      /\bSheet\s*(?:No\.?|#|Number|Num\.?)?\s*([A-Z0-9.-]{2,10})\b/gi, // Sheet No. A101, Sheet #101, Sheet A101, Sheet Number A101
-      /\b([A-Z]{1,2}-?\d{1,3}(?:\.[A-Z0-9]+)?)\b/g,                    // A-101, S1.1, ME-201
-      /\bPage\s+(\d+)\b/gi                                             // Page 1
-    ];
-
-    let foundSheetNumber = '';
-
-    // Helper to validate if a string looks like a sheet number
-    const isValidSheetNumber = (str: string) => {
-      if (!str) return false;
-      const s = str.toLowerCase().trim();
-      // Exclude common words that might be captured by mistake
-      if (['number', 'no', 'page', 'sheet', 'of', 'total'].includes(s)) return false;
-      // Should have at least one digit or be a common short code like "A", "S", "M"
-      return /\d/.test(s) || (s.length >= 1 && s.length <= 6 && /[A-Z]/i.test(s));
-    };
-
-    // First pass: look for explicit "Sheet" labels which are high confidence
-    const explicitSheetMatch = extractedText.match(/\bSheet\s*(?:No\.?|#|Number|Num\.?)?\s*([A-Z0-9.-]{2,10})\b/i);
-    if (explicitSheetMatch && isValidSheetNumber(explicitSheetMatch[1])) {
-      foundSheetNumber = explicitSheetMatch[1].trim();
-    } else {
-      // Second pass: look for common blueprint patterns
-      // We look for all matches and often the one in the title block is near the end of the text stream
-      const allMatches: string[] = [];
-      for (const pattern of sheetNumberPatterns) {
-        const matches = [...extractedText.matchAll(pattern)];
-        matches.forEach(m => {
-          if (isValidSheetNumber(m[1])) {
-            allMatches.push(m[1].trim());
-          }
-        });
-      }
-      
-      if (allMatches.length > 0) {
-        // Filter out common false positives (like "2024", "1234" if they don't look like sheet numbers)
-        // For now, we'll take the last match that has a letter or is a likely sheet number
-        const likelySheet = allMatches.reverse().find(m => /[A-Z]/i.test(m) || m.length <= 4);
-        if (likelySheet) {
-          foundSheetNumber = likelySheet;
-        }
-      }
-    }
-
-    if (foundSheetNumber) {
-      suggestedName = foundSheetNumber;
-    } else if (totalPages === 1) {
+    if (totalPages === 1) {
       // If it's a single page PDF, use the file name without extension
       suggestedName = file.name.replace(/\.[^/.]+$/, "");
     } else if (pageLabels && pageLabels[i - 1]) {

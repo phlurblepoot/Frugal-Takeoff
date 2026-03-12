@@ -1047,6 +1047,12 @@ export const CanvasView: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {!page.scaleConfig && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+                Please set the scale on the left sidebar.
+              </div>
+            )}
             
             {/* Takeoff Totals */}
             {takeoffTotals.map(takeoff => {
