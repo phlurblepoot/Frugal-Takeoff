@@ -20,26 +20,67 @@ async function ensureDirs() {
 }
 
 function initDb() {
-  db = new Database(DB_FILE);
-  db.pragma('journal_mode = WAL');
-  
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      data TEXT,
-      createdAt INTEGER
-    );
-    CREATE TABLE IF NOT EXISTS images (
-      id TEXT PRIMARY KEY,
-      data TEXT
-    );
-    CREATE TABLE IF NOT EXISTS templates (
-      id TEXT PRIMARY KEY,
-      data TEXT
-    );
-  `);
+  try {
+    // Check if the path is a directory (common Docker volume mount mistake)
+    if (fsSync.existsSync(DB_FILE) && fsSync.statSync(DB_FILE).isDirectory()) {
+      console.error(`\n================================================================`);
+      console.error(`❌ FATAL ERROR: Database path ${DB_FILE} is a directory!`);
+      console.error(`This usually happens if you mapped a Docker volume directly to the database file`);
+      console.error(`instead of the directory. Please check your Unraid/Docker volume settings.`);
+      console.error(`Make sure you map to '/app/data' and NOT '/app/data/app.db'.`);
+      console.error(`================================================================\n`);
+      process.exit(1);
+    }
 
-  migrateOldData();
+    // Ensure the directory exists and is writable
+    if (!fsSync.existsSync(DATA_DIR)) {
+      fsSync.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    
+    // Test write permissions to the directory
+    try {
+      const testFile = path.join(DATA_DIR, '.write-test');
+      fsSync.writeFileSync(testFile, 'test');
+      fsSync.unlinkSync(testFile);
+    } catch (err) {
+      console.error(`\n================================================================`);
+      console.error(`❌ FATAL ERROR: No write permission to ${DATA_DIR}!`);
+      console.error(`Please check the permissions of your Unraid appdata folder.`);
+      console.error(`Error details: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`================================================================\n`);
+      process.exit(1);
+    }
+
+    db = new Database(DB_FILE);
+    
+    // Use DELETE journal mode instead of WAL to prevent issues with Unraid's FUSE filesystem (/mnt/user)
+    // WAL mode requires mmap which can fail on network shares or FUSE mounts
+    db.pragma('journal_mode = DELETE');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        data TEXT,
+        createdAt INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS images (
+        id TEXT PRIMARY KEY,
+        data TEXT
+      );
+      CREATE TABLE IF NOT EXISTS templates (
+        id TEXT PRIMARY KEY,
+        data TEXT
+      );
+    `);
+
+    migrateOldData();
+  } catch (error) {
+    console.error(`\n================================================================`);
+    console.error(`❌ FATAL ERROR: Failed to initialize SQLite database at ${DB_FILE}`);
+    console.error(`Error details:`, error);
+    console.error(`================================================================\n`);
+    process.exit(1);
+  }
 }
 
 function migrateOldData() {
