@@ -16,13 +16,14 @@ interface CollaborationContextType {
   sendCursor: (x: number, y: number) => void;
   sendMeasurementUpdate: (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => void;
   sendProjectUpdate: (projectId: string) => void;
+  updateUser: (name: string, color: string) => void;
   onMeasurementSync: (callback: (data: { action: 'add' | 'update' | 'delete', measurement: Measurement }) => void) => () => void;
   onProjectSync: (callback: (data: { projectId: string }) => void) => () => void;
 }
 
 const CollaborationContext = createContext<CollaborationContextType | undefined>(undefined);
 
-export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId?: string; userName?: string }> = ({ children, pageId, userName }) => {
+export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId?: string; userName?: string; userColor?: string }> = ({ children, pageId, userName, userColor }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
@@ -34,7 +35,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
 
     if (pageId && userName) {
       const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-      const color = colors[Math.floor(Math.random() * colors.length)];
+      const color = userColor || colors[Math.floor(Math.random() * colors.length)];
       newSocket.emit('join-page', { pageId, name: userName, color });
     }
 
@@ -57,7 +58,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
     return () => {
       newSocket.close();
     };
-  }, [pageId, userName]);
+  }, [pageId, userName, userColor]);
 
   const sendCursor = (x: number, y: number) => {
     socket?.emit('cursor-move', { x, y });
@@ -69,6 +70,10 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
 
   const sendProjectUpdate = (projectId: string) => {
     socket?.emit('project-update', { projectId });
+  };
+
+  const updateUser = (name: string, color: string) => {
+    socket?.emit('update-user', { name, color });
   };
 
   const onMeasurementSync = (callback: (data: any) => void) => {
@@ -92,6 +97,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
       sendCursor, 
       sendMeasurementUpdate, 
       sendProjectUpdate,
+      updateUser,
       onMeasurementSync,
       onProjectSync
     }}>

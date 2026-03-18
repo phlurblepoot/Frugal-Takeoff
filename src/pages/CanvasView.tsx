@@ -6,6 +6,7 @@ import { PdfCanvas } from '../components/PdfCanvas';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit } from '../utils/math';
 import { getProject, saveProject, getImage, getTemplates } from '../utils/store';
+import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 
 const STANDARD_SCALES = [
   { label: '1/16" = 1\'-0"', pixelDistance: 144, realWorldDistance: 16, unit: 'ft' },
@@ -27,10 +28,12 @@ const STANDARD_SCALES = [
   { label: '1" = 60\'', pixelDistance: 144, realWorldDistance: 60, unit: 'ft' },
 ];
 
-export const CanvasView: React.FC = () => {
+const CanvasViewInner: React.FC = () => {
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
   const navigate = useNavigate();
   
+  const { socket, users, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser } = useCollaboration();
+
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -116,6 +119,58 @@ export const CanvasView: React.FC = () => {
     }
     loadTemplates();
   }, [projectId, pageId]);
+
+  useEffect(() => {
+    const unsubscribeMeasurement = onMeasurementSync(({ action, measurement }) => {
+      setPage(prev => {
+        if (!prev) return prev;
+        let newMeasurements = [...prev.measurements];
+        if (action === 'add') {
+          // Prevent duplicates
+          if (!newMeasurements.find(m => m.id === measurement.id)) {
+            newMeasurements.push(measurement);
+          }
+        } else if (action === 'update') {
+          newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
+        } else if (action === 'delete') {
+          newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
+        }
+        return { ...prev, measurements: newMeasurements };
+      });
+      
+      setProject(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          pages: prev.pages.map(p => {
+            if (p.id !== pageId) return p;
+            let newMeasurements = [...p.measurements];
+            if (action === 'add') {
+              if (!newMeasurements.find(m => m.id === measurement.id)) {
+                newMeasurements.push(measurement);
+              }
+            } else if (action === 'update') {
+              newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
+            } else if (action === 'delete') {
+              newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
+            }
+            return { ...p, measurements: newMeasurements };
+          })
+        };
+      });
+    });
+
+    const unsubscribeProject = onProjectSync(({ projectId: syncProjectId }) => {
+      if (syncProjectId === projectId) {
+        loadData(syncProjectId, pageId!);
+      }
+    });
+
+    return () => {
+      unsubscribeMeasurement();
+      unsubscribeProject();
+    };
+  }, [projectId, pageId, onMeasurementSync, onProjectSync]);
 
   const loadTemplates = async () => {
     const data = await getTemplates();
@@ -268,6 +323,8 @@ export const CanvasView: React.FC = () => {
     savePageUpdates({
       measurements: [...page.measurements, newMeasurement]
     });
+    
+    sendMeasurementUpdate(page.id, 'add', newMeasurement);
 
     const takeoff = project?.takeoffs.find(t => t.id === selectedTakeoffId);
     if (takeoff?.type === 'area' && measurement.type === 'length') {
@@ -293,6 +350,11 @@ export const CanvasView: React.FC = () => {
     saveProject(updatedProject);
     if (page?.id === pageToUpdateId) {
       setPage(updatedProject.pages.find(p => p.id === pageToUpdateId) || page);
+    }
+    
+    const updatedMeasurement = updatedProject.pages.find(p => p.id === pageToUpdateId)?.measurements.find(m => m.id === id);
+    if (updatedMeasurement) {
+      sendMeasurementUpdate(pageToUpdateId, 'update', updatedMeasurement);
     }
   };
 
@@ -337,6 +399,10 @@ export const CanvasView: React.FC = () => {
 
     setShowDeleteConfirm(false);
     setMeasurementToDelete(null);
+    
+    if (mToDelete) {
+      sendMeasurementUpdate(pageToUpdateId, 'delete', mToDelete);
+    }
   };
 
   const handleCreateTakeoff = async () => {
@@ -827,6 +893,55 @@ export const CanvasView: React.FC = () => {
               />
             </div>
           )}
+
+          {users.length > 1 && (
+            <div className="mt-4 pt-4 border-t border-slate-100">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Collaboration</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Your Name</label>
+                  <input
+                    type="text"
+                    value={users.find(u => u.id === socket?.id)?.name || ''}
+                    onChange={(e) => {
+                      const currentUser = users.find(u => u.id === socket?.id);
+                      if (currentUser) {
+                        updateUser(e.target.value, currentUser.color);
+                        localStorage.setItem('userName', e.target.value);
+                      }
+                    }}
+                    className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Cursor Color</label>
+                  <input
+                    type="color"
+                    value={users.find(u => u.id === socket?.id)?.color || '#000000'}
+                    onChange={(e) => {
+                      const currentUser = users.find(u => u.id === socket?.id);
+                      if (currentUser) {
+                        updateUser(currentUser.name, e.target.value);
+                        localStorage.setItem('userColor', e.target.value);
+                      }
+                    }}
+                    className="h-8 w-full rounded cursor-pointer border border-slate-300 p-0.5"
+                  />
+                </div>
+                <div className="pt-2">
+                  <p className="text-xs text-slate-500 mb-2">Other Users:</p>
+                  <div className="space-y-1">
+                    {users.filter(u => u.id !== socket?.id).map(user => (
+                      <div key={user.id} className="flex items-center gap-2 text-sm">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: user.color }}></div>
+                        <span className="text-slate-700 truncate">{user.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         </div>
       </div>
@@ -996,6 +1111,9 @@ export const CanvasView: React.FC = () => {
             setProject(updatedProject);
             setPage(updatedProject.pages.find(p => p.id === page.id) || page);
           }}
+          remoteUsers={users}
+          onCursorMove={sendCursor}
+          currentUserId={socket?.id}
         />
 
         {/* Tool Instructions Overlay */}
@@ -1742,6 +1860,36 @@ export const CanvasView: React.FC = () => {
         </div>
       )}
     </div>
+  );
+};
+
+export const CanvasView: React.FC = () => {
+  const { pageId } = useParams<{ pageId: string }>();
+  const [userName, setUserName] = useState('');
+  const [userColor, setUserColor] = useState('');
+
+  useEffect(() => {
+    const storedName = localStorage.getItem('userName');
+    if (storedName) {
+      setUserName(storedName);
+    } else {
+      const newName = `User${Math.floor(Math.random() * 1000)}`;
+      localStorage.setItem('userName', newName);
+      setUserName(newName);
+    }
+
+    const storedColor = localStorage.getItem('userColor');
+    if (storedColor) {
+      setUserColor(storedColor);
+    }
+  }, []);
+
+  if (!userName) return null;
+
+  return (
+    <CollaborationProvider pageId={pageId} userName={userName} userColor={userColor}>
+      <CanvasViewInner />
+    </CollaborationProvider>
   );
 };
 

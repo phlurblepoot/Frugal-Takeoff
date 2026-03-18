@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
-import { getProject, saveProject, getImage, saveImage, saveFile, getFile, deleteFile, getTemplates } from '../utils/store';
+import { getProject, saveProject, getImage, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS } from '../utils/math';
 import { loadPdfAllPagesAsImages } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -81,6 +81,7 @@ export const ProjectView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [editDueDate, setEditDueDate] = useState('');
+  const [activePages, setActivePages] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
@@ -93,6 +94,20 @@ export const ProjectView: React.FC = () => {
       loadProject(projectId);
     }
     loadTemplates();
+
+    // Poll for active pages
+    const fetchActivePages = async () => {
+      try {
+        const pages = await getActivePages();
+        setActivePages(pages);
+      } catch (error) {
+        console.error('Failed to fetch active pages:', error);
+      }
+    };
+    
+    fetchActivePages();
+    const interval = setInterval(fetchActivePages, 5000);
+    return () => clearInterval(interval);
   }, [projectId]);
 
   const loadTemplates = async () => {
@@ -266,6 +281,12 @@ export const ProjectView: React.FC = () => {
   const handleStartRenamePage = (e: React.MouseEvent, page: ProjectPage) => {
     e.preventDefault();
     e.stopPropagation();
+    
+    if (activePages.includes(page.id)) {
+      alert("This page is currently being viewed by another user and cannot be renamed.");
+      return;
+    }
+    
     setEditingPageId(page.id);
     setEditingPageName(page.name);
     setEditingPageNumber(page.pageNumber || '');

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout } from 'lucide-react';
 import { Project } from '../types';
-import { getAllProjects, deleteProject } from '../utils/store';
+import { getAllProjects, deleteProject, getActivePages } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
@@ -19,9 +19,24 @@ export const ProjectsList: React.FC = () => {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [activePages, setActivePages] = useState<string[]>([]);
 
   useEffect(() => {
     loadProjects();
+    
+    // Poll for active pages
+    const fetchActivePages = async () => {
+      try {
+        const pages = await getActivePages();
+        setActivePages(pages);
+      } catch (error) {
+        console.error('Failed to fetch active pages:', error);
+      }
+    };
+    
+    fetchActivePages();
+    const interval = setInterval(fetchActivePages, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadProjects = async () => {
@@ -34,6 +49,13 @@ export const ProjectsList: React.FC = () => {
   const handleDeleteClick = (e: React.MouseEvent, project: Project) => {
     e.preventDefault();
     e.stopPropagation();
+    
+    const hasActivePages = project.pages.some(page => activePages.includes(page.id));
+    if (hasActivePages) {
+      alert("This project has pages that are currently being viewed by other users and cannot be deleted.");
+      return;
+    }
+    
     setProjectToDelete(project);
     setDeleteConfirmationText('');
   };
