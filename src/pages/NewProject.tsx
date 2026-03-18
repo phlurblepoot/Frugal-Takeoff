@@ -3,8 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { createProject, saveImage, getImage } from '../utils/store';
-import { loadPdfAllPagesAsImages } from '../utils/pdf';
+import { createProject, saveProject, getProject, saveImage, getImage } from '../utils/store';
+import { loadPdfPagesGenerator } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 
 interface PendingPage {
@@ -13,6 +13,7 @@ interface PendingPage {
   pageNumber?: string;
   description?: string;
   imageId: string;
+  thumbnailId: string;
   imageWidth: number;
   imageHeight: number;
   extractedText?: string;
@@ -32,6 +33,8 @@ export const NewProject: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
   
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [planSetId, setPlanSetId] = useState<string | null>(null);
   const [pendingPages, setPendingPages] = useState<PendingPage[]>([]);
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({});
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
@@ -67,6 +70,37 @@ export const NewProject: React.FC = () => {
 
     setIsProcessing(true);
     try {
+      const newProjectId = uuidv4();
+      const newPlanSetId = uuidv4();
+      setProjectId(newProjectId);
+      setPlanSetId(newPlanSetId);
+
+      let parsedBidDueDate = null;
+      if (bidDueDate) {
+        const [year, month, day] = bidDueDate.split('-').map(Number);
+        parsedBidDueDate = new Date(year, month - 1, day).getTime();
+      }
+
+      const project: Project = {
+        id: newProjectId,
+        name,
+        createdAt: Date.now(),
+        contractor: contractor || undefined,
+        bidDueDate: parsedBidDueDate,
+        planSets: [
+          {
+            id: newPlanSetId,
+            name: planSetName || 'Initial Set',
+            date: planSetDate,
+            createdAt: Date.now(),
+          }
+        ],
+        pages: [],
+        takeoffs: [],
+      };
+
+      await createProject(project);
+
       const extractedPages: PendingPage[] = [];
       const thumbnails: Record<string, string> = {};
       
@@ -76,29 +110,55 @@ export const NewProject: React.FC = () => {
         const file = files[i];
         setProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: files.length }));
         
-        const pagesData = await loadPdfAllPagesAsImages(file, (status, current, total) => {
+        const generator = loadPdfPagesGenerator(file, (status, current, total) => {
           setProgress(prev => ({ ...prev, status, current, total }));
         });
 
-        for (let j = 0; j < pagesData.length; j++) {
-          setProgress(prev => ({ ...prev, status: 'Uploading images to server', current: j + 1, total: pagesData.length }));
-          const pageData = pagesData[j];
+        for await (const pageData of generator) {
+          setProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
           const imageId = uuidv4();
+          const thumbnailId = uuidv4();
           await saveImage(imageId, pageData.dataUrl);
-          thumbnails[imageId] = pageData.dataUrl;
+          await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+          thumbnails[imageId] = pageData.thumbnailDataUrl;
           
-          extractedPages.push({
+          const newPage: PendingPage = {
             id: uuidv4(),
             name: pageData.suggestedName || `Page ${globalPageNum}`,
             pageNumber: '',
             description: pageData.suggestedName || '',
             imageId,
+            thumbnailId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
             extractedText: pageData.extractedText,
+          };
+          
+          extractedPages.push(newPage);
+          
+          project.pages.push({
+            id: newPage.id,
+            name: newPage.name,
+            pageNumber: newPage.pageNumber,
+            description: newPage.description,
+            imageId: newPage.imageId,
+            thumbnailId: newPage.thumbnailId,
+            imageWidth: newPage.imageWidth,
+            imageHeight: newPage.imageHeight,
+            extractedText: newPage.extractedText,
+            measurements: [],
+            scaleConfig: null,
+            planSetId: newPlanSetId,
           });
+          
+          if (globalPageNum % 5 === 0) {
+            await saveProject(project);
+          }
+          
           globalPageNum++;
         }
+        // Save any remaining pages
+        await saveProject(project);
       }
 
       setPendingPages(extractedPages);
@@ -112,55 +172,36 @@ export const NewProject: React.FC = () => {
     }
   };
 
-  const handleCreateProject = async () => {
+  const handleSaveChanges = async () => {
+    if (!projectId || !planSetId) return;
+    
     setIsProcessing(true);
     try {
-      const projectId = uuidv4();
-      const planSetId = uuidv4();
-      
-      const pages: ProjectPage[] = pendingPages.map(p => ({
+      const project = await getProject(projectId);
+      if (!project) throw new Error('Project not found');
+
+      const updatedPages: ProjectPage[] = pendingPages.map(p => ({
         id: p.id,
-        name: p.name,
+        name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
         pageNumber: p.pageNumber,
         description: p.description,
         imageId: p.imageId,
+        thumbnailId: p.thumbnailId,
         imageWidth: p.imageWidth,
         imageHeight: p.imageHeight,
         extractedText: p.extractedText,
-        measurements: [],
-        scaleConfig: null,
+        measurements: project.pages.find(pp => pp.id === p.id)?.measurements || [],
+        scaleConfig: project.pages.find(pp => pp.id === p.id)?.scaleConfig || null,
         planSetId,
       }));
 
-      let parsedBidDueDate = null;
-      if (bidDueDate) {
-        const [year, month, day] = bidDueDate.split('-').map(Number);
-        parsedBidDueDate = new Date(year, month - 1, day).getTime();
-      }
-
-      const project: Project = {
-        id: projectId,
-        name,
-        createdAt: Date.now(),
-        contractor: contractor || undefined,
-        bidDueDate: parsedBidDueDate,
-        planSets: [
-          {
-            id: planSetId,
-            name: planSetName || 'Initial Set',
-            date: planSetDate,
-            createdAt: Date.now(),
-          }
-        ],
-        pages,
-        takeoffs: [],
-      };
-
-      await createProject(project);
+      project.pages = updatedPages;
+      await saveProject(project);
+      
       navigate(`/project/${projectId}`);
     } catch (error) {
-      console.error('Error creating project:', error);
-      alert('Failed to create project.');
+      console.error('Error saving project:', error);
+      alert('Failed to save project.');
     } finally {
       setIsProcessing(false);
     }
@@ -283,14 +324,14 @@ export const NewProject: React.FC = () => {
                 <p className="text-slate-500 mt-1">Review and rename the imported pages before creating the project.</p>
               </div>
               <button
-                onClick={handleCreateProject}
+                onClick={handleSaveChanges}
                 disabled={isProcessing}
                 className="flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {isProcessing ? (
                   <><Loader2 size={18} className="animate-spin" /> Saving...</>
                 ) : (
-                  <><Check size={18} /> Create Project</>
+                  <><Check size={18} /> Finish</>
                 )}
               </button>
             </div>

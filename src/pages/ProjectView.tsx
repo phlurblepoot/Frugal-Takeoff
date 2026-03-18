@@ -4,7 +4,7 @@ import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
 import { getProject, saveProject, getImage, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS } from '../utils/math';
-import { loadPdfAllPagesAsImages } from '../utils/pdf';
+import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -58,6 +58,7 @@ export const ProjectView: React.FC = () => {
   const [selectedPlanSetId, setSelectedPlanSetId] = useState<string>('');
   const [showAddPagesModal, setShowAddPagesModal] = useState(false);
   const [addPagesStep, setAddPagesStep] = useState<'details' | 'name_pages'>('details');
+  const [isNamingExistingPages, setIsNamingExistingPages] = useState(false);
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
@@ -333,29 +334,47 @@ export const ProjectView: React.FC = () => {
 
     setIsAddingPages(true);
     try {
+      const planSetId = useExistingPlanSet ? targetPlanSetId : uuidv4();
+      let updatedProject = { 
+        ...project,
+        pages: [...project.pages]
+      };
+
+      if (!useExistingPlanSet) {
+        const newPlanSet = {
+          id: planSetId,
+          name: newPlanSetName,
+          date: newPlanSetDate,
+          createdAt: Date.now(),
+        };
+        updatedProject = {
+          ...updatedProject,
+          planSets: [...(updatedProject.planSets || []), newPlanSet]
+        };
+      }
+
       const extractedPages: any[] = [];
       const thumbnails: Record<string, string> = {};
       
-      let startingPageNum = project.pages.length + 1;
+      let startingPageNum = updatedProject.pages.length + 1;
 
       for (let i = 0; i < newPlanSetFiles.length; i++) {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
         
-        const pagesData = await loadPdfAllPagesAsImages(file, (status, current, total) => {
+        const generator = loadPdfPagesGenerator(file, (status, current, total) => {
           setAddProgress(prev => ({ ...prev, status, current, total }));
         });
 
-        for (let j = 0; j < pagesData.length; j++) {
-          setAddProgress(prev => ({ ...prev, status: 'Uploading images to server', current: j + 1, total: pagesData.length }));
-          const pageData = pagesData[j];
+        for await (const pageData of generator) {
+          setAddProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
           const imageId = uuidv4();
           const thumbnailId = uuidv4();
           await saveImage(imageId, pageData.dataUrl);
           await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-          thumbnails[imageId] = pageData.thumbnailDataUrl; // Use thumbnail for preview
+          thumbnails[imageId] = pageData.thumbnailDataUrl;
           
-          extractedPages.push({
+          const newPage = {
             id: uuidv4(),
             name: pageData.suggestedName || `Page ${startingPageNum}`,
             pageNumber: '',
@@ -365,9 +384,40 @@ export const ProjectView: React.FC = () => {
             imageWidth: pageData.width,
             imageHeight: pageData.height,
             extractedText: pageData.extractedText,
-          });
+          };
+          
+          extractedPages.push(newPage);
+          
+          const newProjectPage = {
+            id: newPage.id,
+            name: newPage.name,
+            pageNumber: newPage.pageNumber,
+            description: newPage.description,
+            imageId: newPage.imageId,
+            thumbnailId: newPage.thumbnailId,
+            imageWidth: newPage.imageWidth,
+            imageHeight: newPage.imageHeight,
+            extractedText: newPage.extractedText,
+            measurements: [],
+            scaleConfig: null,
+            planSetId,
+          };
+          
+          updatedProject = {
+            ...updatedProject,
+            pages: [...updatedProject.pages, newProjectPage]
+          };
+          
+          if (startingPageNum % 5 === 0) {
+            await saveProject(updatedProject);
+            setProject(updatedProject);
+          }
+          
           startingPageNum++;
         }
+        // Save any remaining pages
+        await saveProject(updatedProject);
+        setProject(updatedProject);
       }
 
       setPendingPages(extractedPages);
@@ -685,52 +735,64 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  const handleOpenNamePages = () => {
+    if (!project) return;
+    
+    // Populate pendingPages with existing filtered pages
+    const existingPages = filteredPages.map(p => ({
+      ...p,
+      pageNumber: p.pageNumber || '',
+      description: p.description || p.name || '',
+    }));
+    
+    const thumbnails: Record<string, string> = {};
+    filteredPages.forEach(p => {
+      thumbnails[p.imageId] = `/api/images/${p.thumbnailId || p.imageId}/raw`;
+    });
+    
+    setPendingPages(existingPages);
+    setPendingThumbnails(thumbnails);
+    setAddPagesStep('name_pages');
+    setIsNamingExistingPages(true);
+    setShowAddPagesModal(true);
+  };
+
   const handleConfirmAddPages = async () => {
     if (!project) return;
     setIsAddingPages(true);
     try {
-      const planSetId = useExistingPlanSet ? targetPlanSetId : uuidv4();
-      const newPages: ProjectPage[] = pendingPages.map(p => ({
-        id: p.id,
-        name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
-        pageNumber: p.pageNumber,
-        description: p.description,
-        imageId: p.imageId,
-        thumbnailId: p.thumbnailId,
-        imageWidth: p.imageWidth,
-        imageHeight: p.imageHeight,
-        extractedText: p.extractedText,
-        measurements: [],
-        scaleConfig: null,
-        planSetId,
-      }));
-
-      let updatedProject;
-      if (useExistingPlanSet) {
-        updatedProject = {
-          ...project,
-          pages: [...project.pages, ...newPages]
-        };
-      } else {
-        const newPlanSet = {
-          id: planSetId,
-          name: newPlanSetName,
-          date: newPlanSetDate,
-          createdAt: Date.now(),
-        };
-
-        updatedProject = {
-          ...project,
-          planSets: [...(project.planSets || []), newPlanSet],
-          pages: [...project.pages, ...newPages]
-        };
-      }
+      // The pages are already added to the project, we just need to update their names
+      const updatedProject = { 
+        ...project,
+        pages: [...project.pages]
+      };
+      
+      pendingPages.forEach(p => {
+        const pageIndex = updatedProject.pages.findIndex(pp => pp.id === p.id);
+        if (pageIndex !== -1) {
+          updatedProject.pages[pageIndex] = {
+            ...updatedProject.pages[pageIndex],
+            name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+            pageNumber: p.pageNumber,
+            description: p.description,
+          };
+        }
+      });
 
       await saveProject(updatedProject);
       setProject(updatedProject);
-      setSelectedPlanSetId(planSetId);
+      
+      if (!isNamingExistingPages) {
+        // Find the planSetId from the first pending page
+        const planSetId = updatedProject.pages.find(p => p.id === pendingPages[0]?.id)?.planSetId;
+        if (planSetId) {
+          setSelectedPlanSetId(planSetId);
+        }
+      }
+      
       setShowAddPagesModal(false);
       setAddPagesStep('details');
+      setIsNamingExistingPages(false);
       setNewPlanSetName('');
       setNewPlanSetFiles([]);
       setPendingPages([]);
@@ -1069,6 +1131,10 @@ export const ProjectView: React.FC = () => {
                             (page.description && page.description.toLowerCase().includes(searchLower)) ||
                             (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
       return matchesSearch;
+    }).sort((a, b) => {
+      const nameA = a.pageNumber || a.name || '';
+      const nameB = b.pageNumber || b.name || '';
+      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [project, selectedPlanSetId, searchTerm]);
 
@@ -1254,6 +1320,13 @@ export const ProjectView: React.FC = () => {
                     )}
                   </button>
                 )}
+                <button
+                  onClick={handleOpenNamePages}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center gap-2 shadow-sm"
+                >
+                  <Edit2 size={16} />
+                  Name Pages
+                </button>
                 <button
                   onClick={() => setShowAddPagesModal(true)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm"
@@ -2046,6 +2119,7 @@ export const ProjectView: React.FC = () => {
                 onClick={() => {
                   setShowAddPagesModal(false);
                   setAddPagesStep('details');
+                  setIsNamingExistingPages(false);
                   setNewPlanSetName('');
                   setNewPlanSetFiles([]);
                   setPendingPages([]);
@@ -2199,6 +2273,7 @@ export const ProjectView: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setShowAddPagesModal(false);
+                      setIsNamingExistingPages(false);
                       setNewPlanSetName('');
                       setNewPlanSetFiles([]);
                       setUseExistingPlanSet(false);
@@ -2311,15 +2386,32 @@ export const ProjectView: React.FC = () => {
                   </div>
                 </div>
                 <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
-                  <button
-                    type="button"
-                    onClick={() => setAddPagesStep('details')}
-                    disabled={isAddingPages}
-                    className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium"
-                  >
-                    <ArrowLeft size={16} />
-                    Back
-                  </button>
+                  {isNamingExistingPages ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddPagesModal(false);
+                        setIsNamingExistingPages(false);
+                        setPendingPages([]);
+                        setPendingThumbnails({});
+                      }}
+                      disabled={isAddingPages}
+                      className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium"
+                    >
+                      <X size={16} />
+                      Cancel
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setAddPagesStep('details')}
+                      disabled={isAddingPages}
+                      className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium"
+                    >
+                      <ArrowLeft size={16} />
+                      Back
+                    </button>
+                  )}
                   <button
                     onClick={handleConfirmAddPages}
                     disabled={isAddingPages}
@@ -2328,7 +2420,7 @@ export const ProjectView: React.FC = () => {
                     {isAddingPages ? (
                       <><Loader2 size={16} className="animate-spin" /> Saving...</>
                     ) : (
-                      <><Check size={16} /> Add Pages</>
+                      <><Check size={16} /> {isNamingExistingPages ? 'Save Changes' : 'Add Pages'}</>
                     )}
                   </button>
                 </div>
