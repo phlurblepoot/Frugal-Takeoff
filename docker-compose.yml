@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  takeoff-app:
+    build: .
+    container_name: takeoff-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Maps the Unraid appdata folder to the container's data directory
+      # Change /mnt/user/appdata/takeoff-app to your preferred Unraid path
+      - /mnt/user/appdata/takeoff-app:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATA_DIR=/app/data

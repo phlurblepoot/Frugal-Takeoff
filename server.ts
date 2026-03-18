@@ -3,28 +3,105 @@ import { createServer as createViteServer } from "vite";
 import { Server } from "socket.io";
 import { createServer } from "http";
 import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 import dotenv from "dotenv";
+import Database from "better-sqlite3";
 
 dotenv.config();
 
 const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
-const PROJECTS_DIR = path.join(DATA_DIR, "projects");
-const IMAGES_DIR = path.join(DATA_DIR, "images");
-const TEMPLATES_FILE = path.join(DATA_DIR, "templates.json");
+const DB_FILE = path.join(DATA_DIR, "app.db");
+
+let db: Database.Database;
 
 async function ensureDirs() {
-  await fs.mkdir(PROJECTS_DIR, { recursive: true });
-  await fs.mkdir(IMAGES_DIR, { recursive: true });
+  await fs.mkdir(DATA_DIR, { recursive: true });
+}
+
+function initDb() {
+  db = new Database(DB_FILE);
+  db.pragma('journal_mode = WAL');
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      data TEXT,
+      createdAt INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS images (
+      id TEXT PRIMARY KEY,
+      data TEXT
+    );
+    CREATE TABLE IF NOT EXISTS templates (
+      id TEXT PRIMARY KEY,
+      data TEXT
+    );
+  `);
+
+  migrateOldData();
+}
+
+function migrateOldData() {
+  const PROJECTS_DIR = path.join(DATA_DIR, "projects");
+  const IMAGES_DIR = path.join(DATA_DIR, "images");
+  const TEMPLATES_FILE = path.join(DATA_DIR, "templates.json");
+
+  // Migrate projects
   try {
-    await fs.access(TEMPLATES_FILE);
-  } catch {
-    await fs.writeFile(TEMPLATES_FILE, "[]", "utf-8");
+    if (fsSync.existsSync(PROJECTS_DIR)) {
+      const files = fsSync.readdirSync(PROJECTS_DIR);
+      const insertProject = db.prepare('INSERT OR IGNORE INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
+      for (const file of files) {
+        if (file.endsWith(".json")) {
+          const data = fsSync.readFileSync(path.join(PROJECTS_DIR, file), "utf-8");
+          const project = JSON.parse(data);
+          insertProject.run(project.id, data, project.createdAt || Date.now());
+        }
+      }
+      fsSync.renameSync(PROJECTS_DIR, path.join(DATA_DIR, "projects_migrated"));
+    }
+  } catch (e) {
+    console.error("Failed to migrate projects", e);
+  }
+
+  // Migrate images
+  try {
+    if (fsSync.existsSync(IMAGES_DIR)) {
+      const files = fsSync.readdirSync(IMAGES_DIR);
+      const insertImage = db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)');
+      for (const file of files) {
+        if (file.endsWith(".txt")) {
+          const data = fsSync.readFileSync(path.join(IMAGES_DIR, file), "utf-8");
+          const id = file.replace('.txt', '');
+          insertImage.run(id, data);
+        }
+      }
+      fsSync.renameSync(IMAGES_DIR, path.join(DATA_DIR, "images_migrated"));
+    }
+  } catch (e) {
+    console.error("Failed to migrate images", e);
+  }
+
+  // Migrate templates
+  try {
+    if (fsSync.existsSync(TEMPLATES_FILE)) {
+      const data = fsSync.readFileSync(TEMPLATES_FILE, "utf-8");
+      const templates = JSON.parse(data);
+      const insertTemplate = db.prepare('INSERT OR IGNORE INTO templates (id, data) VALUES (?, ?)');
+      for (const t of templates) {
+        insertTemplate.run(t.id, JSON.stringify(t));
+      }
+      fsSync.renameSync(TEMPLATES_FILE, path.join(DATA_DIR, "templates_migrated.json"));
+    }
+  } catch (e) {
+    console.error("Failed to migrate templates", e);
   }
 }
 
 async function startServer() {
   await ensureDirs();
+  initDb();
 
   const app = express();
   const httpServer = createServer(app);
@@ -37,17 +114,11 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
 
   // API Routes
-  app.get("/api/projects", async (req, res) => {
+  app.get("/api/projects", (req, res) => {
     try {
-      const files = await fs.readdir(PROJECTS_DIR);
-      const projects = [];
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          const data = await fs.readFile(path.join(PROJECTS_DIR, file), "utf-8");
-          projects.push(JSON.parse(data));
-        }
-      }
-      projects.sort((a, b) => b.createdAt - a.createdAt);
+      const stmt = db.prepare('SELECT data FROM projects ORDER BY createdAt DESC');
+      const rows = stmt.all() as { data: string }[];
+      const projects = rows.map(row => JSON.parse(row.data));
       res.json(projects);
     } catch (error) {
       console.error("Error fetching projects:", error);
@@ -55,19 +126,24 @@ async function startServer() {
     }
   });
 
-  app.get("/api/projects/:id", async (req, res) => {
+  app.get("/api/projects/:id", (req, res) => {
     try {
-      const data = await fs.readFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), "utf-8");
-      res.json(JSON.parse(data));
+      const stmt = db.prepare('SELECT data FROM projects WHERE id = ?');
+      const row = stmt.get(req.params.id) as { data: string } | undefined;
+      if (!row) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      res.json(JSON.parse(row.data));
     } catch (error) {
-      res.status(404).json({ error: "Project not found" });
+      res.status(500).json({ error: "Failed to fetch project" });
     }
   });
 
-  app.post("/api/projects", async (req, res) => {
+  app.post("/api/projects", (req, res) => {
     try {
       const project = req.body;
-      await fs.writeFile(path.join(PROJECTS_DIR, `${project.id}.json`), JSON.stringify(project, null, 2), "utf-8");
+      const stmt = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
+      stmt.run(project.id, JSON.stringify(project), project.createdAt || Date.now());
       res.json({ success: true });
     } catch (error) {
       console.error("Error creating project:", error);
@@ -75,34 +151,46 @@ async function startServer() {
     }
   });
 
-  app.put("/api/projects/:id", async (req, res) => {
+  app.put("/api/projects/:id", (req, res) => {
     try {
       const project = req.body;
       
       try {
-        const oldData = await fs.readFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), "utf-8");
-        const oldProject = JSON.parse(oldData);
-        
-        const newImageIds = new Set([
-          ...(project.pages?.map((p: any) => p.imageId) || []),
-          ...(project.printouts?.map((p: any) => p.fileId) || [])
-        ]);
+        const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
+        const row = stmtGet.get(req.params.id) as { data: string } | undefined;
+        if (row) {
+          const oldProject = JSON.parse(row.data);
+          
+          const newImageIds = new Set([
+            ...(project.pages?.map((p: any) => p.imageId) || []),
+            ...(project.printouts?.map((p: any) => p.fileId) || [])
+          ]);
 
-        const oldImageIds = [
-          ...(oldProject.pages?.map((p: any) => p.imageId) || []),
-          ...(oldProject.printouts?.map((p: any) => p.fileId) || [])
-        ];
+          const oldImageIds = [
+            ...(oldProject.pages?.map((p: any) => p.imageId) || []),
+            ...(oldProject.printouts?.map((p: any) => p.fileId) || [])
+          ];
 
-        for (const imgId of oldImageIds) {
-          if (!newImageIds.has(imgId)) {
-            await fs.unlink(path.join(IMAGES_DIR, `${imgId}.txt`)).catch(() => {});
+          const deleteImgStmt = db.prepare('DELETE FROM images WHERE id = ?');
+          for (const imgId of oldImageIds) {
+            if (!newImageIds.has(imgId)) {
+              deleteImgStmt.run(imgId);
+            }
           }
         }
       } catch (e) {
-        // Ignore if old project doesn't exist
+        // Ignore if old project doesn't exist or error occurs during cleanup
       }
 
-      await fs.writeFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), JSON.stringify(project, null, 2), "utf-8");
+      const stmt = db.prepare('UPDATE projects SET data = ? WHERE id = ?');
+      const result = stmt.run(JSON.stringify(project), req.params.id);
+      
+      if (result.changes === 0) {
+        // If it didn't exist, insert it
+        const insertStmt = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
+        insertStmt.run(project.id, JSON.stringify(project), project.createdAt || Date.now());
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error updating project:", error);
@@ -110,21 +198,26 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/projects/:id", async (req, res) => {
+  app.delete("/api/projects/:id", (req, res) => {
     try {
-      const data = await fs.readFile(path.join(PROJECTS_DIR, `${req.params.id}.json`), "utf-8");
-      const project = JSON.parse(data);
+      const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
+      const row = stmtGet.get(req.params.id) as { data: string } | undefined;
       
-      const imageIds = [
-        ...(project.pages?.map((p: any) => p.imageId) || []),
-        ...(project.printouts?.map((p: any) => p.fileId) || [])
-      ];
-      
-      for (const imgId of imageIds) {
-        await fs.unlink(path.join(IMAGES_DIR, `${imgId}.txt`)).catch(() => {});
+      if (row) {
+        const project = JSON.parse(row.data);
+        const imageIds = [
+          ...(project.pages?.map((p: any) => p.imageId) || []),
+          ...(project.printouts?.map((p: any) => p.fileId) || [])
+        ];
+        
+        const deleteImgStmt = db.prepare('DELETE FROM images WHERE id = ?');
+        for (const imgId of imageIds) {
+          deleteImgStmt.run(imgId);
+        }
       }
       
-      await fs.unlink(path.join(PROJECTS_DIR, `${req.params.id}.json`));
+      const stmtDel = db.prepare('DELETE FROM projects WHERE id = ?');
+      stmtDel.run(req.params.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting project:", error);
@@ -132,19 +225,48 @@ async function startServer() {
     }
   });
 
-  app.get("/api/images/:id", async (req, res) => {
+  app.get("/api/images/:id", (req, res) => {
     try {
-      const data = await fs.readFile(path.join(IMAGES_DIR, `${req.params.id}.txt`), "utf-8");
-      res.json({ data });
+      const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
+      const row = stmt.get(req.params.id) as { data: string } | undefined;
+      if (!row) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+      res.json({ data: row.data });
     } catch (error) {
-      res.status(404).json({ error: "Image not found" });
+      res.status(500).json({ error: "Failed to fetch image" });
     }
   });
 
-  app.post("/api/images", async (req, res) => {
+  app.get("/api/images/:id/raw", (req, res) => {
+    try {
+      const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
+      const row = stmt.get(req.params.id) as { data: string } | undefined;
+      if (!row || !row.data) {
+        return res.status(404).send("Image not found");
+      }
+      
+      const matches = row.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches || matches.length !== 3) {
+        return res.status(400).send("Invalid image data");
+      }
+      
+      const contentType = matches[1];
+      const buffer = Buffer.from(matches[2], 'base64');
+      
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+      res.send(buffer);
+    } catch (error) {
+      res.status(500).send("Failed to fetch image");
+    }
+  });
+
+  app.post("/api/images", (req, res) => {
     try {
       const { id, data } = req.body;
-      await fs.writeFile(path.join(IMAGES_DIR, `${id}.txt`), data, "utf-8");
+      const stmt = db.prepare('INSERT OR REPLACE INTO images (id, data) VALUES (?, ?)');
+      stmt.run(id, data);
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving image:", error);
@@ -152,29 +274,22 @@ async function startServer() {
     }
   });
 
-  app.get("/api/templates", async (req, res) => {
+  app.get("/api/templates", (req, res) => {
     try {
-      const data = await fs.readFile(TEMPLATES_FILE, "utf-8");
-      res.json(JSON.parse(data));
+      const stmt = db.prepare('SELECT data FROM templates');
+      const rows = stmt.all() as { data: string }[];
+      const templates = rows.map(row => JSON.parse(row.data));
+      res.json(templates);
     } catch (error) {
       res.json([]);
     }
   });
 
-  app.post("/api/templates", async (req, res) => {
+  app.post("/api/templates", (req, res) => {
     try {
       const t = req.body;
-      const data = await fs.readFile(TEMPLATES_FILE, "utf-8");
-      let templates = JSON.parse(data);
-      
-      const index = templates.findIndex((x: any) => x.id === t.id);
-      if (index >= 0) {
-        templates[index] = t;
-      } else {
-        templates.push(t);
-      }
-      
-      await fs.writeFile(TEMPLATES_FILE, JSON.stringify(templates, null, 2), "utf-8");
+      const stmt = db.prepare('INSERT OR REPLACE INTO templates (id, data) VALUES (?, ?)');
+      stmt.run(t.id, JSON.stringify(t));
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving template:", error);
@@ -182,12 +297,10 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/templates/:id", async (req, res) => {
+  app.delete("/api/templates/:id", (req, res) => {
     try {
-      const data = await fs.readFile(TEMPLATES_FILE, "utf-8");
-      let templates = JSON.parse(data);
-      templates = templates.filter((x: any) => x.id !== req.params.id);
-      await fs.writeFile(TEMPLATES_FILE, JSON.stringify(templates, null, 2), "utf-8");
+      const stmt = db.prepare('DELETE FROM templates WHERE id = ?');
+      stmt.run(req.params.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting template:", error);

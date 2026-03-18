@@ -28,8 +28,9 @@ export const NewProject: React.FC = () => {
   const [planSetDate, setPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
   const [files, setFiles] = useState<File[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0, currentFile: 0, totalFiles: 0 });
+  const [progress, setProgress] = useState({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
   
   const [pendingPages, setPendingPages] = useState<PendingPage[]>([]);
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({});
@@ -38,6 +39,8 @@ export const NewProject: React.FC = () => {
   const [extractionRect, setExtractionRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<{ x: number, y: number } | null>(null);
+  const [interactionMode, setInteractionMode] = useState<'draw' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | null>(null);
+  const [initialRect, setInitialRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
@@ -73,11 +76,13 @@ export const NewProject: React.FC = () => {
         const file = files[i];
         setProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: files.length }));
         
-        const pagesData = await loadPdfAllPagesAsImages(file, (current, total) => {
-          setProgress(prev => ({ ...prev, current, total }));
+        const pagesData = await loadPdfAllPagesAsImages(file, (status, current, total) => {
+          setProgress(prev => ({ ...prev, status, current, total }));
         });
 
-        for (const pageData of pagesData) {
+        for (let j = 0; j < pagesData.length; j++) {
+          setProgress(prev => ({ ...prev, status: 'Uploading images to server', current: j + 1, total: pagesData.length }));
+          const pageData = pagesData[j];
           const imageId = uuidv4();
           await saveImage(imageId, pageData.dataUrl);
           thumbnails[imageId] = pageData.dataUrl;
@@ -187,12 +192,13 @@ export const NewProject: React.FC = () => {
         
         for (let i = 0; i < updatedPages.length; i++) {
           const p = updatedPages[i];
-          const imageData = await getImage(p.imageId);
-          if (!imageData) continue;
 
           const img = new Image();
-          img.src = imageData;
-          await new Promise(resolve => img.onload = resolve);
+          img.src = `/api/images/${p.imageId}/raw`;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+          });
 
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
@@ -223,12 +229,12 @@ export const NewProject: React.FC = () => {
         const page = pendingPages.find(p => p.id === previewPageId);
         if (!page) return;
 
-        const imageData = await getImage(page.imageId);
-        if (!imageData) return;
-
         const img = new Image();
-        img.src = imageData;
-        await new Promise(resolve => img.onload = resolve);
+        img.src = `/api/images/${page.imageId}/raw`;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
 
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -439,15 +445,111 @@ export const NewProject: React.FC = () => {
                 onWheel={(e) => {
                   if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
-                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-                    setZoom(prev => Math.min(5, Math.max(1, prev + delta)));
+                    const zoomDirection = e.deltaY > 0 ? -1 : 1;
+                    const zoomFactor = 1.1;
+                    const newZoom = Math.min(5, Math.max(1, zoomDirection > 0 ? zoom * zoomFactor : zoom / zoomFactor));
+                    
+                    if (newZoom !== zoom) {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const centerX = rect.left + rect.width / 2;
+                      const centerY = rect.top + rect.height / 2;
+                      
+                      const mouseX = e.clientX - centerX;
+                      const mouseY = e.clientY - centerY;
+                      
+                      const scaleRatio = newZoom / zoom;
+                      
+                      setPanOffset({
+                        x: mouseX - (mouseX - panOffset.x) * scaleRatio,
+                        y: mouseY - (mouseY - panOffset.y) * scaleRatio
+                      });
+                      
+                      setZoom(newZoom);
+                    }
                   }
+                }}
+                onMouseMove={(e) => {
+                  if (isPanning) {
+                    setPanOffset({
+                      x: e.clientX - panStart.x,
+                      y: e.clientY - panStart.y
+                    });
+                    return;
+                  }
+                  
+                  const rect = imageContainerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+
+                  if (interactionMode === 'move' && initialRect && selectionStart) {
+                    const dx = ((e.clientX - selectionStart.x) / rect.width) * 100;
+                    const dy = ((e.clientY - selectionStart.y) / rect.height) * 100;
+                    setExtractionRect({
+                      ...initialRect,
+                      x: Math.max(0, Math.min(100 - initialRect.width, initialRect.x + dx)),
+                      y: Math.max(0, Math.min(100 - initialRect.height, initialRect.y + dy))
+                    });
+                    return;
+                  }
+                  
+                  if (interactionMode && interactionMode.startsWith('resize-') && initialRect && selectionStart) {
+                    const dx = ((e.clientX - selectionStart.x) / rect.width) * 100;
+                    const dy = ((e.clientY - selectionStart.y) / rect.height) * 100;
+                    
+                    let newX = initialRect.x;
+                    let newY = initialRect.y;
+                    let newW = initialRect.width;
+                    let newH = initialRect.height;
+                    
+                    if (interactionMode.includes('w')) {
+                      newX = Math.min(initialRect.x + initialRect.width - 1, Math.max(0, initialRect.x + dx));
+                      newW = initialRect.x + initialRect.width - newX;
+                    }
+                    if (interactionMode.includes('e')) {
+                      newW = Math.max(1, Math.min(100 - initialRect.x, initialRect.width + dx));
+                    }
+                    if (interactionMode.includes('n')) {
+                      newY = Math.min(initialRect.y + initialRect.height - 1, Math.max(0, initialRect.y + dy));
+                      newH = initialRect.y + initialRect.height - newY;
+                    }
+                    if (interactionMode.includes('s')) {
+                      newH = Math.max(1, Math.min(100 - initialRect.y, initialRect.height + dy));
+                    }
+                    
+                    setExtractionRect({ x: newX, y: newY, width: newW, height: newH });
+                    return;
+                  }
+
+                  if (isSelecting && selectionStart && interactionMode === 'draw') {
+                    const clientX = Math.max(rect.left, Math.min(rect.right, e.clientX));
+                    const clientY = Math.max(rect.top, Math.min(rect.bottom, e.clientY));
+                    
+                    const x = ((clientX - rect.left) / rect.width) * 100;
+                    const y = ((clientY - rect.top) / rect.height) * 100;
+                    
+                    setExtractionRect({
+                      x: Math.min(x, selectionStart.x),
+                      y: Math.min(y, selectionStart.y),
+                      width: Math.abs(x - selectionStart.x),
+                      height: Math.abs(y - selectionStart.y)
+                    });
+                  }
+                }}
+                onMouseUp={() => {
+                  setIsSelecting(false);
+                  setIsPanning(false);
+                  setInteractionMode(null);
+                }}
+                onMouseLeave={() => {
+                  setIsSelecting(false);
+                  setIsPanning(false);
+                  setInteractionMode(null);
                 }}
               >
                 <div 
+                  ref={imageContainerRef}
                   className="relative transition-transform duration-200 ease-out"
                   style={{ 
-                    transform: `scale(${zoom}) translate(${panOffset.x}px, ${panOffset.y}px)`,
+                    transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
                     transformOrigin: 'center center'
                   }}
                   onMouseDown={(e) => {
@@ -461,36 +563,9 @@ export const NewProject: React.FC = () => {
                     const x = ((e.clientX - rect.left) / rect.width) * 100;
                     const y = ((e.clientY - rect.top) / rect.height) * 100;
                     setIsSelecting(true);
+                    setInteractionMode('draw');
                     setSelectionStart({ x, y });
                     setExtractionRect({ x, y, width: 0, height: 0 });
-                  }}
-                  onMouseMove={(e) => {
-                    if (isPanning) {
-                      setPanOffset({
-                        x: e.clientX - panStart.x,
-                        y: e.clientY - panStart.y
-                      });
-                      return;
-                    }
-                    if (!isSelecting || !selectionStart) return;
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const x = ((e.clientX - rect.left) / rect.width) * 100;
-                    const y = ((e.clientY - rect.top) / rect.height) * 100;
-                    
-                    setExtractionRect({
-                      x: Math.min(x, selectionStart.x),
-                      y: Math.min(y, selectionStart.y),
-                      width: Math.abs(x - selectionStart.x),
-                      height: Math.abs(y - selectionStart.y)
-                    });
-                  }}
-                  onMouseUp={() => {
-                    setIsSelecting(false);
-                    setIsPanning(false);
-                  }}
-                  onMouseLeave={() => {
-                    setIsSelecting(false);
-                    setIsPanning(false);
                   }}
                 >
                   <img 
@@ -501,14 +576,24 @@ export const NewProject: React.FC = () => {
                   />
                   {extractionRect && (
                     <div 
-                      className="absolute border-2 border-blue-500 bg-blue-500/20 pointer-events-none"
+                      className="absolute border-2 border-blue-500 bg-blue-500/20 cursor-move pointer-events-auto"
                       style={{
                         left: `${extractionRect.x}%`,
                         top: `${extractionRect.y}%`,
                         width: `${extractionRect.width}%`,
                         height: `${extractionRect.height}%`
                       }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setInteractionMode('move');
+                        setSelectionStart({ x: e.clientX, y: e.clientY });
+                        setInitialRect({ ...extractionRect });
+                      }}
                     >
+                      <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
                     </div>
                   )}
                   {!extractionType && zoom === 1 && (
@@ -521,38 +606,46 @@ export const NewProject: React.FC = () => {
                 </div>
               </div>
 
-              {extractionRect && (
-                <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
-                  <div className="flex items-center gap-2 text-sm text-slate-600">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                    Area selected. Ready to extract text.
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setExtractionRect(null)}
-                      className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
-                    >
-                      Clear Selection
-                    </button>
-                    <button
-                      onClick={() => handleExtractText(false)}
-                      disabled={isExtracting}
-                      className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
-                    >
-                      {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-                      Extract Current
-                    </button>
-                    <button
-                      onClick={() => handleExtractText(true)}
-                      disabled={isExtracting}
-                      className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
-                    >
-                      {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                      Extract All Pages
-                    </button>
-                  </div>
+              <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+                <div className="flex items-center gap-2 text-sm text-slate-600">
+                  {extractionRect ? (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                      Area selected. Ready to extract text.
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-2 h-2 rounded-full bg-slate-300" />
+                      Select an area to extract text.
+                    </>
+                  )}
                 </div>
-              )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setExtractionRect(null)}
+                    disabled={!extractionRect}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                  >
+                    Clear Selection
+                  </button>
+                  <button
+                    onClick={() => handleExtractText(false)}
+                    disabled={isExtracting || !extractionRect}
+                    className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    Extract Current
+                  </button>
+                  <button
+                    onClick={() => handleExtractText(true)}
+                    disabled={isExtracting || !extractionRect}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                  >
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    Extract All Pages
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -737,7 +830,8 @@ export const NewProject: React.FC = () => {
                 {isProcessing ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
-                    Processing {progress.totalFiles > 1 ? `File ${progress.currentFile}/${progress.totalFiles} ` : ''}
+                    {progress.status ? `${progress.status} ` : 'Processing '}
+                    {progress.totalFiles > 1 ? `File ${progress.currentFile}/${progress.totalFiles} ` : ''}
                     {progress.total > 0 ? `(${progress.current}/${progress.total})` : '...'}
                   </>
                 ) : (

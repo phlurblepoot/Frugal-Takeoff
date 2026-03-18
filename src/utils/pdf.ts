@@ -17,7 +17,7 @@ export interface PdfPageImage {
 
 export const loadPdfAllPagesAsImages = async (
   file: File, 
-  onProgress?: (pageNum: number, totalPages: number) => void
+  onProgress?: (status: string, pageNum: number, totalPages: number) => void
 ): Promise<PdfPageImage[]> => {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ 
@@ -37,7 +37,7 @@ export const loadPdfAllPagesAsImages = async (
   }
 
   for (let i = 1; i <= totalPages; i++) {
-    if (onProgress) onProgress(i, totalPages);
+    if (onProgress) onProgress('Converting pages', i, totalPages);
     
     const page = await pdf.getPage(i);
     
@@ -57,6 +57,7 @@ export const loadPdfAllPagesAsImages = async (
     
     await page.render({ canvasContext: context, viewport } as any).promise;
     
+    if (onProgress) onProgress('Scanning text', i, totalPages);
     let extractedText = '';
     try {
       const textContent = await page.getTextContent();
@@ -67,6 +68,7 @@ export const loadPdfAllPagesAsImages = async (
     
     // Fallback to OCR if no text was extracted (e.g. image-based PDF)
     if (!extractedText || extractedText.trim().length < 5) {
+      if (onProgress) onProgress('Running OCR', i, totalPages);
       try {
         const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng');
         extractedText = text;

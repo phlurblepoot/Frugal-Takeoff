@@ -161,12 +161,7 @@ export const CanvasView: React.FC = () => {
       return;
     }
     
-    const imgUrl = await getImage(pg.imageId);
-    if (!imgUrl) {
-      alert('Failed to load image data.');
-      navigate(`/project/${pId}`);
-      return;
-    }
+    const imgUrl = `/api/images/${pg.imageId}/raw`;
     
     setProject(proj);
     setPage(pg);
