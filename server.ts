@@ -311,6 +311,12 @@ async function startServer() {
   // WebSocket Logic
   const users: Record<string, { id: string; name: string; pageId: string; cursor: { x: number; y: number } | null; color: string }> = {};
 
+  // Active pages endpoint
+  app.get("/api/pages/active", (req, res) => {
+    const activePageIds = Array.from(new Set(Object.values(users).map(u => u.pageId)));
+    res.json(activePageIds);
+  });
+
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
@@ -335,8 +341,14 @@ async function startServer() {
       socket.to(pageId).emit("measurement-sync", { action, measurement });
     });
 
-    socket.on("project-update", ({ projectId }) => {
-      socket.broadcast.emit("project-sync", { projectId });
+    socket.on("update-user", ({ name, color }) => {
+      const user = users[socket.id];
+      if (user) {
+        user.name = name;
+        user.color = color;
+        const roomUsers = Object.values(users).filter(u => u.pageId === user.pageId);
+        io.to(user.pageId).emit("room-users", roomUsers);
+      }
     });
 
     socket.on("disconnect", () => {
