@@ -77,6 +77,7 @@ export interface ProjectPage {
   pageNumber?: string;
   description?: string;
   imageId: string; // Reference to the image stored separately
+  thumbnailId?: string; // Reference to the smaller thumbnail image
   imageWidth: number;
   imageHeight: number;
   measurements: Measurement[];

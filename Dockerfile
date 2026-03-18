@@ -1,33 +1,30 @@
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 
-# Set working directory
+# Install dependencies needed for better-sqlite3
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy package files
+# Copy package files and install dependencies
 COPY package*.json ./
-
-# Install dependencies (including devDependencies for building)
-RUN npm install
+RUN npm ci
 
 # Copy the rest of the application code
 COPY . .
 
-# Build the Vite frontend
+# Build the frontend
 RUN npm run build
 
-# Set environment variables for production
+# Set environment variables
 ENV NODE_ENV=production
+ENV STORAGE_PATH=/app/data
 ENV PORT=3000
-ENV DATA_DIR=/app/data
-
-# Create data directory and set permissions
-RUN mkdir -p /app/data && chown -R node:node /app
-
-# Switch to non-root user for security
-USER node
 
 # Expose the port the app runs on
 EXPOSE 3000
 
-# Start the server using tsx
+# Create the data directory
+RUN mkdir -p /app/data
+
+# Start the server
 CMD ["npx", "tsx", "server.ts"]

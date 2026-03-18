@@ -81,6 +81,8 @@ export const ProjectView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [editDueDate, setEditDueDate] = useState('');
+  const [isOptimizingThumbnails, setIsOptimizingThumbnails] = useState(false);
+  const [optimizeProgress, setOptimizeProgress] = useState({ current: 0, total: 0 });
   const [activePages, setActivePages] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
@@ -348,8 +350,10 @@ export const ProjectView: React.FC = () => {
           setAddProgress(prev => ({ ...prev, status: 'Uploading images to server', current: j + 1, total: pagesData.length }));
           const pageData = pagesData[j];
           const imageId = uuidv4();
+          const thumbnailId = uuidv4();
           await saveImage(imageId, pageData.dataUrl);
-          thumbnails[imageId] = pageData.dataUrl;
+          await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+          thumbnails[imageId] = pageData.thumbnailDataUrl; // Use thumbnail for preview
           
           extractedPages.push({
             id: uuidv4(),
@@ -357,6 +361,7 @@ export const ProjectView: React.FC = () => {
             pageNumber: '',
             description: pageData.suggestedName || `Page ${startingPageNum}`,
             imageId,
+            thumbnailId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
             extractedText: pageData.extractedText,
@@ -691,6 +696,7 @@ export const ProjectView: React.FC = () => {
         pageNumber: p.pageNumber,
         description: p.description,
         imageId: p.imageId,
+        thumbnailId: p.thumbnailId,
         imageWidth: p.imageWidth,
         imageHeight: p.imageHeight,
         extractedText: p.extractedText,
@@ -936,6 +942,64 @@ export const ProjectView: React.FC = () => {
     setIsEditingDueDate(false);
   };
 
+  const handleOptimizeThumbnails = async () => {
+    if (!project) return;
+    
+    const pagesToOptimize = project.pages.filter(p => !p.thumbnailId);
+    if (pagesToOptimize.length === 0) return;
+
+    setIsOptimizingThumbnails(true);
+    setOptimizeProgress({ current: 0, total: pagesToOptimize.length });
+
+    const updatedPages = [...project.pages];
+
+    for (let i = 0; i < pagesToOptimize.length; i++) {
+      const page = pagesToOptimize[i];
+      setOptimizeProgress({ current: i + 1, total: pagesToOptimize.length });
+      
+      try {
+        // Load the full image
+        const imgUrl = await getFile(page.imageId);
+        if (!imgUrl) continue;
+
+        const img = new Image();
+        img.src = imgUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+
+        // Generate thumbnail
+        const thumbCanvas = document.createElement('canvas');
+        const thumbCtx = thumbCanvas.getContext('2d');
+        const thumbScale = 400 / Math.max(img.width, img.height);
+        thumbCanvas.width = img.width * thumbScale;
+        thumbCanvas.height = img.height * thumbScale;
+        
+        if (thumbCtx) {
+          thumbCtx.drawImage(img, 0, 0, thumbCanvas.width, thumbCanvas.height);
+          const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
+          
+          const thumbnailId = uuidv4();
+          await saveImage(thumbnailId, thumbnailDataUrl);
+          
+          // Update page
+          const pageIndex = updatedPages.findIndex(p => p.id === page.id);
+          if (pageIndex !== -1) {
+            updatedPages[pageIndex] = { ...updatedPages[pageIndex], thumbnailId };
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to optimize thumbnail for page ${page.name}`, err);
+      }
+    }
+
+    const updatedProject = { ...project, pages: updatedPages };
+    await saveProject(updatedProject);
+    setProject(updatedProject);
+    setIsOptimizingThumbnails(false);
+  };
+
   const getDueDateColor = () => {
     if (!project || project.submitted || !project.bidDueDate) return 'text-slate-500';
     
@@ -1127,13 +1191,28 @@ export const ProjectView: React.FC = () => {
                   className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                 />
               </div>
-              <button
-                onClick={() => setShowAddPagesModal(true)}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm"
-              >
-                <Plus size={16} />
-                Add Pages
-              </button>
+              <div className="flex gap-2">
+                {project.pages.some(p => !p.thumbnailId) && (
+                  <button
+                    onClick={handleOptimizeThumbnails}
+                    disabled={isOptimizingThumbnails}
+                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
+                  >
+                    {isOptimizingThumbnails ? (
+                      <><Loader2 size={16} className="animate-spin" /> Optimizing ({optimizeProgress.current}/{optimizeProgress.total})</>
+                    ) : (
+                      <><Settings size={16} /> Optimize Thumbnails</>
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowAddPagesModal(true)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm"
+                >
+                  <Plus size={16} />
+                  Add Pages
+                </button>
+              </div>
             </div>
 
             {filteredPages.length === 0 ? (
@@ -1164,7 +1243,7 @@ export const ProjectView: React.FC = () => {
                   >
                     <div className="h-40 bg-slate-100 relative overflow-hidden border-b border-slate-200">
                       <img 
-                        src={`/api/images/${page.imageId}/raw`} 
+                        src={`/api/images/${page.thumbnailId || page.imageId}/raw`} 
                         alt={page.name} 
                         className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity"
                         referrerPolicy="no-referrer"

@@ -8,6 +8,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export interface PdfPageImage {
   dataUrl: string;
+  thumbnailDataUrl: string;
   width: number;
   height: number;
   pageNum: number;
@@ -86,8 +87,19 @@ export const loadPdfAllPagesAsImages = async (
       suggestedName = pageLabels[i - 1];
     }
     
+    // Generate a smaller thumbnail
+    const thumbCanvas = document.createElement('canvas');
+    const thumbCtx = thumbCanvas.getContext('2d');
+    const thumbScale = 400 / Math.max(viewport.width, viewport.height);
+    thumbCanvas.width = viewport.width * thumbScale;
+    thumbCanvas.height = viewport.height * thumbScale;
+    if (thumbCtx) {
+      thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    }
+    
     pages.push({
       dataUrl: canvas.toDataURL('image/png'),
+      thumbnailDataUrl: thumbCanvas.toDataURL('image/jpeg', 0.7),
       width: viewport.width,
       height: viewport.height,
       pageNum: i,
