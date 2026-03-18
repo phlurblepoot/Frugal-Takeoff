@@ -12,6 +12,7 @@ export interface Measurement {
   heights?: number[];
   isTwoSided?: boolean;
   regionId?: string;
+  planSetId?: string; // The plan set version this measurement was made/updated on
 }
 
 export interface MeasurementTakeoff {

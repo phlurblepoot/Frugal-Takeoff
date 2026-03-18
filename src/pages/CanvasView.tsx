@@ -308,6 +308,24 @@ const CanvasViewInner: React.FC = () => {
     }
   };
 
+  const pageKey = page?.pageNumber || page?.name;
+  const pageVersions = project?.pages.filter(p => (p.pageNumber || p.name) === pageKey) || [];
+
+  const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
+
+  useEffect(() => {
+    if (!project || !page) return;
+    
+    const allMeasurements: Measurement[] = [];
+    pageVersions.forEach(pv => {
+      pv.measurements.forEach(m => {
+        allMeasurements.push(m);
+      });
+    });
+    
+    setAggregatedMeasurements(allMeasurements);
+  }, [project, page]);
+
   const addMeasurement = (measurement: Measurement) => {
     if (!page) return;
     
@@ -316,6 +334,7 @@ const CanvasViewInner: React.FC = () => {
       ...measurement,
       takeoffId: selectedTakeoffId,
       color: selectedColor,
+      planSetId: page.planSetId,
     };
     
     pushToHistory({ type: 'add', measurement: newMeasurement });
@@ -333,28 +352,57 @@ const CanvasViewInner: React.FC = () => {
   };
 
   const updateMeasurement = (id: string, updates: Partial<Measurement>, targetPageId?: string) => {
-    if (!project) return;
-    const pageToUpdateId = targetPageId || page?.id;
-    if (!pageToUpdateId) return;
+    if (!project || !page) return;
+    
+    let sourcePageId = targetPageId;
+    let existingMeasurement: Measurement | undefined;
+    
+    if (!sourcePageId) {
+      // Find which page has this measurement
+      for (const p of project.pages) {
+        const m = p.measurements.find(m => m.id === id);
+        if (m) {
+          sourcePageId = p.id;
+          existingMeasurement = m;
+          break;
+        }
+      }
+    } else {
+      existingMeasurement = project.pages.find(p => p.id === sourcePageId)?.measurements.find(m => m.id === id);
+    }
+    
+    if (!sourcePageId || !existingMeasurement) return;
+
+    const destinationPageId = page.id;
+    const isMoving = sourcePageId !== destinationPageId;
+    
+    const updatedMeasurement = { ...existingMeasurement, ...updates, planSetId: page.planSetId };
 
     const updatedProject = {
       ...project,
-      pages: project.pages.map(p => 
-        p.id === pageToUpdateId 
-          ? { ...p, measurements: p.measurements.map(m => m.id === id ? { ...m, ...updates } : m) }
-          : p
-      )
+      pages: project.pages.map(p => {
+        if (p.id === sourcePageId && isMoving) {
+          return { ...p, measurements: p.measurements.filter(m => m.id !== id) };
+        }
+        if (p.id === destinationPageId && isMoving) {
+          return { ...p, measurements: [...p.measurements, updatedMeasurement] };
+        }
+        if (p.id === sourcePageId && !isMoving) {
+          return { ...p, measurements: p.measurements.map(m => m.id === id ? updatedMeasurement : m) };
+        }
+        return p;
+      })
     };
     
     setProject(updatedProject);
     saveProject(updatedProject);
-    if (page?.id === pageToUpdateId) {
-      setPage(updatedProject.pages.find(p => p.id === pageToUpdateId) || page);
-    }
+    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
     
-    const updatedMeasurement = updatedProject.pages.find(p => p.id === pageToUpdateId)?.measurements.find(m => m.id === id);
-    if (updatedMeasurement) {
-      sendMeasurementUpdate(pageToUpdateId, 'update', updatedMeasurement);
+    if (isMoving) {
+      sendMeasurementUpdate(sourcePageId, 'delete', existingMeasurement);
+      sendMeasurementUpdate(destinationPageId, 'add', updatedMeasurement);
+    } else {
+      sendMeasurementUpdate(destinationPageId, 'update', updatedMeasurement);
     }
   };
 
@@ -364,24 +412,33 @@ const CanvasViewInner: React.FC = () => {
   };
 
   const confirmDeleteMeasurement = async () => {
-    if (!project || !measurementToDelete) return;
+    if (!project || !measurementToDelete || !page) return;
     const { id, targetPageId } = measurementToDelete;
     
-    const pageToUpdateId = targetPageId || page?.id;
-    if (!pageToUpdateId) return;
-
-    const pageToUpdate = project.pages.find(p => p.id === pageToUpdateId);
-    if (!pageToUpdate) return;
-
-    const mToDelete = pageToUpdate.measurements.find(m => m.id === id);
-    if (mToDelete) {
-      pushToHistory({ type: 'delete', measurement: mToDelete });
+    let sourcePageId = targetPageId;
+    let mToDelete: Measurement | undefined;
+    
+    if (!sourcePageId) {
+      for (const p of project.pages) {
+        const m = p.measurements.find(m => m.id === id);
+        if (m) {
+          sourcePageId = p.id;
+          mToDelete = m;
+          break;
+        }
+      }
+    } else {
+      mToDelete = project.pages.find(p => p.id === sourcePageId)?.measurements.find(m => m.id === id);
     }
+
+    if (!sourcePageId || !mToDelete) return;
+
+    pushToHistory({ type: 'delete', measurement: mToDelete });
 
     const updatedProject = {
       ...project,
       pages: project.pages.map(p => 
-        p.id === pageToUpdateId 
+        p.id === sourcePageId 
           ? { ...p, measurements: p.measurements.filter(m => m.id !== id) }
           : p
       )
@@ -389,9 +446,7 @@ const CanvasViewInner: React.FC = () => {
     
     setProject(updatedProject);
     saveProject(updatedProject);
-    if (page?.id === pageToUpdateId) {
-      setPage(updatedProject.pages.find(p => p.id === pageToUpdateId) || page);
-    }
+    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
 
     if (selectedMeasurementId === id) {
       setSelectedMeasurementId(null);
@@ -400,9 +455,7 @@ const CanvasViewInner: React.FC = () => {
     setShowDeleteConfirm(false);
     setMeasurementToDelete(null);
     
-    if (mToDelete) {
-      sendMeasurementUpdate(pageToUpdateId, 'delete', mToDelete);
-    }
+    sendMeasurementUpdate(sourcePageId, 'delete', mToDelete);
   };
 
   const handleCreateTakeoff = async () => {
@@ -558,7 +611,7 @@ const CanvasViewInner: React.FC = () => {
     let totalRealValue = 0;
     let measurementsCount = 0;
 
-    const pagesToProcess = showCurrentPageOnly ? [page] : project.pages;
+    const pagesToProcess = showCurrentPageOnly ? pageVersions : project.pages;
 
     pagesToProcess.forEach(p => {
       const takeoffMeasurements = p.measurements.filter(m => m.takeoffId === takeoff.id);
@@ -1047,7 +1100,7 @@ const CanvasViewInner: React.FC = () => {
           imageHeight={page.imageHeight}
           currentTool={currentTool}
           scaleConfig={page.scaleConfig}
-          measurements={page.measurements}
+          measurements={aggregatedMeasurements}
           takeoffs={project.takeoffs}
           onAddMeasurement={addMeasurement}
           onUpdateMeasurement={updateMeasurement}
@@ -1187,7 +1240,7 @@ const CanvasViewInner: React.FC = () => {
                     e.preventDefault();
                     e.currentTarget.classList.remove('ring-2', 'ring-blue-400', 'ring-inset');
                     const measurementId = e.dataTransfer.getData('text/plain');
-                    const measurement = page.measurements.find(m => m.id === measurementId);
+                    const measurement = (showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === measurementId);
                     
                     if (measurement) {
                       if (takeoff.type === 'count' && measurement.type !== 'count') {
@@ -1260,7 +1313,7 @@ const CanvasViewInner: React.FC = () => {
                   </div>
                   {isExpanded && takeoff.type !== 'count' && (
                     <div className="divide-y divide-slate-50 min-h-[10px]">
-                      {(showCurrentPageOnly ? [page] : project.pages).flatMap(p => 
+                      {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p => 
                         p.measurements
                           .filter(m => m.takeoffId === takeoff.id)
                           .map(m => (
@@ -1278,6 +1331,7 @@ const CanvasViewInner: React.FC = () => {
                               pageName={showCurrentPageOnly ? undefined : p.name}
                               pageId={p.id}
                               projectId={project.id}
+                              planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
                             />
                           ))
                       )}
@@ -1285,7 +1339,7 @@ const CanvasViewInner: React.FC = () => {
                   )}
                   {isExpanded && takeoff.type === 'count' && (
                     <div className="divide-y divide-slate-50 min-h-[10px]">
-                      {(showCurrentPageOnly ? [page] : project.pages).map(p => {
+                      {(showCurrentPageOnly ? pageVersions : project.pages).map(p => {
                         const count = p.measurements.filter(m => m.takeoffId === takeoff.id).length;
                         if (count === 0) return null;
                         return (
@@ -1309,7 +1363,7 @@ const CanvasViewInner: React.FC = () => {
             })}
 
             {/* Ungrouped Measurements */}
-            {page.measurements.filter(m => !m.takeoffId).length > 0 && (
+            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).filter(m => !m.takeoffId).length > 0 && (
               <div 
                 className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
                 onDragOver={(e) => {
@@ -1335,7 +1389,7 @@ const CanvasViewInner: React.FC = () => {
                   <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-blue-800' : 'text-slate-800'}`}>Ungrouped</span>
                 </div>
                 <div className="divide-y divide-slate-50 min-h-[10px]">
-                  {(showCurrentPageOnly ? [page] : project.pages).flatMap(p => 
+                  {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p => 
                     p.measurements
                       .filter(m => !m.takeoffId)
                       .map(m => (
@@ -1352,6 +1406,7 @@ const CanvasViewInner: React.FC = () => {
                           pageName={showCurrentPageOnly ? undefined : p.name}
                           pageId={p.id}
                           projectId={project.id}
+                          planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
                         />
                       ))
                   )}
@@ -1359,7 +1414,7 @@ const CanvasViewInner: React.FC = () => {
               </div>
             )}
 
-            {page.measurements.length === 0 && (
+            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).length === 0 && (
               <p className="text-sm text-slate-500 italic text-center py-4">No measurements yet.</p>
             )}
           </div>
@@ -1824,7 +1879,7 @@ const CanvasViewInner: React.FC = () => {
       {/* Heights Modal */}
       {heightsModalMeasurementId && (
         <HeightsModal
-          measurement={page.measurements.find(m => m.id === heightsModalMeasurementId)!}
+          measurement={(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === heightsModalMeasurementId)!}
           scaleConfig={page.scaleConfig}
           onClose={() => setHeightsModalMeasurementId(null)}
           onSave={(heights, isTwoSided) => {
@@ -1937,7 +1992,8 @@ function MeasurementItem({
   onEditHeights,
   pageName,
   pageId,
-  projectId
+  projectId,
+  planSetName
 }: { 
   measurement: Measurement;
   scaleConfig: ScaleConfig | null;
@@ -1951,6 +2007,7 @@ function MeasurementItem({
   pageName?: string;
   pageId?: string;
   projectId?: string;
+  planSetName?: string;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(measurement.name);
@@ -2021,6 +2078,11 @@ function MeasurementItem({
             {pageName && (!pageId || !projectId) && (
               <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide truncate">
                 Page: {pageName}
+              </span>
+            )}
+            {planSetName && (
+              <span className="text-[10px] text-purple-500 font-medium uppercase tracking-wide truncate">
+                Set: {planSetName}
               </span>
             )}
           </div>

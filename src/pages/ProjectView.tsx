@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
@@ -127,7 +127,7 @@ export const ProjectView: React.FC = () => {
     setProject(data);
     
     if (data.planSets && data.planSets.length > 0) {
-      setSelectedPlanSetId(data.planSets[0].id);
+      setSelectedPlanSetId('');
     }
     
     setIsLoading(false);
@@ -1014,6 +1014,64 @@ export const ProjectView: React.FC = () => {
     return 'text-slate-500';
   };
 
+  const filteredPages = useMemo(() => {
+    if (!project) return [];
+
+    let allowedPlanSets = project.planSets || [];
+    
+    if (selectedPlanSetId) {
+      const selectedPlanSet = allowedPlanSets.find(ps => ps.id === selectedPlanSetId);
+      if (selectedPlanSet) {
+        allowedPlanSets = allowedPlanSets.filter(ps => {
+          if (!ps.date || !selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
+          if (ps.date === selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
+          return ps.date < selectedPlanSet.date;
+        });
+      }
+    }
+
+    const allowedPlanSetIds = new Set(allowedPlanSets.map(ps => ps.id));
+    
+    const candidatePages = project.pages.filter(page => 
+      !page.planSetId || allowedPlanSetIds.has(page.planSetId)
+    );
+
+    const latestPagesMap = new Map<string, typeof project.pages[0]>();
+
+    candidatePages.forEach(page => {
+      const key = page.pageNumber ? page.pageNumber.trim().toLowerCase() : page.id;
+      const existingPage = latestPagesMap.get(key);
+
+      if (!existingPage) {
+        latestPagesMap.set(key, page);
+      } else {
+        const existingPlanSet = allowedPlanSets.find(ps => ps.id === existingPage.planSetId);
+        const currentPlanSet = allowedPlanSets.find(ps => ps.id === page.planSetId);
+
+        if (existingPlanSet && currentPlanSet) {
+          const isNewer = currentPlanSet.date && existingPlanSet.date 
+            ? (currentPlanSet.date > existingPlanSet.date || (currentPlanSet.date === existingPlanSet.date && currentPlanSet.createdAt > existingPlanSet.createdAt))
+            : currentPlanSet.createdAt > existingPlanSet.createdAt;
+
+          if (isNewer) {
+            latestPagesMap.set(key, page);
+          }
+        } else if (!existingPlanSet && currentPlanSet) {
+          latestPagesMap.set(key, page);
+        }
+      }
+    });
+
+    const searchLower = searchTerm.toLowerCase();
+    return Array.from(latestPagesMap.values()).filter(page => {
+      const matchesSearch = page.name.toLowerCase().includes(searchLower) || 
+                            (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
+                            (page.description && page.description.toLowerCase().includes(searchLower)) ||
+                            (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
+      return matchesSearch;
+    });
+  }, [project, selectedPlanSetId, searchTerm]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex justify-center items-center">
@@ -1023,16 +1081,6 @@ export const ProjectView: React.FC = () => {
   }
 
   if (!project) return null;
-
-  const filteredPages = project.pages.filter(page => {
-    const matchesPlanSet = !selectedPlanSetId || page.planSetId === selectedPlanSetId;
-    const searchLower = searchTerm.toLowerCase();
-    const matchesSearch = page.name.toLowerCase().includes(searchLower) || 
-                          (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
-                          (page.description && page.description.toLowerCase().includes(searchLower)) ||
-                          (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
-    return matchesPlanSet && matchesSearch;
-  });
 
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans">
@@ -1131,6 +1179,7 @@ export const ProjectView: React.FC = () => {
                 onChange={(e) => setSelectedPlanSetId(e.target.value)}
                 className="bg-transparent text-sm font-medium text-slate-700 outline-none"
               >
+                <option value="">All Plan Sets</option>
                 {project.planSets.map(ps => (
                   <option key={ps.id} value={ps.id}>
                     {ps.name} {ps.date ? `(${ps.date})` : ''}
