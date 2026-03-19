@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
 import { getProject, saveProject, getImage, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS } from '../utils/math';
@@ -1176,21 +1176,21 @@ export const ProjectView: React.FC = () => {
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 p-8 font-sans">
       <div className="max-w-5xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
+        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
         
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-8 gap-4 md:gap-6">
-          <div className="w-full">
-            <h1 className="text-xl md:text-3xl font-bold text-slate-900 break-words leading-tight">{project.name}</h1>
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">{project.name}</h1>
             
-            <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
+            <div className="flex flex-wrap gap-2 mt-3">
               <button
                 onClick={() => handleToggleStatus('submitted')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.submitted 
                     ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
                     : 'bg-white text-slate-400 border-slate-200 hover:border-blue-300 hover:text-blue-500'
@@ -1200,7 +1200,7 @@ export const ProjectView: React.FC = () => {
               </button>
               <button
                 onClick={() => handleToggleStatus('responded')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.responded 
                     ? 'bg-amber-500 text-white border-amber-500 shadow-sm' 
                     : 'bg-white text-slate-400 border-slate-200 hover:border-amber-300 hover:text-amber-500'
@@ -1210,7 +1210,7 @@ export const ProjectView: React.FC = () => {
               </button>
               <button
                 onClick={() => handleToggleStatus('accepted')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
+                className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.accepted 
                     ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm' 
                     : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300 hover:text-emerald-500'
@@ -1220,22 +1220,19 @@ export const ProjectView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500">
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
-                <Calendar size={14} className="text-slate-400 flex-shrink-0" />
-                <span className="truncate">Created {new Date(project.createdAt).toLocaleDateString()}</span>
-              </div>
+            <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-slate-500">
+              <span>Created on {new Date(project.createdAt).toLocaleDateString()}</span>
               
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
-                <Building2 size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                 {isEditingContractor ? (
-                  <div className="flex items-center gap-1 flex-1">
+                  <div className="flex items-center gap-2">
                     <input
                       type="text"
                       value={editContractor}
                       onChange={(e) => setEditContractor(e.target.value)}
-                      placeholder="Contractor"
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Contractor Name"
+                      className="border border-slate-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <button onClick={handleSaveContractor} className="text-green-600 hover:bg-green-50 p-1 rounded">
                       <Check size={14} />
@@ -1245,14 +1242,14 @@ export const ProjectView: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
-                    <span className="truncate">{project.contractor || 'No contractor'}</span>
+                  <div className="flex items-center gap-2 group">
+                    <span>{project.contractor || 'No contractor'}</span>
                     <button 
                       onClick={() => {
                         setEditContractor(project.contractor || '');
                         setIsEditingContractor(true);
                       }}
-                      className="text-slate-400 hover:text-blue-500 transition-opacity p-1"
+                      className="text-slate-400 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Edit2 size={12} />
                     </button>
@@ -1260,14 +1257,14 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
-                <MapPin size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                 {isEditingAddress ? (
-                  <div className="flex items-center gap-1 flex-1">
+                  <div className="flex items-center gap-2 w-64">
                     <AddressAutocomplete
                       value={editAddress}
                       onChange={setEditAddress}
-                      placeholder="Address"
+                      placeholder="Project Address"
                     />
                     <button onClick={handleSaveAddress} className="text-green-600 hover:bg-green-50 p-1 rounded">
                       <Check size={14} />
@@ -1277,25 +1274,25 @@ export const ProjectView: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
+                  <div className="flex items-center gap-2 group">
                     {project.address ? (
                       <a 
                         href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="hover:text-blue-600 hover:underline transition-colors truncate"
+                        className="hover:text-blue-600 hover:underline transition-colors"
                       >
                         {project.address}
                       </a>
                     ) : (
-                      <span className="truncate">No address</span>
+                      <span>No address</span>
                     )}
                     <button 
                       onClick={() => {
                         setEditAddress(project.address || '');
                         setIsEditingAddress(true);
                       }}
-                      className="text-slate-400 hover:text-blue-500 transition-opacity p-1"
+                      className="text-slate-400 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Edit2 size={12} />
                     </button>
@@ -1303,15 +1300,15 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
-                <Clock size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                 {isEditingDueDate ? (
-                  <div className="flex items-center gap-1 flex-1">
+                  <div className="flex items-center gap-2">
                     <input
                       type="date"
                       value={editDueDate}
                       onChange={(e) => setEditDueDate(e.target.value)}
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="border border-slate-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <button onClick={handleSaveDueDate} className="text-green-600 hover:bg-green-50 p-1 rounded">
                       <Check size={14} />
@@ -1321,8 +1318,8 @@ export const ProjectView: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
-                    <span className={`${getDueDateColor()} truncate`}>
+                  <div className="flex items-center gap-2 group">
+                    <span className={getDueDateColor()}>
                       Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
                     </span>
                     <button 
@@ -1330,9 +1327,9 @@ export const ProjectView: React.FC = () => {
                         setEditDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
                         setIsEditingDueDate(true);
                       }}
-                      className="text-slate-400 hover:text-blue-600 transition-opacity p-1"
+                      className="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-blue-50"
                     >
-                      <Edit2 size={12} />
+                      <Edit2 size={14} />
                     </button>
                   </div>
                 )}
@@ -1340,12 +1337,12 @@ export const ProjectView: React.FC = () => {
             </div>
           </div>
           {project.planSets && project.planSets.length > 0 && (
-            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto mt-2 md:mt-0">
-              <span className="text-xs md:text-sm text-slate-500 font-medium whitespace-nowrap">Plan Set:</span>
+            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
+              <span className="text-sm text-slate-500 font-medium">Plan Set:</span>
               <select
                 value={selectedPlanSetId}
                 onChange={(e) => setSelectedPlanSetId(e.target.value)}
-                className="bg-transparent text-xs md:text-sm font-medium text-slate-700 outline-none w-full"
+                className="bg-transparent text-sm font-medium text-slate-700 outline-none"
               >
                 <option value="">All Plan Sets</option>
                 {project.planSets.map(ps => (
@@ -1359,10 +1356,10 @@ export const ProjectView: React.FC = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-200 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+        <div className="flex border-b border-slate-200 mb-6">
           <button
             onClick={() => setActiveTab('pages')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
+            className={`px-6 py-3 text-sm font-medium transition-colors relative ${
               activeTab === 'pages' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
@@ -1373,7 +1370,7 @@ export const ProjectView: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('takeoffs')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
+            className={`px-6 py-3 text-sm font-medium transition-colors relative ${
               activeTab === 'takeoffs' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
@@ -1384,7 +1381,7 @@ export const ProjectView: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('printouts')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
+            className={`px-6 py-3 text-sm font-medium transition-colors relative ${
               activeTab === 'printouts' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
@@ -1397,7 +1394,7 @@ export const ProjectView: React.FC = () => {
 
         {activeTab === 'pages' ? (
           <div className="space-y-6">
-            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div className="relative flex-1 w-full max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                 <input
@@ -1405,33 +1402,33 @@ export const ProjectView: React.FC = () => {
                   placeholder="Search pages and text..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                  className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                 />
               </div>
-              <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+              <div className="flex gap-2">
                 {project.pages.some(p => !p.thumbnailId) && (
                   <button
                     onClick={handleOptimizeThumbnails}
                     disabled={isOptimizingThumbnails}
-                    className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
                   >
                     {isOptimizingThumbnails ? (
-                      <><Loader2 size={16} className="animate-spin" /> ({optimizeProgress.current}/{optimizeProgress.total})</>
+                      <><Loader2 size={16} className="animate-spin" /> Optimizing ({optimizeProgress.current}/{optimizeProgress.total})</>
                     ) : (
-                      <><Settings size={16} /> Optimize</>
+                      <><Settings size={16} /> Optimize Thumbnails</>
                     )}
                   </button>
                 )}
                 <button
                   onClick={handleOpenNamePages}
-                  className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center gap-2 shadow-sm"
                 >
                   <Edit2 size={16} />
                   Name Pages
                 </button>
                 <button
                   onClick={() => setShowAddPagesModal(true)}
-                  className="flex-1 lg:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm"
                 >
                   <Plus size={16} />
                   Add Pages
@@ -1542,51 +1539,49 @@ export const ProjectView: React.FC = () => {
           </div>
         ) : activeTab === 'takeoffs' ? (
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-            <div className="p-4 md:p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800">Takeoffs Inventory</h2>
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <div className="flex items-center gap-3">
                 {selectedTakeoffIds.size > 0 && (
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={handlePrint}
                       disabled={isPrinting || isExportingExcel}
-                      className="flex-1 sm:flex-none px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
                     >
-                      {isPrinting ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
-                      Print ({selectedTakeoffIds.size})
+                      {isPrinting ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />}
+                      {isPrinting ? 'Generating PDF...' : `Print PDF (${selectedTakeoffIds.size})`}
                     </button>
                     <button
                       onClick={handleExportExcel}
                       disabled={isPrinting || isExportingExcel}
-                      className="flex-1 sm:flex-none px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
                     >
-                      {isExportingExcel ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
-                      Excel ({selectedTakeoffIds.size})
+                      {isExportingExcel ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                      {isExportingExcel ? 'Generating Excel...' : `Export Excel (${selectedTakeoffIds.size})`}
                     </button>
                   </div>
                 )}
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  {project.takeoffs.length > 0 && (
-                    <button
-                      onClick={() => setShowDeleteAllConfirm(true)}
-                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Delete All Takeoffs"
-                    >
-                      <Trash2 size={20} />
-                    </button>
-                  )}
+                {project.takeoffs.length > 0 && (
                   <button
-                    onClick={() => setShowTakeoffModal(true)}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    onClick={() => setShowDeleteAllConfirm(true)}
+                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Delete All Takeoffs"
                   >
-                    <Plus size={16} />
-                    New Takeoff
+                    <Trash2 size={20} />
                   </button>
-                </div>
+                )}
+                <button
+                  onClick={() => setShowTakeoffModal(true)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm"
+                >
+                  <Plus size={16} />
+                  New Takeoff
+                </button>
               </div>
             </div>
             
-            <div className="hidden md:block overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-50 text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-200">
@@ -1718,102 +1713,16 @@ export const ProjectView: React.FC = () => {
                       </React.Fragment>
                     );
                   })}
+                  {project.takeoffs.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="px-6 py-12 text-center text-slate-500">
+                        No takeoffs created yet. <button onClick={() => setShowTakeoffModal(true)} className="text-blue-600 font-bold hover:underline">Create one</button> to start estimating.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
-
-            {/* Mobile Takeoff Cards */}
-            <div className="md:hidden divide-y divide-slate-100">
-              {getTakeoffTotals().map(takeoff => {
-                const baseCost = takeoff.totalRealValue * (takeoff.costPerUnit || 0);
-                const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
-                const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
-                const equipmentCost = baseCost * ((takeoff.equipmentPercent || 0) / 100);
-                const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-                const profit = subtotal * ((takeoff.profitPercent || 0) / 100);
-                const totalCost = subtotal + profit;
-
-                return (
-                  <div key={takeoff.id} className="p-4 bg-white">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <input 
-                          type="checkbox" 
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                          checked={selectedTakeoffIds.has(takeoff.id)}
-                          onChange={() => toggleTakeoffSelection(takeoff.id)}
-                        />
-                        <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                        <span className="font-bold text-slate-900">{takeoff.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => handleEditTakeoff(takeoff)} 
-                          className="p-1.5 text-slate-400 hover:text-blue-600"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleDeleteTakeoff(takeoff.id)} 
-                          className="p-1.5 text-slate-400 hover:text-red-600"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-y-2 text-sm mb-3">
-                      <div className="text-slate-500">Type</div>
-                      <div className="text-slate-900 font-medium capitalize text-right">{takeoff.type}</div>
-                      
-                      <div className="text-slate-500">Quantity</div>
-                      <div className="text-slate-900 font-bold text-right">
-                        {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
-                      </div>
-                      
-                      <div className="text-slate-500">Total Cost</div>
-                      <div className="text-blue-600 font-bold text-right">
-                        {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
-                      </div>
-                    </div>
-
-                    <button 
-                      onClick={() => toggleTakeoffExpanded(takeoff.id)}
-                      className="w-full py-2 bg-slate-50 rounded-lg text-xs font-semibold text-slate-600 flex items-center justify-center gap-2"
-                    >
-                      {expandedTakeoffs[takeoff.id] ? 'Hide' : 'Show'} Page Breakdown
-                      <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
-                        <ChevronRight size={14} />
-                      </div>
-                    </button>
-
-                    {expandedTakeoffs[takeoff.id] && (
-                      <div className="mt-3 space-y-2 pt-3 border-t border-slate-100">
-                        {takeoff.pageBreakdown.map(pb => (
-                          <div key={pb.pageId} className="flex justify-between items-center text-xs">
-                            <Link 
-                              to={`/project/${project.id}/page/${pb.pageId}`} 
-                              className="text-blue-600 font-medium"
-                            >
-                              {pb.pageName}
-                            </Link>
-                            <span className="font-bold text-slate-700">
-                              {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {project.takeoffs.length === 0 && (
-              <div className="px-6 py-12 text-center text-slate-500">
-                No takeoffs created yet. <button onClick={() => setShowTakeoffModal(true)} className="text-blue-600 font-bold hover:underline">Create one</button> to start estimating.
-              </div>
-            )}
           </div>
         ) : (
           <div className="space-y-6">

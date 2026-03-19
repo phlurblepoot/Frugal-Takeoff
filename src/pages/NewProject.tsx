@@ -315,7 +315,7 @@ export const NewProject: React.FC = () => {
 
   if (step === 'name_pages') {
     return (
-      <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+      <div className="min-h-screen bg-slate-50 p-8 font-sans">
         <div className="max-w-4xl mx-auto">
           <button 
             onClick={() => setStep('details')}
@@ -326,15 +326,15 @@ export const NewProject: React.FC = () => {
           </button>
           
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 sm:p-8 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center">
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Name Pages</h1>
-                <p className="text-sm text-slate-500 mt-1">Review and rename the imported pages before creating the project.</p>
+                <h1 className="text-2xl font-bold text-slate-900">Name Pages</h1>
+                <p className="text-slate-500 mt-1">Review and rename the imported pages before creating the project.</p>
               </div>
               <button
                 onClick={handleSaveChanges}
                 disabled={isProcessing}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                className="flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {isProcessing ? (
                   <><Loader2 size={18} className="animate-spin" /> Saving...</>
@@ -344,8 +344,8 @@ export const NewProject: React.FC = () => {
               </button>
             </div>
 
-            <div className="p-4 sm:p-8">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+            <div className="p-8">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {pendingPages.map((page, index) => (
                   <div key={page.id} className="bg-white rounded-2xl border-2 border-slate-100 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
                     {/* Thumbnail Section */}
@@ -429,20 +429,20 @@ export const NewProject: React.FC = () => {
         </div>
 
         {previewPageId && (
-          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-0 sm:p-8">
-            <div className="bg-white rounded-none sm:rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
-              <div className="p-3 sm:p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-3">
-                <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-4 sm:p-8">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div className="flex items-center gap-4">
                   <button 
                     onClick={() => setPreviewPageId(null)}
                     className="p-2 hover:bg-slate-200 rounded-full transition-colors"
                   >
                     <ArrowLeft size={20} />
                   </button>
-                  <h3 className="font-bold text-slate-900 text-sm sm:text-base truncate">Page Preview & Extraction</h3>
+                  <h3 className="font-bold text-slate-900">Page Preview & Extraction</h3>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                  <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 mr-2">
                     <button 
                       onClick={() => setZoom(prev => Math.max(1, prev - 0.5))}
                       className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
@@ -450,7 +450,7 @@ export const NewProject: React.FC = () => {
                     >
                       <ZoomOut size={16} />
                     </button>
-                    <span className="text-[10px] font-bold text-slate-500 w-10 text-center">{Math.round(zoom * 100)}%</span>
+                    <span className="text-xs font-bold text-slate-500 w-12 text-center">{Math.round(zoom * 100)}%</span>
                     <button 
                       onClick={() => setZoom(prev => Math.min(5, prev + 0.5))}
                       className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
@@ -458,26 +458,31 @@ export const NewProject: React.FC = () => {
                     >
                       <ZoomIn size={16} />
                     </button>
+                    <button 
+                      onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
+                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors ml-1 border-l border-slate-100"
+                      title="Reset Zoom"
+                    >
+                      <Maximize size={16} />
+                    </button>
                   </div>
 
-                  <div className="flex items-center gap-1 flex-1 sm:flex-none">
-                    <button
-                      onClick={() => setExtractionType('pageNumber')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
-                    >
-                      Number
-                    </button>
-                    <button
-                      onClick={() => setExtractionType('description')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
-                    >
-                      Desc
-                    </button>
-                  </div>
-                  
+                  <button
+                    onClick={() => setExtractionType('pageNumber')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  >
+                    Extract Number
+                  </button>
+                  <button
+                    onClick={() => setExtractionType('description')}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  >
+                    Extract Description
+                  </button>
+                  <div className="w-px h-6 bg-slate-200 mx-2" />
                   <button 
                     onClick={() => setPreviewPageId(null)}
-                    className="hidden sm:block p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
                   >
                     <X size={24} />
                   </button>
@@ -650,12 +655,12 @@ export const NewProject: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-4 sm:p-6 border-t border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-2 text-xs text-slate-600 w-full sm:w-auto">
+              <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+                <div className="flex items-center gap-2 text-sm text-slate-600">
                   {extractionRect ? (
                     <>
                       <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                      Area selected. Ready to extract.
+                      Area selected. Ready to extract text.
                     </>
                   ) : (
                     <>
@@ -664,29 +669,29 @@ export const NewProject: React.FC = () => {
                     </>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center justify-center gap-2 w-full sm:w-auto">
+                <div className="flex items-center gap-3">
                   <button
                     onClick={() => setExtractionRect(null)}
                     disabled={!extractionRect}
-                    className="flex-1 sm:flex-none px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
                   >
-                    Clear
+                    Clear Selection
                   </button>
                   <button
                     onClick={() => handleExtractText(false)}
                     disabled={isExtracting || !extractionRect}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold hover:bg-slate-900 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
                   >
-                    {isExtracting ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                    Extract
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    Extract Current
                   </button>
                   <button
                     onClick={() => handleExtractText(true)}
                     disabled={isExtracting || !extractionRect}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
                   >
-                    {isExtracting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                    All Pages
+                    {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    Extract All Pages
                   </button>
                 </div>
               </div>
@@ -698,7 +703,7 @@ export const NewProject: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 p-8 font-sans">
       <div className="max-w-2xl mx-auto">
         <Link to="/" className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
@@ -706,12 +711,12 @@ export const NewProject: React.FC = () => {
         </Link>
         
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-6 sm:p-8 border-b border-slate-100">
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900">New Project</h1>
-            <p className="text-sm sm:text-base text-slate-500 mt-1">Upload a blueprint PDF to get started</p>
+          <div className="p-8 border-b border-slate-100">
+            <h1 className="text-2xl font-bold text-slate-900">New Project</h1>
+            <p className="text-slate-500 mt-1">Upload a blueprint PDF to get started</p>
           </div>
 
-          <form onSubmit={handleProcessFiles} className="p-6 sm:p-8">
+          <form onSubmit={handleProcessFiles} className="p-8">
             <div className="space-y-6">
               <div>
                 <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-2">

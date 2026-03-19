@@ -1,7 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
-import { Html } from 'react-konva-utils';
-import { Trash2, Edit2, X, Check } from 'lucide-react';
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
@@ -17,7 +15,6 @@ interface PdfCanvasProps {
   takeoffs: MeasurementTakeoff[];
   onAddMeasurement: (measurement: Measurement) => void;
   onUpdateMeasurement: (id: string, measurement: Partial<Measurement>) => void;
-  onDeleteMeasurement: (id: string) => void;
   onSetScale: (pixelDistance: number) => void;
   selectedMeasurementId: string | null;
   onSelectMeasurement: (id: string | null) => void;
@@ -45,7 +42,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   takeoffs,
   onAddMeasurement,
   onUpdateMeasurement,
-  onDeleteMeasurement,
   onSetScale,
   selectedMeasurementId,
   onSelectMeasurement,
@@ -79,9 +75,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [arcMidPoint, setArcMidPoint] = useState<Point | null>(null);
   
   const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number } | null>(null);
-  
-  const lastDistRef = useRef<number>(0);
-  const lastCenterRef = useRef<Point | null>(null);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -180,17 +173,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       lastMousePosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
-
-    // Single finger panning when tool is 'pan'
-    if (currentTool === 'pan' && e.evt.touches && e.evt.touches.length === 1 && lastMousePosRef.current) {
-      const touch = e.evt.touches[0];
-      const dx = touch.clientX - lastMousePosRef.current.x;
-      const dy = touch.clientY - lastMousePosRef.current.y;
-      setStagePos(prev => ({ x: prev.x + dx, y: prev.y + dy }));
-      lastMousePosRef.current = { x: touch.clientX, y: touch.clientY };
-      return;
-    }
-
     if (currentTool === 'pan' || activePoints.length === 0) return;
   };
 
@@ -304,8 +286,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         const lastPoint = activePoints[activePoints.length - 1];
         const dist = calculateDistance(lastPoint, pos);
         // 5 pixels threshold (adjusted for scale)
-        const threshold = (window.innerWidth < 768 ? 20 : 10) / stageScale;
-        if (dist < threshold) {
+        if (dist < 10 / stageScale) {
           if (activePoints.length > 1) {
             let regionId: string | undefined = undefined;
             if (isMultiRegion) {
@@ -339,91 +320,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       setIsMiddleMouseDown(false);
       lastMousePosRef.current = null;
     }
-  };
-
-  const handleTouchStart = (e: any) => {
-    const stage = stageRef.current;
-    if (!stage) return;
-
-    // Always prevent default to stop browser-level panning/scrolling
-    // when interacting with the canvas
-    if (e.evt.cancelable) {
-      e.evt.preventDefault();
-    }
-
-    if (e.evt.touches.length === 2) {
-      // Pinch to zoom
-      const touch1 = e.evt.touches[0];
-      const touch2 = e.evt.touches[1];
-      lastDistRef.current = calculateDistance(
-        { x: touch1.clientX, y: touch1.clientY },
-        { x: touch2.clientX, y: touch2.clientY }
-      );
-      lastCenterRef.current = {
-        x: (touch1.clientX + touch2.clientX) / 2,
-        y: (touch1.clientY + touch2.clientY) / 2,
-      };
-    } else if (e.evt.touches.length === 1) {
-      if (currentTool === 'pan') {
-        const touch = e.evt.touches[0];
-        lastMousePosRef.current = { x: touch.clientX, y: touch.clientY };
-      } else {
-        handleMouseDown(e);
-      }
-    }
-  };
-
-  const handleTouchMove = (e: any) => {
-    const stage = stageRef.current;
-    if (!stage) return;
-
-    if (e.evt.cancelable) {
-      e.evt.preventDefault();
-    }
-
-    if (e.evt.touches.length === 2) {
-      const touch1 = e.evt.touches[0];
-      const touch2 = e.evt.touches[1];
-      const dist = calculateDistance(
-        { x: touch1.clientX, y: touch1.clientY },
-        { x: touch2.clientX, y: touch2.clientY }
-      );
-      const center = {
-        x: (touch1.clientX + touch2.clientX) / 2,
-        y: (touch1.clientY + touch2.clientY) / 2,
-      };
-
-      const oldScale = stage.scaleX();
-      const newScale = oldScale * (dist / lastDistRef.current);
-
-      // Zoom around the center point between fingers
-      const pointer = center;
-      const mousePointTo = {
-        x: (pointer.x - stage.x()) / oldScale,
-        y: (pointer.y - stage.y()) / oldScale,
-      };
-
-      setStageScale(newScale);
-      setStagePos({
-        x: pointer.x - mousePointTo.x * newScale,
-        y: pointer.y - mousePointTo.y * newScale,
-      });
-
-      lastDistRef.current = dist;
-      lastCenterRef.current = center;
-    } else if (e.evt.touches.length === 1) {
-      handleMouseMove(e);
-    }
-  };
-
-  const handleTouchEnd = (e: any) => {
-    if (e.evt.cancelable) {
-      e.evt.preventDefault();
-    }
-    lastDistRef.current = 0;
-    lastCenterRef.current = null;
-    lastMousePosRef.current = null;
-    handleMouseUp(e);
   };
 
   // Handle Escape to cancel drawing
@@ -550,28 +446,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         )}
       </Group>
     );
-  };
-
-  const getSelectedMeasurementCenter = () => {
-    if (!selectedMeasurementId) return null;
-    const m = measurements.find(m => m.id === selectedMeasurementId);
-    if (!m) return null;
-
-    let centerX = 0, centerY = 0;
-    if (m.type === 'count') {
-      centerX = m.points[0].x;
-      centerY = m.points[0].y;
-    } else if (m.type === 'length') {
-      if (m.points.length < 2) return m.points[0];
-      const midIdx = Math.floor((m.points.length - 1) / 2);
-      centerX = (m.points[midIdx].x + m.points[midIdx + 1].x) / 2;
-      centerY = (m.points[midIdx].y + m.points[midIdx + 1].y) / 2;
-    } else {
-      m.points.forEach(p => { centerX += p.x; centerY += p.y; });
-      centerX /= m.points.length;
-      centerY /= m.points.length;
-    }
-    return { x: centerX, y: centerY };
   };
 
   const renderMeasurements = () => {
@@ -848,7 +722,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none">
+    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair">
       {dimensions.width > 0 && dimensions.height > 0 && (
         <Stage
           ref={stageRef}
@@ -858,9 +732,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           onMouseMove={handleMouseMove}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
           onDragEnd={(e) => {
             if (e.target === e.currentTarget) {
               setStagePos({ x: e.target.x(), y: e.target.y() });
@@ -924,46 +795,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 </Group>
               ))}
           </Layer>
-          {selectedMeasurementId && window.innerWidth < 768 && (
-            <Layer>
-              {(() => {
-                const center = getSelectedMeasurementCenter();
-                if (!center) return null;
-                
-                return (
-                  <Html
-                    divProps={{
-                      style: {
-                        position: 'absolute',
-                        left: `${center.x * stageScale + stagePos.x}px`,
-                        top: `${center.y * stageScale + stagePos.y - 60}px`,
-                        transform: 'translateX(-50%)',
-                        pointerEvents: 'auto',
-                      }
-                    }}
-                  >
-                    <div className="flex items-center gap-1 bg-white/95 backdrop-blur border border-slate-200 rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
-                      <button
-                        onClick={() => onDeleteMeasurement(selectedMeasurementId)}
-                        className="p-2.5 text-red-500 hover:bg-red-50 rounded-full active:scale-90 transition-all"
-                        title="Delete"
-                      >
-                        <Trash2 size={20} />
-                      </button>
-                      <div className="w-px h-5 bg-slate-200 mx-0.5" />
-                      <button
-                        onClick={() => onSelectMeasurement(null)}
-                        className="p-2.5 text-slate-500 hover:bg-slate-100 rounded-full active:scale-90 transition-all"
-                        title="Deselect"
-                      >
-                        <X size={20} />
-                      </button>
-                    </div>
-                  </Html>
-                );
-              })()}
-            </Layer>
-          )}
       </Stage>
       )}
     </div>

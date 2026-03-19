@@ -228,23 +228,23 @@ export const ProjectsList: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 p-8 font-sans">
       <div className="max-w-6xl mx-auto">
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 sm:mb-8 gap-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">Takeoff Pro</h1>
-            <p className="text-sm sm:text-base text-slate-500 mt-1">Manage your projects and templates</p>
+            <h1 className="text-3xl font-bold text-slate-900">Takeoff Pro</h1>
+            <p className="text-slate-500 mt-1">Manage your projects and templates</p>
           </div>
-          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          <div className="flex items-center gap-4">
             {activeTab === 'projects' && (
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-3">
                 {contractors.length > 0 && (
-                  <div className="flex-1 sm:flex-none flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
                     <Filter size={16} className="text-slate-400" />
                     <select
                       value={filterContractor}
                       onChange={(e) => setFilterContractor(e.target.value)}
-                      className="bg-transparent text-sm font-medium text-slate-700 outline-none w-full"
+                      className="bg-transparent text-sm font-medium text-slate-700 outline-none"
                     >
                       <option value="all">All Contractors</option>
                       {contractors.map(c => (
@@ -255,7 +255,7 @@ export const ProjectsList: React.FC = () => {
                 )}
                 <Link
                   to="/new"
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm text-sm sm:text-base"
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm"
                 >
                   <Plus size={20} />
                   New Project
@@ -264,7 +264,7 @@ export const ProjectsList: React.FC = () => {
             )}
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
+              className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2 rounded-lg font-medium transition-colors"
               title="Logout"
             >
               <LogOut size={18} />
@@ -273,10 +273,10 @@ export const ProjectsList: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-1 mb-6 bg-slate-200/50 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar -mx-0 px-1">
+        <div className="flex items-center gap-1 mb-6 bg-slate-200/50 p-1 rounded-xl w-fit">
           <button
             onClick={() => setActiveTab('projects')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
               activeTab === 'projects' 
                 ? 'bg-white text-blue-600 shadow-sm' 
                 : 'text-slate-600 hover:text-slate-900'
@@ -287,7 +287,7 @@ export const ProjectsList: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('templates')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
               activeTab === 'templates' 
                 ? 'bg-white text-blue-600 shadow-sm' 
                 : 'text-slate-600 hover:text-slate-900'
@@ -298,7 +298,7 @@ export const ProjectsList: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('bids')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
               activeTab === 'bids' 
                 ? 'bg-white text-blue-600 shadow-sm' 
                 : 'text-slate-600 hover:text-slate-900'
@@ -310,7 +310,7 @@ export const ProjectsList: React.FC = () => {
           {isAdmin && (
             <button
               onClick={() => setActiveTab('users')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                 activeTab === 'users' 
                   ? 'bg-white text-blue-600 shadow-sm' 
                   : 'text-slate-600 hover:text-slate-900'
@@ -342,224 +342,158 @@ export const ProjectsList: React.FC = () => {
                 </Link>
               </div>
             ) : (
-              <div className="space-y-4">
-                {/* Desktop Table View */}
-                <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200">
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('name')}
-                          >
-                            <div className="flex items-center gap-2">
-                              Project Name
-                              <SortIcon field="name" />
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('contractor')}
-                          >
-                            <div className="flex items-center gap-2">
-                              Contractor
-                              <SortIcon field="contractor" />
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider"
-                          >
-                            <div className="flex items-center gap-2">
-                              Address
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('bidDueDate')}
-                          >
-                            <div className="flex items-center gap-2">
-                              Bid Due Date
-                              <SortIcon field="bidDueDate" />
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('createdAt')}
-                          >
-                            <div className="flex items-center gap-2">
-                              Created
-                              <SortIcon field="createdAt" />
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
-                            onClick={() => handleSort('pages')}
-                          >
-                            <div className="flex items-center gap-2">
-                              Pages
-                              <SortIcon field="pages" />
-                            </div>
-                          </th>
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors text-right"
-                          >
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredAndSortedProjects.map((project) => (
-                          <tr 
-                            key={project.id}
-                            onClick={() => navigate(`/project/${project.id}`)}
-                            className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
-                          >
-                            <td className="px-6 py-4">
-                              <div className="flex flex-col gap-1">
-                                <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
-                                  {project.name}
-                                </div>
-                                <div className="flex flex-wrap gap-1.5 mt-1">
-                                  {project.submitted && (
-                                    <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
-                                  )}
-                                  {project.responded && (
-                                    <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
-                                  )}
-                                  {project.accepted && (
-                                    <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Accepted</span>
-                                  )}
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              {project.contractor ? (
-                                <div className="flex items-center gap-2 text-sm text-slate-600">
-                                  <Building2 size={14} className="text-slate-400" />
-                                  <span className="line-clamp-1">{project.contractor}</span>
-                                </div>
-                              ) : (
-                                <span className="text-sm text-slate-400 italic">-</span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              {project.address ? (
-                                <div className="flex items-center gap-2 text-sm text-slate-600">
-                                  <MapPin size={14} className="text-slate-400" />
-                                  <a 
-                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    {project.address}
-                                  </a>
-                                </div>
-                              ) : (
-                                <span className="text-sm text-slate-400 italic">-</span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              {project.bidDueDate ? (
-                                <div className="flex items-center gap-2 text-sm">
-                                  <Calendar size={14} className={getDueDateIconColor(project)} />
-                                  <span className={getDueDateColor(project)}>
-                                    {new Date(project.bidDueDate).toLocaleDateString()}
-                                  </span>
-                                </div>
-                              ) : (
-                                <span className="text-sm text-slate-400 italic">-</span>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className="text-sm text-slate-600">
-                                {new Date(project.createdAt).toLocaleDateString()}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                                {project.pages.length}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 text-right">
-                              <button
-                                onClick={(e) => handleDeleteClick(e, project)}
-                                className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                                title="Delete Project"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Mobile Card View */}
-                <div className="md:hidden space-y-4">
-                  {filteredAndSortedProjects.map((project) => (
-                    <div 
-                      key={project.id}
-                      onClick={() => navigate(`/project/${project.id}`)}
-                      className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm active:bg-slate-50 transition-colors"
-                    >
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="font-bold text-slate-900 text-lg">{project.name}</div>
-                        <button
-                          onClick={(e) => handleDeleteClick(e, project)}
-                          className="text-slate-400 hover:text-red-500 p-1"
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                          onClick={() => handleSort('name')}
                         >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-2 mb-4">
-                        {project.contractor && (
-                          <div className="flex items-center gap-2 text-sm text-slate-600">
-                            <Building2 size={14} className="text-slate-400 shrink-0" />
-                            <span>{project.contractor}</span>
+                          <div className="flex items-center gap-2">
+                            Project Name
+                            <SortIcon field="name" />
                           </div>
-                        )}
-                        {project.address && (
-                          <div className="flex items-center gap-2 text-sm text-slate-600">
-                            <MapPin size={14} className="text-slate-400 shrink-0" />
-                            <span className="line-clamp-1">{project.address}</span>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                          onClick={() => handleSort('contractor')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Contractor
+                            <SortIcon field="contractor" />
                           </div>
-                        )}
-                        <div className="flex items-center justify-between">
-                          {project.bidDueDate ? (
-                            <div className="flex items-center gap-2 text-sm">
-                              <Calendar size={14} className={getDueDateIconColor(project)} />
-                              <span className={getDueDateColor(project)}>
-                                Due: {new Date(project.bidDueDate).toLocaleDateString()}
-                              </span>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider"
+                        >
+                          <div className="flex items-center gap-2">
+                            Address
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                          onClick={() => handleSort('bidDueDate')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Bid Due Date
+                            <SortIcon field="bidDueDate" />
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                          onClick={() => handleSort('createdAt')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Created
+                            <SortIcon field="createdAt" />
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                          onClick={() => handleSort('pages')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Pages
+                            <SortIcon field="pages" />
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors text-right"
+                        >
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredAndSortedProjects.map((project) => (
+                        <tr 
+                          key={project.id}
+                          onClick={() => navigate(`/project/${project.id}`)}
+                          className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                        >
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col gap-1">
+                              <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                                {project.name}
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1">
+                                {project.submitted && (
+                                  <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                                )}
+                                {project.responded && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
+                                )}
+                                {project.accepted && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Accepted</span>
+                                )}
+                              </div>
                             </div>
-                          ) : (
-                            <div className="text-sm text-slate-400">No due date</div>
-                          )}
-                          <div className="text-xs text-slate-500">
-                            {project.pages.length} {project.pages.length === 1 ? 'page' : 'pages'}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-1.5">
-                        {project.submitted && (
-                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
-                        )}
-                        {project.responded && (
-                          <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
-                        )}
-                        {project.accepted && (
-                          <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Accepted</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                          </td>
+                          <td className="px-6 py-4">
+                            {project.contractor ? (
+                              <div className="flex items-center gap-2 text-sm text-slate-600">
+                                <Building2 size={14} className="text-slate-400" />
+                                <span className="line-clamp-1">{project.contractor}</span>
+                              </div>
+                            ) : (
+                              <span className="text-sm text-slate-400 italic">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            {project.address ? (
+                              <div className="flex items-center gap-2 text-sm text-slate-600">
+                                <MapPin size={14} className="text-slate-400" />
+                                <a 
+                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {project.address}
+                                </a>
+                              </div>
+                            ) : (
+                              <span className="text-sm text-slate-400 italic">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            {project.bidDueDate ? (
+                              <div className="flex items-center gap-2 text-sm">
+                                <Calendar size={14} className={getDueDateIconColor(project)} />
+                                <span className={getDueDateColor(project)}>
+                                  {new Date(project.bidDueDate).toLocaleDateString()}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-sm text-slate-400 italic">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-sm text-slate-600">
+                              {new Date(project.createdAt).toLocaleDateString()}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                              {project.pages.length}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={(e) => handleDeleteClick(e, project)}
+                              className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Delete Project"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -610,8 +544,7 @@ export const ProjectsList: React.FC = () => {
               </div>
             </div>
 
-            {/* Desktop Table View */}
-            <div className="hidden md:block overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
@@ -689,67 +622,6 @@ export const ProjectsList: React.FC = () => {
                   )}
                 </tbody>
               </table>
-            </div>
-
-            {/* Mobile Card View for Bids */}
-            <div className="md:hidden divide-y divide-slate-100">
-              {bids.length === 0 ? (
-                <div className="p-8 text-center text-slate-500">
-                  No potential bids added yet.
-                </div>
-              ) : (
-                bids.map((bid) => (
-                  <div key={bid.id} className="p-4 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div className="font-bold text-slate-900">{bid.name}</div>
-                      <button
-                        onClick={() => handleDeleteBid(bid.id)}
-                        className="text-slate-400 hover:text-red-500 p-1"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      {bid.contractor && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <Building2 size={14} className="text-slate-400 shrink-0" />
-                          <span>{bid.contractor}</span>
-                        </div>
-                      )}
-                      {bid.address && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <MapPin size={14} className="text-slate-400 shrink-0" />
-                          <span className="line-clamp-1">{bid.address}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2">
-                      <select
-                        value={bid.decision}
-                        onChange={(e) => handleUpdateBidDecision(bid.id, e.target.value as any)}
-                        className={`text-xs font-bold uppercase tracking-wider rounded-full px-3 py-1 outline-none border-2 ${
-                          bid.decision === 'yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                          bid.decision === 'no' ? 'bg-red-50 text-red-700 border-red-200' :
-                          'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}
-                      >
-                        <option value="pending">Pending</option>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
-                      
-                      <button
-                        onClick={() => handleConvertBid(bid)}
-                        className="text-blue-600 hover:text-blue-700 text-sm font-bold uppercase tracking-wider"
-                      >
-                        Convert
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
             </div>
           </div>
         ) : activeTab === 'users' && isAdmin ? (
