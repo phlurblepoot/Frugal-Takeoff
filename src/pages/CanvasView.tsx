@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit } from '../utils/math';
-import { getProject, saveProject, getImage, getTemplates } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 
 const STANDARD_SCALES = [
@@ -90,8 +90,19 @@ const CanvasViewInner: React.FC = () => {
   const [toolDisabledMessage, setToolDisabledMessage] = useState<string | null>(null);
 
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
-  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(window.innerWidth > 1024);
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 1024) {
+        // Don't automatically close if user explicitly opened it, 
+        // but for initial load or large resizes it's helpful
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const pushToHistory = (action: { type: 'add' | 'delete'; measurement: Measurement }) => {
     setHistory(prev => [...prev, action].slice(-50));
@@ -222,7 +233,7 @@ const CanvasViewInner: React.FC = () => {
       return;
     }
     
-    const imgUrl = `/api/images/${pg.imageId}/raw`;
+    const imgUrl = getImageUrl(pg.imageId);
     
     setProject(proj);
     setPage(pg);
@@ -671,20 +682,32 @@ const CanvasViewInner: React.FC = () => {
   const activeTakeoff = project.takeoffs.find(t => t.id === selectedTakeoffId);
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans relative">
       {/* Left Sidebar Wrapper */}
-      <div className="relative z-20 flex h-full">
-        <div className={`bg-white border-r border-slate-200 flex flex-col shadow-sm transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-80' : 'w-0'}`}>
-          <div className="w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
+      {isLeftSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-900/20 backdrop-blur-[1px] z-40 md:hidden"
+          onClick={() => setIsLeftSidebarOpen(false)}
+        />
+      )}
+      <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isLeftSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+        <div className={`bg-white border-r border-slate-200 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0'}`}>
+          <div className="w-full md:w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
             <div className="p-4 border-b border-slate-200 shrink-0">
-          <div className="flex items-center justify-between mb-4">
-            <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm">
-              <ArrowLeft size={16} />
-              Back to Project
-            </Link>
-            
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between mb-4">
+                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm">
+                  <ArrowLeft size={16} />
+                  <span className="md:inline">Back to Project</span>
+                </Link>
+                
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setIsLeftSidebarOpen(false)}
+                    className="md:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg shadow-sm overflow-hidden">
                 <Link
                   to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
                   state={{ pageIds }}
@@ -1033,70 +1056,102 @@ const CanvasViewInner: React.FC = () => {
             </div>
           )}
         </div>
-        </div>
       </div>
       <button
         onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-        className="absolute right-0 translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-l-0 rounded-r-md p-1 shadow-sm hover:bg-slate-50 text-slate-500"
+        className={`absolute right-0 translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-l-0 rounded-r-md p-1 shadow-sm hover:bg-slate-50 text-slate-500 ${isLeftSidebarOpen ? 'hidden md:block' : 'block'}`}
       >
         {isLeftSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>
     </div>
+  </div>
 
-      {/* Main Canvas Area */}
-      <div className="flex-1 relative bg-slate-200 min-w-0 min-h-0">
-        {/* Floating Controls when sidebar is closed */}
-        {!isLeftSidebarOpen && (
-          <div className="absolute top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between">
-            <div className="pointer-events-auto flex items-center gap-2">
-              <Link 
-                to={`/project/${project.id}`} 
-                className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
-              >
-                <ArrowLeft size={16} />
-                Back to Project
-              </Link>
-              
-              <div className="flex items-center bg-white/90 backdrop-blur border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-                <Link
-                  to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
-                  state={{ pageIds }}
-                  className={`p-2 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
-                  title="Previous Page"
-                  onClick={(e) => !prevPageId && e.preventDefault()}
-                >
-                  <ChevronLeft size={18} />
-                </Link>
-                <div className="w-px h-5 bg-slate-200" />
-                <Link
-                  to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
-                  state={{ pageIds }}
-                  className={`p-2 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
-                  title="Next Page"
-                  onClick={(e) => !nextPageId && e.preventDefault()}
-                >
-                  <ChevronRight size={18} />
-                </Link>
-              </div>
+  {/* Main Canvas Area */}
+      <div className="flex-1 relative bg-slate-200 min-w-0 min-h-0 flex flex-col">
+        {/* Mobile Header (only visible when sidebars are closed) */}
+        <div className={`md:hidden fixed top-0 left-0 right-0 h-14 bg-white/90 backdrop-blur-md border-b border-slate-200 z-40 flex items-center px-4 justify-between transition-all duration-300 ${(!isLeftSidebarOpen && !isRightSidebarOpen) ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsLeftSidebarOpen(true)}
+              className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg active:scale-95 transition-transform"
+            >
+              <Settings size={22} />
+            </button>
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-bold text-slate-900 truncate">{page.name}</span>
+              <span className="text-[10px] text-slate-500 truncate">{project.name}</span>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsRightSidebarOpen(true)}
+            className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg relative active:scale-95 transition-transform"
+          >
+            <Layers size={22} />
+            {aggregatedMeasurements.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+                {aggregatedMeasurements.length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex-1 relative min-h-0">
+          {/* Floating Controls */}
+          <div className={`absolute top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
+            <div className="hidden md:flex pointer-events-auto items-center gap-2">
+              {!isLeftSidebarOpen && (
+                <>
+                  <Link 
+                    to={`/project/${project.id}`} 
+                    className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
+                  >
+                    <ArrowLeft size={16} />
+                    Back to Project
+                  </Link>
+                  
+                  <div className="flex items-center bg-white/90 backdrop-blur border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                    <Link
+                      to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
+                      state={{ pageIds }}
+                      className={`p-2 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                      title="Previous Page"
+                      onClick={(e) => !prevPageId && e.preventDefault()}
+                    >
+                      <ChevronLeft size={18} />
+                    </Link>
+                    <div className="w-px h-5 bg-slate-200" />
+                    <Link
+                      to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
+                      state={{ pageIds }}
+                      className={`p-2 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                      title="Next Page"
+                      onClick={(e) => !nextPageId && e.preventDefault()}
+                    >
+                      <ChevronRight size={18} />
+                    </Link>
+                  </div>
+                </>
+              )}
             </div>
             
-            <div className="absolute left-1/2 -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1.5 shadow-sm">
+            <div className={`pointer-events-auto flex items-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
               <ToolButton
                 active={currentTool === 'pan'}
                 onClick={() => setCurrentTool('pan')}
-                icon={<Hand size={18} />}
+                icon={<Hand size={20} />}
                 label="Pan"
               />
               <ToolButton
                 active={currentTool === 'scale'}
                 onClick={() => setCurrentTool('scale')}
-                icon={<Settings size={18} />}
+                icon={<Settings size={20} />}
                 label="Set Scale"
               />
+              <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <ToolButton
                 active={currentTool === 'length'}
                 onClick={() => setCurrentTool('length')}
-                icon={<Ruler size={18} />}
+                icon={<Ruler size={20} />}
                 label="Length"
                 disabled={!page.scaleConfig || activeTakeoff?.type === 'count'}
                 onDisabledClick={() => {
@@ -1107,7 +1162,7 @@ const CanvasViewInner: React.FC = () => {
               <ToolButton
                 active={currentTool === 'area'}
                 onClick={() => setCurrentTool('area')}
-                icon={<Square size={18} />}
+                icon={<Square size={20} />}
                 label="Area"
                 disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count'}
                 onDisabledClick={() => {
@@ -1119,7 +1174,7 @@ const CanvasViewInner: React.FC = () => {
               <ToolButton
                 active={currentTool === 'count'}
                 onClick={() => setCurrentTool('count')}
-                icon={<Hash size={18} />}
+                icon={<Hash size={20} />}
                 label="Count"
                 disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area'}
                 onDisabledClick={() => {
@@ -1128,130 +1183,146 @@ const CanvasViewInner: React.FC = () => {
                   else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
                 }}
               />
-              <div className="h-8 w-px bg-slate-200 mx-1" />
+              <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <ToolButton
                 active={currentTool === 'region'}
                 onClick={() => setCurrentTool('region')}
-                icon={<Layers size={18} />}
+                icon={<Layers size={20} />}
                 label="Region"
                 disabled={!page.isMultiRegion}
                 onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
               />
-              <div className="h-8 w-px bg-slate-200 mx-1" />
+              <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
                 onClick={handleUndo}
                 disabled={history.length === 0}
-                className={`p-2 rounded-lg transition-colors ${
+                className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   history.length === 0 
                     ? 'text-slate-300 cursor-not-allowed' 
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600 active:bg-slate-200'
                 }`}
                 title="Undo (Ctrl+Z)"
               >
-                <Undo size={18} />
+                <Undo size={20} />
               </button>
             </div>
           </div>
-        )}
-        <PdfCanvas
-          key={page.id}
-          imageUrl={imageUrl}
-          imageWidth={page.imageWidth}
-          imageHeight={page.imageHeight}
-          currentTool={currentTool}
-          scaleConfig={page.scaleConfig}
-          measurements={aggregatedMeasurements}
-          takeoffs={project.takeoffs}
-          onAddMeasurement={addMeasurement}
-          onUpdateMeasurement={updateMeasurement}
-          onSetScale={handleSetScale}
-          selectedMeasurementId={selectedMeasurementId}
-          onSelectMeasurement={setSelectedMeasurementId}
-          onCancel={() => {
-            setSelectedMeasurementId(null);
-            setCurrentTool('pan');
-            setCalibratingRegionId(null);
-          }}
-          isMultiRegion={page.isMultiRegion}
-          scaleRegions={page.scaleRegions}
-          selectedRegionId={selectedRegionId}
-          onSelectRegion={setSelectedRegionId}
-          calibratingRegionId={calibratingRegionId}
-          onAddRegion={async (region) => {
-            const updatedProject = {
-              ...project,
-              pages: project.pages.map(p => 
-                p.id === page.id 
-                  ? { ...p, scaleRegions: [...(p.scaleRegions || []), region] } 
-                  : p
-              )
-            };
-            await saveProject(updatedProject);
-            setProject(updatedProject);
-            setPage(updatedProject.pages.find(p => p.id === page.id) || page);
-            setCurrentTool('pan');
-          }}
-          onUpdateRegion={async (id, regionUpdate) => {
-            const updatedProject = {
-              ...project,
-              pages: project.pages.map(p => 
-                p.id === page.id 
-                  ? { 
-                      ...p, 
-                      scaleRegions: p.scaleRegions?.map(r => r.id === id ? { ...r, ...regionUpdate } : r) 
-                    } 
-                  : p
-              )
-            };
-            await saveProject(updatedProject);
-            setProject(updatedProject);
-            setPage(updatedProject.pages.find(p => p.id === page.id) || page);
-          }}
-          onDeleteRegion={async (id) => {
-            const updatedProject = {
-              ...project,
-              pages: project.pages.map(p => 
-                p.id === page.id 
-                  ? { 
-                      ...p, 
-                      scaleRegions: p.scaleRegions?.filter(r => r.id !== id),
-                      measurements: p.measurements.map(m => m.regionId === id ? { ...m, regionId: undefined } : m)
-                    } 
-                  : p
-              )
-            };
-            await saveProject(updatedProject);
-            setProject(updatedProject);
-            setPage(updatedProject.pages.find(p => p.id === page.id) || page);
-          }}
-          remoteUsers={users}
-          onCursorMove={sendCursor}
-          currentUserId={socket?.id}
-        />
 
-        {/* Tool Instructions Overlay */}
-        {currentTool !== 'pan' && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-slate-800/80 backdrop-blur text-white px-4 py-2 rounded-full text-sm shadow-lg pointer-events-none z-10">
-            {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
-            {currentTool === 'length' && "Click points to draw a line. Double-click or press Enter to finish."}
-            {currentTool === 'area' && "Click points to draw a polygon. Double-click or press Enter to finish."}
-            {currentTool === 'region' && "Click points to define a scale region. Double-click or press Enter to finish."}
-          </div>
-        )}
+          <PdfCanvas
+            key={page.id}
+            imageUrl={imageUrl}
+            imageWidth={page.imageWidth}
+            imageHeight={page.imageHeight}
+            currentTool={currentTool}
+            scaleConfig={page.scaleConfig}
+            measurements={aggregatedMeasurements}
+            takeoffs={project.takeoffs}
+            onAddMeasurement={addMeasurement}
+            onUpdateMeasurement={updateMeasurement}
+            onDeleteMeasurement={deleteMeasurement}
+            onSetScale={handleSetScale}
+            selectedMeasurementId={selectedMeasurementId}
+            onSelectMeasurement={setSelectedMeasurementId}
+            onCancel={() => {
+              setSelectedMeasurementId(null);
+              setCurrentTool('pan');
+              setCalibratingRegionId(null);
+            }}
+            isMultiRegion={page.isMultiRegion}
+            scaleRegions={page.scaleRegions}
+            selectedRegionId={selectedRegionId}
+            onSelectRegion={setSelectedRegionId}
+            calibratingRegionId={calibratingRegionId}
+            onAddRegion={async (region) => {
+              const updatedProject = {
+                ...project,
+                pages: project.pages.map(p => 
+                  p.id === page.id 
+                    ? { ...p, scaleRegions: [...(p.scaleRegions || []), region] } 
+                    : p
+                )
+              };
+              await saveProject(updatedProject);
+              setProject(updatedProject);
+              setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+              setCurrentTool('pan');
+            }}
+            onUpdateRegion={async (id, regionUpdate) => {
+              const updatedProject = {
+                ...project,
+                pages: project.pages.map(p => 
+                  p.id === page.id 
+                    ? { 
+                        ...p, 
+                        scaleRegions: p.scaleRegions?.map(r => r.id === id ? { ...r, ...regionUpdate } : r) 
+                      } 
+                    : p
+                )
+              };
+              await saveProject(updatedProject);
+              setProject(updatedProject);
+              setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+            }}
+            onDeleteRegion={async (id) => {
+              const updatedProject = {
+                ...project,
+                pages: project.pages.map(p => 
+                  p.id === page.id 
+                    ? { 
+                        ...p, 
+                        scaleRegions: p.scaleRegions?.filter(r => r.id !== id),
+                        measurements: p.measurements.map(m => m.regionId === id ? { ...m, regionId: undefined } : m)
+                      } 
+                    : p
+                )
+              };
+              await saveProject(updatedProject);
+              setProject(updatedProject);
+              setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+            }}
+            remoteUsers={users}
+            onCursorMove={sendCursor}
+            currentUserId={socket?.id}
+          />
+
+          {/* Tool Instructions Overlay */}
+          {currentTool !== 'pan' && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/80 backdrop-blur text-white px-4 py-2 rounded-full text-xs md:text-sm shadow-lg pointer-events-none z-10 text-center max-w-[90vw]">
+              {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
+              {currentTool === 'length' && "Click points to draw a line. Double-click or press Enter to finish."}
+              {currentTool === 'area' && "Click points to draw a polygon. Double-click or press Enter to finish."}
+              {currentTool === 'region' && "Click points to define a scale region. Double-click or press Enter to finish."}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Right Sidebar Wrapper */}
-      <div className="relative z-20 flex h-full">
+      {isRightSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-900/20 backdrop-blur-[1px] z-40 md:hidden"
+          onClick={() => setIsRightSidebarOpen(false)}
+        />
+      )}
+      <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}`}>
         <button
           onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-          className="absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 text-slate-500"
+          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 text-slate-500 ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
         >
           {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <div className={`bg-white border-l border-slate-200 flex flex-col shadow-sm transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-96' : 'w-0'}`}>
-          <div className="w-96 flex flex-col h-full overflow-y-auto overflow-x-hidden p-4">
+        <div className={`bg-white border-l border-slate-200 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
+          <div className="w-full md:w-96 flex flex-col h-full overflow-y-auto overflow-x-hidden p-4">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Takeoffs & Measurements</h2>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setIsRightSidebarOpen(false)}
+                  className="md:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  <ChevronRight size={20} />
+                </button>
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Takeoffs & Measurements</h2>
+              </div>
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
                   <input 
@@ -1260,7 +1331,8 @@ const CanvasViewInner: React.FC = () => {
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
                     className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                   />
-                  Current page only
+                  <span className="hidden sm:inline">Current page only</span>
+                  <span className="sm:hidden">Page only</span>
                 </label>
                 {page.scaleConfig && (
                   <button
@@ -1340,32 +1412,34 @@ const CanvasViewInner: React.FC = () => {
                           e.stopPropagation();
                           setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
                         }}
-                        className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition-colors"
+                        className="text-slate-400 hover:text-slate-600 p-2 rounded transition-colors active:scale-95"
                       >
-                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold ${isActive ? 'text-blue-800' : 'text-slate-800'}`}>{takeoff.name}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTakeoffToDelete(takeoff);
-                        }}
-                        className="text-slate-400 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors opacity-0 group-hover/header:opacity-100"
-                        title="Delete Takeoff"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEditTakeoff(takeoff);
-                        }}
-                        className="text-slate-400 hover:text-blue-500 p-1 rounded-md hover:bg-blue-50 transition-colors opacity-0 group-hover/header:opacity-100"
-                        title="Edit Takeoff"
-                      >
-                        <Edit2 size={14} />
-                      </button>
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
+                      <span className={`text-sm font-semibold truncate max-w-[120px] md:max-w-none ${isActive ? 'text-blue-800' : 'text-slate-800'}`}>{takeoff.name}</span>
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTakeoffToDelete(takeoff);
+                          }}
+                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          title="Delete Takeoff"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleEditTakeoff(takeoff);
+                          }}
+                          className="text-slate-400 hover:text-blue-500 p-2 rounded-md hover:bg-blue-50 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          title="Edit Takeoff"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                      </div>
                     </div>
                     <span className="text-xs font-medium text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200 whitespace-pre-line text-right">
                       {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff)}
@@ -1486,8 +1560,8 @@ const CanvasViewInner: React.FC = () => {
 
       {/* Scale Modal */}
       {showScaleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl w-96 overflow-hidden">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
             <div className="p-4 border-b border-slate-100 bg-slate-50">
               <h3 className="font-semibold text-slate-800">Set Scale</h3>
             </div>
@@ -1533,13 +1607,13 @@ const CanvasViewInner: React.FC = () => {
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
               <button
                 onClick={() => setShowScaleModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-lg transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmScale}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:scale-95 rounded-lg transition-all"
               >
                 Set Scale
               </button>
@@ -1550,8 +1624,8 @@ const CanvasViewInner: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
             <div className="p-6 border-b border-slate-100">
               <h3 className="text-lg font-semibold text-slate-900">Delete Measurement</h3>
             </div>
@@ -1563,15 +1637,15 @@ const CanvasViewInner: React.FC = () => {
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button
                 onClick={() => { setShowDeleteConfirm(false); setMeasurementToDelete(null); }}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDeleteMeasurement}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 active:scale-95 rounded-xl transition-all shadow-sm"
               >
-                Delete Measurement
+                Delete
               </button>
             </div>
           </div>
@@ -1579,12 +1653,12 @@ const CanvasViewInner: React.FC = () => {
       )}
       {/* Takeoff Modal */}
       {showTakeoffModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-slate-100">
               <h3 className="text-lg font-semibold text-slate-900">Create Measurement Takeoff</h3>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
               {templates.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Use Template (Optional)</label>
@@ -1738,14 +1812,14 @@ const CanvasViewInner: React.FC = () => {
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button
                 onClick={() => setShowTakeoffModal(false)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreateTakeoff}
                 disabled={!newTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
               >
                 Create Takeoff
               </button>
@@ -1786,12 +1860,12 @@ const CanvasViewInner: React.FC = () => {
 
       {/* Edit Takeoff Modal */}
       {editingTakeoff && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-slate-100">
               <h3 className="text-lg font-semibold text-slate-900">Edit Measurement Takeoff</h3>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
                 <input
@@ -1924,14 +1998,14 @@ const CanvasViewInner: React.FC = () => {
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button
                 onClick={() => setEditingTakeoff(null)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
               >
                 Save Changes
               </button>
@@ -2017,7 +2091,8 @@ function ToolButton({
   icon, 
   label, 
   disabled = false,
-  onDisabledClick
+  onDisabledClick,
+  className = ""
 }: { 
   active: boolean; 
   onClick: () => void; 
@@ -2025,17 +2100,19 @@ function ToolButton({
   label: string;
   disabled?: boolean;
   onDisabledClick?: () => void;
+  className?: string;
 }) {
   return (
     <button
       onClick={disabled ? onDisabledClick : onClick}
       title={label}
       className={`
-        flex items-center justify-center p-2 rounded-lg border transition-all
+        flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
         ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' : 
           active 
             ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' 
             : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}
+        ${className}
       `}
     >
       {icon}
@@ -2164,16 +2241,28 @@ function MeasurementItem({
                 : formatMeasurement(calculatePolygonArea(measurement.points), 'area', scaleConfig, takeoff)
             }
           </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-            title="Delete Measurement"
-          >
-            <Trash2 size={14} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsEditing(true);
+              }}
+              className="md:hidden p-2 text-slate-400 hover:text-blue-500 active:scale-95 transition-all"
+              title="Rename Measurement"
+            >
+              <Edit2 size={18} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="p-2 text-slate-400 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 active:scale-95 transition-all"
+              title="Delete Measurement"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
         </div>
       </div>
       

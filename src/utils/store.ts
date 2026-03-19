@@ -5,6 +5,11 @@ const getAuthHeaders = () => {
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
 
+export const getImageUrl = (id: string) => {
+  const token = localStorage.getItem('token');
+  return `/api/images/${id}/raw${token ? `?token=${token}` : ''}`;
+};
+
 const handleResponse = async (res: Response) => {
   if (res.status === 401 || res.status === 403) {
     localStorage.removeItem('token');
