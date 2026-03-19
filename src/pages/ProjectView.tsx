@@ -1361,6 +1361,7 @@ export const ProjectView: React.FC = () => {
                   <Link
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}`}
+                    state={{ pageIds: filteredPages.map(p => p.id) }}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-all hover:border-blue-300 flex flex-col group"
                   >
                     <div className="h-40 bg-slate-100 relative overflow-hidden border-b border-slate-200">
@@ -1590,7 +1591,11 @@ export const ProjectView: React.FC = () => {
                               <div className="border-l-4 border-blue-500/20 ml-6 my-2 divide-y divide-slate-100">
                                 {takeoff.pageBreakdown.map(pb => (
                                   <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white transition-colors">
-                                    <Link to={`/project/${project.id}/page/${pb.pageId}`} className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-2">
+                                    <Link 
+                                      to={`/project/${project.id}/page/${pb.pageId}`} 
+                                      state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
+                                      className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-2"
+                                    >
                                       <FileImage size={14} className="text-slate-400" />
                                       {pb.pageName}
                                     </Link>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -31,6 +31,7 @@ const STANDARD_SCALES = [
 const CanvasViewInner: React.FC = () => {
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   
   const { socket, users, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser } = useCollaboration();
 
@@ -38,6 +39,11 @@ const CanvasViewInner: React.FC = () => {
   const [page, setPage] = useState<ProjectPage | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const pageIds = (location.state?.pageIds as string[]) || project?.pages.map(p => p.id) || [];
+  const currentPageIndex = pageIds.findIndex(id => id === pageId);
+  const prevPageId = currentPageIndex > 0 ? pageIds[currentPageIndex - 1] : null;
+  const nextPageId = currentPageIndex !== -1 && currentPageIndex < pageIds.length - 1 ? pageIds[currentPageIndex + 1] : null;
   
   const [currentTool, setCurrentTool] = useState<Tool>('pan');
   const [showScaleModal, setShowScaleModal] = useState(false);
@@ -221,6 +227,8 @@ const CanvasViewInner: React.FC = () => {
     setProject(proj);
     setPage(pg);
     setImageUrl(imgUrl);
+    setSelectedMeasurementId(null);
+    setHistory([]);
     
     // Set default takeoff if available
     if (proj.takeoffs.length > 0) {
@@ -669,10 +677,39 @@ const CanvasViewInner: React.FC = () => {
         <div className={`bg-white border-r border-slate-200 flex flex-col shadow-sm transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-80' : 'w-0'}`}>
           <div className="w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
             <div className="p-4 border-b border-slate-200 shrink-0">
-          <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-4 transition-colors font-medium text-sm">
-            <ArrowLeft size={16} />
-            Back to Project
-          </Link>
+          <div className="flex items-center justify-between mb-4">
+            <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm">
+              <ArrowLeft size={16} />
+              Back to Project
+            </Link>
+            
+            <div className="flex items-center gap-2">
+              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                <Link
+                  to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
+                  state={{ pageIds }}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  title="Previous Page"
+                  onClick={(e) => !prevPageId && e.preventDefault()}
+                >
+                  <ChevronLeft size={16} />
+                </Link>
+                <div className="w-px h-4 bg-slate-200" />
+                <Link
+                  to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
+                  state={{ pageIds }}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  title="Next Page"
+                  onClick={(e) => !nextPageId && e.preventDefault()}
+                >
+                  <ChevronRight size={16} />
+                </Link>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 shadow-sm flex items-center text-xs font-medium text-slate-600">
+                <span>{currentPageIndex + 1} / {pageIds.length}</span>
+              </div>
+            </div>
+          </div>
           <h1 className="text-xl font-semibold text-slate-800 flex items-center gap-2 line-clamp-1">
             {page.name}
           </h1>
@@ -1011,7 +1048,7 @@ const CanvasViewInner: React.FC = () => {
         {/* Floating Controls when sidebar is closed */}
         {!isLeftSidebarOpen && (
           <div className="absolute top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between">
-            <div className="pointer-events-auto">
+            <div className="pointer-events-auto flex items-center gap-2">
               <Link 
                 to={`/project/${project.id}`} 
                 className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
@@ -1019,6 +1056,28 @@ const CanvasViewInner: React.FC = () => {
                 <ArrowLeft size={16} />
                 Back to Project
               </Link>
+              
+              <div className="flex items-center bg-white/90 backdrop-blur border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                <Link
+                  to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
+                  state={{ pageIds }}
+                  className={`p-2 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  title="Previous Page"
+                  onClick={(e) => !prevPageId && e.preventDefault()}
+                >
+                  <ChevronLeft size={18} />
+                </Link>
+                <div className="w-px h-5 bg-slate-200" />
+                <Link
+                  to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
+                  state={{ pageIds }}
+                  className={`p-2 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  title="Next Page"
+                  onClick={(e) => !nextPageId && e.preventDefault()}
+                >
+                  <ChevronRight size={18} />
+                </Link>
+              </div>
             </div>
             
             <div className="absolute left-1/2 -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1.5 shadow-sm">
@@ -1095,6 +1154,7 @@ const CanvasViewInner: React.FC = () => {
           </div>
         )}
         <PdfCanvas
+          key={page.id}
           imageUrl={imageUrl}
           imageWidth={page.imageWidth}
           imageHeight={page.imageHeight}
@@ -1332,6 +1392,7 @@ const CanvasViewInner: React.FC = () => {
                               pageId={p.id}
                               projectId={project.id}
                               planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
+                              pageIds={project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id)}
                             />
                           ))
                       )}
@@ -1346,6 +1407,7 @@ const CanvasViewInner: React.FC = () => {
                           <div key={p.id} className="p-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
                             <Link 
                               to={`/project/${project.id}/page/${p.id}`}
+                              state={{ pageIds: project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id) }}
                               className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline truncate"
                             >
                               {p.name}
@@ -1407,6 +1469,7 @@ const CanvasViewInner: React.FC = () => {
                           pageId={p.id}
                           projectId={project.id}
                           planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
+                          pageIds={project.pages.filter(pg => pg.measurements.some(m => !m.takeoffId)).map(pg => pg.id)}
                         />
                       ))
                   )}
@@ -1993,7 +2056,8 @@ function MeasurementItem({
   pageName,
   pageId,
   projectId,
-  planSetName
+  planSetName,
+  pageIds
 }: { 
   measurement: Measurement;
   scaleConfig: ScaleConfig | null;
@@ -2008,6 +2072,7 @@ function MeasurementItem({
   pageId?: string;
   projectId?: string;
   planSetName?: string;
+  pageIds?: string[];
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(measurement.name);
@@ -2069,6 +2134,7 @@ function MeasurementItem({
             {pageName && pageId && projectId && (
               <Link
                 to={`/project/${projectId}/page/${pageId}`}
+                state={{ pageIds }}
                 className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline font-medium uppercase tracking-wide truncate"
                 onClick={(e) => e.stopPropagation()}
               >
