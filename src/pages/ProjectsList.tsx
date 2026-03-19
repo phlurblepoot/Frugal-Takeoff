@@ -1,18 +1,20 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin } from 'lucide-react';
-import { Project } from '../types';
-import { getAllProjects, deleteProject, getActivePages } from '../utils/store';
+import { Project, Bid } from '../types';
+import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
+import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
-type Tab = 'projects' | 'templates';
+type Tab = 'projects' | 'templates' | 'bids';
 
 export const ProjectsList: React.FC = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>('projects');
   const [projects, setProjects] = useState<Project[]>([]);
+  const [bids, setBids] = useState<Bid[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterContractor, setFilterContractor] = useState<string>('all');
   const [sortField, setSortField] = useState<SortField>('createdAt');
@@ -21,8 +23,11 @@ export const ProjectsList: React.FC = () => {
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [activePages, setActivePages] = useState<string[]>([]);
 
+  // New Bid state
+  const [newBid, setNewBid] = useState({ name: '', contractor: '', address: '', decision: 'pending' as const });
+
   useEffect(() => {
-    loadProjects();
+    loadData();
     
     // Poll for active pages
     const fetchActivePages = async () => {
@@ -39,11 +44,56 @@ export const ProjectsList: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const loadProjects = async () => {
+  const loadData = async () => {
     setIsLoading(true);
-    const data = await getAllProjects();
-    setProjects(data);
+    const [projectsData, bidsData] = await Promise.all([
+      getAllProjects(),
+      getBids()
+    ]);
+    setProjects(projectsData);
+    setBids(bidsData);
     setIsLoading(false);
+  };
+
+  const handleAddBid = async () => {
+    if (!newBid.name) return;
+    const bid: Bid = {
+      id: uuidv4(),
+      ...newBid,
+      createdAt: Date.now()
+    };
+    await saveBid(bid);
+    const updatedBids = await getBids();
+    setBids(updatedBids);
+    setNewBid({ name: '', contractor: '', address: '', decision: 'pending' });
+  };
+
+  const handleUpdateBidDecision = async (id: string, decision: 'yes' | 'no' | 'pending') => {
+    const bid = bids.find(b => b.id === id);
+    if (bid) {
+      await saveBid({ ...bid, decision });
+      const updatedBids = await getBids();
+      setBids(updatedBids);
+    }
+  };
+
+  const handleDeleteBid = async (id: string) => {
+    if (window.confirm('Are you sure you want to delete this bid?')) {
+      await deleteBid(id);
+      const updatedBids = await getBids();
+      setBids(updatedBids);
+    }
+  };
+
+  const handleConvertBid = (bid: Bid) => {
+    navigate('/new', {
+      state: {
+        initialName: bid.name,
+        initialContractor: bid.contractor,
+        initialAddress: bid.address,
+        fromBidId: bid.id
+      }
+    });
   };
 
   const handleDeleteClick = (e: React.MouseEvent, project: Project) => {
@@ -64,7 +114,7 @@ export const ProjectsList: React.FC = () => {
     if (projectToDelete && deleteConfirmationText.toLowerCase() === 'delete') {
       await deleteProject(projectToDelete.id);
       setProjectToDelete(null);
-      loadProjects();
+      loadData();
     }
   };
 
@@ -216,6 +266,17 @@ export const ProjectsList: React.FC = () => {
           >
             <Layout size={18} />
             Templates
+          </button>
+          <button
+            onClick={() => setActiveTab('bids')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+              activeTab === 'bids' 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Building2 size={18} />
+            Bid Pipeline
           </button>
         </div>
 
@@ -395,6 +456,132 @@ export const ProjectsList: React.FC = () => {
               </div>
             )}
           </>
+        ) : activeTab === 'bids' ? (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-200 bg-slate-50">
+              <h2 className="text-lg font-bold text-slate-900 mb-4">Add Potential Bid</h2>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
+                  <input
+                    type="text"
+                    value={newBid.name}
+                    onChange={e => setNewBid({ ...newBid, name: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="e.g. City Hall Renovation"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Contractor</label>
+                  <input
+                    type="text"
+                    value={newBid.contractor}
+                    onChange={e => setNewBid({ ...newBid, contractor: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="e.g. ABC Construction"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Address</label>
+                  <input
+                    type="text"
+                    value={newBid.address}
+                    onChange={e => setNewBid({ ...newBid, address: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="e.g. 123 Main St"
+                  />
+                </div>
+                <button
+                  onClick={handleAddBid}
+                  disabled={!newBid.name}
+                  className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
+                >
+                  <Plus size={18} />
+                  Add Bid
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Project Name</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Contractor</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Address</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Decision</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {bids.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                        No potential bids added yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    bids.map((bid) => (
+                      <tr key={bid.id} className="hover:bg-slate-50 transition-colors group">
+                        <td className="px-6 py-4 font-medium text-slate-900">{bid.name}</td>
+                        <td className="px-6 py-4 text-slate-600">{bid.contractor || '-'}</td>
+                        <td className="px-6 py-4">
+                          {bid.address ? (
+                            <div className="flex items-center gap-2 text-sm text-slate-600">
+                              <MapPin size={14} className="text-slate-400" />
+                              <a 
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bid.address)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {bid.address}
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-slate-400 italic">-</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <select
+                            value={bid.decision}
+                            onChange={(e) => handleUpdateBidDecision(bid.id, e.target.value as any)}
+                            className={`text-sm font-medium rounded-full px-3 py-1 outline-none border-2 ${
+                              bid.decision === 'yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                              bid.decision === 'no' ? 'bg-red-50 text-red-700 border-red-200' :
+                              'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}
+                          >
+                            <option value="pending">Pending</option>
+                            <option value="yes">Yes</option>
+                            <option value="no">No</option>
+                          </select>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleConvertBid(bid)}
+                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              Convert to Project
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBid(bid.id)}
+                              className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                              title="Delete Bid"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         ) : (
           <TemplatesView />
         )}

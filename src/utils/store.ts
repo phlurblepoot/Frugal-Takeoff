@@ -1,4 +1,4 @@
-import { Project, TakeoffTemplate } from '../types';
+import { Project, TakeoffTemplate, Bid } from '../types';
 
 export const saveProject = async (project: Project): Promise<void> => {
   const res = await fetch('/api/projects/' + project.id, {
@@ -84,4 +84,23 @@ export const getActivePages = async (): Promise<string[]> => {
   const res = await fetch('/api/pages/active');
   if (!res.ok) return [];
   return await res.json();
+};
+
+// Bid functions
+export const getBids = async (): Promise<Bid[]> => {
+  const res = await fetch('/api/bids');
+  if (!res.ok) return [];
+  return await res.json();
+};
+
+export const saveBid = async (bid: Bid): Promise<void> => {
+  await fetch('/api/bids', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(bid)
+  });
+};
+
+export const deleteBid = async (id: string): Promise<void> => {
+  await fetch('/api/bids/' + id, { method: 'DELETE' });
 };

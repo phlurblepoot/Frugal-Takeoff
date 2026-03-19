@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { createProject, saveProject, getProject, saveImage, getImage } from '../utils/store';
+import { createProject, saveProject, getProject, saveImage, getImage, deleteBid } from '../utils/store';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
@@ -22,10 +22,11 @@ interface PendingPage {
 
 export const NewProject: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [step, setStep] = useState<'details' | 'name_pages'>('details');
-  const [name, setName] = useState('');
-  const [contractor, setContractor] = useState('');
-  const [address, setAddress] = useState('');
+  const [name, setName] = useState(location.state?.initialName || '');
+  const [contractor, setContractor] = useState(location.state?.initialContractor || '');
+  const [address, setAddress] = useState(location.state?.initialAddress || '');
   const [bidDueDate, setBidDueDate] = useState('');
   const [planSetName, setPlanSetName] = useState('Initial Set');
   const [planSetDate, setPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
@@ -200,6 +201,10 @@ export const NewProject: React.FC = () => {
 
       project.pages = updatedPages;
       await saveProject(project);
+      
+      if (location.state?.fromBidId) {
+        await deleteBid(location.state.fromBidId);
+      }
       
       navigate(`/project/${projectId}`);
     } catch (error) {

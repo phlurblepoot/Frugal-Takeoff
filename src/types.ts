@@ -89,6 +89,15 @@ export interface ProjectPage {
   extractedText?: string;
 }
 
+export interface Bid {
+  id: string;
+  name: string;
+  contractor: string;
+  address: string;
+  decision: 'yes' | 'no' | 'pending';
+  createdAt: number;
+}
+
 export interface Project {
   id: string;
   name: string;

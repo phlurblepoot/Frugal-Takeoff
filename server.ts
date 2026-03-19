@@ -71,6 +71,11 @@ function initDb() {
         id TEXT PRIMARY KEY,
         data TEXT
       );
+      CREATE TABLE IF NOT EXISTS bids (
+        id TEXT PRIMARY KEY,
+        data TEXT,
+        createdAt INTEGER
+      );
     `);
 
     migrateOldData();
@@ -346,6 +351,42 @@ async function startServer() {
     } catch (error) {
       console.error("Error deleting template:", error);
       res.status(500).json({ error: "Failed to delete template" });
+    }
+  });
+
+  // Bids API
+  app.get("/api/bids", (req, res) => {
+    try {
+      const stmt = db.prepare('SELECT data FROM bids ORDER BY createdAt DESC');
+      const rows = stmt.all() as { data: string }[];
+      const bids = rows.map(row => JSON.parse(row.data));
+      res.json(bids);
+    } catch (error) {
+      console.error("Error fetching bids:", error);
+      res.status(500).json({ error: "Failed to fetch bids" });
+    }
+  });
+
+  app.post("/api/bids", (req, res) => {
+    try {
+      const bid = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)');
+      stmt.run(bid.id, JSON.stringify(bid), bid.createdAt || Date.now());
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving bid:", error);
+      res.status(500).json({ error: "Failed to save bid" });
+    }
+  });
+
+  app.delete("/api/bids/:id", (req, res) => {
+    try {
+      const stmt = db.prepare('DELETE FROM bids WHERE id = ?');
+      stmt.run(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting bid:", error);
+      res.status(500).json({ error: "Failed to delete bid" });
     }
   });
 
