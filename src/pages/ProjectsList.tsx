@@ -1,14 +1,15 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut } from 'lucide-react';
 import { Project, Bid } from '../types';
 import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
+import { UsersView } from './UsersView';
 import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
-type Tab = 'projects' | 'templates' | 'bids';
+type Tab = 'projects' | 'templates' | 'bids' | 'users';
 
 export const ProjectsList: React.FC = () => {
   const navigate = useNavigate();
@@ -22,12 +23,24 @@ export const ProjectsList: React.FC = () => {
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [activePages, setActivePages] = useState<string[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // New Bid state
   const [newBid, setNewBid] = useState({ name: '', contractor: '', address: '', decision: 'pending' as const });
 
   useEffect(() => {
     loadData();
+    
+    // Check if user is admin
+    try {
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        setIsAdmin(user.role === 'admin');
+      }
+    } catch (e) {
+      console.error('Failed to parse user data', e);
+    }
     
     // Poll for active pages
     const fetchActivePages = async () => {
@@ -208,6 +221,12 @@ export const ProjectsList: React.FC = () => {
     return 'text-slate-400';
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/login');
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 p-8 font-sans">
       <div className="max-w-6xl mx-auto">
@@ -216,32 +235,42 @@ export const ProjectsList: React.FC = () => {
             <h1 className="text-3xl font-bold text-slate-900">Takeoff Pro</h1>
             <p className="text-slate-500 mt-1">Manage your projects and templates</p>
           </div>
-          {activeTab === 'projects' && (
-            <div className="flex flex-wrap items-center gap-3">
-              {contractors.length > 0 && (
-                <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
-                  <Filter size={16} className="text-slate-400" />
-                  <select
-                    value={filterContractor}
-                    onChange={(e) => setFilterContractor(e.target.value)}
-                    className="bg-transparent text-sm font-medium text-slate-700 outline-none"
-                  >
-                    <option value="all">All Contractors</option>
-                    {contractors.map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <Link
-                to="/new"
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm"
-              >
-                <Plus size={20} />
-                New Project
-              </Link>
-            </div>
-          )}
+          <div className="flex items-center gap-4">
+            {activeTab === 'projects' && (
+              <div className="flex flex-wrap items-center gap-3">
+                {contractors.length > 0 && (
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
+                    <Filter size={16} className="text-slate-400" />
+                    <select
+                      value={filterContractor}
+                      onChange={(e) => setFilterContractor(e.target.value)}
+                      className="bg-transparent text-sm font-medium text-slate-700 outline-none"
+                    >
+                      <option value="all">All Contractors</option>
+                      {contractors.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <Link
+                  to="/new"
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm"
+                >
+                  <Plus size={20} />
+                  New Project
+                </Link>
+              </div>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2 rounded-lg font-medium transition-colors"
+              title="Logout"
+            >
+              <LogOut size={18} />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-1 mb-6 bg-slate-200/50 p-1 rounded-xl w-fit">
@@ -278,6 +307,19 @@ export const ProjectsList: React.FC = () => {
             <Building2 size={18} />
             Bid Pipeline
           </button>
+          {isAdmin && (
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                activeTab === 'users' 
+                  ? 'bg-white text-blue-600 shadow-sm' 
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Users size={18} />
+              Users
+            </button>
+          )}
         </div>
 
         {activeTab === 'projects' ? (
@@ -582,6 +624,8 @@ export const ProjectsList: React.FC = () => {
               </table>
             </div>
           </div>
+        ) : activeTab === 'users' && isAdmin ? (
+          <UsersView />
         ) : (
           <TemplatesView />
         )}

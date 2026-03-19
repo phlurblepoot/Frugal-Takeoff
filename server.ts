@@ -7,6 +7,9 @@ import fsSync from "fs";
 import path from "path";
 import dotenv from "dotenv";
 import Database from "better-sqlite3";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -76,7 +79,22 @@ function initDb() {
         data TEXT,
         createdAt INTEGER
       );
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE,
+        password TEXT,
+        role TEXT
+      );
     `);
+
+    // Create default admin user if no users exist
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
+    if (userCount.count === 0) {
+      const hash = bcrypt.hashSync('admin', 10);
+      db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(
+        'admin-id-123', 'admin', hash, 'admin'
+      );
+    }
 
     migrateOldData();
   } catch (error) {
@@ -159,8 +177,101 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
+  const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production';
+
+  // Auth Middleware
+  const authenticateToken = (req: any, res: any, next: any) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
+
+    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+      if (err) return res.sendStatus(403);
+      req.user = user;
+      next();
+    });
+  };
+
+  const requireAdmin = (req: any, res: any, next: any) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+  };
+
+  // Auth Routes
+  app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    try {
+      const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const validPassword = bcrypt.compareSync(password, user.password);
+      if (!validPassword) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+      res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+    } catch (error) {
+      res.status(500).json({ error: 'Login failed' });
+    }
+  });
+
+  app.get('/api/auth/me', authenticateToken, (req: any, res: any) => {
+    res.json({ user: req.user });
+  });
+
+  // User Management Routes
+  app.get('/api/users', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const users = db.prepare('SELECT id, username, role FROM users').all();
+      res.json(users);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch users' });
+    }
+  });
+
+  app.post('/api/users', authenticateToken, requireAdmin, (req, res) => {
+    const { username, password, role } = req.body;
+    try {
+      const hash = bcrypt.hashSync(password, 10);
+      const id = crypto.randomUUID();
+      db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(
+        id, username, hash, role || 'user'
+      );
+      res.json({ success: true, user: { id, username, role: role || 'user' } });
+    } catch (error: any) {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        res.status(400).json({ error: 'Username already exists' });
+      } else {
+        res.status(500).json({ error: 'Failed to create user' });
+      }
+    }
+  });
+
+  app.delete('/api/users/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      // Prevent deleting the last admin
+      const userToDelete = db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id) as any;
+      if (userToDelete?.role === 'admin') {
+        const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as any;
+        if (adminCount.count <= 1) {
+          return res.status(400).json({ error: 'Cannot delete the last admin user' });
+        }
+      }
+      
+      db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to delete user' });
+    }
+  });
+
   // API Routes
-  app.get("/api/projects", (req, res) => {
+  app.get("/api/projects", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM projects ORDER BY createdAt DESC');
       const rows = stmt.all() as { data: string }[];
@@ -172,7 +283,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/projects/:id", (req, res) => {
+  app.get("/api/projects/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM projects WHERE id = ?');
       const row = stmt.get(req.params.id) as { data: string } | undefined;
@@ -185,7 +296,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/projects", (req, res) => {
+  app.post("/api/projects", authenticateToken, (req, res) => {
     try {
       const project = req.body;
       const stmt = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
@@ -197,7 +308,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/projects/:id", (req, res) => {
+  app.put("/api/projects/:id", authenticateToken, (req, res) => {
     try {
       const project = req.body;
       
@@ -244,7 +355,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/projects/:id", (req, res) => {
+  app.delete("/api/projects/:id", authenticateToken, (req, res) => {
     try {
       const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
       const row = stmtGet.get(req.params.id) as { data: string } | undefined;
@@ -271,7 +382,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/images/:id", (req, res) => {
+  app.get("/api/images/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
       const row = stmt.get(req.params.id) as { data: string } | undefined;
@@ -284,7 +395,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/images/:id/raw", (req, res) => {
+  app.get("/api/images/:id/raw", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
       const row = stmt.get(req.params.id) as { data: string } | undefined;
@@ -308,7 +419,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/images", (req, res) => {
+  app.post("/api/images", authenticateToken, (req, res) => {
     try {
       const { id, data } = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO images (id, data) VALUES (?, ?)');
@@ -320,7 +431,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/templates", (req, res) => {
+  app.get("/api/templates", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM templates');
       const rows = stmt.all() as { data: string }[];
@@ -331,7 +442,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/templates", (req, res) => {
+  app.post("/api/templates", authenticateToken, (req, res) => {
     try {
       const t = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO templates (id, data) VALUES (?, ?)');
@@ -343,7 +454,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/templates/:id", (req, res) => {
+  app.delete("/api/templates/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('DELETE FROM templates WHERE id = ?');
       stmt.run(req.params.id);
@@ -355,7 +466,7 @@ async function startServer() {
   });
 
   // Bids API
-  app.get("/api/bids", (req, res) => {
+  app.get("/api/bids", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM bids ORDER BY createdAt DESC');
       const rows = stmt.all() as { data: string }[];
@@ -367,7 +478,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bids", (req, res) => {
+  app.post("/api/bids", authenticateToken, (req, res) => {
     try {
       const bid = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)');
@@ -379,7 +490,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/bids/:id", (req, res) => {
+  app.delete("/api/bids/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('DELETE FROM bids WHERE id = ?');
       stmt.run(req.params.id);
@@ -394,7 +505,7 @@ async function startServer() {
   const users: Record<string, { id: string; name: string; pageId: string; cursor: { x: number; y: number } | null; color: string }> = {};
 
   // Active pages endpoint
-  app.get("/api/pages/active", (req, res) => {
+  app.get("/api/pages/active", authenticateToken, (req, res) => {
     const activePageIds = Array.from(new Set(Object.values(users).map(u => u.pageId)));
     res.json(activePageIds);
   });
