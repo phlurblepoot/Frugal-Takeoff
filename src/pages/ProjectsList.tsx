@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin } from 'lucide-react';
 import { Project } from '../types';
 import { getAllProjects, deleteProject, getActivePages } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
@@ -263,6 +263,13 @@ export const ProjectsList: React.FC = () => {
                           </div>
                         </th>
                         <th 
+                          className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider"
+                        >
+                          <div className="flex items-center gap-2">
+                            Address
+                          </div>
+                        </th>
+                        <th 
                           className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
                           onClick={() => handleSort('bidDueDate')}
                         >
@@ -326,6 +333,24 @@ export const ProjectsList: React.FC = () => {
                               <div className="flex items-center gap-2 text-sm text-slate-600">
                                 <Building2 size={14} className="text-slate-400" />
                                 <span className="line-clamp-1">{project.contractor}</span>
+                              </div>
+                            ) : (
+                              <span className="text-sm text-slate-400 italic">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            {project.address ? (
+                              <div className="flex items-center gap-2 text-sm text-slate-600">
+                                <MapPin size={14} className="text-slate-400" />
+                                <a 
+                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {project.address}
+                                </a>
                               </div>
                             ) : (
                               <span className="text-sm text-slate-400 italic">-</span>

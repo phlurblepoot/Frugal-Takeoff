@@ -6,6 +6,7 @@ import { Project, ProjectPage } from '../types';
 import { createProject, saveProject, getProject, saveImage, getImage } from '../utils/store';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
+import { AddressAutocomplete } from '../components/AddressAutocomplete';
 
 interface PendingPage {
   id: string;
@@ -24,6 +25,7 @@ export const NewProject: React.FC = () => {
   const [step, setStep] = useState<'details' | 'name_pages'>('details');
   const [name, setName] = useState('');
   const [contractor, setContractor] = useState('');
+  const [address, setAddress] = useState('');
   const [bidDueDate, setBidDueDate] = useState('');
   const [planSetName, setPlanSetName] = useState('Initial Set');
   const [planSetDate, setPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
@@ -86,6 +88,7 @@ export const NewProject: React.FC = () => {
         name,
         createdAt: Date.now(),
         contractor: contractor || undefined,
+        address: address || undefined,
         bidDueDate: parsedBidDueDate,
         planSets: [
           {
@@ -741,7 +744,17 @@ export const NewProject: React.FC = () => {
                     disabled={isProcessing}
                   />
                 </div>
-
+                <div>
+                  <label htmlFor="address" className="block text-sm font-medium text-slate-700 mb-2">
+                    Address (Optional)
+                  </label>
+                  <AddressAutocomplete
+                    value={address}
+                    onChange={setAddress}
+                    placeholder="e.g. 123 Main St, City, State"
+                    disabled={isProcessing}
+                  />
+                </div>
                 <div>
                   <label htmlFor="bidDueDate" className="block text-sm font-medium text-slate-700 mb-2">
                     Bid Due Date (Optional)

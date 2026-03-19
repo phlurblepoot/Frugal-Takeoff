@@ -94,6 +94,7 @@ export interface Project {
   name: string;
   createdAt: number;
   contractor?: string;
+  address?: string;
   bidDueDate?: number | null;
   planSets?: PlanSet[];
   pages: ProjectPage[];

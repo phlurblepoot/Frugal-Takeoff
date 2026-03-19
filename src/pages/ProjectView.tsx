@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { createWorker } from 'tesseract.js';
+import { AddressAutocomplete } from '../components/AddressAutocomplete';
 
 export const ProjectView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -82,6 +83,10 @@ export const ProjectView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [editDueDate, setEditDueDate] = useState('');
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [editAddress, setEditAddress] = useState('');
+  const [isEditingContractor, setIsEditingContractor] = useState(false);
+  const [editContractor, setEditContractor] = useState('');
   const [isOptimizingThumbnails, setIsOptimizingThumbnails] = useState(false);
   const [optimizeProgress, setOptimizeProgress] = useState({ current: 0, total: 0 });
   const [activePages, setActivePages] = useState<string[]>([]);
@@ -1004,6 +1009,28 @@ export const ProjectView: React.FC = () => {
     setIsEditingDueDate(false);
   };
 
+  const handleSaveAddress = async () => {
+    if (!project) return;
+    const updatedProject = {
+      ...project,
+      address: editAddress || undefined
+    };
+    await saveProject(updatedProject);
+    setProject(updatedProject);
+    setIsEditingAddress(false);
+  };
+
+  const handleSaveContractor = async () => {
+    if (!project) return;
+    const updatedProject = {
+      ...project,
+      contractor: editContractor || undefined
+    };
+    await saveProject(updatedProject);
+    setProject(updatedProject);
+    setIsEditingContractor(false);
+  };
+
   const handleOptimizeThumbnails = async () => {
     if (!project) return;
     
@@ -1195,12 +1222,84 @@ export const ProjectView: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-slate-500">
               <span>Created on {new Date(project.createdAt).toLocaleDateString()}</span>
-              {project.contractor && (
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 rounded-full bg-slate-300"></span>
-                  {project.contractor}
-                </span>
-              )}
+              
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                {isEditingContractor ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={editContractor}
+                      onChange={(e) => setEditContractor(e.target.value)}
+                      placeholder="Contractor Name"
+                      className="border border-slate-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button onClick={handleSaveContractor} className="text-green-600 hover:bg-green-50 p-1 rounded">
+                      <Check size={14} />
+                    </button>
+                    <button onClick={() => setIsEditingContractor(false)} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 group">
+                    <span>{project.contractor || 'No contractor'}</span>
+                    <button 
+                      onClick={() => {
+                        setEditContractor(project.contractor || '');
+                        setIsEditingContractor(true);
+                      }}
+                      className="text-slate-400 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                {isEditingAddress ? (
+                  <div className="flex items-center gap-2 w-64">
+                    <AddressAutocomplete
+                      value={editAddress}
+                      onChange={setEditAddress}
+                      placeholder="Project Address"
+                    />
+                    <button onClick={handleSaveAddress} className="text-green-600 hover:bg-green-50 p-1 rounded">
+                      <Check size={14} />
+                    </button>
+                    <button onClick={() => setIsEditingAddress(false)} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 group">
+                    {project.address ? (
+                      <a 
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-blue-600 hover:underline transition-colors"
+                      >
+                        {project.address}
+                      </a>
+                    ) : (
+                      <span>No address</span>
+                    )}
+                    <button 
+                      onClick={() => {
+                        setEditAddress(project.address || '');
+                        setIsEditingAddress(true);
+                      }}
+                      className="text-slate-400 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center gap-1">
                 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                 {isEditingDueDate ? (
