@@ -18,10 +18,8 @@ export const TemplatesView: React.FC = () => {
   const [color, setColor] = useState('#3b82f6');
   const [unit, setUnit] = useState('');
   const [costPerUnit, setCostPerUnit] = useState<number | ''>('');
-  const [laborPercent, setLaborPercent] = useState<number | ''>('');
-  const [materialsPercent, setMaterialsPercent] = useState<number | ''>('');
-  const [equipmentPercent, setEquipmentPercent] = useState<number | ''>('');
-  const [profitPercent, setProfitPercent] = useState<number | ''>('');
+  const [isAdvancedCost, setIsAdvancedCost] = useState(false);
+  const [customCosts, setCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
 
   useEffect(() => {
     loadTemplates();
@@ -40,10 +38,8 @@ export const TemplatesView: React.FC = () => {
     setColor('#3b82f6');
     setUnit('');
     setCostPerUnit('');
-    setLaborPercent('');
-    setMaterialsPercent('');
-    setEquipmentPercent('');
-    setProfitPercent('');
+    setIsAdvancedCost(false);
+    setCustomCosts([]);
     setEditingTemplate(null);
   };
 
@@ -59,10 +55,8 @@ export const TemplatesView: React.FC = () => {
     setColor(template.color);
     setUnit(template.unit || '');
     setCostPerUnit(template.costPerUnit ?? '');
-    setLaborPercent(template.laborPercent ?? '');
-    setMaterialsPercent(template.materialsPercent ?? '');
-    setEquipmentPercent(template.equipmentPercent ?? '');
-    setProfitPercent(template.profitPercent ?? '');
+    setIsAdvancedCost(template.isAdvancedCost || false);
+    setCustomCosts(template.customCosts || []);
     setShowModal(true);
   };
 
@@ -75,11 +69,9 @@ export const TemplatesView: React.FC = () => {
       type,
       color,
       unit: unit || undefined,
-      costPerUnit: costPerUnit !== '' ? Number(costPerUnit) : undefined,
-      laborPercent: laborPercent !== '' ? Number(laborPercent) : undefined,
-      materialsPercent: materialsPercent !== '' ? Number(materialsPercent) : undefined,
-      equipmentPercent: equipmentPercent !== '' ? Number(equipmentPercent) : undefined,
-      profitPercent: profitPercent !== '' ? Number(profitPercent) : undefined,
+      costPerUnit: !isAdvancedCost && costPerUnit !== '' ? Number(costPerUnit) : undefined,
+      isAdvancedCost,
+      customCosts: isAdvancedCost ? customCosts : undefined,
       createdAt: editingTemplate?.createdAt || Date.now(),
     };
 
@@ -182,32 +174,23 @@ export const TemplatesView: React.FC = () => {
                 </div>
                 <div className="text-slate-500">Cost/Unit</div>
                 <div className="text-slate-900 font-medium text-right">
-                  {template.costPerUnit ? `$${template.costPerUnit.toFixed(2)}` : '-'}
+                  {template.isAdvancedCost && template.customCosts 
+                    ? `$${template.customCosts.reduce((sum, c) => sum + (c.costPerUnit || 0), 0).toFixed(2)}`
+                    : template.costPerUnit ? `$${template.costPerUnit.toFixed(2)}` : '-'}
                 </div>
               </div>
 
-              {(template.laborPercent || template.materialsPercent || template.equipmentPercent || template.profitPercent) && (
-                <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-2">
-                  {template.laborPercent && (
-                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium">
-                      L: {template.laborPercent}%
-                    </span>
-                  )}
-                  {template.materialsPercent && (
-                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium">
-                      M: {template.materialsPercent}%
-                    </span>
-                  )}
-                  {template.equipmentPercent && (
-                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium">
-                      E: {template.equipmentPercent}%
-                    </span>
-                  )}
-                  {template.profitPercent && (
-                    <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[10px] font-medium">
-                      P: {template.profitPercent}%
-                    </span>
-                  )}
+              {template.isAdvancedCost && template.customCosts && template.customCosts.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Custom Costs</div>
+                  <div className="space-y-1">
+                    {template.customCosts.map(c => (
+                      <div key={c.id} className="flex justify-between text-[10px]">
+                        <span className="text-slate-600 truncate mr-2">{c.name}</span>
+                        <span className="text-slate-900 font-medium">${c.costPerUnit.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -328,63 +311,87 @@ export const TemplatesView: React.FC = () => {
                     type="number"
                     min="0"
                     step="0.01"
-                    value={costPerUnit}
+                    disabled={isAdvancedCost}
+                    value={isAdvancedCost ? '' : costPerUnit}
                     onChange={(e) => setCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0.00"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder={isAdvancedCost ? "Disabled in Advanced" : "0.00"}
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Labor %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={laborPercent}
-                    onChange={(e) => setLaborPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Materials %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={materialsPercent}
-                    onChange={(e) => setMaterialsPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Equip %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={equipmentPercent}
-                    onChange={(e) => setEquipmentPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Profit %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={profitPercent}
-                    onChange={(e) => setProfitPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
+
+              <div className="flex items-center gap-2 py-2">
+                <input
+                  type="checkbox"
+                  id="isAdvancedCost"
+                  checked={isAdvancedCost}
+                  onChange={(e) => setIsAdvancedCost(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                />
+                <label htmlFor="isAdvancedCost" className="text-sm font-medium text-slate-700 cursor-pointer">
+                  Advanced Costing (Custom Items)
+                </label>
               </div>
+
+              {isAdvancedCost && (
+                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                    <button
+                      onClick={() => setCustomCosts([...customCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
+                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
+                      title="Add Cost Item"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  
+                  {customCosts.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {customCosts.map((item, index) => (
+                        <div key={item.id} className="flex gap-2 items-start">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => {
+                                const newCosts = [...customCosts];
+                                newCosts[index].name = e.target.value;
+                                setCustomCosts(newCosts);
+                              }}
+                              placeholder="Item Name"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.costPerUnit}
+                              onChange={(e) => {
+                                const newCosts = [...customCosts];
+                                newCosts[index].costPerUnit = Number(e.target.value);
+                                setCustomCosts(newCosts);
+                              }}
+                              placeholder="Cost"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <button
+                            onClick={() => setCustomCosts(customCosts.filter((_, i) => i !== index))}
+                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button

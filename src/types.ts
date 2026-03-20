@@ -15,6 +15,12 @@ export interface Measurement {
   planSetId?: string; // The plan set version this measurement was made/updated on
 }
 
+export interface CustomCost {
+  id: string;
+  name: string;
+  costPerUnit: number;
+}
+
 export interface MeasurementTakeoff {
   id: string;
   name: string;
@@ -22,10 +28,8 @@ export interface MeasurementTakeoff {
   type: MeasurementType;
   unit?: string;
   costPerUnit?: number;
-  laborPercent?: number;
-  materialsPercent?: number;
-  equipmentPercent?: number;
-  profitPercent?: number;
+  isAdvancedCost?: boolean;
+  customCosts?: CustomCost[];
 }
 
 export interface TakeoffTemplate {
@@ -35,10 +39,8 @@ export interface TakeoffTemplate {
   type: MeasurementType;
   unit?: string;
   costPerUnit?: number;
-  laborPercent?: number;
-  materialsPercent?: number;
-  equipmentPercent?: number;
-  profitPercent?: number;
+  isAdvancedCost?: boolean;
+  customCosts?: CustomCost[];
   createdAt: number;
 }
 

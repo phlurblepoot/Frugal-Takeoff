@@ -28,10 +28,8 @@ export const ProjectView: React.FC = () => {
   const [newTakeoffType, setNewTakeoffType] = useState<'length' | 'area' | 'count'>('length');
   const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
   const [newTakeoffCostPerUnit, setNewTakeoffCostPerUnit] = useState<number | ''>('');
-  const [newTakeoffLaborPercent, setNewTakeoffLaborPercent] = useState<number | ''>('');
-  const [newTakeoffMaterialsPercent, setNewTakeoffMaterialsPercent] = useState<number | ''>('');
-  const [newTakeoffEquipmentPercent, setNewTakeoffEquipmentPercent] = useState<number | ''>('');
-  const [newTakeoffProfitPercent, setNewTakeoffProfitPercent] = useState<number | ''>('');
+  const [isNewTakeoffAdvanced, setIsNewTakeoffAdvanced] = useState(false);
+  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
@@ -44,10 +42,8 @@ export const ProjectView: React.FC = () => {
   const [editTakeoffColor, setEditTakeoffColor] = useState('');
   const [editTakeoffUnit, setEditTakeoffUnit] = useState('');
   const [editTakeoffCostPerUnit, setEditTakeoffCostPerUnit] = useState<number | ''>('');
-  const [editTakeoffLaborPercent, setEditTakeoffLaborPercent] = useState<number | ''>('');
-  const [editTakeoffMaterialsPercent, setEditTakeoffMaterialsPercent] = useState<number | ''>('');
-  const [editTakeoffEquipmentPercent, setEditTakeoffEquipmentPercent] = useState<number | ''>('');
-  const [editTakeoffProfitPercent, setEditTakeoffProfitPercent] = useState<number | ''>('');
+  const [isEditTakeoffAdvanced, setIsEditTakeoffAdvanced] = useState(false);
+  const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
 
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
@@ -148,11 +144,9 @@ export const ProjectView: React.FC = () => {
       color: newTakeoffColor,
       type: newTakeoffType,
       unit: newTakeoffUnit || undefined,
-      costPerUnit: newTakeoffCostPerUnit !== '' ? Number(newTakeoffCostPerUnit) : undefined,
-      laborPercent: newTakeoffLaborPercent !== '' ? Number(newTakeoffLaborPercent) : undefined,
-      materialsPercent: newTakeoffMaterialsPercent !== '' ? Number(newTakeoffMaterialsPercent) : undefined,
-      equipmentPercent: newTakeoffEquipmentPercent !== '' ? Number(newTakeoffEquipmentPercent) : undefined,
-      profitPercent: newTakeoffProfitPercent !== '' ? Number(newTakeoffProfitPercent) : undefined,
+      costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? Number(newTakeoffCostPerUnit) : undefined,
+      isAdvancedCost: isNewTakeoffAdvanced,
+      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts : undefined,
     };
 
     const updatedProject = {
@@ -166,10 +160,8 @@ export const ProjectView: React.FC = () => {
     setNewTakeoffName('');
     setNewTakeoffUnit('');
     setNewTakeoffCostPerUnit('');
-    setNewTakeoffLaborPercent('');
-    setNewTakeoffMaterialsPercent('');
-    setNewTakeoffEquipmentPercent('');
-    setNewTakeoffProfitPercent('');
+    setIsNewTakeoffAdvanced(false);
+    setNewTakeoffCustomCosts([]);
     setSelectedTemplateId('');
   };
 
@@ -184,10 +176,8 @@ export const ProjectView: React.FC = () => {
       setNewTakeoffColor(template.color);
       setNewTakeoffUnit(template.unit || '');
       setNewTakeoffCostPerUnit(template.costPerUnit ?? '');
-      setNewTakeoffLaborPercent(template.laborPercent ?? '');
-      setNewTakeoffMaterialsPercent(template.materialsPercent ?? '');
-      setNewTakeoffEquipmentPercent(template.equipmentPercent ?? '');
-      setNewTakeoffProfitPercent(template.profitPercent ?? '');
+      setIsNewTakeoffAdvanced(template.isAdvancedCost || false);
+      setNewTakeoffCustomCosts(template.customCosts || []);
     }
   };
 
@@ -238,10 +228,8 @@ export const ProjectView: React.FC = () => {
     setEditTakeoffColor(rawTakeoff.color);
     setEditTakeoffUnit(rawTakeoff.unit || '');
     setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit ?? '');
-    setEditTakeoffLaborPercent(rawTakeoff.laborPercent ?? '');
-    setEditTakeoffMaterialsPercent(rawTakeoff.materialsPercent ?? '');
-    setEditTakeoffEquipmentPercent(rawTakeoff.equipmentPercent ?? '');
-    setEditTakeoffProfitPercent(rawTakeoff.profitPercent ?? '');
+    setIsEditTakeoffAdvanced(rawTakeoff.isAdvancedCost || false);
+    setEditTakeoffCustomCosts(rawTakeoff.customCosts || []);
   };
 
   const handleSaveEditTakeoff = async () => {
@@ -256,11 +244,9 @@ export const ProjectView: React.FC = () => {
               name: editTakeoffName, 
               color: editTakeoffColor,
               unit: editTakeoffUnit || undefined,
-              costPerUnit: editTakeoffCostPerUnit !== '' ? Number(editTakeoffCostPerUnit) : undefined,
-              laborPercent: editTakeoffLaborPercent !== '' ? Number(editTakeoffLaborPercent) : undefined,
-              materialsPercent: editTakeoffMaterialsPercent !== '' ? Number(editTakeoffMaterialsPercent) : undefined,
-              equipmentPercent: editTakeoffEquipmentPercent !== '' ? Number(editTakeoffEquipmentPercent) : undefined,
-              profitPercent: editTakeoffProfitPercent !== '' ? Number(editTakeoffProfitPercent) : undefined,
+              costPerUnit: !isEditTakeoffAdvanced && editTakeoffCostPerUnit !== '' ? Number(editTakeoffCostPerUnit) : undefined,
+              isAdvancedCost: isEditTakeoffAdvanced,
+              customCosts: isEditTakeoffAdvanced ? editTakeoffCustomCosts : undefined,
             } 
           : g
       ),
@@ -617,24 +603,17 @@ export const ProjectView: React.FC = () => {
       const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
       
       const data = selectedTakeoffs.map(t => {
-        const baseCost = t.totalRealValue * (t.costPerUnit || 0);
-        const laborCost = baseCost * ((t.laborPercent || 0) / 100);
-        const materialsCost = baseCost * ((t.materialsPercent || 0) / 100);
-        const equipmentCost = baseCost * ((t.equipmentPercent || 0) / 100);
-        const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-        const profit = subtotal * ((t.profitPercent || 0) / 100);
-        const totalCost = subtotal + profit;
+        const totalCostPerUnit = t.isAdvancedCost && t.customCosts 
+          ? t.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
+          : (t.costPerUnit || 0);
+        const totalCost = t.totalRealValue * totalCostPerUnit;
 
         return {
           'Takeoff Name': t.name,
           'Type': t.type,
           'Total Quantity': t.totalRealValue,
           'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Cost Per Unit': t.costPerUnit || 0,
-          'Labor %': t.laborPercent || 0,
-          'Materials %': t.materialsPercent || 0,
-          'Equipment %': t.equipmentPercent || 0,
-          'Profit %': t.profitPercent || 0,
+          'Cost Per Unit': totalCostPerUnit,
           'Total Cost': totalCost
         };
       });
@@ -1608,23 +1587,16 @@ export const ProjectView: React.FC = () => {
                     <th className="px-6 py-4">Type</th>
                     <th className="px-6 py-4 text-right">Qty</th>
                     <th className="px-6 py-4 text-right">Unit Cost</th>
-                    <th className="px-6 py-4 text-right">Labor %</th>
-                    <th className="px-6 py-4 text-right">Mat %</th>
-                    <th className="px-6 py-4 text-right">Equip %</th>
-                    <th className="px-6 py-4 text-right">Profit %</th>
                     <th className="px-6 py-4 text-right">Total Cost</th>
                     <th className="px-6 py-4 w-24"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {getTakeoffTotals().map(takeoff => {
-                    const baseCost = takeoff.totalRealValue * (takeoff.costPerUnit || 0);
-                    const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
-                    const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
-                    const equipmentCost = baseCost * ((takeoff.equipmentPercent || 0) / 100);
-                    const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-                    const profit = subtotal * ((takeoff.profitPercent || 0) / 100);
-                    const totalCost = subtotal + profit;
+                    const totalCostPerUnit = takeoff.isAdvancedCost && takeoff.customCosts 
+                      ? takeoff.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
+                      : (takeoff.costPerUnit || 0);
+                    const totalCost = takeoff.totalRealValue * totalCostPerUnit;
 
                     return (
                       <React.Fragment key={takeoff.id}>
@@ -1653,19 +1625,14 @@ export const ProjectView: React.FC = () => {
                             {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                           </td>
                           <td className="px-6 py-4 text-right text-sm text-slate-600 font-medium">
-                            {takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-500">
-                            {takeoff.laborPercent ? `${takeoff.laborPercent}%` : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-500">
-                            {takeoff.materialsPercent ? `${takeoff.materialsPercent}%` : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-500">
-                            {takeoff.equipmentPercent ? `${takeoff.equipmentPercent}%` : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-500">
-                            {takeoff.profitPercent ? `${takeoff.profitPercent}%` : '-'}
+                            {takeoff.isAdvancedCost ? (
+                              <div className="flex flex-col items-end">
+                                <span className="text-blue-600 font-bold">${totalCostPerUnit.toFixed(2)}</span>
+                                <span className="text-[10px] text-slate-400 uppercase">Advanced</span>
+                              </div>
+                            ) : (
+                              takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
+                            )}
                           </td>
                           <td className="px-6 py-4 text-right font-bold text-blue-600">
                             {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
@@ -1725,13 +1692,10 @@ export const ProjectView: React.FC = () => {
             {/* Mobile Takeoff Cards */}
             <div className="md:hidden divide-y divide-slate-100">
               {getTakeoffTotals().map(takeoff => {
-                const baseCost = takeoff.totalRealValue * (takeoff.costPerUnit || 0);
-                const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
-                const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
-                const equipmentCost = baseCost * ((takeoff.equipmentPercent || 0) / 100);
-                const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-                const profit = subtotal * ((takeoff.profitPercent || 0) / 100);
-                const totalCost = subtotal + profit;
+                const totalCostPerUnit = takeoff.isAdvancedCost && takeoff.customCosts 
+                  ? takeoff.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
+                  : (takeoff.costPerUnit || 0);
+                const totalCost = takeoff.totalRealValue * totalCostPerUnit;
 
                 return (
                   <div key={takeoff.id} className="p-4 bg-white">
@@ -2066,63 +2030,87 @@ export const ProjectView: React.FC = () => {
                     type="number"
                     min="0"
                     step="0.01"
-                    value={newTakeoffCostPerUnit}
+                    disabled={isNewTakeoffAdvanced}
+                    value={isNewTakeoffAdvanced ? '' : newTakeoffCostPerUnit}
                     onChange={(e) => setNewTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0.00"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Labor %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={newTakeoffLaborPercent}
-                    onChange={(e) => setNewTakeoffLaborPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Materials %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={newTakeoffMaterialsPercent}
-                    onChange={(e) => setNewTakeoffMaterialsPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Equip %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={newTakeoffEquipmentPercent}
-                    onChange={(e) => setNewTakeoffEquipmentPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Profit %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={newTakeoffProfitPercent}
-                    onChange={(e) => setNewTakeoffProfitPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
+
+              <div className="flex items-center gap-2 py-2">
+                <input
+                  type="checkbox"
+                  id="isNewTakeoffAdvanced"
+                  checked={isNewTakeoffAdvanced}
+                  onChange={(e) => setIsNewTakeoffAdvanced(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                />
+                <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
+                  Advanced Costing (Custom Items)
+                </label>
               </div>
+
+              {isNewTakeoffAdvanced && (
+                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                    <button
+                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
+                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
+                      title="Add Cost Item"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  
+                  {newTakeoffCustomCosts.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {newTakeoffCustomCosts.map((item, index) => (
+                        <div key={item.id} className="flex gap-2 items-start">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => {
+                                const newCosts = [...newTakeoffCustomCosts];
+                                newCosts[index].name = e.target.value;
+                                setNewTakeoffCustomCosts(newCosts);
+                              }}
+                              placeholder="Item Name"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.costPerUnit}
+                              onChange={(e) => {
+                                const newCosts = [...newTakeoffCustomCosts];
+                                newCosts[index].costPerUnit = Number(e.target.value);
+                                setNewTakeoffCustomCosts(newCosts);
+                              }}
+                              placeholder="Cost"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <button
+                            onClick={() => setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== index))}
+                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button
@@ -2221,63 +2209,87 @@ export const ProjectView: React.FC = () => {
                     type="number"
                     min="0"
                     step="0.01"
-                    value={editTakeoffCostPerUnit}
+                    disabled={isEditTakeoffAdvanced}
+                    value={isEditTakeoffAdvanced ? '' : editTakeoffCostPerUnit}
                     onChange={(e) => setEditTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0.00"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Labor %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={editTakeoffLaborPercent}
-                    onChange={(e) => setEditTakeoffLaborPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Materials %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={editTakeoffMaterialsPercent}
-                    onChange={(e) => setEditTakeoffMaterialsPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Equip %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={editTakeoffEquipmentPercent}
-                    onChange={(e) => setEditTakeoffEquipmentPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Profit %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={editTakeoffProfitPercent}
-                    onChange={(e) => setEditTakeoffProfitPercent(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="0"
-                  />
-                </div>
+
+              <div className="flex items-center gap-2 py-2">
+                <input
+                  type="checkbox"
+                  id="isEditTakeoffAdvanced"
+                  checked={isEditTakeoffAdvanced}
+                  onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                />
+                <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
+                  Advanced Costing (Custom Items)
+                </label>
               </div>
+
+              {isEditTakeoffAdvanced && (
+                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                    <button
+                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
+                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
+                      title="Add Cost Item"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  
+                  {editTakeoffCustomCosts.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {editTakeoffCustomCosts.map((item, index) => (
+                        <div key={item.id} className="flex gap-2 items-start">
+                          <div className="flex-1">
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => {
+                                const newCosts = [...editTakeoffCustomCosts];
+                                newCosts[index].name = e.target.value;
+                                setEditTakeoffCustomCosts(newCosts);
+                              }}
+                              placeholder="Item Name"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="w-24">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.costPerUnit}
+                              onChange={(e) => {
+                                const newCosts = [...editTakeoffCustomCosts];
+                                newCosts[index].costPerUnit = Number(e.target.value);
+                                setEditTakeoffCustomCosts(newCosts);
+                              }}
+                              placeholder="Cost"
+                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <button
+                            onClick={() => setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== index))}
+                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button

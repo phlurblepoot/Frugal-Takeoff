@@ -215,35 +215,53 @@ export const convertUnit = (
   toUnit: string,
   type: 'length' | 'area' | 'count'
 ): number => {
-  if (type === 'count' || fromUnit === toUnit) return value;
+  if (type === 'count' || !fromUnit || !toUnit) return value;
+  
+  const normalize = (u: string) => u.toLowerCase().replace(/\s+/g, '').replace(/^(sq|square)/, '');
+  const nFrom = normalize(fromUnit);
+  const nTo = normalize(toUnit);
+
+  if (nFrom === nTo) return value;
 
   if (type === 'length') {
-    if (fromUnit === 'in' && toUnit === 'ft') return value / 12;
-    if (fromUnit === 'in' && toUnit === 'yd') return value / 36;
-    if (fromUnit === 'ft' && toUnit === 'in') return value * 12;
-    if (fromUnit === 'ft' && toUnit === 'yd') return value / 3;
-    if (fromUnit === 'yd' && toUnit === 'in') return value * 36;
-    if (fromUnit === 'yd' && toUnit === 'ft') return value * 3;
-    if (fromUnit === 'm' && toUnit === 'cm') return value * 100;
-    if (fromUnit === 'cm' && toUnit === 'm') return value / 100;
+    const factors: Record<string, number> = {
+      'in': 1,
+      'inch': 1,
+      'inches': 1,
+      'ft': 12,
+      'foot': 12,
+      'feet': 12,
+      'yd': 36,
+      'yard': 36,
+      'yards': 36,
+      'cm': 1 / 2.54,
+      'm': 100 / 2.54,
+    };
+
+    if (factors[nFrom] && factors[nTo]) {
+      return (value * factors[nFrom]) / factors[nTo];
+    }
   } else if (type === 'area') {
-    // Normalize units to area units for comparison
-    const normFrom = fromUnit === 'in' ? 'sqin' : fromUnit === 'ft' ? 'sqft' : fromUnit === 'yd' ? 'sqyd' : fromUnit === 'm' ? 'sqm' : fromUnit === 'cm' ? 'sqcm' : fromUnit;
-    const normTo = toUnit === 'in' ? 'sqin' : toUnit === 'ft' ? 'sqft' : toUnit === 'yd' ? 'sqyd' : toUnit === 'm' ? 'sqm' : toUnit === 'cm' ? 'sqcm' : toUnit;
+    const factors: Record<string, number> = {
+      'in': 1,
+      'inch': 1,
+      'inches': 1,
+      'ft': 144,
+      'foot': 144,
+      'feet': 144,
+      'yd': 1296,
+      'yard': 1296,
+      'yards': 1296,
+      'cm': Math.pow(1 / 2.54, 2),
+      'm': Math.pow(100 / 2.54, 2),
+    };
 
-    if (normFrom === normTo) return value;
-
-    if (normFrom === 'sqin' && normTo === 'sqft') return value / 144;
-    if (normFrom === 'sqin' && normTo === 'sqyd') return value / 1296;
-    if (normFrom === 'sqft' && normTo === 'sqin') return value * 144;
-    if (normFrom === 'sqft' && normTo === 'sqyd') return value / 9;
-    if (normFrom === 'sqyd' && normTo === 'sqin') return value * 1296;
-    if (normFrom === 'sqyd' && normTo === 'sqft') return value * 9;
-    if (normFrom === 'sqm' && normTo === 'sqcm') return value * 10000;
-    if (normFrom === 'sqcm' && normTo === 'sqm') return value / 10000;
+    if (factors[nFrom] && factors[nTo]) {
+      return (value * factors[nFrom]) / factors[nTo];
+    }
   }
 
-  return value; // Fallback if conversion not supported
+  return value;
 };
 
 export const UNIT_LABELS: Record<string, string> = {
@@ -257,7 +275,12 @@ export const UNIT_LABELS: Record<string, string> = {
   'sqyd': 'sq yd',
   'sqcm': 'sq cm',
   'sqm': 'sq m',
-  'each': 'each'
+  'each': 'each',
+  'sq in': 'sq in',
+  'sq ft': 'sq ft',
+  'sq yd': 'sq yd',
+  'sq cm': 'sq cm',
+  'sq m': 'sq m'
 };
 
 export const formatRealValue = (
@@ -267,25 +290,13 @@ export const formatRealValue = (
   takeoff?: MeasurementTakeoff,
   includeCost: boolean = true
 ): string => {
-  if (type === 'count') {
-    const count = Math.round(realValue);
-    if (includeCost && takeoff?.costPerUnit) {
-      const baseCost = count * takeoff.costPerUnit;
-      const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
-      const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
-      const equipmentCost = baseCost * ((takeoff.equipmentPercent || 0) / 100);
-      const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-      const profit = subtotal * ((takeoff.profitPercent || 0) / 100);
-      const totalCost = subtotal + profit;
-      return `${count} each\n$${totalCost.toFixed(2)}`;
-    }
-    return `${count} each`;
-  }
-
   let displayValue = realValue;
   let displayUnit = unit;
 
-  if (takeoff?.unit) {
+  if (type === 'count') {
+    displayValue = Math.round(realValue);
+    displayUnit = 'each';
+  } else if (takeoff?.unit) {
     displayUnit = takeoff.unit;
     displayValue = convertUnit(realValue, unit, takeoff.unit, type);
   }
@@ -293,7 +304,9 @@ export const formatRealValue = (
   let text = '';
   const readableUnit = UNIT_LABELS[displayUnit] || displayUnit;
 
-  if (!takeoff?.unit && type === 'length' && (unit === 'ft' || unit === 'in')) {
+  if (type === 'count') {
+    text = `${displayValue} each`;
+  } else if (!takeoff?.unit && type === 'length' && (unit === 'ft' || unit === 'in')) {
     const decimalFeet = unit === 'in' ? realValue / 12 : realValue;
     text = formatFeetAndInches(decimalFeet);
   } else if (!takeoff?.unit && type === 'area') {
@@ -309,16 +322,18 @@ export const formatRealValue = (
     text = `${displayValue.toFixed(2)} ${readableUnit}`;
   }
 
-  if (includeCost && takeoff?.costPerUnit) {
-    const baseCost = displayValue * takeoff.costPerUnit;
-    const laborCost = baseCost * ((takeoff.laborPercent || 0) / 100);
-    const materialsCost = baseCost * ((takeoff.materialsPercent || 0) / 100);
-    const equipmentCost = baseCost * ((takeoff.equipmentPercent || 0) / 100);
-    const subtotal = baseCost + laborCost + materialsCost + equipmentCost;
-    const profit = subtotal * ((takeoff.profitPercent || 0) / 100);
-    const totalCost = subtotal + profit;
-    
-    text += `\n$${totalCost.toFixed(2)}`;
+  if (includeCost) {
+    let totalCostPerUnit = 0;
+    if (takeoff?.isAdvancedCost && takeoff.customCosts) {
+      totalCostPerUnit = takeoff.customCosts.reduce((sum, item) => sum + (item.costPerUnit || 0), 0);
+    } else if (takeoff?.costPerUnit) {
+      totalCostPerUnit = takeoff.costPerUnit;
+    }
+
+    if (totalCostPerUnit > 0) {
+      const totalCost = displayValue * totalCostPerUnit;
+      text += `\n$${totalCost.toFixed(2)}`;
+    }
   }
 
   return text;

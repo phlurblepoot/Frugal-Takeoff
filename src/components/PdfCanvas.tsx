@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
 import { Html } from 'react-konva-utils';
-import { Trash2, Edit2, X, Check } from 'lucide-react';
+import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
@@ -68,6 +68,17 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   
   const [stageScale, setStageScale] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+  const stageScaleRef = useRef(1);
+  const stagePosRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    stageScaleRef.current = stageScale;
+  }, [stageScale]);
+
+  useEffect(() => {
+    stagePosRef.current = stagePos;
+  }, [stagePos]);
+
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   
   const [activePoints, setActivePoints] = useState<Point[]>([]);
@@ -136,20 +147,79 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
-    const scaleBy = 1.1;
+    
     const stage = stageRef.current;
-    const oldScale = stage.scaleX();
+    if (!stage) return;
+
+    const oldScale = stageScaleRef.current;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
     const mousePointTo = {
-      x: stage.getPointerPosition().x / oldScale - stage.x() / oldScale,
-      y: stage.getPointerPosition().y / oldScale - stage.y() / oldScale,
+      x: (pointer.x - stagePosRef.current.x) / oldScale,
+      y: (pointer.y - stagePosRef.current.y) / oldScale,
     };
 
-    const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+    // Smoother zoom for trackpads by taking deltaY into account
+    // deltaY is usually around 100 for a mouse wheel notch, but much smaller for trackpad
+    const zoomSpeed = 0.0015;
+    const delta = -e.evt.deltaY;
+    const newScale = oldScale * Math.exp(delta * zoomSpeed);
+    
+    // Limit scale
+    const limitedScale = Math.max(0.01, Math.min(newScale, 50));
+    
+    setStageScale(limitedScale);
+    setStagePos({
+      x: pointer.x - mousePointTo.x * limitedScale,
+      y: pointer.y - mousePointTo.y * limitedScale,
+    });
+  };
+
+  const handleZoomIn = () => {
+    const oldScale = stageScaleRef.current;
+    const oldPos = stagePosRef.current;
+    const newScale = oldScale * 1.2;
+    const center = { x: dimensions.width / 2, y: dimensions.height / 2 };
+    const mousePointTo = {
+      x: (center.x - oldPos.x) / oldScale,
+      y: (center.y - oldPos.y) / oldScale,
+    };
     setStageScale(newScale);
     setStagePos({
-      x: -(mousePointTo.x - stage.getPointerPosition().x / newScale) * newScale,
-      y: -(mousePointTo.y - stage.getPointerPosition().y / newScale) * newScale,
+      x: center.x - mousePointTo.x * newScale,
+      y: center.y - mousePointTo.y * newScale,
     });
+  };
+
+  const handleZoomOut = () => {
+    const oldScale = stageScaleRef.current;
+    const oldPos = stagePosRef.current;
+    const newScale = oldScale / 1.2;
+    const center = { x: dimensions.width / 2, y: dimensions.height / 2 };
+    const mousePointTo = {
+      x: (center.x - oldPos.x) / oldScale,
+      y: (center.y - oldPos.y) / oldScale,
+    };
+    setStageScale(newScale);
+    setStagePos({
+      x: center.x - mousePointTo.x * newScale,
+      y: center.y - mousePointTo.y * newScale,
+    });
+  };
+
+  const handleResetView = () => {
+    if (image && dimensions.width > 0 && dimensions.height > 0) {
+      const scaleX = dimensions.width / imageWidth;
+      const scaleY = dimensions.height / imageHeight;
+      const initialScale = Math.min(scaleX, scaleY) * 0.9;
+      
+      setStageScale(initialScale);
+      setStagePos({
+        x: (dimensions.width - imageWidth * initialScale) / 2,
+        y: (dimensions.height - imageHeight * initialScale) / 2,
+      });
+    }
   };
 
   const getRelativePointerPosition = (node: any) => {
@@ -393,21 +463,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         y: (touch1.clientY + touch2.clientY) / 2,
       };
 
-      const oldScale = stage.scaleX();
-      const newScale = oldScale * (dist / lastDistRef.current);
+      if (lastDistRef.current > 0) {
+        const oldScale = stageScaleRef.current;
+        const oldPos = stagePosRef.current;
+        const scaleFactor = dist / lastDistRef.current;
+        const newScale = Math.max(0.01, Math.min(oldScale * scaleFactor, 50));
 
-      // Zoom around the center point between fingers
-      const pointer = center;
-      const mousePointTo = {
-        x: (pointer.x - stage.x()) / oldScale,
-        y: (pointer.y - stage.y()) / oldScale,
-      };
+        // Zoom around the center point between fingers
+        const pointer = center;
+        const mousePointTo = {
+          x: (pointer.x - oldPos.x) / oldScale,
+          y: (pointer.y - oldPos.y) / oldScale,
+        };
 
-      setStageScale(newScale);
-      setStagePos({
-        x: pointer.x - mousePointTo.x * newScale,
-        y: pointer.y - mousePointTo.y * newScale,
-      });
+        setStageScale(newScale);
+        setStagePos({
+          x: pointer.x - mousePointTo.x * newScale,
+          y: pointer.y - mousePointTo.y * newScale,
+        });
+      }
 
       lastDistRef.current = dist;
       lastCenterRef.current = center;
@@ -848,9 +922,43 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none">
+    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative">
       {dimensions.width > 0 && dimensions.height > 0 && (
-        <Stage
+        <>
+          {/* Zoom Toolbar */}
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
+            <button
+              onClick={handleZoomOut}
+              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              title="Zoom Out"
+            >
+              <ZoomOut size={18} />
+            </button>
+            
+            <div className="px-2 min-w-[60px] text-center text-sm font-semibold text-slate-700 select-none">
+              {Math.round(stageScale * 100)}%
+            </div>
+            
+            <button
+              onClick={handleZoomIn}
+              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              title="Zoom In"
+            >
+              <ZoomIn size={18} />
+            </button>
+            
+            <div className="w-px h-4 bg-slate-200 mx-1" />
+            
+            <button
+              onClick={handleResetView}
+              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              title="Reset View"
+            >
+              <RotateCcw size={18} />
+            </button>
+          </div>
+
+          <Stage
           ref={stageRef}
           width={dimensions.width}
           height={dimensions.height}
@@ -965,6 +1073,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             </Layer>
           )}
       </Stage>
+        </>
       )}
     </div>
   );
