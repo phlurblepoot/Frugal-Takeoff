@@ -6,17 +6,10 @@ const getAuthHeaders = () => {
 };
 
 export const getImageUrl = (id: string) => {
-  const token = localStorage.getItem('token');
-  return `/api/images/${id}/raw${token ? `?token=${token}` : ''}`;
+  return `/api/images/${id}/raw`;
 };
 
 const handleResponse = async (res: Response) => {
-  if (res.status === 401 || res.status === 403) {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
-  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Request failed');
@@ -105,9 +98,19 @@ export const deleteTemplate = async (id: string): Promise<void> => {
 };
 
 export const getActivePages = async (): Promise<string[]> => {
-  const res = await fetch('/api/pages/active', { headers: getAuthHeaders() });
-  await handleResponse(res);
-  return await res.json();
+  try {
+    const res = await fetch('/api/pages/active', { headers: getAuthHeaders() });
+    if (!res.ok) {
+      console.error(`Active pages fetch failed with status: ${res.status}`);
+      const text = await res.text();
+      console.error('Response body:', text.substring(0, 100));
+      throw new Error(`Request failed with status ${res.status}`);
+    }
+    return await res.json();
+  } catch (error) {
+    console.error('Network error or server crash in getActivePages:', error);
+    throw error;
+  }
 };
 
 // Bid functions

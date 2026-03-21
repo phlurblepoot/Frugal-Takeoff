@@ -15,10 +15,18 @@ export interface Measurement {
   planSetId?: string; // The plan set version this measurement was made/updated on
 }
 
+export type CostType = 'flat' | 'yield' | 'unit' | 'amount_per_units';
+
 export interface CustomCost {
   id: string;
   name: string;
-  costPerUnit: number;
+  type: CostType;
+  cost?: number;
+  yield?: number;
+  costPerUnit?: number;
+  amount?: number;
+  perUnits?: number;
+  unit?: string;
 }
 
 export interface MeasurementTakeoff {

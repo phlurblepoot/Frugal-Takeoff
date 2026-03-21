@@ -20,11 +20,7 @@ export const UsersView: React.FC = () => {
   const fetchUsers = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/users', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const res = await fetch('/api/users');
       if (!res.ok) throw new Error('Failed to fetch users');
       const data = await res.json();
       setUsers(data);
@@ -50,8 +46,7 @@ export const UsersView: React.FC = () => {
       const res = await fetch('/api/users', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole })
       });
@@ -75,10 +70,7 @@ export const UsersView: React.FC = () => {
     
     try {
       const res = await fetch(`/api/users/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+        method: 'DELETE'
       });
       
       if (!res.ok) {

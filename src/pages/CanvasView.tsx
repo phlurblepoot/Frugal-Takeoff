@@ -3,8 +3,8 @@ import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
-import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit } from '../utils/math';
+import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
+import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 
@@ -27,6 +27,145 @@ const STANDARD_SCALES = [
   { label: '1" = 50\'', pixelDistance: 144, realWorldDistance: 50, unit: 'ft' },
   { label: '1" = 60\'', pixelDistance: 144, realWorldDistance: 60, unit: 'ft' },
 ];
+
+const CustomCostRow: React.FC<{
+  item: any;
+  index: number;
+  unitLabel: string;
+  onChange: (index: number, updated: any) => void;
+  onRemove: (index: number) => void;
+}> = ({ item, index, unitLabel, onChange, onRemove }) => {
+  const handleMathBlur = (field: string, value: string) => {
+    if (value.startsWith('=')) {
+      const result = evaluateMathExpression(value);
+      if (result !== null) {
+        onChange(index, { ...item, [field]: result.toString() });
+      }
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-slate-200 shadow-sm">
+      <div className="flex gap-2 items-center">
+        <select
+          value={item.type}
+          onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+        >
+          <option value="flat">Flat Cost</option>
+          <option value="yield">Cost by Yield</option>
+          <option value="unit">Cost per {unitLabel}</option>
+          <option value="amount_per_units">Amount per {unitLabel}s</option>
+        </select>
+        <input
+          type="text"
+          value={item.name}
+          onChange={(e) => onChange(index, { ...item, name: e.target.value })}
+          placeholder="Line Name"
+          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button
+          onClick={() => onRemove(index)}
+          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      
+      <div className="flex gap-2 items-center pl-2 border-l-2 border-blue-100">
+        {item.type === 'flat' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <input
+                type="text"
+                value={item.cost || '0'}
+                onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                onBlur={(e) => handleMathBlur('cost', e.target.value)}
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        )}
+        
+        {item.type === 'yield' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield:</span>
+              <input
+                type="text"
+                value={item.yield || '0'}
+                onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
+                onBlur={(e) => handleMathBlur('yield', e.target.value)}
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <input
+                  type="text"
+                  value={item.cost || '0'}
+                  onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                  onBlur={(e) => handleMathBlur('cost', e.target.value)}
+                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </>
+        )}
+        
+        {item.type === 'unit' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}:</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <input
+                type="text"
+                value={item.costPerUnit || '0'}
+                onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
+                onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        )}
+        
+        {item.type === 'amount_per_units' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount:</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <input
+                  type="text"
+                  value={item.amount || '0'}
+                  onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
+                  onBlur={(e) => handleMathBlur('amount', e.target.value)}
+                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Per:</span>
+              <input
+                type="text"
+                value={item.perUnits || '0'}
+                onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
+                onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
+                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-[10px] text-slate-500">{unitLabel}s</span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const CanvasViewInner: React.FC = () => {
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
@@ -64,9 +203,9 @@ const CanvasViewInner: React.FC = () => {
   const [newTakeoffColor, setNewTakeoffColor] = useState('#3b82f6');
   const [newTakeoffType, setNewTakeoffType] = useState<'length' | 'area' | 'count'>('length');
   const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
-  const [newTakeoffCostPerUnit, setNewTakeoffCostPerUnit] = useState<number | ''>('');
+  const [newTakeoffCostPerUnit, setNewTakeoffCostPerUnit] = useState<string>('');
   const [isNewTakeoffAdvanced, setIsNewTakeoffAdvanced] = useState(false);
-  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
+  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<any[]>([]);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
@@ -75,9 +214,9 @@ const CanvasViewInner: React.FC = () => {
   const [editTakeoffName, setEditTakeoffName] = useState('');
   const [editTakeoffColor, setEditTakeoffColor] = useState('');
   const [editTakeoffUnit, setEditTakeoffUnit] = useState('');
-  const [editTakeoffCostPerUnit, setEditTakeoffCostPerUnit] = useState<number | ''>('');
+  const [editTakeoffCostPerUnit, setEditTakeoffCostPerUnit] = useState<string>('');
   const [isEditTakeoffAdvanced, setIsEditTakeoffAdvanced] = useState(false);
-  const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
+  const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<any[]>([]);
 
   const [showCurrentPageOnly, setShowCurrentPageOnly] = useState(false);
   const [history, setHistory] = useState<{ type: 'add' | 'delete'; measurement: Measurement }[]>([]);
@@ -482,9 +621,16 @@ const CanvasViewInner: React.FC = () => {
       color: newTakeoffColor,
       type: newTakeoffType,
       unit: newTakeoffUnit || undefined,
-      costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? Number(newTakeoffCostPerUnit) : undefined,
+      costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? (evaluateMathExpression(newTakeoffCostPerUnit) ?? 0) : undefined,
       isAdvancedCost: isNewTakeoffAdvanced,
-      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts : undefined,
+      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts.map(c => ({
+        ...c,
+        cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
+        yield: evaluateMathExpression(c.yield?.toString() || '') ?? 0,
+        costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '') ?? 0,
+        amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
+        perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
+      })) : undefined,
     };
 
     const updatedProject = {
@@ -516,9 +662,16 @@ const CanvasViewInner: React.FC = () => {
       }
       setNewTakeoffColor(template.color);
       setNewTakeoffUnit(template.unit || '');
-      setNewTakeoffCostPerUnit(template.costPerUnit ?? '');
+      setNewTakeoffCostPerUnit(template.costPerUnit?.toString() || '');
       setIsNewTakeoffAdvanced(template.isAdvancedCost || false);
-      setNewTakeoffCustomCosts(template.customCosts || []);
+      setNewTakeoffCustomCosts(template.customCosts?.map(c => ({
+        ...c,
+        cost: c.cost?.toString() || '0',
+        yield: c.yield?.toString() || '0',
+        costPerUnit: c.costPerUnit?.toString() || '0',
+        amount: c.amount?.toString() || '0',
+        perUnits: c.perUnits?.toString() || '0',
+      })) || []);
     }
   };
 
@@ -554,9 +707,16 @@ const CanvasViewInner: React.FC = () => {
     setEditTakeoffName(rawTakeoff.name);
     setEditTakeoffColor(rawTakeoff.color);
     setEditTakeoffUnit(rawTakeoff.unit || '');
-    setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit ?? '');
+    setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit?.toString() || '');
     setIsEditTakeoffAdvanced(rawTakeoff.isAdvancedCost || false);
-    setEditTakeoffCustomCosts(rawTakeoff.customCosts || []);
+    setEditTakeoffCustomCosts(rawTakeoff.customCosts?.map(c => ({
+      ...c,
+      cost: c.cost?.toString() || '0',
+      yield: c.yield?.toString() || '0',
+      costPerUnit: c.costPerUnit?.toString() || '0',
+      amount: c.amount?.toString() || '0',
+      perUnits: c.perUnits?.toString() || '0',
+    })) || []);
   };
 
   const handleSaveEditTakeoff = async () => {
@@ -571,9 +731,16 @@ const CanvasViewInner: React.FC = () => {
               name: editTakeoffName, 
               color: editTakeoffColor,
               unit: editTakeoffUnit || undefined,
-              costPerUnit: !isEditTakeoffAdvanced && editTakeoffCostPerUnit !== '' ? Number(editTakeoffCostPerUnit) : undefined,
+              costPerUnit: !isEditTakeoffAdvanced && editTakeoffCostPerUnit !== '' ? (evaluateMathExpression(editTakeoffCostPerUnit) ?? 0) : undefined,
               isAdvancedCost: isEditTakeoffAdvanced,
-              customCosts: isEditTakeoffAdvanced ? editTakeoffCustomCosts : undefined,
+              customCosts: isEditTakeoffAdvanced ? editTakeoffCustomCosts.map(c => ({
+                ...c,
+                cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
+                yield: evaluateMathExpression(c.yield?.toString() || '') ?? 0,
+                costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '') ?? 0,
+                amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
+                perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
+              })) : undefined,
             } 
           : g
       ),
@@ -1431,10 +1598,18 @@ const CanvasViewInner: React.FC = () => {
                       <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                         {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
                       </span>
-                      {takeoff.costPerUnit && (
-                        <span className="text-[10px] font-bold text-emerald-600 mt-1 uppercase tracking-tight">
-                          {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff).split('\n')[1]}
-                        </span>
+                      {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
+                        <div className="flex flex-col items-end mt-1">
+                          {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff)
+                            .split('\n')
+                            .slice(1)
+                            .map((line, i) => (
+                              <span key={i} className="text-[10px] font-bold text-emerald-600 uppercase tracking-tight text-right">
+                                {line}
+                              </span>
+                            ))
+                          }
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1741,14 +1916,18 @@ const CanvasViewInner: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
                     disabled={isNewTakeoffAdvanced}
                     value={isNewTakeoffAdvanced ? '' : newTakeoffCostPerUnit}
-                    onChange={(e) => setNewTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
+                    onChange={(e) => setNewTakeoffCostPerUnit(e.target.value)}
+                    onBlur={() => {
+                      if (newTakeoffCostPerUnit.startsWith('=')) {
+                        const result = evaluateMathExpression(newTakeoffCostPerUnit);
+                        if (result !== null) setNewTakeoffCostPerUnit(result.toString());
+                      }
+                    }}
                     className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
+                    placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
               </div>
@@ -1767,62 +1946,35 @@ const CanvasViewInner: React.FC = () => {
               </div>
 
               {isNewTakeoffAdvanced && (
-                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
-                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
-                      title="Add Cost Item"
+                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
+                      className="text-[10px] flex items-center gap-1 text-blue-600 hover:text-blue-700 font-bold uppercase tracking-tight"
                     >
-                      <Plus size={16} />
+                      <Plus size={12} />
+                      Add Cost Item
                     </button>
                   </div>
-                  
-                  {newTakeoffCustomCosts.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {newTakeoffCustomCosts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2 items-start">
-                          <div className="flex-1">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => {
-                                const newCosts = [...newTakeoffCustomCosts];
-                                newCosts[index].name = e.target.value;
-                                setNewTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Item Name"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div className="w-24">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.costPerUnit}
-                              onChange={(e) => {
-                                const newCosts = [...newTakeoffCustomCosts];
-                                newCosts[index].costPerUnit = Number(e.target.value);
-                                setNewTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Cost"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== index))}
-                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {newTakeoffCustomCosts.map((cost, idx) => (
+                      <CustomCostRow
+                        key={cost.id}
+                        item={cost}
+                        index={idx}
+                        unitLabel={UNIT_LABELS[newTakeoffUnit as keyof typeof UNIT_LABELS] || newTakeoffUnit || 'unit'}
+                        onChange={(index, updated) => {
+                          const newCosts = [...newTakeoffCustomCosts];
+                          newCosts[index] = updated;
+                          setNewTakeoffCustomCosts(newCosts);
+                        }}
+                        onRemove={(index) => {
+                          setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== index));
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -1951,14 +2103,18 @@ const CanvasViewInner: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
                     disabled={isEditTakeoffAdvanced}
                     value={isEditTakeoffAdvanced ? '' : editTakeoffCostPerUnit}
-                    onChange={(e) => setEditTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
+                    onChange={(e) => setEditTakeoffCostPerUnit(e.target.value)}
+                    onBlur={() => {
+                      if (editTakeoffCostPerUnit.startsWith('=')) {
+                        const result = evaluateMathExpression(editTakeoffCostPerUnit);
+                        if (result !== null) setEditTakeoffCostPerUnit(result.toString());
+                      }
+                    }}
                     className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
+                    placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
               </div>
@@ -1977,62 +2133,35 @@ const CanvasViewInner: React.FC = () => {
               </div>
 
               {isEditTakeoffAdvanced && (
-                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
-                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
-                      title="Add Cost Item"
+                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
+                      className="text-[10px] flex items-center gap-1 text-blue-600 hover:text-blue-700 font-bold uppercase tracking-tight"
                     >
-                      <Plus size={16} />
+                      <Plus size={12} />
+                      Add Cost Item
                     </button>
                   </div>
-                  
-                  {editTakeoffCustomCosts.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {editTakeoffCustomCosts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2 items-start">
-                          <div className="flex-1">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => {
-                                const newCosts = [...editTakeoffCustomCosts];
-                                newCosts[index].name = e.target.value;
-                                setEditTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Item Name"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div className="w-24">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.costPerUnit}
-                              onChange={(e) => {
-                                const newCosts = [...editTakeoffCustomCosts];
-                                newCosts[index].costPerUnit = Number(e.target.value);
-                                setEditTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Cost"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== index))}
-                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {editTakeoffCustomCosts.map((cost, idx) => (
+                      <CustomCostRow
+                        key={cost.id}
+                        item={cost}
+                        index={idx}
+                        unitLabel={UNIT_LABELS[editTakeoffUnit as keyof typeof UNIT_LABELS] || editTakeoffUnit || 'unit'}
+                        onChange={(index, updated) => {
+                          const newCosts = [...editTakeoffCustomCosts];
+                          newCosts[index] = updated;
+                          setEditTakeoffCustomCosts(newCosts);
+                        }}
+                        onRemove={(index) => {
+                          setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== index));
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

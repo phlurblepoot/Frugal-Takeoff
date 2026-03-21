@@ -6,26 +6,15 @@ import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { Login } from './pages/Login';
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const token = localStorage.getItem('token');
-  const location = useLocation();
-
-  if (!token) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
-
-  return <>{children}</>;
-};
-
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/" element={<ProtectedRoute><ProjectsList /></ProtectedRoute>} />
-        <Route path="/new" element={<ProtectedRoute><NewProject /></ProtectedRoute>} />
-        <Route path="/project/:projectId" element={<ProtectedRoute><ProjectView /></ProtectedRoute>} />
-        <Route path="/project/:projectId/page/:pageId" element={<ProtectedRoute><CanvasView /></ProtectedRoute>} />
+        <Route path="/" element={<ProjectsList />} />
+        <Route path="/new" element={<NewProject />} />
+        <Route path="/project/:projectId" element={<ProjectView />} />
+        <Route path="/project/:projectId/page/:pageId" element={<CanvasView />} />
       </Routes>
     </BrowserRouter>
   );

@@ -77,10 +77,11 @@ export const NewProject: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (contractor.trim()) {
+    const trimmedContractor = String(contractor || '').trim();
+    if (trimmedContractor) {
       const filtered = allContractors.filter(c => 
-        c.toLowerCase().includes(contractor.toLowerCase()) && 
-        c.toLowerCase() !== contractor.toLowerCase()
+        c.toLowerCase().includes(trimmedContractor.toLowerCase()) && 
+        c.toLowerCase() !== trimmedContractor.toLowerCase()
       );
       setFilteredContractors(filtered);
     } else {
@@ -308,7 +309,7 @@ export const NewProject: React.FC = () => {
           ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
 
           const { data: { text } } = await worker.recognize(canvas.toDataURL());
-          const cleanedText = text.trim().replace(/\n/g, ' ');
+          const cleanedText = (text || '').trim().replace(/\n/g, ' ');
           
           updatedPages[i] = { ...p, [extractionType]: cleanedText };
           const num = extractionType === 'pageNumber' ? cleanedText : (p.pageNumber || '');
@@ -344,7 +345,7 @@ export const NewProject: React.FC = () => {
         ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
 
         const { data: { text } } = await worker.recognize(canvas.toDataURL());
-        const cleanedText = text.trim().replace(/\n/g, ' ');
+        const cleanedText = (text || '').trim().replace(/\n/g, ' ');
         
         await worker.terminate();
         updatePendingPageField(previewPageId, extractionType, cleanedText);

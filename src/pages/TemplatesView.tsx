@@ -1,8 +1,199 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Edit2, Layout, Hash, Ruler, Square } from 'lucide-react';
-import { TakeoffTemplate, MeasurementType } from '../types';
+import { TakeoffTemplate, MeasurementType, CustomCost, CostType } from '../types';
 import { getTemplates, saveTemplate, deleteTemplate } from '../utils/store';
 import { v4 as uuidv4 } from 'uuid';
+import { evaluateMathExpression, UNIT_LABELS } from '../utils/math';
+
+const CustomCostRow: React.FC<{
+  item: any;
+  index: number;
+  unitLabel: string;
+  onChange: (index: number, updated: any) => void;
+  onRemove: (index: number) => void;
+}> = ({ item, index, unitLabel, onChange, onRemove }) => {
+  return (
+    <div className="flex flex-col gap-2 p-3 bg-white border border-slate-200 rounded-xl shadow-sm">
+      <div className="flex gap-2 items-center">
+        <select
+          value={item.type || 'unit'}
+          onChange={(e) => {
+            const type = e.target.value as CostType;
+            onChange(index, { ...item, type });
+          }}
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-medium"
+        >
+          <option value="flat">Flat Cost</option>
+          <option value="yield">Cost by Yield</option>
+          <option value="unit">Cost per {unitLabel}</option>
+          <option value="amount_per_units">Amount per {unitLabel}s</option>
+        </select>
+        <div className="flex-1">
+          <input
+            type="text"
+            value={item.name}
+            onChange={(e) => onChange(index, { ...item, name: e.target.value })}
+            placeholder="Item Name (e.g. Labor, Waste)"
+            className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          onClick={() => onRemove(index)}
+          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      <div className="flex gap-3 items-center pl-1">
+        {(!item.type || item.type === 'unit') && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+              <input
+                type="text"
+                value={item.costPerUnit || ''}
+                onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
+                onBlur={() => {
+                  if (item.costPerUnit?.toString().startsWith('=')) {
+                    const result = evaluateMathExpression(item.costPerUnit.toString());
+                    if (result !== null) onChange(index, { ...item, costPerUnit: result.toString() });
+                  }
+                }}
+                className="w-24 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+        )}
+
+        {item.type === 'flat' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Flat Cost</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+              <input
+                type="text"
+                value={item.cost || ''}
+                onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                onBlur={() => {
+                  if (item.cost?.toString().startsWith('=')) {
+                    const result = evaluateMathExpression(item.cost.toString());
+                    if (result !== null) onChange(index, { ...item, cost: result.toString() });
+                  }
+                }}
+                className="w-24 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+        )}
+
+        {item.type === 'yield' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                <input
+                  type="text"
+                  value={item.cost || ''}
+                  onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                  onBlur={() => {
+                    if (item.cost?.toString().startsWith('=')) {
+                      const result = evaluateMathExpression(item.cost.toString());
+                      if (result !== null) onChange(index, { ...item, cost: result.toString() });
+                    }
+                  }}
+                  className="w-20 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield (per {unitLabel})</span>
+              <input
+                type="text"
+                value={item.yield || ''}
+                onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
+                onBlur={() => {
+                  if (item.yield?.toString().startsWith('=')) {
+                    const result = evaluateMathExpression(item.yield.toString());
+                    if (result !== null) onChange(index, { ...item, yield: result.toString() });
+                  }
+                }}
+                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="1.0"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. bags"
+                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+          </>
+        )}
+
+        {item.type === 'amount_per_units' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                <input
+                  type="text"
+                  value={item.amount || ''}
+                  onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
+                  onBlur={() => {
+                    if (item.amount?.toString().startsWith('=')) {
+                      const result = evaluateMathExpression(item.amount.toString());
+                      if (result !== null) onChange(index, { ...item, amount: result.toString() });
+                    }
+                  }}
+                  className="w-20 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Per</span>
+              <input
+                type="text"
+                value={item.perUnits || ''}
+                onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
+                onBlur={() => {
+                  if (item.perUnits?.toString().startsWith('=')) {
+                    const result = evaluateMathExpression(item.perUnits.toString());
+                    if (result !== null) onChange(index, { ...item, perUnits: result.toString() });
+                  }
+                }}
+                className="w-16 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="1"
+              />
+              <span className="text-[10px] font-bold text-slate-400 uppercase">{unitLabel}s</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. bags"
+                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const TemplatesView: React.FC = () => {
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
@@ -17,9 +208,9 @@ export const TemplatesView: React.FC = () => {
   const [type, setType] = useState<MeasurementType>('length');
   const [color, setColor] = useState('#3b82f6');
   const [unit, setUnit] = useState('');
-  const [costPerUnit, setCostPerUnit] = useState<number | ''>('');
+  const [costPerUnit, setCostPerUnit] = useState<string>('');
   const [isAdvancedCost, setIsAdvancedCost] = useState(false);
-  const [customCosts, setCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
+  const [customCosts, setCustomCosts] = useState<any[]>([]);
 
   useEffect(() => {
     loadTemplates();
@@ -54,9 +245,16 @@ export const TemplatesView: React.FC = () => {
     setType(template.type);
     setColor(template.color);
     setUnit(template.unit || '');
-    setCostPerUnit(template.costPerUnit ?? '');
+    setCostPerUnit(template.costPerUnit?.toString() || '');
     setIsAdvancedCost(template.isAdvancedCost || false);
-    setCustomCosts(template.customCosts || []);
+    setCustomCosts(template.customCosts?.map(c => ({
+      ...c,
+      costPerUnit: c.costPerUnit?.toString() || '0',
+      cost: c.cost?.toString() || '0',
+      yield: c.yield?.toString() || '1',
+      amount: c.amount?.toString() || '0',
+      perUnits: c.perUnits?.toString() || '1'
+    })) || []);
     setShowModal(true);
   };
 
@@ -69,9 +267,16 @@ export const TemplatesView: React.FC = () => {
       type,
       color,
       unit: unit || undefined,
-      costPerUnit: !isAdvancedCost && costPerUnit !== '' ? Number(costPerUnit) : undefined,
+      costPerUnit: !isAdvancedCost && costPerUnit !== '' ? (evaluateMathExpression(costPerUnit) ?? 0) : undefined,
       isAdvancedCost,
-      customCosts: isAdvancedCost ? customCosts : undefined,
+      customCosts: isAdvancedCost ? customCosts.map(c => ({
+        ...c,
+        costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '0') ?? 0,
+        cost: evaluateMathExpression(c.cost?.toString() || '0') ?? 0,
+        yield: evaluateMathExpression(c.yield?.toString() || '1') ?? 1,
+        amount: evaluateMathExpression(c.amount?.toString() || '0') ?? 0,
+        perUnits: evaluateMathExpression(c.perUnits?.toString() || '1') ?? 1
+      })) : undefined,
       createdAt: editingTemplate?.createdAt || Date.now(),
     };
 
@@ -308,14 +513,18 @@ export const TemplatesView: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
                     disabled={isAdvancedCost}
                     value={isAdvancedCost ? '' : costPerUnit}
-                    onChange={(e) => setCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
+                    onChange={(e) => setCostPerUnit(e.target.value)}
+                    onBlur={() => {
+                      if (costPerUnit.startsWith('=')) {
+                        const result = evaluateMathExpression(costPerUnit);
+                        if (result !== null) setCostPerUnit(result.toString());
+                      }
+                    }}
                     className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder={isAdvancedCost ? "Disabled in Advanced" : "0.00"}
+                    placeholder={isAdvancedCost ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
               </div>
@@ -334,62 +543,35 @@ export const TemplatesView: React.FC = () => {
               </div>
 
               {isAdvancedCost && (
-                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
-                      onClick={() => setCustomCosts([...customCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
-                      title="Add Cost Item"
+                      onClick={() => setCustomCosts([...customCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
+                      className="text-[10px] flex items-center gap-1 text-blue-600 hover:text-blue-700 font-bold uppercase tracking-tight"
                     >
-                      <Plus size={16} />
+                      <Plus size={12} />
+                      Add Cost Item
                     </button>
                   </div>
-                  
-                  {customCosts.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {customCosts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2 items-start">
-                          <div className="flex-1">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => {
-                                const newCosts = [...customCosts];
-                                newCosts[index].name = e.target.value;
-                                setCustomCosts(newCosts);
-                              }}
-                              placeholder="Item Name"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div className="w-24">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.costPerUnit}
-                              onChange={(e) => {
-                                const newCosts = [...customCosts];
-                                newCosts[index].costPerUnit = Number(e.target.value);
-                                setCustomCosts(newCosts);
-                              }}
-                              placeholder="Cost"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => setCustomCosts(customCosts.filter((_, i) => i !== index))}
-                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {customCosts.map((cost, idx) => (
+                      <CustomCostRow
+                        key={cost.id}
+                        item={cost}
+                        index={idx}
+                        unitLabel={UNIT_LABELS[unit as keyof typeof UNIT_LABELS] || unit || 'unit'}
+                        onChange={(index, updated) => {
+                          const newCosts = [...customCosts];
+                          newCosts[index] = updated;
+                          setCustomCosts(newCosts);
+                        }}
+                        onRemove={(index) => {
+                          setCustomCosts(customCosts.filter((_, i) => i !== index));
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

@@ -1,15 +1,174 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
-import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate } from '../types';
+import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
+
+const CustomCostRow: React.FC<{
+  item: any;
+  index: number;
+  unitLabel: string;
+  onChange: (index: number, updated: any) => void;
+  onRemove: (index: number) => void;
+}> = ({ item, index, unitLabel, onChange, onRemove }) => {
+  const handleMathBlur = (field: string, value: string) => {
+    if (value.startsWith('=')) {
+      const result = evaluateMathExpression(value);
+      if (result !== null) {
+        onChange(index, { ...item, [field]: result.toString() });
+      }
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-slate-200 shadow-sm">
+      <div className="flex gap-2 items-center">
+        <select
+          value={item.type}
+          onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+        >
+          <option value="flat">Flat Cost</option>
+          <option value="yield">Cost by Yield</option>
+          <option value="unit">Cost per {unitLabel}</option>
+          <option value="amount_per_units">Amount per {unitLabel}s</option>
+        </select>
+        <input
+          type="text"
+          value={item.name}
+          onChange={(e) => onChange(index, { ...item, name: e.target.value })}
+          placeholder="Line Name"
+          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button
+          onClick={() => onRemove(index)}
+          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      
+      <div className="flex gap-2 items-center pl-2 border-l-2 border-blue-100">
+        {item.type === 'flat' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <input
+                type="text"
+                value={item.cost || '0'}
+                onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                onBlur={(e) => handleMathBlur('cost', e.target.value)}
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        )}
+        
+        {item.type === 'yield' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield:</span>
+              <input
+                type="text"
+                value={item.yield || '0'}
+                onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
+                onBlur={(e) => handleMathBlur('yield', e.target.value)}
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. bags"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <input
+                  type="text"
+                  value={item.cost || '0'}
+                  onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
+                  onBlur={(e) => handleMathBlur('cost', e.target.value)}
+                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          </>
+        )}
+        
+        {item.type === 'unit' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}:</span>
+            <div className="relative">
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <input
+                type="text"
+                value={item.costPerUnit || '0'}
+                onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
+                onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        )}
+        
+        {item.type === 'amount_per_units' && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount:</span>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <input
+                  type="text"
+                  value={item.amount || '0'}
+                  onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
+                  onBlur={(e) => handleMathBlur('amount', e.target.value)}
+                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Per:</span>
+              <input
+                type="text"
+                value={item.perUnits || '0'}
+                onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
+                onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
+                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <span className="text-[10px] text-slate-500">{unitLabel}s</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. bags"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const ProjectView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -29,7 +188,7 @@ export const ProjectView: React.FC = () => {
   const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
   const [newTakeoffCostPerUnit, setNewTakeoffCostPerUnit] = useState<number | ''>('');
   const [isNewTakeoffAdvanced, setIsNewTakeoffAdvanced] = useState(false);
-  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
+  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<any[]>([]);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
@@ -43,7 +202,7 @@ export const ProjectView: React.FC = () => {
   const [editTakeoffUnit, setEditTakeoffUnit] = useState('');
   const [editTakeoffCostPerUnit, setEditTakeoffCostPerUnit] = useState<number | ''>('');
   const [isEditTakeoffAdvanced, setIsEditTakeoffAdvanced] = useState(false);
-  const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<{ id: string; name: string; costPerUnit: number }[]>([]);
+  const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<any[]>([]);
 
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
@@ -146,7 +305,14 @@ export const ProjectView: React.FC = () => {
       unit: newTakeoffUnit || undefined,
       costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? Number(newTakeoffCostPerUnit) : undefined,
       isAdvancedCost: isNewTakeoffAdvanced,
-      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts : undefined,
+      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts.map(c => ({
+        ...c,
+        cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
+        yield: evaluateMathExpression(c.yield?.toString() || '') ?? 0,
+        costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '') ?? 0,
+        amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
+        perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
+      })) : undefined,
     };
 
     const updatedProject = {
@@ -246,7 +412,14 @@ export const ProjectView: React.FC = () => {
               unit: editTakeoffUnit || undefined,
               costPerUnit: !isEditTakeoffAdvanced && editTakeoffCostPerUnit !== '' ? Number(editTakeoffCostPerUnit) : undefined,
               isAdvancedCost: isEditTakeoffAdvanced,
-              customCosts: isEditTakeoffAdvanced ? editTakeoffCustomCosts : undefined,
+              customCosts: isEditTakeoffAdvanced ? editTakeoffCustomCosts.map(c => ({
+                ...c,
+                cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
+                yield: evaluateMathExpression(c.yield?.toString() || '') ?? 0,
+                costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '') ?? 0,
+                amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
+                perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
+              })) : undefined,
             } 
           : g
       ),
@@ -603,17 +776,13 @@ export const ProjectView: React.FC = () => {
       const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
       
       const data = selectedTakeoffs.map(t => {
-        const totalCostPerUnit = t.isAdvancedCost && t.customCosts 
-          ? t.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
-          : (t.costPerUnit || 0);
-        const totalCost = t.totalRealValue * totalCostPerUnit;
+        const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
 
         return {
           'Takeoff Name': t.name,
           'Type': t.type,
           'Total Quantity': t.totalRealValue,
           'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Cost Per Unit': totalCostPerUnit,
           'Total Cost': totalCost
         };
       });
@@ -1593,10 +1762,8 @@ export const ProjectView: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {getTakeoffTotals().map(takeoff => {
-                    const totalCostPerUnit = takeoff.isAdvancedCost && takeoff.customCosts 
-                      ? takeoff.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
-                      : (takeoff.costPerUnit || 0);
-                    const totalCost = takeoff.totalRealValue * totalCostPerUnit;
+                    const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+                    const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
 
                     return (
                       <React.Fragment key={takeoff.id}>
@@ -1627,15 +1794,24 @@ export const ProjectView: React.FC = () => {
                           <td className="px-6 py-4 text-right text-sm text-slate-600 font-medium">
                             {takeoff.isAdvancedCost ? (
                               <div className="flex flex-col items-end">
-                                <span className="text-blue-600 font-bold">${totalCostPerUnit.toFixed(2)}</span>
-                                <span className="text-[10px] text-slate-400 uppercase">Advanced</span>
+                                <span className="text-blue-600 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
+                                <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
                               </div>
                             ) : (
                               takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
                             )}
                           </td>
                           <td className="px-6 py-4 text-right font-bold text-blue-600">
-                            {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                            <div className="flex flex-col items-end">
+                              <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
+                              {takeoff.isAdvancedCost && costDetails.map((d, i) => (
+                                d.quantity !== undefined && d.quantity > 0 && (
+                                  <span key={i} className="text-[10px] text-slate-500 font-normal">
+                                    {d.quantity.toFixed(2)} {d.quantityUnit || 'units'} of {d.name}
+                                  </span>
+                                )
+                              ))}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
@@ -2057,7 +2233,7 @@ export const ProjectView: React.FC = () => {
                   <div className="flex justify-between items-center mb-2">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
                     <button
-                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
+                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
                       className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
                       title="Add Cost Item"
                     >
@@ -2068,44 +2244,22 @@ export const ProjectView: React.FC = () => {
                   {newTakeoffCustomCosts.length === 0 ? (
                     <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {newTakeoffCustomCosts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2 items-start">
-                          <div className="flex-1">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => {
-                                const newCosts = [...newTakeoffCustomCosts];
-                                newCosts[index].name = e.target.value;
-                                setNewTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Item Name"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div className="w-24">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.costPerUnit}
-                              onChange={(e) => {
-                                const newCosts = [...newTakeoffCustomCosts];
-                                newCosts[index].costPerUnit = Number(e.target.value);
-                                setNewTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Cost"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== index))}
-                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
+                        <CustomCostRow
+                          key={item.id}
+                          item={item}
+                          index={index}
+                          unitLabel={UNIT_LABELS[newTakeoffUnit] || newTakeoffUnit || (newTakeoffType === 'area' ? 'sq ft' : newTakeoffType === 'length' ? 'ft' : 'ea')}
+                          onChange={(idx, updated) => {
+                            const newCosts = [...newTakeoffCustomCosts];
+                            newCosts[idx] = updated;
+                            setNewTakeoffCustomCosts(newCosts);
+                          }}
+                          onRemove={(idx) => {
+                            setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== idx));
+                          }}
+                        />
                       ))}
                     </div>
                   )}
@@ -2236,7 +2390,7 @@ export const ProjectView: React.FC = () => {
                   <div className="flex justify-between items-center mb-2">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
                     <button
-                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', costPerUnit: 0 }])}
+                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
                       className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
                       title="Add Cost Item"
                     >
@@ -2247,44 +2401,22 @@ export const ProjectView: React.FC = () => {
                   {editTakeoffCustomCosts.length === 0 ? (
                     <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {editTakeoffCustomCosts.map((item, index) => (
-                        <div key={item.id} className="flex gap-2 items-start">
-                          <div className="flex-1">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => {
-                                const newCosts = [...editTakeoffCustomCosts];
-                                newCosts[index].name = e.target.value;
-                                setEditTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Item Name"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div className="w-24">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={item.costPerUnit}
-                              onChange={(e) => {
-                                const newCosts = [...editTakeoffCustomCosts];
-                                newCosts[index].costPerUnit = Number(e.target.value);
-                                setEditTakeoffCustomCosts(newCosts);
-                              }}
-                              placeholder="Cost"
-                              className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== index))}
-                            className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
+                        <CustomCostRow
+                          key={item.id}
+                          item={item}
+                          index={index}
+                          unitLabel={UNIT_LABELS[editTakeoffUnit] || editTakeoffUnit || (editingTakeoff?.type === 'area' ? 'sq ft' : editingTakeoff?.type === 'length' ? 'ft' : 'ea')}
+                          onChange={(idx, updated) => {
+                            const newCosts = [...editTakeoffCustomCosts];
+                            newCosts[idx] = updated;
+                            setEditTakeoffCustomCosts(newCosts);
+                          }}
+                          onRemove={(idx) => {
+                            setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== idx));
+                          }}
+                        />
                       ))}
                     </div>
                   )}

@@ -19,7 +19,7 @@ export const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
     <div className={`relative ${className}`}>
       <input
         type="text"
-        value={value}
+        value={value || ''}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}

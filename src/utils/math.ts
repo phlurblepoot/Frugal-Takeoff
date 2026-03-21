@@ -283,6 +283,66 @@ export const UNIT_LABELS: Record<string, string> = {
   'sq m': 'sq m'
 };
 
+export const calculateTakeoffCostDetails = (takeoff: MeasurementTakeoff, totalValue: number) => {
+  if (takeoff.isAdvancedCost && takeoff.customCosts) {
+    return takeoff.customCosts.map(item => {
+      let cost = 0;
+      let quantity: number | undefined;
+
+      switch (item.type) {
+        case 'flat':
+          cost = item.cost || 0;
+          break;
+        case 'yield':
+          if (item.yield && item.yield > 0) {
+            quantity = totalValue / item.yield;
+            cost = quantity * (item.cost || 0);
+          }
+          break;
+        case 'unit':
+          cost = totalValue * (item.costPerUnit || 0);
+          break;
+        case 'amount_per_units':
+          if (item.perUnits && item.perUnits > 0) {
+            quantity = totalValue / item.perUnits;
+            cost = quantity * (item.amount || 0);
+          }
+          break;
+      }
+      return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
+    });
+  }
+  return [];
+};
+
+export const calculateTakeoffTotalCost = (takeoff: MeasurementTakeoff, totalValue: number): number => {
+  if (takeoff.isAdvancedCost && takeoff.customCosts) {
+    return takeoff.customCosts.reduce((sum, item) => {
+      switch (item.type) {
+        case 'flat':
+          return sum + (item.cost || 0);
+        case 'yield':
+          if (item.yield && item.yield > 0) {
+            return sum + (totalValue / item.yield) * (item.cost || 0);
+          }
+          return sum;
+        case 'unit':
+          return sum + totalValue * (item.costPerUnit || 0);
+        case 'amount_per_units':
+          if (item.perUnits && item.perUnits > 0) {
+            return sum + (totalValue / item.perUnits) * (item.amount || 0);
+          }
+          return sum;
+        default:
+          return sum;
+      }
+    }, 0);
+  } else if (takeoff.costPerUnit) {
+    return totalValue * takeoff.costPerUnit;
+  }
+  return 0;
+};
+
 export const formatRealValue = (
   realValue: number,
   type: 'length' | 'area' | 'count',
@@ -322,17 +382,23 @@ export const formatRealValue = (
     text = `${displayValue.toFixed(2)} ${readableUnit}`;
   }
 
-  if (includeCost) {
-    let totalCostPerUnit = 0;
-    if (takeoff?.isAdvancedCost && takeoff.customCosts) {
-      totalCostPerUnit = takeoff.customCosts.reduce((sum, item) => sum + (item.costPerUnit || 0), 0);
-    } else if (takeoff?.costPerUnit) {
-      totalCostPerUnit = takeoff.costPerUnit;
-    }
-
-    if (totalCostPerUnit > 0) {
-      const totalCost = displayValue * totalCostPerUnit;
-      text += `\n$${totalCost.toFixed(2)}`;
+  if (includeCost && takeoff) {
+    if (takeoff.isAdvancedCost) {
+      const details = calculateTakeoffCostDetails(takeoff, displayValue);
+      const totalCost = details.reduce((sum, d) => sum + d.costValue, 0);
+      if (totalCost > 0) {
+        text += `\n$${totalCost.toFixed(2)}`;
+        details.forEach(d => {
+          if (d.quantity !== undefined && d.quantity > 0) {
+            text += `\n(${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} of ${d.name})`;
+          }
+        });
+      }
+    } else {
+      const totalCost = calculateTakeoffTotalCost(takeoff, displayValue);
+      if (totalCost > 0) {
+        text += `\n$${totalCost.toFixed(2)}`;
+      }
     }
   }
 
@@ -368,4 +434,39 @@ export const calculateRealValue = (
   
   const ratio = scale.realWorldDistance / scale.pixelDistance;
   return type === 'length' ? pixelValue * ratio : pixelValue * Math.pow(ratio, 2);
+};
+
+export const evaluateMathExpression = (input: string): number | null => {
+  const cleanInput = input.trim();
+  if (!cleanInput) return null;
+
+  if (!cleanInput.startsWith('=')) {
+    const val = parseFloat(cleanInput);
+    return isNaN(val) ? null : val;
+  }
+
+  try {
+    // Remove the leading '='
+    let expression = cleanInput.substring(1);
+    
+    // Replace percentages (e.g., 40% -> 0.4)
+    // We need to be careful with things like 40% * 100
+    // A simple regex to replace \d% with \d/100
+    expression = expression.replace(/([\d.]+)\s*%/g, '($1/100)');
+    
+    // Basic sanitization: only allow numbers, operators, parentheses, and dots
+    if (!/^[0-9+\-*/().\s]+$/.test(expression)) {
+      return null;
+    }
+
+    // Use Function constructor for evaluation (relatively safe given the regex above)
+    // eslint-disable-next-line no-new-func
+    const result = new Function(`return ${expression}`)();
+    
+    const finalVal = parseFloat(result);
+    return isNaN(finalVal) ? null : finalVal;
+  } catch (e) {
+    console.error('Math evaluation error:', e);
+    return null;
+  }
 };
