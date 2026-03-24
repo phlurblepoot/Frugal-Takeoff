@@ -220,6 +220,8 @@ const CanvasViewInner: React.FC = () => {
 
   const [showCurrentPageOnly, setShowCurrentPageOnly] = useState(false);
   const [history, setHistory] = useState<{ type: 'add' | 'delete'; measurement: Measurement }[]>([]);
+  const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
+  const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
   const [heightsModalMeasurementId, setHeightsModalMeasurementId] = useState<string | null>(null);
   const [toolDisabledMessage, setToolDisabledMessage] = useState<string | null>(null);
@@ -344,6 +346,15 @@ const CanvasViewInner: React.FC = () => {
         deleteMeasurement(selectedMeasurementId);
       }
 
+      if ((e.key === 'p' || e.key === 'P') && selectedMeasurementId) {
+        const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
+        if (measurement && (measurement.type === 'length' || measurement.type === 'area')) {
+          setResumeMeasurement(measurement);
+          setCurrentTool(measurement.type);
+          setSelectedMeasurementId(null);
+        }
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         handleUndo();
@@ -352,7 +363,7 @@ const CanvasViewInner: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeasurementId, page, history]);
+  }, [selectedMeasurementId, page, history, aggregatedMeasurements]);
 
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
@@ -464,8 +475,6 @@ const CanvasViewInner: React.FC = () => {
 
   const pageKey = page?.pageNumber || page?.name;
   const pageVersions = project?.pages.filter(p => (p.pageNumber || p.name) === pageKey) || [];
-
-  const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
   useEffect(() => {
     if (!project || !page) return;
@@ -1376,6 +1385,8 @@ const CanvasViewInner: React.FC = () => {
             onSetScale={handleSetScale}
             selectedMeasurementId={selectedMeasurementId}
             onSelectMeasurement={setSelectedMeasurementId}
+            resumeMeasurement={resumeMeasurement}
+            onMeasurementResumed={() => setResumeMeasurement(null)}
             onCancel={() => {
               setSelectedMeasurementId(null);
               setCurrentTool('pan');

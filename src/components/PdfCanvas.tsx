@@ -33,6 +33,8 @@ interface PdfCanvasProps {
   remoteUsers?: any[];
   onCursorMove?: (x: number, y: number) => void;
   currentUserId?: string;
+  resumeMeasurement?: Measurement | null;
+  onMeasurementResumed?: () => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -61,6 +63,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   remoteUsers = [],
   onCursorMove,
   currentUserId,
+  resumeMeasurement,
+  onMeasurementResumed,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -91,6 +95,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   
   const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number } | null>(null);
   
+  const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (resumeMeasurement) {
+      setActivePoints(resumeMeasurement.points);
+      setResumeMeasurementId(resumeMeasurement.id);
+      setArcMode('inactive');
+      setArcMidPoint(null);
+      onMeasurementResumed?.();
+    }
+  }, [resumeMeasurement, onMeasurementResumed]);
+
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);
 
@@ -384,14 +400,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             }
 
             const newMeasurement: Measurement = {
-              id: uuidv4(),
+              id: resumeMeasurementId || uuidv4(),
               type: currentTool,
               points: [...activePoints],
               color: currentTool === 'length' ? '#3b82f6' : '#10b981',
               name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
               regionId,
             };
-            onAddMeasurement(newMeasurement);
+            if (resumeMeasurementId) {
+              const existing = measurements.find(m => m.id === resumeMeasurementId);
+              if (existing) {
+                newMeasurement.color = existing.color;
+                newMeasurement.name = existing.name;
+              }
+              onUpdateMeasurement(resumeMeasurementId, newMeasurement);
+              setResumeMeasurementId(null);
+            } else {
+              onAddMeasurement(newMeasurement);
+            }
           }
           setActivePoints([]);
           setMousePos(null);
@@ -518,6 +544,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           setMousePos(null);
           setArcMode('inactive');
           setArcMidPoint(null);
+          setResumeMeasurementId(null);
         } else {
           onCancel?.();
         }
@@ -542,14 +569,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             }
 
             const newMeasurement: Measurement = {
-              id: uuidv4(),
+              id: resumeMeasurementId || uuidv4(),
               type: currentTool,
               points: [...activePoints],
               color: currentTool === 'length' ? '#3b82f6' : '#10b981',
               name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
               regionId,
             };
-            onAddMeasurement(newMeasurement);
+            if (resumeMeasurementId) {
+              const existing = measurements.find(m => m.id === resumeMeasurementId);
+              if (existing) {
+                newMeasurement.color = existing.color;
+                newMeasurement.name = existing.name;
+              }
+              onUpdateMeasurement(resumeMeasurementId, newMeasurement);
+              setResumeMeasurementId(null);
+            } else {
+              onAddMeasurement(newMeasurement);
+            }
           }
           setActivePoints([]);
           setMousePos(null);
@@ -649,7 +686,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   const renderMeasurements = () => {
-    return measurements.map((m) => {
+    return measurements.filter(m => m.id !== resumeMeasurementId).map((m) => {
       // Find region scale if applicable
       let currentScale = scaleConfig;
       if (isMultiRegion && m.regionId) {
