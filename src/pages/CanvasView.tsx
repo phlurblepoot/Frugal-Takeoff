@@ -4,7 +4,7 @@ import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plu
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 
@@ -355,6 +355,60 @@ const CanvasViewInner: React.FC = () => {
         }
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedMeasurementId) {
+        const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
+        if (measurement) {
+          localStorage.setItem('copiedMeasurement', JSON.stringify(measurement));
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        const copiedStr = localStorage.getItem('copiedMeasurement');
+        if (copiedStr && page) {
+          try {
+            const copiedMeasurement = JSON.parse(copiedStr) as Measurement;
+            const isMultiRegionValid = page.isMultiRegion && page.scaleRegions && page.scaleRegions.length > 0;
+            if (!page.scaleConfig && !isMultiRegionValid) {
+              setToolDisabledMessage('Please set the shape before pasting.');
+              return;
+            }
+            
+            // Offset the pasted measurement slightly so it doesn't perfectly overlap
+            const offset = 20;
+            const newPoints = copiedMeasurement.points.map(p => ({
+              x: p.x + offset,
+              y: p.y + offset
+            }));
+            
+            let regionId: string | undefined = undefined;
+            if (page.isMultiRegion && page.scaleRegions) {
+              const region = page.scaleRegions.find(r => isPointInPolygon(newPoints[0], r.points));
+              if (region) {
+                regionId = region.id;
+              }
+            }
+            
+            const newMeasurement: Measurement = {
+              ...copiedMeasurement,
+              id: uuidv4(),
+              name: `${copiedMeasurement.name} (Copy)`,
+              points: newPoints,
+              planSetId: page.planSetId,
+              regionId,
+            };
+
+            pushToHistory({ type: 'add', measurement: newMeasurement });
+            savePageUpdates({
+              measurements: [...page.measurements, newMeasurement]
+            });
+            sendMeasurementUpdate(page.id, 'add', newMeasurement);
+            setSelectedMeasurementId(newMeasurement.id);
+          } catch (err) {
+            console.error('Failed to parse copied measurement', err);
+          }
+        }
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         handleUndo();
@@ -363,7 +417,7 @@ const CanvasViewInner: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeasurementId, page, history, aggregatedMeasurements]);
+  }, [selectedMeasurementId, page, project, history, aggregatedMeasurements]);
 
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
