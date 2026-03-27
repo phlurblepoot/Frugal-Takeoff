@@ -1050,6 +1050,28 @@ const CanvasViewInner: React.FC = () => {
               />
             </div>
 
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-slate-700">Show Legend</label>
+              <input 
+                type="checkbox"
+                checked={page.showLegend || false}
+                onChange={(e) => savePageUpdates({ showLegend: e.target.checked })}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+            </div>
+
+            {page.showLegend && (
+              <div className="flex items-center justify-between pl-4">
+                <label className="text-xs font-medium text-slate-600">Show Legend Totals</label>
+                <input 
+                  type="checkbox"
+                  checked={page.showLegendTotals !== false} // Default to true
+                  onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+              </div>
+            )}
+
             {!page.isMultiRegion && (
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">Page Scale</label>
@@ -1432,6 +1454,7 @@ const CanvasViewInner: React.FC = () => {
             currentTool={currentTool}
             scaleConfig={page.scaleConfig}
             measurements={aggregatedMeasurements}
+            pageMeasurements={page.measurements}
             takeoffs={project.takeoffs}
             onAddMeasurement={addMeasurement}
             onUpdateMeasurement={updateMeasurement}
@@ -1451,6 +1474,16 @@ const CanvasViewInner: React.FC = () => {
             selectedRegionId={selectedRegionId}
             onSelectRegion={setSelectedRegionId}
             calibratingRegionId={calibratingRegionId}
+            showLegend={page.showLegend}
+            showLegendTotals={page.showLegendTotals}
+            legendPosition={page.legendPosition}
+            legendScale={page.legendScale}
+            onUpdateLegend={async (updates) => {
+              const pageUpdates: Partial<ProjectPage> = {};
+              if (updates.position) pageUpdates.legendPosition = updates.position;
+              if (updates.scale !== undefined) pageUpdates.legendScale = updates.scale;
+              savePageUpdates(pageUpdates);
+            }}
             onAddRegion={async (region) => {
               const updatedProject = {
                 ...project,

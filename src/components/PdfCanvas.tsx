@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
-import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, calculateSurfaceAreaPx, isPointInPolygon } from '../utils/math';
+import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -14,6 +14,7 @@ interface PdfCanvasProps {
   currentTool: Tool;
   scaleConfig: ScaleConfig | null;
   measurements: Measurement[];
+  pageMeasurements?: Measurement[];
   takeoffs: MeasurementTakeoff[];
   onAddMeasurement: (measurement: Measurement) => void;
   onUpdateMeasurement: (id: string, measurement: Partial<Measurement>) => void;
@@ -35,6 +36,11 @@ interface PdfCanvasProps {
   currentUserId?: string;
   resumeMeasurement?: Measurement | null;
   onMeasurementResumed?: () => void;
+  showLegend?: boolean;
+  showLegendTotals?: boolean;
+  legendPosition?: { x: number, y: number };
+  legendScale?: number;
+  onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number }) => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -44,6 +50,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   currentTool,
   scaleConfig,
   measurements,
+  pageMeasurements,
   takeoffs,
   onAddMeasurement,
   onUpdateMeasurement,
@@ -65,6 +72,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   currentUserId,
   resumeMeasurement,
   onMeasurementResumed,
+  showLegend = false,
+  showLegendTotals = true,
+  legendPosition = { x: 20, y: 20 },
+  legendScale = 1,
+  onUpdateLegend,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -958,6 +970,160 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     });
   };
 
+  const renderLegend = () => {
+    if (!showLegend || takeoffs.length === 0) return null;
+
+    const legendItems: { color: string; name: string; total: string }[] = [];
+
+    takeoffs.forEach(takeoff => {
+      let totalRealValue = 0;
+      let hasMeasurements = false;
+
+      const measurementsToUse = pageMeasurements || measurements;
+
+      measurementsToUse.filter(m => m.takeoffId === takeoff.id).forEach(m => {
+        hasMeasurements = true;
+        let currentScale = scaleConfig;
+        if (isMultiRegion && m.regionId) {
+          const region = scaleRegions.find(r => r.id === m.regionId);
+          if (region?.scaleConfig) {
+            currentScale = region.scaleConfig;
+          }
+        }
+
+        let pixelValue = 0;
+        if (takeoff.type === 'length' && m.type === 'length') {
+          pixelValue = calculatePolylineLength(m.points);
+        } else if (takeoff.type === 'area' && m.type === 'area') {
+          pixelValue = calculatePolygonArea(m.points);
+        } else if (takeoff.type === 'area' && m.type === 'length') {
+          pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+        } else if (takeoff.type === 'count' && m.type === 'count') {
+          pixelValue = 1;
+        }
+
+        if (pixelValue > 0) {
+          const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+          const targetUnit = takeoff.unit || scaleConfig?.unit || 'ft';
+          const sourceUnit = currentScale?.unit || 'ft';
+          
+          if (takeoff.type === 'count') {
+            totalRealValue += realValue;
+          } else {
+            // Ensure we are converting to the correct target unit, stripping 'sq ' if necessary for the convertUnit function
+            const cleanTargetUnit = targetUnit.replace('sq ', '');
+            totalRealValue += convertUnit(realValue, sourceUnit, cleanTargetUnit, takeoff.type as 'length' | 'area' | 'count');
+          }
+        }
+      });
+
+      if (hasMeasurements) {
+        const targetUnit = takeoff.unit || scaleConfig?.unit || 'ft';
+        const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
+        const formattedTotal = takeoff.type === 'count' 
+          ? Math.round(totalRealValue).toString() 
+          : totalRealValue.toFixed(2);
+        
+        legendItems.push({
+          color: takeoff.color,
+          name: takeoff.name,
+          total: showLegendTotals ? `${formattedTotal}${unitLabel}` : ''
+        });
+      }
+    });
+
+    if (legendItems.length === 0) return null;
+
+    const padding = 12;
+    const itemHeight = 24;
+    const colorBoxSize = 14;
+    const textOffsetX = colorBoxSize + 10;
+    const width = 240;
+    const height = padding * 2 + legendItems.length * itemHeight + 30;
+
+    return (
+      <Group
+        x={legendPosition.x}
+        y={legendPosition.y}
+        scaleX={legendScale}
+        scaleY={legendScale}
+        draggable={currentTool === 'pan'}
+        onDragEnd={(e) => {
+          if (onUpdateLegend) {
+            onUpdateLegend({ position: { x: e.target.x(), y: e.target.y() } });
+          }
+        }}
+        onWheel={(e) => {
+          if (currentTool === 'pan') {
+            e.cancelBubble = true;
+            e.evt.preventDefault();
+            const scaleBy = 1.05;
+            const oldScale = legendScale;
+            const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+            if (onUpdateLegend) {
+              onUpdateLegend({ scale: Math.max(0.5, Math.min(newScale, 3)) });
+            }
+          }
+        }}
+      >
+        <Rect
+          width={width}
+          height={height}
+          fill="white"
+          stroke="#e2e8f0"
+          strokeWidth={1}
+          cornerRadius={6}
+          shadowColor="black"
+          shadowBlur={10}
+          shadowOpacity={0.1}
+          shadowOffset={{ x: 0, y: 4 }}
+        />
+        <Text
+          x={padding}
+          y={padding}
+          text="Legend"
+          fontSize={16}
+          fontStyle="bold"
+          fill="#334155"
+        />
+        {legendItems.map((item, index) => (
+          <Group key={index} y={padding + 30 + index * itemHeight}>
+            <Rect
+              x={padding}
+              y={2}
+              width={colorBoxSize}
+              height={colorBoxSize}
+              fill={item.color}
+              cornerRadius={3}
+            />
+            <Text
+              x={padding + textOffsetX}
+              y={2}
+              text={item.name}
+              fontSize={14}
+              fill="#475569"
+              width={width - padding * 2 - textOffsetX - (showLegendTotals ? 70 : 0)}
+              ellipsis={true}
+              wrap="none"
+            />
+            {showLegendTotals && (
+              <Text
+                x={width - padding - 70}
+                y={2}
+                text={item.total}
+                fontSize={14}
+                fill="#0f172a"
+                width={70}
+                align="right"
+                fontStyle="bold"
+              />
+            )}
+          </Group>
+        ))}
+      </Group>
+    );
+  };
+
   return (
     <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative">
       {dimensions.width > 0 && dimensions.height > 0 && (
@@ -1030,6 +1196,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             {renderRegions()}
             {renderMeasurements()}
             {renderActiveDrawing()}
+            {renderLegend()}
           </Layer>
           <Layer>
             {/* Remote Cursors */}

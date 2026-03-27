@@ -724,6 +724,141 @@ export const ProjectView: React.FC = () => {
           }
         });
 
+        // Draw Legend
+        if (page.showLegend && project.takeoffs.length > 0) {
+          const legendItems: { color: string; name: string; total: string }[] = [];
+
+          project.takeoffs.forEach(takeoff => {
+            let totalRealValue = 0;
+            let hasMeasurements = false;
+
+            page.measurements.filter(m => m.takeoffId === takeoff.id).forEach(m => {
+              if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
+              hasMeasurements = true;
+              let currentScale = page.scaleConfig;
+              if (page.isMultiRegion && m.regionId) {
+                const region = page.scaleRegions?.find(r => r.id === m.regionId);
+                if (region?.scaleConfig) {
+                  currentScale = region.scaleConfig;
+                }
+              }
+
+              let pixelValue = 0;
+              if (takeoff.type === 'length' && m.type === 'length') {
+                pixelValue = calculatePolylineLength(m.points);
+              } else if (takeoff.type === 'area' && m.type === 'area') {
+                pixelValue = calculatePolygonArea(m.points);
+              } else if (takeoff.type === 'area' && m.type === 'length') {
+                pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+              } else if (takeoff.type === 'count' && m.type === 'count') {
+                pixelValue = 1;
+              }
+
+              if (pixelValue > 0) {
+                const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+                const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+                const sourceUnit = currentScale?.unit || 'ft';
+                
+                if (takeoff.type === 'count') {
+                  totalRealValue += realValue;
+                } else {
+                  const cleanTargetUnit = targetUnit.replace('sq ', '');
+                  totalRealValue += convertUnit(realValue, sourceUnit, cleanTargetUnit, takeoff.type as 'length' | 'area' | 'count');
+                }
+              }
+            });
+
+            if (hasMeasurements) {
+              const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+              const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
+              const formattedTotal = takeoff.type === 'count' 
+                ? Math.round(totalRealValue).toString() 
+                : totalRealValue.toFixed(2);
+              
+              legendItems.push({
+                color: takeoff.color,
+                name: takeoff.name,
+                total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : ''
+              });
+            }
+          });
+
+          if (legendItems.length > 0) {
+            const padding = 12;
+            const itemHeight = 24;
+            const colorBoxSize = 14;
+            const textOffsetX = colorBoxSize + 10;
+            const width = 240;
+            const height = padding * 2 + legendItems.length * itemHeight + 30;
+            
+            const scale = page.legendScale || 1;
+            const pos = page.legendPosition || { x: 20, y: 20 };
+
+            ctx.save();
+            ctx.translate(pos.x, pos.y);
+            ctx.scale(scale, scale);
+
+            // Background
+            ctx.fillStyle = 'white';
+            ctx.shadowColor = 'rgba(0,0,0,0.1)';
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetY = 4;
+            ctx.beginPath();
+            ctx.roundRect(0, 0, width, height, 6);
+            ctx.fill();
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Reset shadow for text
+            ctx.shadowColor = 'transparent';
+
+            // Title
+            ctx.fillStyle = '#334155';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('Legend', padding, padding);
+
+            // Items
+            legendItems.forEach((item, index) => {
+              const y = padding + 30 + index * itemHeight;
+              
+              // Color box
+              ctx.fillStyle = item.color;
+              ctx.beginPath();
+              ctx.roundRect(padding, y + 2, colorBoxSize, colorBoxSize, 3);
+              ctx.fill();
+
+              // Name
+              ctx.fillStyle = '#475569';
+              ctx.font = '14px sans-serif';
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'top';
+              // Simple truncation for name
+              let nameText = item.name;
+              const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? 70 : 0);
+              if (ctx.measureText(nameText).width > maxNameWidth) {
+                while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) {
+                  nameText = nameText.slice(0, -1);
+                }
+                nameText += '...';
+              }
+              ctx.fillText(nameText, padding + textOffsetX, y + 2);
+
+              // Total
+              if (page.showLegendTotals !== false) {
+                ctx.fillStyle = '#0f172a';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(item.total, width - padding, y + 2);
+              }
+            });
+
+            ctx.restore();
+          }
+        }
+
         const pageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
         
         if (i > 0) {

@@ -97,6 +97,10 @@ export interface ProjectPage {
   isMultiRegion?: boolean;
   scaleRegions?: ScaleRegion[];
   extractedText?: string;
+  showLegend?: boolean;
+  showLegendTotals?: boolean;
+  legendPosition?: { x: number, y: number };
+  legendScale?: number;
 }
 
 export interface Bid {
