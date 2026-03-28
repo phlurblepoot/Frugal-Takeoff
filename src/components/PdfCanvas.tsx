@@ -40,7 +40,11 @@ interface PdfCanvasProps {
   showLegendTotals?: boolean;
   legendPosition?: { x: number, y: number };
   legendScale?: number;
-  onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number }) => void;
+  legendScaleX?: number;
+  legendScaleY?: number;
+  legendFontSize?: number;
+  legendWidth?: number;
+  onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number, scaleX?: number, scaleY?: number, fontSize?: number, width?: number }) => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -75,7 +79,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   showLegend = false,
   showLegendTotals = true,
   legendPosition = { x: 20, y: 20 },
-  legendScale = 1,
+  legendScale = 2,
+  legendScaleX,
+  legendScaleY,
+  legendFontSize = 14,
+  legendWidth,
   onUpdateLegend,
 }) => {
   const [image] = useImage(imageUrl);
@@ -1034,22 +1042,20 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
     if (legendItems.length === 0) return null;
 
-    const padding = 12;
-    const itemHeight = 24;
-    const colorBoxSize = 14;
+    const padding = legendFontSize * 0.8;
+    const itemHeight = legendFontSize * 1.6;
+    const colorBoxSize = legendFontSize;
     const textOffsetX = colorBoxSize + 10;
-    const width = 240;
-    const height = padding * 2 + legendItems.length * itemHeight + 30;
+    const width = legendWidth || 350;
+    const height = padding * 2 + legendItems.length * itemHeight + legendFontSize * 2;
 
     return (
       <Group
         x={legendPosition.x}
         y={legendPosition.y}
-        scaleX={legendScale}
-        scaleY={legendScale}
         draggable={currentTool === 'pan'}
         onDragEnd={(e) => {
-          if (onUpdateLegend) {
+          if (e.target === e.currentTarget && onUpdateLegend) {
             onUpdateLegend({ position: { x: e.target.x(), y: e.target.y() } });
           }
         }}
@@ -1058,10 +1064,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             e.cancelBubble = true;
             e.evt.preventDefault();
             const scaleBy = 1.05;
-            const oldScale = legendScale;
-            const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+            const oldFontSize = legendFontSize;
+            const newFontSize = e.evt.deltaY < 0 ? oldFontSize * scaleBy : oldFontSize / scaleBy;
             if (onUpdateLegend) {
-              onUpdateLegend({ scale: Math.max(0.5, Math.min(newScale, 3)) });
+              onUpdateLegend({ 
+                fontSize: Math.max(8, Math.min(newFontSize, 100))
+              });
             }
           }
         }}
@@ -1082,12 +1090,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           x={padding}
           y={padding}
           text="Legend"
-          fontSize={16}
+          fontSize={legendFontSize + 2}
           fontStyle="bold"
           fill="#334155"
         />
         {legendItems.map((item, index) => (
-          <Group key={index} y={padding + 30 + index * itemHeight}>
+          <Group key={index} y={padding + legendFontSize * 2 + index * itemHeight}>
             <Rect
               x={padding}
               y={2}
@@ -1100,26 +1108,78 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               x={padding + textOffsetX}
               y={2}
               text={item.name}
-              fontSize={14}
+              fontSize={legendFontSize}
               fill="#475569"
-              width={width - padding * 2 - textOffsetX - (showLegendTotals ? 70 : 0)}
+              width={width - padding * 2 - textOffsetX - (showLegendTotals ? legendFontSize * 10 : 0)}
               ellipsis={true}
               wrap="none"
             />
             {showLegendTotals && (
               <Text
-                x={width - padding - 70}
+                x={width - padding - legendFontSize * 10}
                 y={2}
                 text={item.total}
-                fontSize={14}
+                fontSize={legendFontSize}
                 fill="#0f172a"
-                width={70}
+                width={legendFontSize * 10}
                 align="right"
                 fontStyle="bold"
+                wrap="none"
               />
             )}
           </Group>
         ))}
+        {/* Resize handle */}
+        {currentTool === 'pan' && (
+          <Rect
+            x={width - 10}
+            y={height - 10}
+            width={10}
+            height={10}
+            fill="#3b82f6"
+            cornerRadius={2}
+            draggable
+            onDragMove={(e) => {
+              e.cancelBubble = true;
+              const stage = e.target.getStage();
+              if (!stage) return;
+              const pointerPos = stage.getPointerPosition();
+              if (!pointerPos) return;
+              
+              // Calculate new width and font size based on pointer position relative to legend origin
+              const newWidth = (pointerPos.x - stagePos.x) / stageScale - legendPosition.x;
+              const newHeight = (pointerPos.y - stagePos.y) / stageScale - legendPosition.y;
+              
+              // height = fontSize * (1.6 + items * 1.6 + 2) = fontSize * (3.6 + items * 1.6)
+              const newFontSize = newHeight / (3.6 + legendItems.length * 1.6);
+              
+              if (onUpdateLegend) {
+                onUpdateLegend({ 
+                  width: Math.max(100, newWidth),
+                  fontSize: Math.max(8, newFontSize)
+                });
+              }
+              
+              // Reset handle position relative to group so it stays at the corner
+              e.target.x(width - 10);
+              e.target.y(height - 10);
+            }}
+            onDragEnd={(e) => {
+              e.cancelBubble = true;
+              // Ensure handle stays at the corner
+              e.target.x(width - 10);
+              e.target.y(height - 10);
+            }}
+            onMouseEnter={(e) => {
+              const container = e.target.getStage()?.container();
+              if (container) container.style.cursor = 'nwse-resize';
+            }}
+            onMouseLeave={(e) => {
+              const container = e.target.getStage()?.container();
+              if (container) container.style.cursor = 'crosshair';
+            }}
+          />
+        )}
       </Group>
     );
   };

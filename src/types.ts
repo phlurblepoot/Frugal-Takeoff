@@ -101,6 +101,10 @@ export interface ProjectPage {
   showLegendTotals?: boolean;
   legendPosition?: { x: number, y: number };
   legendScale?: number;
+  legendScaleX?: number;
+  legendScaleY?: number;
+  legendFontSize?: number;
+  legendWidth?: number;
 }
 
 export interface Bid {

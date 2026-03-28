@@ -784,19 +784,18 @@ export const ProjectView: React.FC = () => {
           });
 
           if (legendItems.length > 0) {
-            const padding = 12;
-            const itemHeight = 24;
-            const colorBoxSize = 14;
+            const fontSize = page.legendFontSize || 14;
+            const padding = fontSize * 0.8;
+            const itemHeight = fontSize * 1.6;
+            const colorBoxSize = fontSize;
             const textOffsetX = colorBoxSize + 10;
-            const width = 240;
-            const height = padding * 2 + legendItems.length * itemHeight + 30;
+            const width = page.legendWidth || 350;
+            const height = padding * 2 + legendItems.length * itemHeight + fontSize * 2;
             
-            const scale = page.legendScale || 1;
             const pos = page.legendPosition || { x: 20, y: 20 };
 
             ctx.save();
             ctx.translate(pos.x, pos.y);
-            ctx.scale(scale, scale);
 
             // Background
             ctx.fillStyle = 'white';
@@ -815,14 +814,14 @@ export const ProjectView: React.FC = () => {
 
             // Title
             ctx.fillStyle = '#334155';
-            ctx.font = 'bold 16px sans-serif';
+            ctx.font = `bold ${fontSize + 2}px sans-serif`;
             ctx.textAlign = 'left';
             ctx.textBaseline = 'top';
             ctx.fillText('Legend', padding, padding);
 
             // Items
             legendItems.forEach((item, index) => {
-              const y = padding + 30 + index * itemHeight;
+              const y = padding + fontSize * 2 + index * itemHeight;
               
               // Color box
               ctx.fillStyle = item.color;
@@ -832,12 +831,12 @@ export const ProjectView: React.FC = () => {
 
               // Name
               ctx.fillStyle = '#475569';
-              ctx.font = '14px sans-serif';
+              ctx.font = `${fontSize}px sans-serif`;
               ctx.textAlign = 'left';
               ctx.textBaseline = 'top';
               // Simple truncation for name
               let nameText = item.name;
-              const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? 70 : 0);
+              const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 10 : 0);
               if (ctx.measureText(nameText).width > maxNameWidth) {
                 while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) {
                   nameText = nameText.slice(0, -1);
@@ -849,7 +848,7 @@ export const ProjectView: React.FC = () => {
               // Total
               if (page.showLegendTotals !== false) {
                 ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold 14px sans-serif';
+                ctx.font = `bold ${fontSize}px sans-serif`;
                 ctx.textAlign = 'right';
                 ctx.fillText(item.total, width - padding, y + 2);
               }

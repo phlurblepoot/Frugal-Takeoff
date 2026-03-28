@@ -1061,15 +1061,32 @@ const CanvasViewInner: React.FC = () => {
             </div>
 
             {page.showLegend && (
-              <div className="flex items-center justify-between pl-4">
-                <label className="text-xs font-medium text-slate-600">Show Legend Totals</label>
-                <input 
-                  type="checkbox"
-                  checked={page.showLegendTotals !== false} // Default to true
-                  onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-              </div>
+              <>
+                <div className="flex items-center justify-between pl-4">
+                  <label className="text-xs font-medium text-slate-600">Show Legend Totals</label>
+                  <input 
+                    type="checkbox"
+                    checked={page.showLegendTotals !== false} // Default to true
+                    onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5 pl-4">
+                  <label className="text-xs font-medium text-slate-600">Legend Text Size</label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="range"
+                      min="8"
+                      max="48"
+                      step="1"
+                      value={page.legendFontSize || 14}
+                      onChange={(e) => savePageUpdates({ legendFontSize: parseInt(e.target.value) })}
+                      className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500 w-6">{page.legendFontSize || 14}</span>
+                  </div>
+                </div>
+              </>
             )}
 
             {!page.isMultiRegion && (
@@ -1478,10 +1495,18 @@ const CanvasViewInner: React.FC = () => {
             showLegendTotals={page.showLegendTotals}
             legendPosition={page.legendPosition}
             legendScale={page.legendScale}
+            legendScaleX={page.legendScaleX}
+            legendScaleY={page.legendScaleY}
+            legendFontSize={page.legendFontSize}
+            legendWidth={page.legendWidth}
             onUpdateLegend={async (updates) => {
               const pageUpdates: Partial<ProjectPage> = {};
               if (updates.position) pageUpdates.legendPosition = updates.position;
               if (updates.scale !== undefined) pageUpdates.legendScale = updates.scale;
+              if (updates.scaleX !== undefined) pageUpdates.legendScaleX = updates.scaleX;
+              if (updates.scaleY !== undefined) pageUpdates.legendScaleY = updates.scaleY;
+              if (updates.fontSize !== undefined) pageUpdates.legendFontSize = updates.fontSize;
+              if (updates.width !== undefined) pageUpdates.legendWidth = updates.width;
               savePageUpdates(pageUpdates);
             }}
             onAddRegion={async (region) => {
@@ -1562,9 +1587,9 @@ const CanvasViewInner: React.FC = () => {
         >
           {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <div className={`bg-white border-l border-slate-200 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
-          <div className="w-full md:w-96 flex flex-col h-full overflow-y-auto overflow-x-hidden p-4">
-            <div className="flex items-center justify-between mb-3">
+        <div className={`bg-white border-l border-slate-200 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
+          <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20">
+            <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => setIsRightSidebarOpen(false)}
@@ -1611,7 +1636,7 @@ const CanvasViewInner: React.FC = () => {
               return (
                 <div 
                   key={takeoff.id} 
-                  className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors ${isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
+                  className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
                   onDragOver={(e) => {
                     e.preventDefault();
                     e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
@@ -1657,19 +1682,19 @@ const CanvasViewInner: React.FC = () => {
                       }
                     }}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
                         }}
-                        className="text-slate-400 hover:text-slate-600 p-2 rounded transition-colors active:scale-95"
+                        className="text-slate-400 hover:text-slate-600 p-2 rounded transition-colors active:scale-95 shrink-0"
                       >
                         {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold truncate max-w-[120px] md:max-w-none ${isActive ? 'text-blue-800' : 'text-slate-800'}`}>{takeoff.name}</span>
-                      <div className="flex items-center gap-0.5">
+                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-blue-800' : 'text-slate-800'}`}>{takeoff.name}</span>
+                      <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1767,7 +1792,7 @@ const CanvasViewInner: React.FC = () => {
             {/* Ungrouped Measurements */}
             {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).filter(m => !m.takeoffId).length > 0 && (
               <div 
-                className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
+                className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
@@ -2466,7 +2491,7 @@ function MeasurementItem({
               />
             ) : (
               <span 
-                className="text-sm text-slate-700 truncate hover:text-blue-600"
+                className="text-sm text-slate-700 break-words whitespace-normal hover:text-blue-600"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   setIsEditing(true);
