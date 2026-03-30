@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Measurement } from '../types';
 
 interface User {
@@ -13,6 +14,9 @@ interface User {
 interface CollaborationContextType {
   socket: Socket | null;
   users: User[];
+  globalUsers: User[];
+  followedUserId: string | null;
+  setFollowedUserId: (id: string | null) => void;
   sendCursor: (x: number, y: number) => void;
   sendMeasurementUpdate: (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => void;
   sendProjectUpdate: (projectId: string) => void;
@@ -23,24 +27,39 @@ interface CollaborationContextType {
 
 const CollaborationContext = createContext<CollaborationContextType | undefined>(undefined);
 
-export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId?: string; userName?: string; userColor?: string }> = ({ children, pageId, userName, userColor }) => {
+export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [globalUsers, setGlobalUsers] = useState<User[]>([]);
+  const [followedUserId, setFollowedUserId] = useState<string | null>(null);
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
+  
+  const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const newSocket = io();
     setSocket(newSocket);
 
-    if (pageId && userName) {
-      const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-      const color = userColor || colors[Math.floor(Math.random() * colors.length)];
-      newSocket.emit('join-page', { pageId, name: userName, color });
-    }
+    const storedUser = localStorage.getItem('user');
+    const user = storedUser ? JSON.parse(storedUser) : null;
+    const userName = user?.username || `User${Math.floor(Math.random() * 1000)}`;
+    
+    const storedColor = localStorage.getItem('userColor');
+    const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+    const userColor = storedColor || colors[Math.floor(Math.random() * colors.length)];
+    if (!storedColor) localStorage.setItem('userColor', userColor);
+
+    // Join with current location
+    newSocket.emit('join-page', { pageId: location.pathname, name: userName, color: userColor });
 
     newSocket.on('room-users', (roomUsers: User[]) => {
       setUsers(roomUsers);
+    });
+
+    newSocket.on('global-users', (allUsers: User[]) => {
+      setGlobalUsers(allUsers);
     });
 
     newSocket.on('user-cursor', ({ id, cursor }: { id: string; cursor: { x: number; y: number } }) => {
@@ -58,7 +77,28 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
     return () => {
       newSocket.close();
     };
-  }, [pageId, userName, userColor]);
+  }, []);
+
+  // Update location when URL changes
+  useEffect(() => {
+    if (socket) {
+      socket.emit('join-page', { 
+        pageId: location.pathname, 
+        name: globalUsers.find(u => u.id === socket.id)?.name || JSON.parse(localStorage.getItem('user') || '{}').username || 'User',
+        color: localStorage.getItem('userColor') || '#3b82f6'
+      });
+    }
+  }, [location.pathname, socket]);
+
+  // Handle following
+  useEffect(() => {
+    if (followedUserId && globalUsers.length > 0) {
+      const followedUser = globalUsers.find(u => u.id === followedUserId);
+      if (followedUser && followedUser.pageId !== location.pathname) {
+        navigate(followedUser.pageId);
+      }
+    }
+  }, [followedUserId, globalUsers, location.pathname, navigate]);
 
   const sendCursor = (x: number, y: number) => {
     socket?.emit('cursor-move', { x, y });
@@ -94,6 +134,9 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode; pageId
     <CollaborationContext.Provider value={{ 
       socket, 
       users, 
+      globalUsers,
+      followedUserId,
+      setFollowedUserId,
       sendCursor, 
       sendMeasurementUpdate, 
       sendProjectUpdate,

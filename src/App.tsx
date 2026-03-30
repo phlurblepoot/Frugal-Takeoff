@@ -5,17 +5,22 @@ import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { Login } from './pages/Login';
+import { CollaborationProvider } from './context/CollaborationContext';
+import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/" element={<ProjectsList />} />
-        <Route path="/new" element={<NewProject />} />
-        <Route path="/project/:projectId" element={<ProjectView />} />
-        <Route path="/project/:projectId/page/:pageId" element={<CanvasView />} />
-      </Routes>
+      <CollaborationProvider>
+        <UserPresenceOverlay />
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<ProjectsList />} />
+          <Route path="/new" element={<NewProject />} />
+          <Route path="/project/:projectId" element={<ProjectView />} />
+          <Route path="/project/:projectId/page/:pageId" element={<CanvasView />} />
+        </Routes>
+      </CollaborationProvider>
     </BrowserRouter>
   );
 }

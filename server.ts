@@ -546,6 +546,9 @@ async function startServer() {
       // Notify others in the room
       const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
       io.to(pageId).emit("room-users", roomUsers);
+
+      // Notify everyone about global users
+      io.emit("global-users", Object.values(users));
     });
 
     socket.on("cursor-move", ({ x, y }) => {
@@ -567,6 +570,7 @@ async function startServer() {
         user.color = color;
         const roomUsers = Object.values(users).filter(u => u.pageId === user.pageId);
         io.to(user.pageId).emit("room-users", roomUsers);
+        io.emit("global-users", Object.values(users));
       }
     });
 
@@ -577,6 +581,7 @@ async function startServer() {
         delete users[socket.id];
         const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
         io.to(pageId).emit("room-users", roomUsers);
+        io.emit("global-users", Object.values(users));
       }
       console.log("User disconnected:", socket.id);
     });

@@ -172,7 +172,7 @@ const CanvasViewInner: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   
-  const { socket, users, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser } = useCollaboration();
+  const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -1262,32 +1262,17 @@ const CanvasViewInner: React.FC = () => {
             </div>
           )}
 
-          {users.length > 1 && (
+          {globalUsers.length > 1 && (
             <div className="mt-4 pt-4 border-t border-slate-100">
               <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Collaboration</h3>
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Your Name</label>
-                  <input
-                    type="text"
-                    value={users.find(u => u.id === socket?.id)?.name || ''}
-                    onChange={(e) => {
-                      const currentUser = users.find(u => u.id === socket?.id);
-                      if (currentUser) {
-                        updateUser(e.target.value, currentUser.color);
-                        localStorage.setItem('userName', e.target.value);
-                      }
-                    }}
-                    className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Cursor Color</label>
                   <input
                     type="color"
-                    value={users.find(u => u.id === socket?.id)?.color || '#000000'}
+                    value={globalUsers.find(u => u.id === socket?.id)?.color || '#000000'}
                     onChange={(e) => {
-                      const currentUser = users.find(u => u.id === socket?.id);
+                      const currentUser = globalUsers.find(u => u.id === socket?.id);
                       if (currentUser) {
                         updateUser(currentUser.name, e.target.value);
                         localStorage.setItem('userColor', e.target.value);
@@ -1298,11 +1283,29 @@ const CanvasViewInner: React.FC = () => {
                 </div>
                 <div className="pt-2">
                   <p className="text-xs text-slate-500 mb-2">Other Users:</p>
-                  <div className="space-y-1">
-                    {users.filter(u => u.id !== socket?.id).map(user => (
-                      <div key={user.id} className="flex items-center gap-2 text-sm">
-                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: user.color }}></div>
-                        <span className="text-slate-700 truncate">{user.name}</span>
+                  <div className="space-y-2">
+                    {globalUsers.filter(u => u.id !== socket?.id).map(user => (
+                      <div key={user.id} className="flex items-center justify-between gap-2 text-sm">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: user.color }}></div>
+                          <div className="min-w-0 cursor-pointer hover:text-blue-600 transition-colors" onClick={() => navigate(user.pageId)}>
+                            <p className="text-slate-700 truncate font-medium" title={user.name}>{user.name}</p>
+                            {user.pageId !== location.pathname && (
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {user.pageId === '/' ? 'Home' : user.pageId.split('/').pop()}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-1 cursor-pointer group">
+                          <input 
+                            type="checkbox"
+                            checked={followedUserId === user.id}
+                            onChange={(e) => setFollowedUserId(e.target.checked ? user.id : null)}
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-[10px] font-medium text-slate-400 group-hover:text-blue-600 transition-colors">Follow</span>
+                        </label>
                       </div>
                     ))}
                   </div>
@@ -2372,9 +2375,7 @@ export const CanvasView: React.FC = () => {
   if (!userName) return null;
 
   return (
-    <CollaborationProvider pageId={pageId} userName={userName} userColor={userColor}>
-      <CanvasViewInner />
-    </CollaborationProvider>
+    <CanvasViewInner />
   );
 };
 
