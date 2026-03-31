@@ -133,3 +133,35 @@ export interface Project {
 }
 
 export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';
+
+export interface NoteElement {
+  id: string;
+  type: 'text' | 'image' | 'link' | 'table' | 'drawing' | 'scale_area' | 'polyline';
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  content?: string; // For text, link
+  data?: any; // For table, drawing, scale_area
+  imageUrl?: string; // For image
+  rotation?: number;
+  scaleX?: number;
+  scaleY?: number;
+  color?: string;
+  fontSize?: number;
+  strokeWidth?: number;
+  isNew?: boolean;
+}
+
+export interface ProjectNote {
+  id: string;
+  projectId: string;
+  elements: NoteElement[];
+  viewport: {
+    x: number;
+    y: number;
+    zoom: number;
+  };
+  createdAt: number;
+  updatedAt: number;
+}

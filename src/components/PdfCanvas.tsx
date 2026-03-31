@@ -655,7 +655,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         <Line
           points={flatPoints}
           stroke={color}
-          strokeWidth={2 / stageScale}
+          strokeWidth={4 / stageScale}
           lineJoin="round"
           lineCap="round"
           dash={currentTool === 'scale' ? [5 / stageScale, 5 / stageScale] : undefined}
@@ -816,12 +816,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               <Line
                 points={[-6 / stageScale, 0, 6 / stageScale, 0]}
                 stroke="#fff"
-                strokeWidth={2 / stageScale}
+                strokeWidth={3 / stageScale}
               />
               <Line
                 points={[0, -6 / stageScale, 0, 6 / stageScale]}
                 stroke="#fff"
-                strokeWidth={2 / stageScale}
+                strokeWidth={3 / stageScale}
               />
             </Group>
           ) : (
@@ -829,7 +829,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               <Line
                 points={flatPoints}
                 stroke={m.color}
-                strokeWidth={isSelected ? 6 / stageScale : 3 / stageScale}
+                strokeWidth={isSelected ? 8 / stageScale : 5 / stageScale}
                 hitStrokeWidth={20 / stageScale}
                 lineJoin="round"
                 lineCap="round"

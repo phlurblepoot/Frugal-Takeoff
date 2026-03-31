@@ -1,6 +1,24 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import Tesseract from 'tesseract.js';
 
+// Background timer worker to prevent throttling in background tabs
+let pulseWorker: Worker | null = null;
+const getPulse = () => {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (!pulseWorker) {
+    const code = `setInterval(() => postMessage('pulse'), 100);`;
+    const blob = new Blob([code], { type: 'application/javascript' });
+    pulseWorker = new Worker(URL.createObjectURL(blob));
+  }
+  return new Promise(resolve => {
+    const handler = () => {
+      pulseWorker?.removeEventListener('message', handler);
+      resolve(null);
+    };
+    pulseWorker?.addEventListener('message', handler);
+  });
+};
+
 // Configure the worker to use the local version matching the installed pdfjs-dist version
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
@@ -143,7 +161,12 @@ export const loadPdfPagesGenerator = async function*(
       };
 
       // Small delay to allow garbage collection and UI updates
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // In background tabs, setTimeout is throttled to 1s, so we use a worker-based pulse instead
+      if (document.visibilityState === 'visible') {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } else {
+        await getPulse();
+      }
     }
   } finally {
     if (tesseractWorker) {

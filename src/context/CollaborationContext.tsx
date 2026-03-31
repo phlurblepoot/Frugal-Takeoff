@@ -7,6 +7,7 @@ interface User {
   id: string;
   name: string;
   pageId: string;
+  pageName: string;
   cursor: { x: number; y: number } | null;
   color: string;
 }
@@ -21,6 +22,7 @@ interface CollaborationContextType {
   sendMeasurementUpdate: (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => void;
   sendProjectUpdate: (projectId: string) => void;
   updateUser: (name: string, color: string) => void;
+  setPageName: (name: string) => void;
   onMeasurementSync: (callback: (data: { action: 'add' | 'update' | 'delete', measurement: Measurement }) => void) => () => void;
   onProjectSync: (callback: (data: { projectId: string }) => void) => () => void;
 }
@@ -32,6 +34,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [users, setUsers] = useState<User[]>([]);
   const [globalUsers, setGlobalUsers] = useState<User[]>([]);
   const [followedUserId, setFollowedUserId] = useState<string | null>(null);
+  const [currentPageName, setCurrentPageName] = useState('Home');
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
   
@@ -52,7 +55,12 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     if (!storedColor) localStorage.setItem('userColor', userColor);
 
     // Join with current location
-    newSocket.emit('join-page', { pageId: location.pathname, name: userName, color: userColor });
+    newSocket.emit('join-page', { 
+      pageId: location.pathname, 
+      pageName: currentPageName,
+      name: userName, 
+      color: userColor 
+    });
 
     newSocket.on('room-users', (roomUsers: User[]) => {
       setUsers(roomUsers);
@@ -84,11 +92,12 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     if (socket) {
       socket.emit('join-page', { 
         pageId: location.pathname, 
+        pageName: currentPageName,
         name: globalUsers.find(u => u.id === socket.id)?.name || JSON.parse(localStorage.getItem('user') || '{}').username || 'User',
         color: localStorage.getItem('userColor') || '#3b82f6'
       });
     }
-  }, [location.pathname, socket]);
+  }, [location.pathname, socket, currentPageName]);
 
   // Handle following
   useEffect(() => {
@@ -141,6 +150,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
       sendMeasurementUpdate, 
       sendProjectUpdate,
       updateUser,
+      setPageName: setCurrentPageName,
       onMeasurementSync,
       onProjectSync
     }}>

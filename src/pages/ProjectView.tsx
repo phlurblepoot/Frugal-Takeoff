@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
-import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages } from '../utils/store';
+import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -10,6 +10,8 @@ import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
+import { StickyNote } from 'lucide-react';
+import { useNotes } from '../context/NotesContext';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -171,16 +173,19 @@ const CustomCostRow: React.FC<{
 };
 
 export const ProjectView: React.FC = () => {
+  const { openNotes } = useNotes();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [project, setProject] = useState<Project | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeletePrintoutConfirm, setShowDeletePrintoutConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts'>('pages');
+  const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts' | 'notes'>('pages');
   const [isLoading, setIsLoading] = useState(true);
+  const [projectNote, setProjectNote] = useState<ProjectNote | null>(null);
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [newTakeoffName, setNewTakeoffName] = useState('');
   const [newTakeoffColor, setNewTakeoffColor] = useState('#3b82f6');
@@ -272,6 +277,12 @@ export const ProjectView: React.FC = () => {
     const interval = setInterval(fetchActivePages, 5000);
     return () => clearInterval(interval);
   }, [projectId]);
+
+  useEffect(() => {
+    if (location.state?.activeTab) {
+      setActiveTab(location.state.activeTab);
+    }
+  }, [location.state]);
 
   const loadTemplates = async () => {
     const data = await getTemplates();
@@ -657,7 +668,7 @@ export const ProjectView: React.FC = () => {
           
           ctx.strokeStyle = color;
           ctx.fillStyle = `${color}40`;
-          ctx.lineWidth = 3;
+          ctx.lineWidth = m.type === 'length' ? 8 : 3;
           
           if (m.type === 'count') {
             const p = m.points[0];
@@ -1499,6 +1510,13 @@ export const ProjectView: React.FC = () => {
                 }`}
               >
                 Accepted
+              </button>
+              <button
+                onClick={() => projectId && openNotes(projectId)}
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-blue-600 border-blue-200 hover:border-blue-400 hover:bg-blue-50 flex items-center gap-1.5 shadow-sm"
+              >
+                <StickyNote size={14} />
+                Notes Board
               </button>
             </div>
 

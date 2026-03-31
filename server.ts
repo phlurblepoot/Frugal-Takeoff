@@ -85,7 +85,24 @@ function initDb() {
         password TEXT,
         role TEXT
       );
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY,
+        projectId TEXT,
+        data TEXT,
+        createdAt INTEGER,
+        updatedAt INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
     `);
+
+    // Initialize default settings
+    const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };
+    if (settingsCount.count === 0) {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('appName', 'Takeoff Pro');
+    }
 
     // Create default admin user if no users exist
     const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
@@ -522,6 +539,33 @@ async function startServer() {
     }
   });
 
+  // Notes API
+  app.get("/api/projects/:projectId/notes", authenticateToken, (req, res) => {
+    try {
+      const stmt = db.prepare('SELECT data FROM notes WHERE projectId = ? ORDER BY updatedAt DESC');
+      const row = stmt.get(req.params.projectId) as { data: string } | undefined;
+      if (!row) {
+        return res.json(null);
+      }
+      res.json(JSON.parse(row.data));
+    } catch (error) {
+      console.error("Error fetching notes:", error);
+      res.status(500).json({ error: "Failed to fetch notes" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/notes", authenticateToken, (req, res) => {
+    try {
+      const note = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO notes (id, projectId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)');
+      stmt.run(note.id, req.params.projectId, JSON.stringify(note), note.createdAt || Date.now(), Date.now());
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving notes:", error);
+      res.status(500).json({ error: "Failed to save notes" });
+    }
+  });
+
   // Active pages endpoint
   app.get("/api/pages/active", authenticateToken, (req, res) => {
     try {
@@ -531,6 +575,34 @@ async function startServer() {
     } catch (error) {
       console.error("Error in /api/pages/active route:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Settings API
+  app.get("/api/settings", (req, res) => {
+    try {
+      const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string, value: string }[];
+      const settings: Record<string, string> = {};
+      rows.forEach(row => {
+        settings[row.key] = row.value;
+      });
+      res.json(settings);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.post("/api/settings", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const settings = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+      Object.entries(settings).forEach(([key, value]) => {
+        stmt.run(key, value as string);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      res.status(500).json({ error: "Failed to save settings" });
     }
   });
 

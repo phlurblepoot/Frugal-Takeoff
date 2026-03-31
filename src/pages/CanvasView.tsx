@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
+import { useNotes } from '../context/NotesContext';
 
 const STANDARD_SCALES = [
   { label: '1/16" = 1\'-0"', pixelDistance: 144, realWorldDistance: 16, unit: 'ft' },
@@ -168,11 +169,12 @@ const CustomCostRow: React.FC<{
 };
 
 const CanvasViewInner: React.FC = () => {
+  const { openNotes } = useNotes();
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   
-  const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser } = useCollaboration();
+  const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -183,6 +185,15 @@ const CanvasViewInner: React.FC = () => {
   const currentPageIndex = pageIds.findIndex(id => id === pageId);
   const prevPageId = currentPageIndex > 0 ? pageIds[currentPageIndex - 1] : null;
   const nextPageId = currentPageIndex !== -1 && currentPageIndex < pageIds.length - 1 ? pageIds[currentPageIndex + 1] : null;
+
+  useEffect(() => {
+    if (project && pageId) {
+      const currentPage = project.pages.find(p => p.id === pageId);
+      if (currentPage) {
+        setPageName(currentPage.name);
+      }
+    }
+  }, [project, pageId, setPageName]);
   
   const [currentTool, setCurrentTool] = useState<Tool>('pan');
   const [showScaleModal, setShowScaleModal] = useState(false);
@@ -1005,6 +1016,14 @@ const CanvasViewInner: React.FC = () => {
                 else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
               }}
             />
+            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <button
+              onClick={() => projectId && openNotes(projectId)}
+              className="flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95 bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+              title="Project Notes"
+            >
+              <StickyNote size={18} />
+            </button>
             <div className="h-8 w-px bg-slate-200 mx-1" />
             <ToolButton
               active={currentTool === 'region'}

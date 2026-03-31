@@ -79,7 +79,7 @@ export const UserPresenceOverlay: React.FC = () => {
                           <p className="text-sm font-medium text-slate-900 truncate">{user.name}</p>
                           <p className="text-[10px] text-slate-500 truncate flex items-center gap-1">
                             <ExternalLink size={10} />
-                            {user.pageId === '/' ? 'Home' : user.pageId.split('/').pop()}
+                            {user.pageName || (user.pageId === '/' ? 'Home' : user.pageId.split('/').pop())}
                           </p>
                         </div>
                       </div>

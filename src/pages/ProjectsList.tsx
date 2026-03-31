@@ -1,19 +1,18 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut, Edit2, Check, X, Settings } from 'lucide-react';
 import { Project, Bid } from '../types';
-import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid } from '../utils/store';
+import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid, saveProject } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
-import { UsersView } from './UsersView';
 import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
 type Tab = 'projects' | 'templates' | 'bids' | 'users';
 
-export const ProjectsList: React.FC = () => {
+export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<Tab>('projects');
+  const [activeTab, setActiveTab] = useState<'projects' | 'templates' | 'bids'>('projects');
   const [projects, setProjects] = useState<Project[]>([]);
   const [bids, setBids] = useState<Bid[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -107,6 +106,19 @@ export const ProjectsList: React.FC = () => {
         fromBidId: bid.id
       }
     });
+  };
+
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState('');
+
+  const handleRename = async (project: Project) => {
+    try {
+      await saveProject({ ...project, name: editingProjectName });
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, name: editingProjectName } : p));
+      setEditingProjectId(null);
+    } catch (error) {
+      console.error('Failed to rename project:', error);
+    }
   };
 
   const handleDeleteClick = (e: React.MouseEvent, project: Project) => {
@@ -231,9 +243,18 @@ export const ProjectsList: React.FC = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 sm:mb-8 gap-4">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">Takeoff Pro</h1>
-            <p className="text-sm sm:text-base text-slate-500 mt-1">Manage your projects and templates</p>
+          <div className="flex items-center gap-4">
+            {logoUrl ? (
+              <img src={logoUrl} alt="Logo" className="h-12 w-auto object-contain" />
+            ) : (
+              <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
+                <FolderOpen size={28} />
+              </div>
+            )}
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{appName}</h1>
+              <p className="text-sm sm:text-base text-slate-500 mt-1">Manage your projects and templates</p>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             {activeTab === 'projects' && (
@@ -261,6 +282,16 @@ export const ProjectsList: React.FC = () => {
                   New Project
                 </Link>
               </div>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => navigate('/settings')}
+                className="flex items-center gap-2 text-slate-500 hover:text-blue-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
+                title="Server Settings"
+              >
+                <Settings size={18} />
+                <span className="hidden sm:inline">Settings</span>
+              </button>
             )}
             <button
               onClick={handleLogout}
@@ -307,19 +338,6 @@ export const ProjectsList: React.FC = () => {
             <Building2 size={18} />
             Bid Pipeline
           </button>
-          {isAdmin && (
-            <button
-              onClick={() => setActiveTab('users')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
-                activeTab === 'users' 
-                  ? 'bg-white text-blue-600 shadow-sm' 
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Users size={18} />
-              Users
-            </button>
-          )}
         </div>
 
         {activeTab === 'projects' ? (
@@ -417,9 +435,49 @@ export const ProjectsList: React.FC = () => {
                           >
                             <td className="px-6 py-4">
                               <div className="flex flex-col gap-1">
-                                <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
-                                  {project.name}
-                                </div>
+                                {editingProjectId === project.id ? (
+                                  <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                                    <input
+                                      type="text"
+                                      value={editingProjectName}
+                                      onChange={e => setEditingProjectName(e.target.value)}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') handleRename(project);
+                                        if (e.key === 'Escape') setEditingProjectId(null);
+                                      }}
+                                      className="px-2 py-1 text-sm border border-blue-500 rounded outline-none w-full"
+                                      autoFocus
+                                    />
+                                    <button 
+                                      onClick={() => handleRename(project)}
+                                      className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
+                                    >
+                                      <Check size={16} />
+                                    </button>
+                                    <button 
+                                      onClick={() => setEditingProjectId(null)}
+                                      className="p-1 text-slate-400 hover:bg-slate-50 rounded"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 group/name">
+                                    <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                                      {project.name}
+                                    </div>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingProjectId(project.id);
+                                        setEditingProjectName(project.name);
+                                      }}
+                                      className="p-1 text-slate-400 hover:text-blue-600 opacity-0 group-hover/name:opacity-100 transition-all"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
                                 <div className="flex flex-wrap gap-1.5 mt-1">
                                   {project.submitted && (
                                     <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
@@ -752,8 +810,6 @@ export const ProjectsList: React.FC = () => {
               )}
             </div>
           </div>
-        ) : activeTab === 'users' && isAdmin ? (
-          <UsersView />
         ) : (
           <TemplatesView />
         )}

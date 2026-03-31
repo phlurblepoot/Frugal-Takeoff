@@ -1,4 +1,4 @@
-import { Project, TakeoffTemplate, Bid } from '../types';
+import { Project, TakeoffTemplate, Bid, ProjectNote } from '../types';
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -15,6 +15,21 @@ const handleResponse = async (res: Response) => {
     throw new Error(err.error || 'Request failed');
   }
   return res;
+};
+
+export const getSettings = async (): Promise<Record<string, string>> => {
+  const res = await fetch('/api/settings');
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const saveSettings = async (settings: Record<string, string>): Promise<void> => {
+  const res = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(settings)
+  });
+  await handleResponse(res);
 };
 
 export const saveProject = async (project: Project): Promise<void> => {
@@ -131,5 +146,20 @@ export const saveBid = async (bid: Bid): Promise<void> => {
 
 export const deleteBid = async (id: string): Promise<void> => {
   const res = await fetch('/api/bids/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  await handleResponse(res);
+};
+
+export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
+  const res = await fetch(`/api/projects/${projectId}/notes`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const saveProjectNotes = async (projectId: string, note: ProjectNote): Promise<void> => {
+  const res = await fetch(`/api/projects/${projectId}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(note)
+  });
   await handleResponse(res);
 };
