@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -173,6 +173,8 @@ const CanvasViewInner: React.FC = () => {
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const searchTerm = searchParams.get('search') || '';
   
   const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
 
@@ -1379,7 +1381,7 @@ const CanvasViewInner: React.FC = () => {
               {!isLeftSidebarOpen && (
                 <>
                   <Link 
-                    to={`/project/${project.id}`} 
+                    to={`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
                     className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
                   >
                     <ArrowLeft size={16} />
@@ -1388,7 +1390,7 @@ const CanvasViewInner: React.FC = () => {
                   
                   <div className="flex items-center bg-white/90 backdrop-blur border border-slate-200 rounded-lg shadow-sm overflow-hidden">
                     <Link
-                      to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
+                      to={prevPageId ? `/project/${project.id}/page/${prevPageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}` : '#'}
                       state={{ pageIds }}
                       className={`p-2 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
                       title="Previous Page"
@@ -1398,7 +1400,7 @@ const CanvasViewInner: React.FC = () => {
                     </Link>
                     <div className="w-px h-5 bg-slate-200" />
                     <Link
-                      to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
+                      to={nextPageId ? `/project/${project.id}/page/${nextPageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}` : '#'}
                       state={{ pageIds }}
                       className={`p-2 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
                       title="Next Page"
@@ -1491,6 +1493,7 @@ const CanvasViewInner: React.FC = () => {
             imageWidth={page.imageWidth}
             imageHeight={page.imageHeight}
             currentTool={currentTool}
+            searchTerm={searchTerm}
             scaleConfig={page.scaleConfig}
             measurements={aggregatedMeasurements}
             pageMeasurements={page.measurements}

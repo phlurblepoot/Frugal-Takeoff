@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes } from '../utils/store';
@@ -240,7 +240,18 @@ export const ProjectView: React.FC = () => {
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
   const [useExistingPlanSet, setUseExistingPlanSet] = useState(false);
   const [targetPlanSetId, setTargetPlanSetId] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchTerm = searchParams.get('search') || '';
+  const setSearchTerm = (term: string) => {
+    if (term) {
+      searchParams.set('search', term);
+    } else {
+      searchParams.delete('search');
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
+  const [editProjectName, setEditProjectName] = useState('');
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [editDueDate, setEditDueDate] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
@@ -1458,6 +1469,20 @@ export const ProjectView: React.FC = () => {
     });
   }, [project, selectedPlanSetId, searchTerm]);
 
+  const handleSaveProjectName = async () => {
+    if (!project || !editProjectName.trim()) return;
+    
+    try {
+      const updatedProject = { ...project, name: editProjectName.trim() };
+      await saveProject(updatedProject);
+      setProject(updatedProject);
+      setIsEditingProjectName(false);
+    } catch (error) {
+      console.error('Failed to update project name:', error);
+      alert('Failed to update project name. Please try again.');
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex justify-center items-center">
@@ -1478,7 +1503,47 @@ export const ProjectView: React.FC = () => {
         
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-8 gap-4 md:gap-6">
           <div className="w-full">
-            <h1 className="text-xl md:text-3xl font-bold text-slate-900 break-words leading-tight">{project.name}</h1>
+            {isEditingProjectName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveProjectName();
+                    if (e.key === 'Escape') setIsEditingProjectName(false);
+                  }}
+                  className="text-xl md:text-3xl font-bold text-slate-900 border-b-2 border-blue-500 focus:outline-none bg-transparent px-1 min-w-[300px]"
+                  autoFocus
+                />
+                <button
+                  onClick={handleSaveProjectName}
+                  className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                >
+                  <Check size={20} />
+                </button>
+                <button
+                  onClick={() => setIsEditingProjectName(false)}
+                  className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 group">
+                <h1 className="text-xl md:text-3xl font-bold text-slate-900 break-words leading-tight">{project.name}</h1>
+                <button
+                  onClick={() => {
+                    setEditProjectName(project.name);
+                    setIsEditingProjectName(true);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-blue-50"
+                  title="Edit project name"
+                >
+                  <Edit2 size={18} />
+                </button>
+              </div>
+            )}
             
             <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
               <button
@@ -1762,7 +1827,7 @@ export const ProjectView: React.FC = () => {
                 {filteredPages.map((page) => (
                   <Link
                     key={page.id}
-                    to={`/project/${project.id}/page/${page.id}`}
+                    to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-all hover:border-blue-300 flex flex-col group"
                   >
@@ -1991,7 +2056,7 @@ export const ProjectView: React.FC = () => {
                                 {takeoff.pageBreakdown.map(pb => (
                                   <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white transition-colors">
                                     <Link 
-                                      to={`/project/${project.id}/page/${pb.pageId}`} 
+                                      to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
                                       state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
                                       className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-2"
                                     >
@@ -2084,7 +2149,7 @@ export const ProjectView: React.FC = () => {
                         {takeoff.pageBreakdown.map(pb => (
                           <div key={pb.pageId} className="flex justify-between items-center text-xs">
                             <Link 
-                              to={`/project/${project.id}/page/${pb.pageId}`} 
+                              to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
                               className="text-blue-600 font-medium"
                             >
                               {pb.pageName}

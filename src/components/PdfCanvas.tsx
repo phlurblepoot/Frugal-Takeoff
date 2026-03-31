@@ -6,6 +6,7 @@ import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
+import { createWorker } from 'tesseract.js';
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -45,6 +46,7 @@ interface PdfCanvasProps {
   legendFontSize?: number;
   legendWidth?: number;
   onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number, scaleX?: number, scaleY?: number, fontSize?: number, width?: number }) => void;
+  searchTerm?: string;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -85,6 +87,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   legendFontSize = 14,
   legendWidth,
   onUpdateLegend,
+  searchTerm,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -116,6 +119,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number } | null>(null);
   
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
+  const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     if (resumeMeasurement) {
@@ -180,6 +185,61 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       });
     }
   }, [image, dimensions, imageWidth, imageHeight]);
+
+  useEffect(() => {
+    let isActive = true;
+    const runSearch = async () => {
+      if (!searchTerm || !imageUrl) {
+        setSearchHighlights([]);
+        return;
+      }
+      setIsSearching(true);
+      try {
+        const worker = await createWorker('eng');
+        if (!isActive) {
+          await worker.terminate();
+          return;
+        }
+        const ret = await worker.recognize(imageUrl, {}, { blocks: true });
+        if (!isActive) {
+          await worker.terminate();
+          return;
+        }
+        
+        const data = ret?.data;
+        const blocks = data?.blocks || [];
+        const words = blocks.flatMap(block => 
+          (block.paragraphs || []).flatMap(paragraph => 
+            (paragraph.lines || []).flatMap(line => line.words || [])
+          )
+        );
+        
+        const lowerSearchTerm = searchTerm.toLowerCase();
+        const searchWords = lowerSearchTerm.split(/\s+/).filter(Boolean);
+        
+        const highlights = words
+          .filter(w => {
+            const wordText = w?.text?.toLowerCase() || '';
+            // Match if the word contains any of the search words
+            // This handles cases where the OCR word has punctuation attached
+            return searchWords.some(sw => wordText.includes(sw));
+          })
+          .map(w => w.bbox);
+        setSearchHighlights(highlights);
+        await worker.terminate();
+      } catch (error) {
+        console.error('OCR search failed:', error);
+      } finally {
+        if (isActive) {
+          setIsSearching(false);
+        }
+      }
+    };
+    runSearch();
+    return () => {
+      isActive = false;
+    };
+  }, [searchTerm, imageUrl]);
 
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
@@ -1186,6 +1246,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   return (
     <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative">
+      {isSearching && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur border border-slate-200 rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
+          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm font-medium text-slate-700">Searching...</span>
+        </div>
+      )}
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
@@ -1253,6 +1319,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 height={imageHeight}
               />
             )}
+            {searchHighlights.map((bbox, i) => (
+              <Rect
+                key={`highlight-${i}`}
+                x={bbox.x0}
+                y={bbox.y0}
+                width={bbox.x1 - bbox.x0}
+                height={bbox.y1 - bbox.y0}
+                fill="rgba(255, 255, 0, 0.4)"
+                stroke="rgba(255, 200, 0, 0.8)"
+                strokeWidth={2 / stageScale}
+                cornerRadius={2 / stageScale}
+              />
+            ))}
             {renderRegions()}
             {renderMeasurements()}
             {renderActiveDrawing()}

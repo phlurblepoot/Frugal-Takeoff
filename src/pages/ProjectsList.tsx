@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut, Edit2, Check, X, Settings } from 'lucide-react';
 import { Project, Bid } from '../types';
 import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid, saveProject } from '../utils/store';
@@ -12,11 +12,33 @@ type Tab = 'projects' | 'templates' | 'bids' | 'users';
 
 export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'projects' | 'templates' | 'bids'>('projects');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = (searchParams.get('tab') as Tab) || 'projects';
+  const setActiveTab = (tab: Tab) => {
+    searchParams.set('tab', tab);
+    setSearchParams(searchParams, { replace: true });
+  };
+  const filterContractor = searchParams.get('contractor') || 'all';
+  const setFilterContractor = (contractor: string) => {
+    if (contractor === 'all') {
+      searchParams.delete('contractor');
+    } else {
+      searchParams.set('contractor', contractor);
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
+  const searchTerm = searchParams.get('search') || '';
+  const setSearchTerm = (term: string) => {
+    if (term) {
+      searchParams.set('search', term);
+    } else {
+      searchParams.delete('search');
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
   const [projects, setProjects] = useState<Project[]>([]);
   const [bids, setBids] = useState<Bid[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [filterContractor, setFilterContractor] = useState<string>('all');
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
@@ -167,6 +189,15 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
       result = result.filter(p => p.contractor === filterContractor);
     }
 
+    if (searchTerm) {
+      const lowerSearchTerm = searchTerm.toLowerCase();
+      result = result.filter(p => 
+        p.name.toLowerCase().includes(lowerSearchTerm) || 
+        (p.contractor && p.contractor.toLowerCase().includes(lowerSearchTerm)) ||
+        (p.address && p.address.toLowerCase().includes(lowerSearchTerm))
+      );
+    }
+
     result.sort((a, b) => {
       let comparison = 0;
       
@@ -259,6 +290,15 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             {activeTab === 'projects' && (
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <div className="flex-1 sm:flex-none flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm min-w-[200px]">
+                  <input
+                    type="text"
+                    placeholder="Search projects..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="bg-transparent text-sm font-medium text-slate-700 outline-none w-full"
+                  />
+                </div>
                 {contractors.length > 0 && (
                   <div className="flex-1 sm:flex-none flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
                     <Filter size={16} className="text-slate-400" />
@@ -430,7 +470,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                         {filteredAndSortedProjects.map((project) => (
                           <tr 
                             key={project.id}
-                            onClick={() => navigate(`/project/${project.id}`)}
+                            onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
                             className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
                           >
                             <td className="px-6 py-4">
@@ -562,7 +602,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                   {filteredAndSortedProjects.map((project) => (
                     <div 
                       key={project.id}
-                      onClick={() => navigate(`/project/${project.id}`)}
+                      onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
                       className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm active:bg-slate-50 transition-colors"
                     >
                       <div className="flex justify-between items-start mb-3">
