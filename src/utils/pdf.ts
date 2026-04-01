@@ -3,21 +3,63 @@ import Tesseract from 'tesseract.js';
 
 // Background timer worker to prevent throttling in background tabs
 let pulseWorker: Worker | null = null;
-const getPulse = () => {
-  if (typeof window === 'undefined') return Promise.resolve();
-  if (!pulseWorker) {
-    const code = `setInterval(() => postMessage('pulse'), 100);`;
-    const blob = new Blob([code], { type: 'application/javascript' });
-    pulseWorker = new Worker(URL.createObjectURL(blob));
-  }
-  return new Promise(resolve => {
-    const handler = () => {
-      pulseWorker?.removeEventListener('message', handler);
-      resolve(null);
+let pulseId = 0;
+const pulseCallbacks = new Map<number, () => void>();
+
+const initPulseWorker = () => {
+  if (typeof window === 'undefined' || pulseWorker) return;
+  const code = `
+    self.onmessage = function(e) {
+      setTimeout(() => {
+        postMessage(e.data.id);
+      }, e.data.delay);
     };
-    pulseWorker?.addEventListener('message', handler);
+  `;
+  const blob = new Blob([code], { type: 'application/javascript' });
+  pulseWorker = new Worker(URL.createObjectURL(blob));
+  pulseWorker.onmessage = (e) => {
+    const id = e.data;
+    const callback = pulseCallbacks.get(id);
+    if (callback) {
+      pulseCallbacks.delete(id);
+      callback();
+    }
+  };
+};
+
+const getPulse = (delay = 100) => {
+  initPulseWorker();
+  return new Promise(resolve => {
+    const id = ++pulseId;
+    pulseCallbacks.set(id, () => resolve(null));
+    pulseWorker!.postMessage({ id, delay });
   });
 };
+
+// Polyfill requestAnimationFrame to use our worker when the tab is hidden
+// This prevents pdf.js from pausing when the user switches tabs
+if (typeof window !== 'undefined') {
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = function(callback: FrameRequestCallback): number {
+    if (document.hidden) {
+      initPulseWorker();
+      const id = ++pulseId;
+      pulseCallbacks.set(id, () => callback(performance.now()));
+      pulseWorker!.postMessage({ id, delay: 16 });
+      return id;
+    }
+    return originalRequestAnimationFrame(callback);
+  };
+  
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+  window.cancelAnimationFrame = function(handle: number): void {
+    if (document.hidden && pulseCallbacks.has(handle)) {
+      pulseCallbacks.delete(handle);
+      return;
+    }
+    originalCancelAnimationFrame(handle);
+  };
+}
 
 // Configure the worker to use the local version matching the installed pdfjs-dist version
 // @ts-ignore
@@ -44,6 +86,7 @@ export const loadPdfPagesGenerator = async function*(
     cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/cmaps/',
     cMapPacked: true,
     standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/standard_fonts/',
+    disableFontFace: true,
   }).promise;
 
   let pdf = await getPdfDoc();
@@ -83,7 +126,7 @@ export const loadPdfPagesGenerator = async function*(
       context.fillStyle = 'white';
       context.fillRect(0, 0, canvas.width, canvas.height);
       
-      await page.render({ canvasContext: context, viewport } as any).promise;
+      await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
       
       if (onProgress) onProgress('reading the text', i, totalPages);
       let extractedText = '';
@@ -162,11 +205,7 @@ export const loadPdfPagesGenerator = async function*(
 
       // Small delay to allow garbage collection and UI updates
       // In background tabs, setTimeout is throttled to 1s, so we use a worker-based pulse instead
-      if (document.visibilityState === 'visible') {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } else {
-        await getPulse();
-      }
+      await getPulse(100);
     }
   } finally {
     if (tesseractWorker) {

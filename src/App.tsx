@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation, useBlocker } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
 import { ProjectsList } from './pages/ProjectsList';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
@@ -12,35 +12,10 @@ import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { NotesOverlay } from './components/NotesOverlay';
 import { getSettings } from './utils/store';
 
-const NavigationBlocker: React.FC = () => {
-  const { followedUserId, setFollowedUserId } = useCollaboration();
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      followedUserId !== null && currentLocation.pathname !== nextLocation.pathname
-  );
-
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      const proceed = window.confirm(
-        'You are currently following another user. You must unfollow them before navigating away from this page. Would you like to unfollow and proceed?'
-      );
-      if (proceed) {
-        setFollowedUserId(null);
-        blocker.proceed();
-      } else {
-        blocker.reset();
-      }
-    }
-  }, [blocker, setFollowedUserId]);
-
-  return null;
-};
-
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   return (
     <CollaborationProvider>
       <NotesProvider>
-        <NavigationBlocker />
         <UserPresenceOverlay />
         <NotesOverlay />
         <Outlet context={{ appName, logoUrl }} />

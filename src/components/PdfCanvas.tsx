@@ -207,12 +207,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         }
         
         const data = ret?.data;
-        const blocks = data?.blocks || [];
-        const words = blocks.flatMap(block => 
-          (block.paragraphs || []).flatMap(paragraph => 
-            (paragraph.lines || []).flatMap(line => line.words || [])
-          )
-        );
+        const words = data?.words || [];
         
         const lowerSearchTerm = searchTerm.toLowerCase();
         const searchWords = lowerSearchTerm.split(/\s+/).filter(Boolean);

@@ -1143,13 +1143,16 @@ export const ProjectView: React.FC = () => {
       const worker = await createWorker('eng');
       
       const extractFromPage = async (targetPage: any) => {
-        const imageUrl = pendingThumbnails[targetPage.imageId];
+        const imageUrl = getImageUrl(targetPage.imageId);
         if (!imageUrl) return null;
 
         // Crop image to selection area for better OCR
         const img = new Image();
-        img.src = imageUrl;
-        await new Promise(resolve => img.onload = resolve);
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = imageUrl;
+        });
 
         const canvas = document.createElement('canvas');
         const scaleX = img.width / 100;
@@ -3175,7 +3178,7 @@ export const ProjectView: React.FC = () => {
                 }}
               >
                 <img 
-                  src={pendingThumbnails[pendingPages.find(p => p.id === previewPageId)?.imageId || '']} 
+                  src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')} 
                   alt="Preview"
                   className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
                   draggable={false}
