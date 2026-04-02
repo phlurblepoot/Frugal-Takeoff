@@ -194,24 +194,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         return;
       }
       setIsSearching(true);
+      let worker: any = null;
       try {
-        const worker = await createWorker('eng');
-        if (!isActive) {
-          await worker.terminate();
-          return;
-        }
+        worker = await createWorker('eng');
+        if (!isActive) return;
         const ret = await worker.recognize(imageUrl, {}, { blocks: true });
-        if (!isActive) {
-          await worker.terminate();
-          return;
-        }
-        
+        if (!isActive) return;
+
         const data = ret?.data;
         const words = data?.words || [];
-        
+
         const lowerSearchTerm = searchTerm.toLowerCase();
         const searchWords = lowerSearchTerm.split(/\s+/).filter(Boolean);
-        
+
         const highlights = words
           .filter(w => {
             const wordText = w?.text?.toLowerCase() || '';
@@ -221,10 +216,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           })
           .map(w => w.bbox);
         setSearchHighlights(highlights);
-        await worker.terminate();
       } catch (error) {
         console.error('OCR search failed:', error);
       } finally {
+        if (worker) await worker.terminate();
         if (isActive) {
           setIsSearching(false);
         }

@@ -416,7 +416,8 @@ const evaluateCell = (cell: string, rows: string[][]) => {
     // Basic math evaluation
     // We only allow numbers and basic operators for safety
     if (/^[0-9+\-*/().\s]+$/.test(formula)) {
-      return eval(formula).toString();
+      // eslint-disable-next-line no-new-func
+      return new Function(`return ${formula}`)().toString();
     }
     return '#REF!';
   } catch (e) {
