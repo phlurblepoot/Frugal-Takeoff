@@ -10,6 +10,12 @@ export const getImageUrl = (id: string) => {
 };
 
 const handleResponse = async (res: Response) => {
+  if (res.status === 401) {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Request failed');
