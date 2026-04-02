@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, Trash2, Shield, User, Loader2 } from 'lucide-react';
+import { getAuthHeaders } from '../utils/store';
 
 interface UserData {
   id: string;
@@ -20,7 +21,7 @@ export const UsersView: React.FC = () => {
   const fetchUsers = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch('/api/users', { headers: getAuthHeaders() });
       if (!res.ok) throw new Error('Failed to fetch users');
       const data = await res.json();
       setUsers(data);
@@ -45,9 +46,7 @@ export const UsersView: React.FC = () => {
     try {
       const res = await fetch('/api/users', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole })
       });
       
@@ -70,7 +69,8 @@ export const UsersView: React.FC = () => {
     
     try {
       const res = await fetch(`/api/users/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders()
       });
       
       if (!res.ok) {
