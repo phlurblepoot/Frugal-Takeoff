@@ -1,6 +1,6 @@
 import { Project, TakeoffTemplate, Bid, ProjectNote } from '../types';
 
-const getAuthHeaders = () => {
+export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
