@@ -1742,29 +1742,29 @@ const CanvasViewInner: React.FC = () => {
       <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}`}>
         <button
           onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 text-slate-500 ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
+          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
         >
           {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <div className={`bg-white border-l border-slate-200 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
+        <div className={`bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
           <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => setIsRightSidebarOpen(false)}
-                  className="md:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                  className="md:hidden p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
                 >
                   <ChevronRight size={20} />
                 </button>
-                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Takeoffs & Measurements</h2>
+                <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Takeoffs & Measurements</h2>
               </div>
               <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
                   <input 
                     type="checkbox" 
                     checked={showCurrentPageOnly}
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500"
                   />
                   <span className="hidden sm:inline">Current page only</span>
                   <span className="sm:hidden">Page only</span>
@@ -1772,7 +1772,7 @@ const CanvasViewInner: React.FC = () => {
                 {page.scaleConfig && (
                   <button
                     onClick={() => setShowTakeoffModal(true)}
-                    className="text-xs flex items-center gap-1 text-blue-600 hover:text-blue-700 font-medium bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded transition-colors"
+                    className="text-xs flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 px-2 py-1 rounded transition-colors"
                   >
                     <Plus size={12} />
                     New
@@ -1789,12 +1789,12 @@ const CanvasViewInner: React.FC = () => {
                 value={measurementFilter}
                 onChange={(e) => setMeasurementFilter(e.target.value)}
                 placeholder="Filter takeoffs & measurements..."
-                className="w-full text-xs border border-slate-200 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+                className="w-full text-xs border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
               />
             </div>
 
             {!page.scaleConfig && (
-              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+              <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-lg text-sm text-amber-700 dark:text-amber-400">
                 Please set the scale on the left sidebar.
               </div>
             )}
@@ -1812,9 +1812,10 @@ const CanvasViewInner: React.FC = () => {
               const isExpanded = expandedTakeoffs[takeoff.id] !== false; // Default to expanded
               
               return (
-                <div 
-                  key={takeoff.id} 
-                  className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
+                <div
+                  key={takeoff.id}
+                  className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200 dark:border-slate-700'}`}
+                  style={{ borderLeftColor: takeoff.color }}
                   onDragOver={(e) => {
                     e.preventDefault();
                     e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
@@ -1847,7 +1848,7 @@ const CanvasViewInner: React.FC = () => {
                   }}
                 >
                   <div 
-                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-blue-50 border-blue-100' : 'bg-slate-50 border-slate-100 hover:bg-slate-100'}`}
+                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
                     onClick={() => {
                       if (isActive) {
                         setSelectedTakeoffId(null);
@@ -1866,19 +1867,19 @@ const CanvasViewInner: React.FC = () => {
                           e.stopPropagation();
                           setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
                         }}
-                        className="text-slate-400 hover:text-slate-600 p-2 rounded transition-colors active:scale-95 shrink-0"
+                        className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded transition-colors active:scale-95 shrink-0"
                       >
                         {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-blue-800' : 'text-slate-800'}`}>{takeoff.name}</span>
+                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-blue-800 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200'}`}>{takeoff.name}</span>
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             setTakeoffToDelete(takeoff);
                           }}
-                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
                           title="Delete Takeoff"
                         >
                           <Trash2 size={16} />
@@ -1888,7 +1889,7 @@ const CanvasViewInner: React.FC = () => {
                             e.stopPropagation();
                             handleEditTakeoff(takeoff);
                           }}
-                          className="text-slate-400 hover:text-blue-500 p-2 rounded-md hover:bg-blue-50 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-slate-400 hover:text-blue-500 p-2 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
                           title="Edit Takeoff"
                         >
                           <Edit2 size={16} />
@@ -1896,7 +1897,7 @@ const CanvasViewInner: React.FC = () => {
                       </div>
                     </div>
                     <div className="flex flex-col items-end shrink-0 ml-2">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
                         {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
                       </span>
                       {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
@@ -1905,7 +1906,7 @@ const CanvasViewInner: React.FC = () => {
                             .split('\n')
                             .slice(1)
                             .map((line, i) => (
-                              <span key={i} className="text-[10px] font-bold text-emerald-600 uppercase tracking-tight text-right">
+                              <span key={i} className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-tight text-right">
                                 {line}
                               </span>
                             ))
@@ -1915,7 +1916,7 @@ const CanvasViewInner: React.FC = () => {
                     </div>
                   </div>
                   {isExpanded && takeoff.type !== 'count' && (
-                    <div className="divide-y divide-slate-50 min-h-[10px]">
+                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
                       {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
                         p.measurements
                           .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
@@ -1942,20 +1943,20 @@ const CanvasViewInner: React.FC = () => {
                     </div>
                   )}
                   {isExpanded && takeoff.type === 'count' && (
-                    <div className="divide-y divide-slate-50 min-h-[10px]">
+                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
                       {(showCurrentPageOnly ? pageVersions : project.pages).map(p => {
                         const count = p.measurements.filter(m => m.takeoffId === takeoff.id).length;
                         if (count === 0) return null;
                         return (
-                          <div key={p.id} className="p-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                          <div key={p.id} className="p-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                             <Link 
                               to={`/project/${project.id}/page/${p.id}`}
                               state={{ pageIds: project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id) }}
-                              className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline truncate"
+                              className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline truncate"
                             >
                               {p.name}
                             </Link>
-                            <span className="text-sm font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full">
+                            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full">
                               {count}
                             </span>
                           </div>
@@ -1971,7 +1972,7 @@ const CanvasViewInner: React.FC = () => {
             {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
               .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
               <div 
-                className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
+                className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200 dark:border-slate-700'}`}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
@@ -1989,13 +1990,13 @@ const CanvasViewInner: React.FC = () => {
                 }}
               >
                 <div 
-                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-blue-50 border-blue-100' : 'bg-slate-50 border-slate-100 hover:bg-slate-100'}`}
+                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
                   onClick={() => setSelectedTakeoffId(null)}
                 >
-                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-blue-800' : 'text-slate-800'}`}>Ungrouped</span>
+                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-blue-800 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
                 </div>
-                <div className="divide-y divide-slate-50 min-h-[10px]">
-                  {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p => 
+                <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
+                  {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
                     p.measurements
                       .filter(m => !m.takeoffId)
                       .map(m => (
@@ -2031,12 +2032,12 @@ const CanvasViewInner: React.FC = () => {
       {/* Scale Modal */}
       {showScaleModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-100 bg-slate-50">
-              <h3 className="font-semibold text-slate-800">Set Scale</h3>
+          <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <h3 className="font-semibold text-slate-800 dark:text-slate-200">Set Scale</h3>
             </div>
             <div className="p-6">
-              <p className="text-sm text-slate-600 mb-4">
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
                 Enter the real-world distance for the line you just drew.
                 {(scaleUnit === 'ft' || scaleUnit === 'in') && (
                   <span className="block mt-1 text-xs text-slate-500">
@@ -2054,7 +2055,7 @@ const CanvasViewInner: React.FC = () => {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') confirmScale();
                     }}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
                     autoFocus
                   />
                 </div>
@@ -2063,7 +2064,7 @@ const CanvasViewInner: React.FC = () => {
                   <select
                     value={scaleUnit}
                     onChange={(e) => setScaleUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="ft">ft</option>
                     <option value="in">in</option>
@@ -2074,10 +2075,10 @@ const CanvasViewInner: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
               <button
                 onClick={() => setShowScaleModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-lg transition-all"
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-lg transition-all"
               >
                 Cancel
               </button>
@@ -2095,19 +2096,19 @@ const CanvasViewInner: React.FC = () => {
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Delete Measurement</h3>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Delete Measurement</h3>
             </div>
             <div className="p-6">
-              <p className="text-slate-600">
+              <p className="text-slate-600 dark:text-slate-400">
                 Are you sure you want to delete this measurement? This action cannot be undone.
               </p>
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
               <button
                 onClick={() => { setShowDeleteConfirm(false); setMeasurementToDelete(null); }}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
@@ -2124,18 +2125,18 @@ const CanvasViewInner: React.FC = () => {
       {/* Takeoff Modal */}
       {showTakeoffModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Create Measurement Takeoff</h3>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Create Measurement Takeoff</h3>
             </div>
             <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
               {templates.length > 0 && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Use Template (Optional)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Use Template (Optional)</label>
                   <select
                     value={selectedTemplateId}
                     onChange={(e) => handleTemplateChange(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Select a template...</option>
                     {templates.map(t => (
@@ -2145,26 +2146,26 @@ const CanvasViewInner: React.FC = () => {
                 </div>
               )}
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
                 <input
                   type="text"
                   value={newTakeoffName}
                   onChange={(e) => setNewTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Measurement Type</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Measurement Type</label>
                   <select
                     value={newTakeoffType}
                     onChange={(e) => {
                       setNewTakeoffType(e.target.value as 'length' | 'area' | 'count');
                       setNewTakeoffUnit('');
                     }}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="length">Length</option>
                     <option value="area">Area</option>
@@ -2172,24 +2173,24 @@ const CanvasViewInner: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Color</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Color</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={newTakeoffColor}
                       onChange={(e) => setNewTakeoffColor(e.target.value)}
-                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 p-1"
+                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-1"
                     />
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Unit</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Unit</label>
                   <select
                     value={newTakeoffUnit}
                     onChange={(e) => setNewTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {newTakeoffType === 'length' && (
@@ -2216,7 +2217,7 @@ const CanvasViewInner: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cost Per Unit ($)</label>
                   <input
                     type="text"
                     disabled={isNewTakeoffAdvanced}
@@ -2228,7 +2229,7 @@ const CanvasViewInner: React.FC = () => {
                         if (result !== null) setNewTakeoffCostPerUnit(result.toString());
                       }
                     }}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
                     placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
@@ -2240,15 +2241,15 @@ const CanvasViewInner: React.FC = () => {
                   id="isNewTakeoffAdvanced"
                   checked={isNewTakeoffAdvanced}
                   onChange={(e) => setIsNewTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
                 />
-                <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
+                <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
                   Advanced Costing (Custom Items)
                 </label>
               </div>
 
               {isNewTakeoffAdvanced && (
-                <div className="mt-4 pt-4 border-t border-slate-100">
+                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
@@ -2280,10 +2281,10 @@ const CanvasViewInner: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
               <button
                 onClick={() => setShowTakeoffModal(false)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
@@ -2302,19 +2303,19 @@ const CanvasViewInner: React.FC = () => {
       {/* Delete Takeoff Confirmation Modal */}
       {takeoffToDelete && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Delete Takeoff</h3>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Delete Takeoff</h3>
             </div>
             <div className="p-6">
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
                 Are you sure you want to delete the takeoff "{takeoffToDelete.name}"? This will also delete all measurements associated with it across all pages. This action cannot be undone.
               </p>
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
               <button
                 onClick={() => setTakeoffToDelete(null)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors"
               >
                 Cancel
               </button>
@@ -2332,51 +2333,51 @@ const CanvasViewInner: React.FC = () => {
       {/* Edit Takeoff Modal */}
       {editingTakeoff && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Edit Measurement Takeoff</h3>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Edit Measurement Takeoff</h3>
             </div>
             <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
                 <input
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Measurement Type</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Measurement Type</label>
                   <input
                     type="text"
                     value={editingTakeoff.type}
                     disabled
-                    className="w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-slate-50 text-slate-500 capitalize"
+                    className="w-full border border-slate-200 dark:border-slate-600 rounded-xl px-4 py-2.5 bg-slate-50 dark:bg-slate-800/50 text-slate-500 capitalize"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Color</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Color</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={editTakeoffColor}
                       onChange={(e) => setEditTakeoffColor(e.target.value)}
-                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 p-1"
+                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-1"
                     />
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Unit</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Unit</label>
                   <select
                     value={editTakeoffUnit}
                     onChange={(e) => setEditTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {editingTakeoff.type === 'length' && (
@@ -2403,7 +2404,7 @@ const CanvasViewInner: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cost Per Unit ($)</label>
                   <input
                     type="text"
                     disabled={isEditTakeoffAdvanced}
@@ -2415,7 +2416,7 @@ const CanvasViewInner: React.FC = () => {
                         if (result !== null) setEditTakeoffCostPerUnit(result.toString());
                       }
                     }}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
                     placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
@@ -2427,15 +2428,15 @@ const CanvasViewInner: React.FC = () => {
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
                   onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
                 />
-                <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
+                <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
                   Advanced Costing (Custom Items)
                 </label>
               </div>
 
               {isEditTakeoffAdvanced && (
-                <div className="mt-4 pt-4 border-t border-slate-100">
+                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
@@ -2467,10 +2468,10 @@ const CanvasViewInner: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
               <button
                 onClick={() => setEditingTakeoff(null)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 active:scale-95 rounded-xl transition-all"
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-xl transition-all"
               >
                 Cancel
               </button>
@@ -2868,7 +2869,7 @@ function HeightsModal({
                 type="checkbox"
                 checked={isTwoSided}
                 onChange={e => setIsTwoSided(e.target.checked)}
-                className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
               />
               <span className="text-sm font-medium text-slate-700">Two-sided wall (doubles the area)</span>
             </label>
