@@ -454,7 +454,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/images/:id/raw", authenticateToken, (req, res) => {
+  app.get("/api/images/:id/raw", (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
       const row = stmt.get(req.params.id) as { data: string } | undefined;
