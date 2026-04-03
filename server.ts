@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -96,6 +97,9 @@ function initDb() {
         key TEXT PRIMARY KEY,
         value TEXT
       );
+      CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
+      CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
+      CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
     `);
 
     // Initialize default settings
@@ -197,6 +201,10 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
 
   const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production';
+  if (!process.env.JWT_SECRET) {
+    console.warn('\n⚠️  WARNING: JWT_SECRET environment variable is not set. Using an insecure default secret.');
+    console.warn('   Set JWT_SECRET in your .env file or environment before deploying to production.\n');
+  }
 
   // Health check
   app.get("/api/health", (req, res) => {
@@ -209,21 +217,12 @@ async function startServer() {
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
-      // For development/debugging, we can still allow some routes if needed,
-      // but let's be strict for now to see if this is the issue.
-      // Actually, let's just log it.
-      console.log('No token provided in authenticateToken');
-      // If we want to bypass for now:
-      req.user = { id: 'admin-id-123', username: 'admin', role: 'admin' };
-      return next();
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
     jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
       if (err) {
-        console.error('JWT verification failed:', err.message);
-        // Fallback to admin for now if we want to bypass, but let's see if this is the issue
-        req.user = { id: 'admin-id-123', username: 'admin', role: 'admin' };
-        return next();
+        return res.status(401).json({ error: 'Invalid or expired token' });
       }
       req.user = user;
       next();
@@ -237,8 +236,16 @@ async function startServer() {
     next();
   };
 
+  const loginLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: 'Too many login attempts. Please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   // Auth Routes
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', loginLimiter, (req, res) => {
     const { username, password } = req.body;
     try {
       const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as any;
@@ -274,13 +281,23 @@ async function startServer() {
 
   app.post('/api/users', authenticateToken, requireAdmin, (req, res) => {
     const { username, password, role } = req.body;
+    if (!username || typeof username !== 'string' || username.trim().length === 0) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+    if (!password || typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    const assignedRole = role || 'user';
+    if (!['admin', 'user'].includes(assignedRole)) {
+      return res.status(400).json({ error: 'Role must be admin or user' });
+    }
     try {
       const hash = bcrypt.hashSync(password, 10);
       const id = crypto.randomUUID();
       db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(
-        id, username, hash, role || 'user'
+        id, username.trim(), hash, assignedRole
       );
-      res.json({ success: true, user: { id, username, role: role || 'user' } });
+      res.json({ success: true, user: { id, username: username.trim(), role: assignedRole } });
     } catch (error: any) {
       if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
         res.status(400).json({ error: 'Username already exists' });
@@ -366,11 +383,10 @@ async function startServer() {
             ...(oldProject.printouts?.map((p: any) => p.fileId) || [])
           ];
 
-          const deleteImgStmt = db.prepare('DELETE FROM images WHERE id = ?');
-          for (const imgId of oldImageIds) {
-            if (!newImageIds.has(imgId)) {
-              deleteImgStmt.run(imgId);
-            }
+          const removedIds = oldImageIds.filter((id: string) => id && !newImageIds.has(id));
+          if (removedIds.length > 0) {
+            const placeholders = removedIds.map(() => '?').join(', ');
+            db.prepare(`DELETE FROM images WHERE id IN (${placeholders})`).run(...removedIds);
           }
         }
       } catch (e) {
@@ -397,22 +413,27 @@ async function startServer() {
     try {
       const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
       const row = stmtGet.get(req.params.id) as { data: string } | undefined;
-      
-      if (row) {
-        const project = JSON.parse(row.data);
-        const imageIds = [
-          ...(project.pages?.map((p: any) => p.imageId) || []),
-          ...(project.printouts?.map((p: any) => p.fileId) || [])
-        ];
-        
-        const deleteImgStmt = db.prepare('DELETE FROM images WHERE id = ?');
-        for (const imgId of imageIds) {
-          deleteImgStmt.run(imgId);
+
+      db.transaction(() => {
+        if (row) {
+          try {
+            const project = JSON.parse(row.data);
+            const imageIds = [
+              ...(project.pages?.map((p: any) => p.imageId) || []),
+              ...(project.printouts?.map((p: any) => p.fileId) || [])
+            ].filter(Boolean);
+
+            if (imageIds.length > 0) {
+              const placeholders = imageIds.map(() => '?').join(', ');
+              db.prepare(`DELETE FROM images WHERE id IN (${placeholders})`).run(...imageIds);
+            }
+          } catch (e) {
+            // Ignore parse errors during cleanup
+          }
         }
-      }
-      
-      const stmtDel = db.prepare('DELETE FROM projects WHERE id = ?');
-      stmtDel.run(req.params.id);
+        db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
+      })();
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting project:", error);
@@ -433,7 +454,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/images/:id/raw", authenticateToken, (req, res) => {
+  app.get("/api/images/:id/raw", (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
       const row = stmt.get(req.params.id) as { data: string } | undefined;

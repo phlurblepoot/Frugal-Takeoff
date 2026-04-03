@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search } from 'lucide-react';
+import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
@@ -169,6 +170,7 @@ const CustomCostRow: React.FC<{
 };
 
 const CanvasViewInner: React.FC = () => {
+  const { toast } = useToast();
   const { openNotes } = useNotes();
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>();
   const navigate = useNavigate();
@@ -232,7 +234,17 @@ const CanvasViewInner: React.FC = () => {
   const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<any[]>([]);
 
   const [showCurrentPageOnly, setShowCurrentPageOnly] = useState(false);
-  const [history, setHistory] = useState<{ type: 'add' | 'delete'; measurement: Measurement }[]>([]);
+
+  type HistoryAction =
+    | { type: 'add'; measurement: Measurement }
+    | { type: 'delete'; measurement: Measurement }
+    | { type: 'update'; measurementId: string; before: Partial<Measurement>; after: Partial<Measurement> };
+
+  const [history, setHistory] = useState<HistoryAction[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryAction[]>([]);
+  const [measurementFilter, setMeasurementFilter] = useState('');
+  const [showPageJump, setShowPageJump] = useState(false);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
   const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
@@ -254,30 +266,48 @@ const CanvasViewInner: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const pushToHistory = (action: { type: 'add' | 'delete'; measurement: Measurement }) => {
+  const pushToHistory = (action: HistoryAction) => {
     setHistory(prev => [...prev, action].slice(-50));
+    setRedoStack([]);
+  };
+
+  const applyAction = (action: HistoryAction, direction: 'undo' | 'redo') => {
+    if (!page) return;
+    if (action.type === 'add') {
+      if (direction === 'undo') {
+        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
+        if (selectedMeasurementId === action.measurement.id) setSelectedMeasurementId(null);
+      } else {
+        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
+      }
+    } else if (action.type === 'delete') {
+      if (direction === 'undo') {
+        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
+      } else {
+        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
+      }
+    } else if (action.type === 'update') {
+      const patch = direction === 'undo' ? action.before : action.after;
+      savePageUpdates({ measurements: page.measurements.map(m => m.id === action.measurementId ? { ...m, ...patch } : m) });
+    }
   };
 
   const handleUndo = () => {
     if (history.length === 0 || !page) return;
-
     const lastAction = history[history.length - 1];
     setHistory(prev => prev.slice(0, -1));
+    setRedoStack(prev => [...prev, lastAction]);
+    applyAction(lastAction, 'undo');
+    toast('Undone', { type: 'info', duration: 1500 });
+  };
 
-    if (lastAction.type === 'add') {
-      // Undo add -> remove it
-      savePageUpdates({
-        measurements: page.measurements.filter(m => m.id !== lastAction.measurement.id)
-      });
-      if (selectedMeasurementId === lastAction.measurement.id) {
-        setSelectedMeasurementId(null);
-      }
-    } else if (lastAction.type === 'delete') {
-      // Undo delete -> add it back
-      savePageUpdates({
-        measurements: [...page.measurements, lastAction.measurement]
-      });
-    }
+  const handleRedo = () => {
+    if (redoStack.length === 0 || !page) return;
+    const action = redoStack[redoStack.length - 1];
+    setRedoStack(prev => prev.slice(0, -1));
+    setHistory(prev => [...prev, action]);
+    applyAction(action, 'redo');
+    toast('Redone', { type: 'info', duration: 1500 });
   };
 
   useEffect(() => {
@@ -355,6 +385,27 @@ const CanvasViewInner: React.FC = () => {
         return;
       }
 
+      // Escape: close modals / deselect (priority order)
+      if (e.key === 'Escape') {
+        if (showShortcutsHelp) { setShowShortcutsHelp(false); return; }
+        if (showScaleModal) { setShowScaleModal(false); return; }
+        if (showDeleteConfirm) { setShowDeleteConfirm(false); setMeasurementToDelete(null); return; }
+        if (showTakeoffModal) { setShowTakeoffModal(false); return; }
+        if (heightsModalMeasurementId) { setHeightsModalMeasurementId(null); return; }
+        if (editingTakeoff) { setEditingTakeoff(null); return; }
+        if (toolDisabledMessage) { setToolDisabledMessage(null); return; }
+        if (takeoffToDelete) { setTakeoffToDelete(null); return; }
+        if (showPageJump) { setShowPageJump(false); return; }
+        if (selectedMeasurementId) { setSelectedMeasurementId(null); return; }
+        return;
+      }
+
+      // ? — keyboard shortcut help
+      if (e.key === '?') {
+        setShowShortcutsHelp(prev => !prev);
+        return;
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMeasurementId) {
         deleteMeasurement(selectedMeasurementId);
       }
@@ -372,6 +423,7 @@ const CanvasViewInner: React.FC = () => {
         const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
         if (measurement) {
           localStorage.setItem('copiedMeasurement', JSON.stringify(measurement));
+          toast(`Copied "${measurement.name}"`, { type: 'success', duration: 1500 });
         }
       }
 
@@ -382,25 +434,23 @@ const CanvasViewInner: React.FC = () => {
             const copiedMeasurement = JSON.parse(copiedStr) as Measurement;
             const isMultiRegionValid = page.isMultiRegion && page.scaleRegions && page.scaleRegions.length > 0;
             if (!page.scaleConfig && !isMultiRegionValid) {
-              setToolDisabledMessage('Please set the shape before pasting.');
+              setToolDisabledMessage('Please set the scale before pasting.');
               return;
             }
-            
+
             // Offset the pasted measurement slightly so it doesn't perfectly overlap
             const offset = 20;
             const newPoints = copiedMeasurement.points.map(p => ({
               x: p.x + offset,
               y: p.y + offset
             }));
-            
+
             let regionId: string | undefined = undefined;
             if (page.isMultiRegion && page.scaleRegions) {
               const region = page.scaleRegions.find(r => isPointInPolygon(newPoints[0], r.points));
-              if (region) {
-                regionId = region.id;
-              }
+              if (region) regionId = region.id;
             }
-            
+
             const newMeasurement: Measurement = {
               ...copiedMeasurement,
               id: uuidv4(),
@@ -411,26 +461,47 @@ const CanvasViewInner: React.FC = () => {
             };
 
             pushToHistory({ type: 'add', measurement: newMeasurement });
-            savePageUpdates({
-              measurements: [...page.measurements, newMeasurement]
-            });
+            savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
             sendMeasurementUpdate(page.id, 'add', newMeasurement);
             setSelectedMeasurementId(newMeasurement.id);
+            toast('Measurement pasted', { type: 'success', duration: 1500 });
           } catch (err) {
             console.error('Failed to parse copied measurement', err);
           }
         }
       }
 
+      // Redo must be checked before Undo (Shift+Z vs Z)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         handleUndo();
+      }
+
+      // Arrow key page navigation
+      if (e.key === 'ArrowLeft' && prevPageId && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        navigate(`/project/${project.id}/page/${prevPageId}`, { state: { pageIds } });
+      }
+      if (e.key === 'ArrowRight' && nextPageId && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        navigate(`/project/${project.id}/page/${nextPageId}`, { state: { pageIds } });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeasurementId, page, project, history, aggregatedMeasurements]);
+  }, [selectedMeasurementId, page, project, history, redoStack, aggregatedMeasurements,
+      showShortcutsHelp, showScaleModal, showDeleteConfirm, showTakeoffModal,
+      heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
+      showPageJump, prevPageId, nextPageId, pageIds]);
 
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
@@ -518,7 +589,7 @@ const CanvasViewInner: React.FC = () => {
       }
       setShowScaleModal(false);
     } else {
-      alert('Please enter a valid distance.');
+      toast('Please enter a valid distance.', { type: 'warning' });
     }
   };
 
@@ -911,7 +982,7 @@ const CanvasViewInner: React.FC = () => {
   const activeTakeoff = project.takeoffs.find(t => t.id === selectedTakeoffId);
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans relative">
+    <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-900 overflow-hidden font-sans relative">
       {/* Left Sidebar Wrapper */}
       {isLeftSidebarOpen && (
         <div 
@@ -920,11 +991,11 @@ const CanvasViewInner: React.FC = () => {
         />
       )}
       <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isLeftSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        <div className={`bg-white border-r border-slate-200 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0'}`}>
+        <div className={`bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0'}`}>
           <div className="w-full md:w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
-            <div className="p-4 border-b border-slate-200 shrink-0">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
               <div className="flex items-center justify-between mb-4">
-                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm">
+                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
                   <ArrowLeft size={16} />
                   <span className="md:inline">Back to Project</span>
                 </Link>
@@ -932,44 +1003,69 @@ const CanvasViewInner: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setIsLeftSidebarOpen(false)}
-                    className="md:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                    className="md:hidden p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
                   >
                     <ChevronLeft size={20} />
                   </button>
-                  <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                  <div className="flex items-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
                 <Link
                   to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
                   state={{ pageIds }}
-                  className={`p-1.5 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'}`}
                   title="Previous Page"
                   onClick={(e) => !prevPageId && e.preventDefault()}
                 >
                   <ChevronLeft size={16} />
                 </Link>
-                <div className="w-px h-4 bg-slate-200" />
+                <div className="w-px h-4 bg-slate-200 dark:bg-slate-700" />
                 <Link
                   to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
                   state={{ pageIds }}
-                  className={`p-1.5 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'}`}
                   title="Next Page"
                   onClick={(e) => !nextPageId && e.preventDefault()}
                 >
                   <ChevronRight size={16} />
                 </Link>
               </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 shadow-sm flex items-center text-xs font-medium text-slate-600">
-                <span>{currentPageIndex + 1} / {pageIds.length}</span>
+              <div className="relative">
+                <button
+                  onClick={() => setShowPageJump(prev => !prev)}
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 shadow-sm flex items-center text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                  title="Jump to page"
+                >
+                  {currentPageIndex + 1} / {pageIds.length}
+                </button>
+                {showPageJump && (
+                  <div className="absolute top-full left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-50 min-w-[160px] max-h-64 overflow-y-auto">
+                    {pageIds.map((pid, idx) => {
+                      const pg = project.pages.find(p => p.id === pid);
+                      return (
+                        <Link
+                          key={pid}
+                          to={`/project/${project.id}/page/${pid}`}
+                          state={{ pageIds }}
+                          onClick={() => setShowPageJump(false)}
+                          className={`flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${pid === pageId ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
+                        >
+                          <span className="text-slate-400 dark:text-slate-500 w-5 shrink-0">{idx + 1}.</span>
+                          <span className="truncate">{pg?.name || `Page ${idx + 1}`}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-          <h1 className="text-xl font-semibold text-slate-800 flex items-center gap-2 line-clamp-1">
+          <h1 className="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2 line-clamp-1">
             {page.name}
           </h1>
-          <p className="text-xs text-slate-500 mt-1 line-clamp-1">{project.name}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">{project.name}</p>
         </div>
 
-        <div className="p-4 border-b border-slate-200">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Tools</h2>
+        <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+          <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">Tools</h2>
           <div className="flex items-center gap-2 mb-4">
             <ToolButton
               active={currentTool === 'pan'}
@@ -1018,15 +1114,15 @@ const CanvasViewInner: React.FC = () => {
                 else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
               }}
             />
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={() => projectId && openNotes(projectId)}
-              className="flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95 bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+              className="flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95 bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300"
               title="Project Notes"
             >
               <StickyNote size={18} />
             </button>
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <ToolButton
               active={currentTool === 'region'}
               onClick={() => setCurrentTool('region')}
@@ -1035,21 +1131,40 @@ const CanvasViewInner: React.FC = () => {
               disabled={!page.isMultiRegion}
               onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
             />
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={handleUndo}
               disabled={history.length === 0}
               className={`p-2 rounded-lg transition-colors ${
-                history.length === 0 
-                  ? 'text-slate-300 cursor-not-allowed' 
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+                history.length === 0
+                  ? 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-blue-600'
               }`}
               title="Undo (Ctrl+Z)"
             >
               <Undo size={18} />
             </button>
+            <button
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              className={`p-2 rounded-lg transition-colors ${
+                redoStack.length === 0
+                  ? 'text-slate-300 cursor-not-allowed'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+              }`}
+              title="Redo (Ctrl+Shift+Z)"
+            >
+              <Redo size={18} />
+            </button>
+            <button
+              onClick={() => setShowShortcutsHelp(true)}
+              className="p-2 rounded-lg transition-colors text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+              title="Keyboard Shortcuts (?)"
+            >
+              <HelpCircle size={18} />
+            </button>
           </div>
-          
+
           <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-slate-700">Multi-Region Scaling</label>
@@ -1476,13 +1591,32 @@ const CanvasViewInner: React.FC = () => {
                 onClick={handleUndo}
                 disabled={history.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
-                  history.length === 0 
-                    ? 'text-slate-300 cursor-not-allowed' 
+                  history.length === 0
+                    ? 'text-slate-300 cursor-not-allowed'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600 active:bg-slate-200'
                 }`}
                 title="Undo (Ctrl+Z)"
               >
                 <Undo size={20} />
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={redoStack.length === 0}
+                className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
+                  redoStack.length === 0
+                    ? 'text-slate-300 cursor-not-allowed'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600 active:bg-slate-200'
+                }`}
+                title="Redo (Ctrl+Shift+Z)"
+              >
+                <Redo size={20} />
+              </button>
+              <button
+                onClick={() => setShowShortcutsHelp(true)}
+                className="p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+                title="Keyboard Shortcuts (?)"
+              >
+                <HelpCircle size={20} />
               </button>
             </div>
           </div>
@@ -1647,14 +1781,33 @@ const CanvasViewInner: React.FC = () => {
               </div>
             </div>
 
+            {/* Measurement filter */}
+            <div className="mb-3 flex-shrink-0 relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={measurementFilter}
+                onChange={(e) => setMeasurementFilter(e.target.value)}
+                placeholder="Filter takeoffs & measurements..."
+                className="w-full text-xs border border-slate-200 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+              />
+            </div>
+
             {!page.scaleConfig && (
               <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
                 Please set the scale on the left sidebar.
               </div>
             )}
-            
+
             {/* Takeoff Totals */}
-            {takeoffTotals.map(takeoff => {
+            {takeoffTotals.filter(takeoff => {
+              if (!measurementFilter) return true;
+              const fl = measurementFilter.toLowerCase();
+              if (takeoff.name.toLowerCase().includes(fl)) return true;
+              return (showCurrentPageOnly ? pageVersions : project.pages).some(p =>
+                p.measurements.some(m => m.takeoffId === takeoff.id && m.name.toLowerCase().includes(fl))
+              );
+            }).map(takeoff => {
               const isActive = selectedTakeoffId === takeoff.id;
               const isExpanded = expandedTakeoffs[takeoff.id] !== false; // Default to expanded
               
@@ -1677,15 +1830,15 @@ const CanvasViewInner: React.FC = () => {
                     
                     if (measurement) {
                       if (takeoff.type === 'count' && measurement.type !== 'count') {
-                        alert('Cannot drop non-count measurements into a count takeoff.');
+                        toast('Cannot drop non-count measurements into a count takeoff.', { type: 'warning' });
                         return;
                       }
                       if (takeoff.type !== 'count' && measurement.type === 'count') {
-                        alert('Cannot drop count measurements into a non-count takeoff.');
+                        toast('Cannot drop count measurements into a non-count takeoff.', { type: 'warning' });
                         return;
                       }
                       if (takeoff.type === 'length' && measurement.type === 'area') {
-                        alert('Cannot drop area measurements into a linear takeoff.');
+                        toast('Cannot drop area measurements into a linear takeoff.', { type: 'warning' });
                         return;
                       }
                       
@@ -1763,9 +1916,9 @@ const CanvasViewInner: React.FC = () => {
                   </div>
                   {isExpanded && takeoff.type !== 'count' && (
                     <div className="divide-y divide-slate-50 min-h-[10px]">
-                      {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p => 
+                      {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
                         p.measurements
-                          .filter(m => m.takeoffId === takeoff.id)
+                          .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
                           .map(m => (
                             <MeasurementItem 
                               key={m.id} 
@@ -1815,7 +1968,8 @@ const CanvasViewInner: React.FC = () => {
             })}
 
             {/* Ungrouped Measurements */}
-            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).filter(m => !m.takeoffId).length > 0 && (
+            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
+              .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
               <div 
                 className={`mb-4 bg-white border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}
                 onDragOver={(e) => {
@@ -2342,6 +2496,57 @@ const CanvasViewInner: React.FC = () => {
             setHeightsModalMeasurementId(null);
           }}
         />
+      )}
+      {/* Keyboard Shortcuts Help Modal */}
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4" onClick={() => setShowShortcutsHelp(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                  <HelpCircle size={20} />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900">Keyboard Shortcuts</h3>
+              </div>
+              <button onClick={() => setShowShortcutsHelp(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto max-h-[60vh]">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100">
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Key</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {[
+                    ['?', 'Show this help'],
+                    ['Escape', 'Cancel / close modal / deselect'],
+                    ['Ctrl+Z', 'Undo'],
+                    ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'],
+                    ['Delete / Backspace', 'Delete selected measurement'],
+                    ['P', 'Resume/extend selected measurement'],
+                    ['Ctrl+C', 'Copy measurement'],
+                    ['Ctrl+V', 'Paste measurement'],
+                    ['← / →', 'Previous / next page'],
+                    ['Enter', 'Finish current measurement'],
+                    ['A (while drawing)', 'Toggle arc mode'],
+                  ].map(([key, action]) => (
+                    <tr key={key} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-3 font-mono text-xs text-blue-700 bg-blue-50/50 whitespace-nowrap">{key}</td>
+                      <td className="px-6 py-3 text-slate-700">{action}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50 text-center">
+              <p className="text-xs text-slate-400">Press <span className="font-mono">Escape</span> or click outside to close</p>
+            </div>
+          </div>
+        </div>
       )}
       {/* Tool Disabled Message Modal */}
       {toolDisabledMessage && (

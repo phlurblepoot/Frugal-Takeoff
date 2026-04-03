@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
+import { ThemeProvider } from './context/ThemeContext';
 import { ProjectsList } from './pages/ProjectsList';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
@@ -10,17 +11,20 @@ import { CollaborationProvider, useCollaboration } from './context/Collaboration
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { NotesOverlay } from './components/NotesOverlay';
+import { ToastProvider } from './components/Toast';
 import { getSettings } from './utils/store';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   return (
-    <CollaborationProvider>
-      <NotesProvider>
-        <UserPresenceOverlay />
-        <NotesOverlay />
-        <Outlet context={{ appName, logoUrl }} />
-      </NotesProvider>
-    </CollaborationProvider>
+    <ToastProvider>
+      <CollaborationProvider>
+        <NotesProvider>
+          <UserPresenceOverlay />
+          <NotesOverlay />
+          <Outlet context={{ appName, logoUrl }} />
+        </NotesProvider>
+      </CollaborationProvider>
+    </ToastProvider>
   );
 };
 
@@ -79,5 +83,5 @@ export default function App() {
     },
   ]);
 
-  return <RouterProvider router={router} />;
+  return <ThemeProvider><RouterProvider router={router} /></ThemeProvider>;
 }
