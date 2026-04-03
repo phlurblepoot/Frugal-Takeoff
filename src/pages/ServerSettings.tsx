@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Globe, Image as ImageIcon, Users, Shield, Check, X } from 'lucide-react';
+import { ArrowLeft, Save, Globe, Image as ImageIcon, Users, Shield } from 'lucide-react';
 import { getSettings, saveSettings } from '../utils/store';
 import { UsersView } from './UsersView';
 
@@ -49,7 +49,6 @@ export const ServerSettings: React.FC = () => {
     setIsSaving(true);
     try {
       await saveSettings(settings);
-      // Update document title if appName changed
       if (settings.appName) {
         document.title = settings.appName;
       }
@@ -75,7 +74,7 @@ export const ServerSettings: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
       </div>
     );
@@ -84,18 +83,18 @@ export const ServerSettings: React.FC = () => {
   if (!isAdmin) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => navigate('/')}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
+                className="p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all"
               >
                 <ArrowLeft size={20} />
               </button>
-              <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Shield className="text-blue-600" size={24} />
                 Server Settings
               </h1>
@@ -122,7 +121,7 @@ export const ServerSettings: React.FC = () => {
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                   activeTab === 'general'
                     ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-slate-600 hover:bg-white hover:shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
                 }`}
               >
                 <Globe size={18} />
@@ -133,7 +132,7 @@ export const ServerSettings: React.FC = () => {
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                   activeTab === 'users'
                     ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-slate-600 hover:bg-white hover:shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
                 }`}
               >
                 <Users size={18} />
@@ -146,38 +145,38 @@ export const ServerSettings: React.FC = () => {
           <div className="flex-1">
             {activeTab === 'general' ? (
               <div className="space-y-6">
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-slate-100">
-                    <h2 className="text-lg font-bold text-slate-900">Application Branding</h2>
-                    <p className="text-sm text-slate-500">Customize how the application appears to users.</p>
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Application Branding</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Customize how the application appears to users.</p>
                   </div>
                   <div className="p-6 space-y-6">
                     <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-wider">
+                      <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
                         Application Name
                       </label>
                       <input
                         type="text"
                         value={settings.appName}
                         onChange={e => setSettings({ ...settings, appName: e.target.value })}
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                         placeholder="e.g. My Custom Takeoff"
                       />
-                      <p className="mt-2 text-xs text-slate-500 italic">
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
                         This will update the name shown in the navigation bar and the browser tab title.
                       </p>
                     </div>
 
                     <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-wider">
+                      <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
                         Application Logo
                       </label>
                       <div className="flex items-start gap-6">
-                        <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+                        <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0">
                           {settings.logoUrl ? (
                             <img src={settings.logoUrl} alt="Logo Preview" className="max-w-full max-h-full object-contain" />
                           ) : (
-                            <ImageIcon className="text-slate-300" size={32} />
+                            <ImageIcon className="text-slate-300 dark:text-slate-600" size={32} />
                           )}
                         </div>
                         <div className="flex-1">
@@ -190,7 +189,7 @@ export const ServerSettings: React.FC = () => {
                           />
                           <label
                             htmlFor="logo-upload"
-                            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 cursor-pointer transition-all shadow-sm"
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 hover:border-slate-300 cursor-pointer transition-all shadow-sm"
                           >
                             <ImageIcon size={16} />
                             Upload New Logo
@@ -203,7 +202,7 @@ export const ServerSettings: React.FC = () => {
                               Remove
                             </button>
                           )}
-                          <p className="mt-2 text-xs text-slate-500">
+                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                             Recommended: Square or horizontal logo with transparent background. Max 2MB.
                           </p>
                         </div>
@@ -213,7 +212,7 @@ export const ServerSettings: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">
                 <UsersView />
               </div>
             )}

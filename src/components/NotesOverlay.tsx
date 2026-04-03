@@ -36,39 +36,39 @@ export const NotesOverlay: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-200">
-      <div className="bg-white w-full h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+      <div className="bg-white dark:bg-slate-900 w-full h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 dark:border-slate-700 animate-in zoom-in-95 duration-200">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg">
               <StickyNote size={20} />
             </div>
             <div>
-              <h2 className="font-bold text-slate-800">Project Notes Board</h2>
-              <p className="text-xs text-slate-500">Freeform workspace for sketches, tables, and notes</p>
+              <h2 className="font-bold text-slate-800 dark:text-slate-100">Project Notes Board</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Freeform workspace for sketches, tables, and notes</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={closeNotes}
-            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+            className="p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-all"
           >
             <X size={24} />
           </button>
         </div>
-        
+
         <div className="flex-1 relative">
           {loading ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-20">
+            <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 z-20">
               <div className="flex flex-col items-center gap-3">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                <span className="text-sm text-slate-500 font-medium">Loading board...</span>
+                <span className="text-sm text-slate-500 dark:text-slate-400 font-medium">Loading board...</span>
               </div>
             </div>
           ) : (
-            <NotesBoard 
+            <NotesBoard
               key={projectId}
-              projectId={projectId} 
-              initialNote={note} 
-              onSave={handleSave} 
+              projectId={projectId}
+              initialNote={note}
+              onSave={handleSave}
             />
           )}
         </div>

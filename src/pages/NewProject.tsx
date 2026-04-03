@@ -361,21 +361,21 @@ export const NewProject: React.FC = () => {
 
   if (step === 'name_pages') {
     return (
-      <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
         <div className="max-w-4xl mx-auto">
-          <button 
+          <button
             onClick={() => setStep('details')}
-            className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors font-medium"
+            className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium"
           >
             <ArrowLeft size={18} />
             Back to Details
           </button>
           
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 sm:p-8 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="p-4 sm:p-8 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">Name Pages</h1>
-                <p className="text-sm text-slate-500 mt-1">Review and rename the imported pages before creating the project.</p>
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">Name Pages</h1>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Review and rename the imported pages before creating the project.</p>
               </div>
               <button
                 onClick={handleSaveChanges}
@@ -393,10 +393,10 @@ export const NewProject: React.FC = () => {
             <div className="p-4 sm:p-8">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 {pendingPages.map((page, index) => (
-                  <div key={page.id} className="bg-white rounded-2xl border-2 border-slate-100 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
+                  <div key={page.id} className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
                     {/* Thumbnail Section */}
                     <div 
-                      className="h-48 bg-slate-100 relative flex-shrink-0 border-b border-slate-100 cursor-pointer overflow-hidden group"
+                      className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
                       onClick={() => setPreviewPageId(page.id)}
                     >
                       {pageThumbnails[page.imageId] ? (
@@ -406,7 +406,7 @@ export const NewProject: React.FC = () => {
                           className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-400">
+                        <div className="w-full h-full flex items-center justify-center text-slate-400 dark:text-slate-500">
                           <Loader2 size={32} className="animate-spin" />
                         </div>
                       )}
@@ -431,18 +431,18 @@ export const NewProject: React.FC = () => {
                     <div className="p-5 space-y-5">
                       <div className="space-y-2">
                         <div className="flex items-center justify-between px-1">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Page Number</label>
+                          <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Page Number</label>
                           {page.pageNumber && <Check size={12} className="text-green-500" />}
                         </div>
                         <div className="relative">
-                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
                             <Hash size={14} />
                           </div>
                           <input
                             type="text"
                             value={page.pageNumber || ''}
                             onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
                             placeholder="e.g. A-101"
                           />
                         </div>
@@ -450,18 +450,18 @@ export const NewProject: React.FC = () => {
 
                       <div className="space-y-2">
                         <div className="flex items-center justify-between px-1">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</label>
+                          <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Description</label>
                           {page.description && <Check size={12} className="text-green-500" />}
                         </div>
                         <div className="relative">
-                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
                             <FileText size={14} />
                           </div>
                           <input
                             type="text"
                             value={page.description || ''}
                             onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
                             placeholder="e.g. Floor Plan"
                           />
                         </div>
@@ -476,30 +476,30 @@ export const NewProject: React.FC = () => {
 
         {previewPageId && (
           <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-0 sm:p-8">
-            <div className="bg-white rounded-none sm:rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
-              <div className="p-3 sm:p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-3">
+            <div className="bg-white dark:bg-slate-800 rounded-none sm:rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
+              <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 dark:bg-slate-900 gap-3">
                 <div className="flex items-center gap-3 w-full sm:w-auto">
-                  <button 
+                  <button
                     onClick={() => setPreviewPageId(null)}
-                    className="p-2 hover:bg-slate-200 rounded-full transition-colors"
+                    className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors text-slate-700 dark:text-slate-300"
                   >
                     <ArrowLeft size={20} />
                   </button>
-                  <h3 className="font-bold text-slate-900 text-sm sm:text-base truncate">Page Preview & Extraction</h3>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base truncate">Page Preview & Extraction</h3>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                  <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1">
-                    <button 
+                  <div className="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg p-1">
+                    <button
                       onClick={() => setZoom(prev => Math.max(1, prev - 0.5))}
-                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                      className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors"
                       title="Zoom Out"
                     >
                       <ZoomOut size={16} />
                     </button>
-                    <span className="text-[10px] font-bold text-slate-500 w-10 text-center">{Math.round(zoom * 100)}%</span>
-                    <button 
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 w-10 text-center">{Math.round(zoom * 100)}%</span>
+                    <button
                       onClick={() => setZoom(prev => Math.min(5, prev + 0.5))}
-                      className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+                      className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-400 transition-colors"
                       title="Zoom In"
                     >
                       <ZoomIn size={16} />
@@ -509,13 +509,13 @@ export const NewProject: React.FC = () => {
                   <div className="flex items-center gap-1 flex-1 sm:flex-none">
                     <button
                       onClick={() => setExtractionType('pageNumber')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-blue-300'}`}
                     >
                       Number
                     </button>
                     <button
                       onClick={() => setExtractionType('description')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-blue-300'}`}
                     >
                       Desc
                     </button>
@@ -523,7 +523,7 @@ export const NewProject: React.FC = () => {
                   
                   <button 
                     onClick={() => setPreviewPageId(null)}
-                    className="hidden sm:block p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                    className="hidden sm:block p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
                   >
                     <X size={24} />
                   </button>
@@ -696,8 +696,8 @@ export const NewProject: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-4 sm:p-6 border-t border-slate-100 bg-slate-50 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-2 text-xs text-slate-600 w-full sm:w-auto">
+              <div className="p-4 sm:p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 w-full sm:w-auto">
                   {extractionRect ? (
                     <>
                       <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
@@ -714,7 +714,7 @@ export const NewProject: React.FC = () => {
                   <button
                     onClick={() => setExtractionRect(null)}
                     disabled={!extractionRect}
-                    className="flex-1 sm:flex-none px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                    className="flex-1 sm:flex-none px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
                   >
                     Clear
                   </button>
@@ -744,23 +744,23 @@ export const NewProject: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
       <div className="max-w-2xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-6 transition-colors font-medium">
+        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
         
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-6 sm:p-8 border-b border-slate-100">
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900">New Project</h1>
-            <p className="text-sm sm:text-base text-slate-500 mt-1">Upload a blueprint PDF to get started</p>
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div className="p-6 sm:p-8 border-b border-slate-100 dark:border-slate-700">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">New Project</h1>
+            <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1">Upload a blueprint PDF to get started</p>
           </div>
 
           <form onSubmit={handleProcessFiles} className="p-6 sm:p-8">
             <div className="space-y-6">
               <div>
-                <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-2">
+                <label htmlFor="name" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Project Name
                 </label>
                 <input
@@ -768,7 +768,7 @@ export const NewProject: React.FC = () => {
                   id="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                   placeholder="e.g. Main Floor Plan"
                   required
                   disabled={isProcessing}
@@ -777,7 +777,7 @@ export const NewProject: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="relative">
-                  <label htmlFor="contractor" className="block text-sm font-medium text-slate-700 mb-2">
+                  <label htmlFor="contractor" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Contractor (Optional)
                   </label>
                   <input
@@ -789,21 +789,21 @@ export const NewProject: React.FC = () => {
                       setShowSuggestions(true);
                     }}
                     onFocus={() => setShowSuggestions(true)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                     placeholder="e.g. ABC Construction"
                     disabled={isProcessing}
                     autoComplete="off"
                   />
                   {showSuggestions && filteredContractors.length > 0 && (
-                    <div 
+                    <div
                       ref={suggestionRef}
-                      className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-auto"
+                      className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-auto"
                     >
                       {filteredContractors.map((c, index) => (
                         <button
                           key={index}
                           type="button"
-                          className="w-full text-left px-4 py-2 hover:bg-slate-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
+                          className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors first:rounded-t-xl last:rounded-b-xl"
                           onClick={() => {
                             setContractor(c);
                             setShowSuggestions(false);
@@ -816,7 +816,7 @@ export const NewProject: React.FC = () => {
                   )}
                 </div>
                 <div>
-                  <label htmlFor="address" className="block text-sm font-medium text-slate-700 mb-2">
+                  <label htmlFor="address" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Address (Optional)
                   </label>
                   <AddressAutocomplete

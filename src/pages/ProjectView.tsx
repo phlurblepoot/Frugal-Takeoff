@@ -1488,7 +1488,7 @@ export const ProjectView: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex justify-center items-center">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex justify-center items-center">
         <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -1497,9 +1497,9 @@ export const ProjectView: React.FC = () => {
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
       <div className="max-w-5xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
+        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
@@ -1516,7 +1516,7 @@ export const ProjectView: React.FC = () => {
                     if (e.key === 'Enter') handleSaveProjectName();
                     if (e.key === 'Escape') setIsEditingProjectName(false);
                   }}
-                  className="text-xl md:text-3xl font-bold text-slate-900 border-b-2 border-blue-500 focus:outline-none bg-transparent px-1 min-w-[300px]"
+                  className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white border-b-2 border-blue-500 focus:outline-none bg-transparent dark:bg-transparent px-1 min-w-[300px]"
                   autoFocus
                 />
                 <button
@@ -1527,14 +1527,14 @@ export const ProjectView: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setIsEditingProjectName(false)}
-                  className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg transition-colors"
+                  className="p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
                 >
                   <X size={20} />
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-3 group">
-                <h1 className="text-xl md:text-3xl font-bold text-slate-900 break-words leading-tight">{project.name}</h1>
+                <h1 className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white break-words leading-tight">{project.name}</h1>
                 <button
                   onClick={() => {
                     setEditProjectName(project.name);
@@ -1553,8 +1553,8 @@ export const ProjectView: React.FC = () => {
                 onClick={() => handleToggleStatus('submitted')}
                 className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.submitted 
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                    : 'bg-white text-slate-400 border-slate-200 hover:border-blue-300 hover:text-blue-500'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-blue-300 hover:text-blue-500'
                 }`}
               >
                 Submitted
@@ -1563,8 +1563,8 @@ export const ProjectView: React.FC = () => {
                 onClick={() => handleToggleStatus('responded')}
                 className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.responded 
-                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm' 
-                    : 'bg-white text-slate-400 border-slate-200 hover:border-amber-300 hover:text-amber-500'
+                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-amber-300 hover:text-amber-500'
                 }`}
               >
                 Responded
@@ -1573,8 +1573,8 @@ export const ProjectView: React.FC = () => {
                 onClick={() => handleToggleStatus('accepted')}
                 className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.accepted 
-                    ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm' 
-                    : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300 hover:text-emerald-500'
+                    ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-emerald-300 hover:text-emerald-500'
                 }`}
               >
                 Accepted
@@ -1588,7 +1588,7 @@ export const ProjectView: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500 dark:text-slate-400">
               <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
                 <Calendar size={14} className="text-slate-400 flex-shrink-0" />
                 <span className="truncate">Created {new Date(project.createdAt).toLocaleDateString()}</span>
@@ -1708,12 +1708,12 @@ export const ProjectView: React.FC = () => {
             </div>
           </div>
           {project.planSets && project.planSets.length > 0 && (
-            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto mt-2 md:mt-0">
-              <span className="text-xs md:text-sm text-slate-500 font-medium whitespace-nowrap">Plan Set:</span>
+            <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto mt-2 md:mt-0">
+              <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
               <select
                 value={selectedPlanSetId}
                 onChange={(e) => setSelectedPlanSetId(e.target.value)}
-                className="bg-transparent text-xs md:text-sm font-medium text-slate-700 outline-none w-full"
+                className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full"
               >
                 <option value="">All Plan Sets</option>
                 {project.planSets.map(ps => (
@@ -1727,11 +1727,11 @@ export const ProjectView: React.FC = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-200 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+        <div className="flex border-b border-slate-200 dark:border-slate-700 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
           <button
             onClick={() => setActiveTab('pages')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'pages' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+              activeTab === 'pages' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Pages
@@ -1742,7 +1742,7 @@ export const ProjectView: React.FC = () => {
           <button
             onClick={() => setActiveTab('takeoffs')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'takeoffs' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+              activeTab === 'takeoffs' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Takeoffs
@@ -1753,7 +1753,7 @@ export const ProjectView: React.FC = () => {
           <button
             onClick={() => setActiveTab('printouts')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'printouts' ? 'text-blue-600' : 'text-slate-500 hover:text-slate-700'
+              activeTab === 'printouts' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Printouts
@@ -1773,7 +1773,7 @@ export const ProjectView: React.FC = () => {
                   placeholder="Search pages and text..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                  className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                 />
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
@@ -1808,12 +1808,12 @@ export const ProjectView: React.FC = () => {
             </div>
 
             {filteredPages.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
-                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
+                <div className="w-16 h-16 bg-slate-50 dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400 dark:text-slate-500">
                   <FileImage size={32} />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-1">No pages found</h3>
-                <p className="text-slate-500 text-sm max-w-xs mx-auto">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">No pages found</h3>
+                <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto">
                   {searchTerm ? `No pages match your search "${searchTerm}"` : 'This plan set has no pages yet. Add some to get started.'}
                 </p>
                 {!searchTerm && (
@@ -1832,9 +1832,9 @@ export const ProjectView: React.FC = () => {
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
-                    className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-all hover:border-blue-300 flex flex-col group"
+                    className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500 flex flex-col group"
                   >
-                    <div className="h-40 bg-slate-100 relative overflow-hidden border-b border-slate-200">
+                    <div className="h-40 bg-slate-100 dark:bg-slate-700 relative overflow-hidden border-b border-slate-200 dark:border-slate-600">
                       <img 
                         src={getImageUrl(page.thumbnailId || page.imageId)} 
                         alt={page.name} 
@@ -1909,9 +1909,9 @@ export const ProjectView: React.FC = () => {
             )}
           </div>
         ) : activeTab === 'takeoffs' ? (
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-            <div className="p-4 md:p-6 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50">
-              <h2 className="text-xl font-bold text-slate-800">Takeoffs Inventory</h2>
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
+            <div className="p-4 md:p-6 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50 dark:bg-slate-800/50">
+              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Takeoffs Inventory</h2>
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 {selectedTakeoffIds.size > 0 && (
                   <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -1926,7 +1926,7 @@ export const ProjectView: React.FC = () => {
                     <button
                       onClick={handleExportExcel}
                       disabled={isPrinting || isExportingExcel}
-                      className="flex-1 sm:flex-none px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-3 py-2 bg-accent-600 text-white rounded-lg text-xs font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                     >
                       {isExportingExcel ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
                       Excel ({selectedTakeoffIds.size})
@@ -1937,7 +1937,7 @@ export const ProjectView: React.FC = () => {
                   {project.takeoffs.length > 0 && (
                     <button
                       onClick={() => setShowDeleteAllConfirm(true)}
-                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                       title="Delete All Takeoffs"
                     >
                       <Trash2 size={20} />
@@ -1945,7 +1945,7 @@ export const ProjectView: React.FC = () => {
                   )}
                   <button
                     onClick={() => setShowTakeoffModal(true)}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    className="flex-1 sm:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                   >
                     <Plus size={16} />
                     New Takeoff
@@ -1957,11 +1957,11 @@ export const ProjectView: React.FC = () => {
             <div className="hidden md:block overflow-x-auto">
               <table className="w-full border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-200">
+                  <tr className="bg-slate-50 dark:bg-slate-800 text-left text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest border-b border-slate-200 dark:border-slate-700">
                     <th className="px-6 py-4 w-10">
                       <input 
                         type="checkbox" 
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
                         checked={selectedTakeoffIds.size === project.takeoffs.length && project.takeoffs.length > 0}
                         onChange={(e) => {
                           if (e.target.checked) {
@@ -1980,18 +1980,18 @@ export const ProjectView: React.FC = () => {
                     <th className="px-6 py-4 w-24"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {getTakeoffTotals().map(takeoff => {
                     const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
                     const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
 
                     return (
                       <React.Fragment key={takeoff.id}>
-                        <tr className="hover:bg-slate-50/80 transition-colors group">
+                        <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
                           <td className="px-6 py-4">
                             <input 
                               type="checkbox" 
-                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                              className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
                               checked={selectedTakeoffIds.has(takeoff.id)}
                               onChange={() => toggleTakeoffSelection(takeoff.id)}
                             />
@@ -2002,31 +2002,31 @@ export const ProjectView: React.FC = () => {
                                 <ChevronRight size={16} className="text-slate-400" />
                               </div>
                               <div className="w-4 h-4 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                              <span className="font-semibold text-slate-900">{takeoff.name}</span>
+                              <span className="font-semibold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-sm text-slate-500 capitalize font-medium">
+                          <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 capitalize font-medium">
                             {takeoff.type}
                           </td>
-                          <td className="px-6 py-4 text-right font-bold text-slate-900">
+                          <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
                             {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                           </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-600 font-medium">
+                          <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
                             {takeoff.isAdvancedCost ? (
                               <div className="flex flex-col items-end">
-                                <span className="text-blue-600 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
+                                <span className="text-accent-600 dark:text-accent-400 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
                                 <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
                               </div>
                             ) : (
                               takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
                             )}
                           </td>
-                          <td className="px-6 py-4 text-right font-bold text-blue-600">
+                          <td className="px-6 py-4 text-right font-bold text-accent-600 dark:text-accent-400">
                             <div className="flex flex-col items-end">
                               <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
                               {takeoff.isAdvancedCost && costDetails.map((d, i) => (
                                 d.quantity !== undefined && d.quantity > 0 && (
-                                  <span key={i} className="text-[10px] text-slate-500 font-normal">
+                                  <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
                                     {d.quantity.toFixed(2)} {d.quantityUnit || 'units'} of {d.name}
                                   </span>
                                 )
@@ -2037,14 +2037,14 @@ export const ProjectView: React.FC = () => {
                             <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                               <button 
                                 onClick={() => handleEditTakeoff(takeoff)} 
-                                className="text-slate-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
+                                className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
                                 title="Edit Takeoff"
                               >
                                 <Edit2 size={16} />
                               </button>
                               <button 
                                 onClick={() => handleDeleteTakeoff(takeoff.id)} 
-                                className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
+                                className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
                                 title="Delete Takeoff"
                               >
                                 <Trash2 size={16} />
@@ -2054,25 +2054,25 @@ export const ProjectView: React.FC = () => {
                         </tr>
                         {expandedTakeoffs[takeoff.id] && (
                           <tr>
-                            <td colSpan={11} className="px-0 py-0 bg-slate-50/30">
-                              <div className="border-l-4 border-blue-500/20 ml-6 my-2 divide-y divide-slate-100">
+                            <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
+                              <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
                                 {takeoff.pageBreakdown.map(pb => (
-                                  <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white transition-colors">
-                                    <Link 
-                                      to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
+                                  <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                                    <Link
+                                      to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                                       state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
-                                      className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-2"
+                                      className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2"
                                     >
                                       <FileImage size={14} className="text-slate-400" />
                                       {pb.pageName}
                                     </Link>
-                                    <span className="text-sm font-bold text-slate-700">
+                                    <span className="text-sm font-bold text-slate-700 dark:text-slate-300">
                                       {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
                                     </span>
                                   </div>
                                 ))}
                                 {takeoff.pageBreakdown.length === 0 && (
-                                  <div className="py-4 pl-8 text-sm text-slate-400 italic">No measurements found for this takeoff.</div>
+                                  <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
                                 )}
                               </div>
                             </td>
@@ -2086,7 +2086,7 @@ export const ProjectView: React.FC = () => {
             </div>
 
             {/* Mobile Takeoff Cards */}
-            <div className="md:hidden divide-y divide-slate-100">
+            <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-700">
               {getTakeoffTotals().map(takeoff => {
                 const totalCostPerUnit = takeoff.isAdvancedCost && takeoff.customCosts 
                   ? takeoff.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
@@ -2094,27 +2094,27 @@ export const ProjectView: React.FC = () => {
                 const totalCost = takeoff.totalRealValue * totalCostPerUnit;
 
                 return (
-                  <div key={takeoff.id} className="p-4 bg-white">
+                  <div key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <input 
                           type="checkbox" 
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
                           checked={selectedTakeoffIds.has(takeoff.id)}
                           onChange={() => toggleTakeoffSelection(takeoff.id)}
                         />
                         <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                        <span className="font-bold text-slate-900">{takeoff.name}</span>
+                        <span className="font-bold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
                       </div>
                       <div className="flex items-center gap-1">
                         <button 
                           onClick={() => handleEditTakeoff(takeoff)} 
-                          className="p-1.5 text-slate-400 hover:text-blue-600"
+                          className="p-1.5 text-slate-400 hover:text-accent-600"
                         >
                           <Edit2 size={16} />
                         </button>
-                        <button 
-                          onClick={() => handleDeleteTakeoff(takeoff.id)} 
+                        <button
+                          onClick={() => handleDeleteTakeoff(takeoff.id)}
                           className="p-1.5 text-slate-400 hover:text-red-600"
                         >
                           <Trash2 size={16} />
@@ -2123,23 +2123,23 @@ export const ProjectView: React.FC = () => {
                     </div>
                     
                     <div className="grid grid-cols-2 gap-y-2 text-sm mb-3">
-                      <div className="text-slate-500">Type</div>
-                      <div className="text-slate-900 font-medium capitalize text-right">{takeoff.type}</div>
-                      
-                      <div className="text-slate-500">Quantity</div>
-                      <div className="text-slate-900 font-bold text-right">
+                      <div className="text-slate-500 dark:text-slate-400">Type</div>
+                      <div className="text-slate-900 dark:text-slate-100 font-medium capitalize text-right">{takeoff.type}</div>
+
+                      <div className="text-slate-500 dark:text-slate-400">Quantity</div>
+                      <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
                         {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                       </div>
-                      
-                      <div className="text-slate-500">Total Cost</div>
-                      <div className="text-blue-600 font-bold text-right">
+
+                      <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
+                      <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
                         {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
                       </div>
                     </div>
 
                     <button 
                       onClick={() => toggleTakeoffExpanded(takeoff.id)}
-                      className="w-full py-2 bg-slate-50 rounded-lg text-xs font-semibold text-slate-600 flex items-center justify-center gap-2"
+                      className="w-full py-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2"
                     >
                       {expandedTakeoffs[takeoff.id] ? 'Hide' : 'Show'} Page Breakdown
                       <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
@@ -2148,16 +2148,16 @@ export const ProjectView: React.FC = () => {
                     </button>
 
                     {expandedTakeoffs[takeoff.id] && (
-                      <div className="mt-3 space-y-2 pt-3 border-t border-slate-100">
+                      <div className="mt-3 space-y-2 pt-3 border-t border-slate-100 dark:border-slate-700">
                         {takeoff.pageBreakdown.map(pb => (
                           <div key={pb.pageId} className="flex justify-between items-center text-xs">
                             <Link 
                               to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
-                              className="text-blue-600 font-medium"
+                              className="text-accent-600 dark:text-accent-400 font-medium"
                             >
                               {pb.pageName}
                             </Link>
-                            <span className="font-bold text-slate-700">
+                            <span className="font-bold text-slate-700 dark:text-slate-300">
                               {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
                             </span>
                           </div>
@@ -2171,64 +2171,64 @@ export const ProjectView: React.FC = () => {
 
             {project.takeoffs.length === 0 && (
               <div className="px-6 py-12 text-center text-slate-500">
-                No takeoffs created yet. <button onClick={() => setShowTakeoffModal(true)} className="text-blue-600 font-bold hover:underline">Create one</button> to start estimating.
+                No takeoffs created yet. <button onClick={() => setShowTakeoffModal(true)} className="text-accent-600 dark:text-accent-400 font-bold hover:underline">Create one</button> to start estimating.
               </div>
             )}
           </div>
         ) : (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold text-slate-800">Generated Printouts</h2>
+              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Generated Printouts</h2>
               <p className="text-sm text-slate-500">
                 {project.printouts?.length || 0} files saved
               </p>
             </div>
 
             {(!project.printouts || project.printouts.length === 0) ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
-                <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
+                <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
                   <Printer size={32} />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900 mb-1">No printouts yet</h3>
-                <p className="text-slate-500 text-sm max-w-xs mx-auto">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-1">No printouts yet</h3>
+                <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto">
                   Select takeoffs from the Takeoffs tab and click "Print PDF" or "Export Excel" to generate a report.
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {[...(project.printouts || [])].sort((a, b) => b.createdAt - a.createdAt).map((printout) => (
-                  <div key={printout.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-all group">
+                  <div key={printout.id} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all group">
                     <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
-                        <div className={`w-12 h-12 ${printout.type === 'excel' ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600'} rounded-xl flex items-center justify-center`}>
+                        <div className={`w-12 h-12 ${printout.type === 'excel' ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600' : 'bg-accent-50 dark:bg-accent-900/30 text-accent-600'} rounded-xl flex items-center justify-center`}>
                           {printout.type === 'excel' ? <FileSpreadsheet size={24} /> : <FileText size={24} />}
                         </div>
                         <div className="flex items-center gap-1">
                           <button 
                             onClick={() => handleViewPrintout(printout)}
-                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
                             title={printout.type === 'excel' ? "Download Excel" : "View PDF"}
                           >
                             {printout.type === 'excel' ? <Download size={18} /> : <Eye size={18} />}
                           </button>
-                          <button 
+                          <button
                             onClick={() => handleDownloadPrintout(printout)}
-                            className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
                             title={printout.type === 'excel' ? "Download Excel" : "Download PDF"}
                           >
                             <Download size={18} />
                           </button>
                           <button 
                             onClick={() => handleDeletePrintout(printout.id)}
-                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                             title="Delete Printout"
                           >
                             <Trash2 size={18} />
                           </button>
                         </div>
                       </div>
-                      <h3 className="font-semibold text-slate-900 mb-1 line-clamp-1">{printout.name}</h3>
-                      <p className="text-xs text-slate-500">
+                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-1 line-clamp-1">{printout.name}</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
                         Generated on {new Date(printout.createdAt).toLocaleString()}
                       </p>
                     </div>
