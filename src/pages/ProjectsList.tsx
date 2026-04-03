@@ -1,14 +1,16 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut, Edit2, Check, X, Settings } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut, Edit2, Check, X, Settings, Palette } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Project, Bid } from '../types';
 import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid, saveProject } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
+import { UserSettingsPanel } from '../components/UserSettingsPanel';
 import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
-type Tab = 'projects' | 'templates' | 'bids' | 'users';
+type Tab = 'projects' | 'templates' | 'bids' | 'users' | 'settings';
 
 export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const navigate = useNavigate();
@@ -271,20 +273,20 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 sm:mb-8 gap-4">
           <div className="flex items-center gap-4">
             {logoUrl ? (
               <img src={logoUrl} alt="Logo" className="h-12 w-auto object-contain" />
             ) : (
-              <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
+              <div className="w-12 h-12 bg-accent-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-accent-600/25">
                 <FolderOpen size={28} />
               </div>
             )}
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">{appName}</h1>
-              <p className="text-sm sm:text-base text-slate-500 mt-1">Manage your projects and templates</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">{appName}</h1>
+              <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1">Manage your projects and templates</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
@@ -344,13 +346,13 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           </div>
         </div>
 
-        <div className="flex items-center gap-1 mb-6 bg-slate-200/50 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar -mx-0 px-1">
+        <div className="flex items-center gap-1 mb-6 glass-subtle p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar -mx-0 px-1">
           <button
             onClick={() => setActiveTab('projects')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
-              activeTab === 'projects' 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-slate-600 hover:text-slate-900'
+              activeTab === 'projects'
+                ? 'bg-white dark:bg-slate-800 text-accent-600 dark:text-accent-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
             <FolderOpen size={18} />
@@ -359,9 +361,9 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           <button
             onClick={() => setActiveTab('templates')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
-              activeTab === 'templates' 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-slate-600 hover:text-slate-900'
+              activeTab === 'templates'
+                ? 'bg-white dark:bg-slate-800 text-accent-600 dark:text-accent-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
             <Layout size={18} />
@@ -370,27 +372,51 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           <button
             onClick={() => setActiveTab('bids')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
-              activeTab === 'bids' 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-slate-600 hover:text-slate-900'
+              activeTab === 'bids'
+                ? 'bg-white dark:bg-slate-800 text-accent-600 dark:text-accent-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
             <Building2 size={18} />
             Bid Pipeline
           </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
+              activeTab === 'settings'
+                ? 'bg-white dark:bg-slate-800 text-accent-600 dark:text-accent-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Palette size={18} />
+            Settings
+          </button>
         </div>
 
-        {activeTab === 'projects' ? (
+        <AnimatePresence mode="wait">
+        {activeTab === 'settings' ? (
+          <motion.div key="settings"
+            initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -12 }} transition={{ duration: 0.22 }}
+          >
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">User Settings</h2>
+            <UserSettingsPanel />
+          </motion.div>
+        ) : activeTab === 'projects' ? (
+          <motion.div key="projects"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
+          >
           <>
             {isLoading ? (
               <div className="flex justify-center py-12">
                 <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : projects.length === 0 ? (
-              <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-sm">
-                <FolderOpen size={48} className="mx-auto text-slate-300 mb-4" />
-                <h3 className="text-lg font-medium text-slate-900 mb-2">No projects yet</h3>
-                <p className="text-slate-500 mb-6">Create your first project to start measuring blueprints.</p>
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
+                <FolderOpen size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-4" />
+                <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">No projects yet</h3>
+                <p className="text-slate-500 dark:text-slate-400 mb-6">Create your first project to start measuring blueprints.</p>
                 <Link
                   to="/new"
                   className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 hover:bg-blue-100 px-4 py-2 rounded-lg font-medium transition-colors"
@@ -402,13 +428,13 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             ) : (
               <div className="space-y-4">
                 {/* Desktop Table View */}
-                <div className="hidden md:block bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="hidden md:block bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200">
-                          <th 
-                            className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 transition-colors"
+                        <tr className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+                          <th
+                            className="px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                             onClick={() => handleSort('name')}
                           >
                             <div className="flex items-center gap-2">
@@ -471,7 +497,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                           <tr 
                             key={project.id}
                             onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                            className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                            className="hover:bg-blue-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
                           >
                             <td className="px-6 py-4">
                               <div className="flex flex-col gap-1">
@@ -503,7 +529,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2 group/name">
-                                    <div className="font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                                    <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-accent-400 transition-colors">
                                       {project.name}
                                     </div>
                                     <button
@@ -599,11 +625,14 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
                 {/* Mobile Card View */}
                 <div className="md:hidden space-y-4">
-                  {filteredAndSortedProjects.map((project) => (
-                    <div 
+                  {filteredAndSortedProjects.map((project, i) => (
+                    <motion.div
                       key={project.id}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.22, delay: Math.min(i * 0.04, 0.3) }}
                       onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                      className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm active:bg-slate-50 transition-colors"
+                      className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm active:bg-slate-50 dark:active:bg-slate-700 transition-colors"
                     >
                       <div className="flex justify-between items-start mb-3">
                         <div className="font-bold text-slate-900 text-lg">{project.name}</div>
@@ -656,14 +685,19 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                           <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">Accepted</span>
                         )}
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
                 </div>
               </div>
             )}
           </>
+          </motion.div>
         ) : activeTab === 'bids' ? (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <motion.div key="bids"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
+          >
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-200 bg-slate-50">
               <h2 className="text-lg font-bold text-slate-900 mb-4">Add Potential Bid</h2>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -850,16 +884,23 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
               )}
             </div>
           </div>
+          </motion.div>
         ) : (
-          <TemplatesView />
+          <motion.div key="templates"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
+          >
+            <TemplatesView />
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
 
       {projectToDelete && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden p-6">
-            <h3 className="text-xl font-bold text-slate-900 mb-2">Delete Project</h3>
-            <p className="text-slate-600 mb-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glass-card w-full max-w-md overflow-hidden p-6">
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Delete Project</h3>
+            <p className="text-slate-600 dark:text-slate-300 mb-4">
               Are you sure you want to delete <strong>{projectToDelete.name}</strong>? This action cannot be undone.
             </p>
             <div className="mb-6">

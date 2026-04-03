@@ -1,1 +1,93 @@
 @import "tailwindcss";
+
+/* ── Dark mode class variant ──────────────────────────────────────────── */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Accent colour scale (JS overrides at runtime for colour picker) ──── */
+@theme {
+  --color-accent-50:  oklch(0.97 0.012 264);
+  --color-accent-100: oklch(0.93 0.032 264);
+  --color-accent-200: oklch(0.87 0.065 264);
+  --color-accent-300: oklch(0.78 0.12  264);
+  --color-accent-400: oklch(0.68 0.17  264);
+  --color-accent-500: oklch(0.60 0.22  264);
+  --color-accent-600: oklch(0.52 0.24  264);
+  --color-accent-700: oklch(0.44 0.22  264);
+  --color-accent-800: oklch(0.36 0.18  264);
+  --color-accent-900: oklch(0.28 0.14  264);
+}
+
+/* ── Semantic surface tokens ──────────────────────────────────────────── */
+:root {
+  --glass-bg:     rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.40);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  --glass-blur:   blur(16px);
+  --surface-bg:   #f8fafc;
+  --card-bg:      #ffffff;
+  --card-border:  #e2e8f0;
+}
+
+.dark {
+  --glass-bg:     rgba(15, 23, 42, 0.75);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.40);
+  --surface-bg:   #0f172a;
+  --card-bg:      #1e293b;
+  --card-border:  #334155;
+}
+
+/* ── Glass utility classes ────────────────────────────────────────────── */
+@layer utilities {
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+
+  .glass-card {
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    border-radius: 1rem;
+  }
+
+  .glass-subtle {
+    background: rgba(255, 255, 255, 0.50);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.30);
+  }
+
+  .theme-page {
+    background-color: var(--surface-bg);
+  }
+
+  .theme-card {
+    background-color: var(--card-bg);
+    border-color: var(--card-border);
+  }
+
+  /* CSS-level reduced motion override */
+  .motion-reduce *,
+  .motion-reduce *::before,
+  .motion-reduce *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Dark glass-subtle override */
+.dark .glass-subtle {
+  background: rgba(30, 41, 59, 0.60);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dark body {
+  color-scheme: dark;
+}
