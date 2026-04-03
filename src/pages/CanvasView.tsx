@@ -982,7 +982,7 @@ const CanvasViewInner: React.FC = () => {
   const activeTakeoff = project.takeoffs.find(t => t.id === selectedTakeoffId);
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans relative">
+    <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-900 overflow-hidden font-sans relative">
       {/* Left Sidebar Wrapper */}
       {isLeftSidebarOpen && (
         <div 
@@ -991,11 +991,11 @@ const CanvasViewInner: React.FC = () => {
         />
       )}
       <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isLeftSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        <div className={`bg-white border-r border-slate-200 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0'}`}>
+        <div className={`bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0'}`}>
           <div className="w-full md:w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
-            <div className="p-4 border-b border-slate-200 shrink-0">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
               <div className="flex items-center justify-between mb-4">
-                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm">
+                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
                   <ArrowLeft size={16} />
                   <span className="md:inline">Back to Project</span>
                 </Link>
@@ -1003,25 +1003,25 @@ const CanvasViewInner: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setIsLeftSidebarOpen(false)}
-                    className="md:hidden p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                    className="md:hidden p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
                   >
                     <ChevronLeft size={20} />
                   </button>
-                  <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                  <div className="flex items-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
                 <Link
                   to={prevPageId ? `/project/${project.id}/page/${prevPageId}` : '#'}
                   state={{ pageIds }}
-                  className={`p-1.5 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${prevPageId ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'}`}
                   title="Previous Page"
                   onClick={(e) => !prevPageId && e.preventDefault()}
                 >
                   <ChevronLeft size={16} />
                 </Link>
-                <div className="w-px h-4 bg-slate-200" />
+                <div className="w-px h-4 bg-slate-200 dark:bg-slate-700" />
                 <Link
                   to={nextPageId ? `/project/${project.id}/page/${nextPageId}` : '#'}
                   state={{ pageIds }}
-                  className={`p-1.5 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 hover:bg-slate-200 hover:text-slate-900' : 'text-slate-300 cursor-not-allowed'}`}
+                  className={`p-1.5 flex items-center justify-center transition-colors ${nextPageId ? 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'}`}
                   title="Next Page"
                   onClick={(e) => !nextPageId && e.preventDefault()}
                 >
@@ -1031,13 +1031,13 @@ const CanvasViewInner: React.FC = () => {
               <div className="relative">
                 <button
                   onClick={() => setShowPageJump(prev => !prev)}
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 shadow-sm flex items-center text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 shadow-sm flex items-center text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                   title="Jump to page"
                 >
                   {currentPageIndex + 1} / {pageIds.length}
                 </button>
                 {showPageJump && (
-                  <div className="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 min-w-[160px] max-h-64 overflow-y-auto">
+                  <div className="absolute top-full left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-50 min-w-[160px] max-h-64 overflow-y-auto">
                     {pageIds.map((pid, idx) => {
                       const pg = project.pages.find(p => p.id === pid);
                       return (
@@ -1046,9 +1046,9 @@ const CanvasViewInner: React.FC = () => {
                           to={`/project/${project.id}/page/${pid}`}
                           state={{ pageIds }}
                           onClick={() => setShowPageJump(false)}
-                          className={`flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 transition-colors ${pid === pageId ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-700'}`}
+                          className={`flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${pid === pageId ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
                         >
-                          <span className="text-slate-400 w-5 shrink-0">{idx + 1}.</span>
+                          <span className="text-slate-400 dark:text-slate-500 w-5 shrink-0">{idx + 1}.</span>
                           <span className="truncate">{pg?.name || `Page ${idx + 1}`}</span>
                         </Link>
                       );
@@ -1058,14 +1058,14 @@ const CanvasViewInner: React.FC = () => {
               </div>
             </div>
           </div>
-          <h1 className="text-xl font-semibold text-slate-800 flex items-center gap-2 line-clamp-1">
+          <h1 className="text-xl font-semibold text-slate-800 dark:text-white flex items-center gap-2 line-clamp-1">
             {page.name}
           </h1>
-          <p className="text-xs text-slate-500 mt-1 line-clamp-1">{project.name}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 line-clamp-1">{project.name}</p>
         </div>
 
-        <div className="p-4 border-b border-slate-200">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Tools</h2>
+        <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+          <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">Tools</h2>
           <div className="flex items-center gap-2 mb-4">
             <ToolButton
               active={currentTool === 'pan'}
@@ -1114,15 +1114,15 @@ const CanvasViewInner: React.FC = () => {
                 else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
               }}
             />
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={() => projectId && openNotes(projectId)}
-              className="flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95 bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300"
+              className="flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95 bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300"
               title="Project Notes"
             >
               <StickyNote size={18} />
             </button>
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <ToolButton
               active={currentTool === 'region'}
               onClick={() => setCurrentTool('region')}
@@ -1131,14 +1131,14 @@ const CanvasViewInner: React.FC = () => {
               disabled={!page.isMultiRegion}
               onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
             />
-            <div className="h-8 w-px bg-slate-200 mx-1" />
+            <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
               onClick={handleUndo}
               disabled={history.length === 0}
               className={`p-2 rounded-lg transition-colors ${
                 history.length === 0
-                  ? 'text-slate-300 cursor-not-allowed'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+                  ? 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-blue-600'
               }`}
               title="Undo (Ctrl+Z)"
             >
