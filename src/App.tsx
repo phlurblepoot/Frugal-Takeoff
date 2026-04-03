@@ -10,17 +10,20 @@ import { CollaborationProvider, useCollaboration } from './context/Collaboration
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { NotesOverlay } from './components/NotesOverlay';
+import { ToastProvider } from './components/Toast';
 import { getSettings } from './utils/store';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   return (
-    <CollaborationProvider>
-      <NotesProvider>
-        <UserPresenceOverlay />
-        <NotesOverlay />
-        <Outlet context={{ appName, logoUrl }} />
-      </NotesProvider>
-    </CollaborationProvider>
+    <ToastProvider>
+      <CollaborationProvider>
+        <NotesProvider>
+          <UserPresenceOverlay />
+          <NotesOverlay />
+          <Outlet context={{ appName, logoUrl }} />
+        </NotesProvider>
+      </CollaborationProvider>
+    </ToastProvider>
   );
 };
 
