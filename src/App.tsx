@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom';
+import { ThemeProvider } from './context/ThemeContext';
 import { ProjectsList } from './pages/ProjectsList';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
@@ -82,5 +83,5 @@ export default function App() {
     },
   ]);
 
-  return <RouterProvider router={router} />;
+  return <ThemeProvider><RouterProvider router={router} /></ThemeProvider>;
 }
