@@ -198,6 +198,8 @@ export const ProjectView: React.FC = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
+  const [newTakeoffPricePackage, setNewTakeoffPricePackage] = useState('');
+  const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
@@ -339,6 +341,7 @@ export const ProjectView: React.FC = () => {
         amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
         perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
       })) : undefined,
+      pricePackage: newTakeoffPricePackage.trim() || undefined,
     };
 
     const updatedProject = {
@@ -354,6 +357,7 @@ export const ProjectView: React.FC = () => {
     setNewTakeoffCostPerUnit('');
     setIsNewTakeoffAdvanced(false);
     setNewTakeoffCustomCosts([]);
+    setNewTakeoffPricePackage('');
     setSelectedTemplateId('');
   };
 
@@ -422,6 +426,7 @@ export const ProjectView: React.FC = () => {
     setEditTakeoffCostPerUnit(rawTakeoff.costPerUnit ?? '');
     setIsEditTakeoffAdvanced(rawTakeoff.isAdvancedCost || false);
     setEditTakeoffCustomCosts(rawTakeoff.customCosts || []);
+    setEditTakeoffPricePackage(rawTakeoff.pricePackage || '');
   };
 
   const handleSaveEditTakeoff = async () => {
@@ -431,9 +436,9 @@ export const ProjectView: React.FC = () => {
       ...project,
       takeoffs: project.takeoffs.map(g => 
         g.id === editingTakeoff.id 
-          ? { 
-              ...g, 
-              name: editTakeoffName, 
+          ? {
+              ...g,
+              name: editTakeoffName,
               color: editTakeoffColor,
               unit: editTakeoffUnit || undefined,
               costPerUnit: !isEditTakeoffAdvanced && editTakeoffCostPerUnit !== '' ? Number(editTakeoffCostPerUnit) : undefined,
@@ -446,7 +451,8 @@ export const ProjectView: React.FC = () => {
                 amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
                 perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
               })) : undefined,
-            } 
+              pricePackage: editTakeoffPricePackage.trim() || undefined,
+            }
           : g
       ),
       pages: project.pages.map(page => ({
@@ -2266,192 +2272,249 @@ export const ProjectView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                  {getTakeoffTotals().map(takeoff => {
-                    const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
-                    const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
-
-                    return (
-                      <React.Fragment key={takeoff.id}>
-                        <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
-                          <td className="px-6 py-4">
-                            <input 
-                              type="checkbox" 
-                              className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
-                              checked={selectedTakeoffIds.has(takeoff.id)}
-                              onChange={() => toggleTakeoffSelection(takeoff.id)}
-                            />
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleTakeoffExpanded(takeoff.id)}>
-                              <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
-                                <ChevronRight size={16} className="text-slate-400" />
+                  {(() => {
+                    const totals = getTakeoffTotals();
+                    const packageOrder: string[] = [];
+                    const packageMap: Record<string, typeof totals> = {};
+                    const ungrouped: typeof totals = [];
+                    for (const t of totals) {
+                      if (t.pricePackage) {
+                        if (!packageMap[t.pricePackage]) {
+                          packageMap[t.pricePackage] = [];
+                          packageOrder.push(t.pricePackage);
+                        }
+                        packageMap[t.pricePackage].push(t);
+                      } else {
+                        ungrouped.push(t);
+                      }
+                    }
+                    const renderRow = (takeoff: typeof totals[0]) => {
+                      const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+                      const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
+                      return (
+                        <React.Fragment key={takeoff.id}>
+                          <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                            <td className="px-6 py-4">
+                              <input
+                                type="checkbox"
+                                className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                                checked={selectedTakeoffIds.has(takeoff.id)}
+                                onChange={() => toggleTakeoffSelection(takeoff.id)}
+                              />
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleTakeoffExpanded(takeoff.id)}>
+                                <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
+                                  <ChevronRight size={16} className="text-slate-400" />
+                                </div>
+                                <div className="w-4 h-4 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
+                                <span className="font-semibold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
                               </div>
-                              <div className="w-4 h-4 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                              <span className="font-semibold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 capitalize font-medium">
-                            {takeoff.type}
-                          </td>
-                          <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
-                            {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
-                            {takeoff.isAdvancedCost ? (
+                            </td>
+                            <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 capitalize font-medium">
+                              {takeoff.type}
+                            </td>
+                            <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
+                              {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                            </td>
+                            <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
+                              {takeoff.isAdvancedCost ? (
+                                <div className="flex flex-col items-end">
+                                  <span className="text-accent-600 dark:text-accent-400 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
+                                  <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
+                                </div>
+                              ) : (
+                                takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-right font-bold text-accent-600 dark:text-accent-400">
                               <div className="flex flex-col items-end">
-                                <span className="text-accent-600 dark:text-accent-400 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
-                                <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
-                              </div>
-                            ) : (
-                              takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-right font-bold text-accent-600 dark:text-accent-400">
-                            <div className="flex flex-col items-end">
-                              <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
-                              {takeoff.isAdvancedCost && costDetails.map((d, i) => (
-                                d.quantity !== undefined && d.quantity > 0 && (
-                                  <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
-                                    {d.quantity.toFixed(2)} {d.quantityUnit || 'units'} of {d.name}
-                                  </span>
-                                )
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => handleEditTakeoff(takeoff)} 
-                                className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
-                                title="Edit Takeoff"
-                              >
-                                <Edit2 size={16} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteTakeoff(takeoff.id)} 
-                                className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                                title="Delete Takeoff"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                        {expandedTakeoffs[takeoff.id] && (
-                          <tr>
-                            <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
-                              <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
-                                {takeoff.pageBreakdown.map(pb => (
-                                  <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
-                                    <Link
-                                      to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                                      state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
-                                      className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2"
-                                    >
-                                      <FileImage size={14} className="text-slate-400" />
-                                      {pb.pageName}
-                                    </Link>
-                                    <span className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                                      {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
+                                {takeoff.isAdvancedCost && costDetails.map((d, i) => (
+                                  d.quantity !== undefined && d.quantity > 0 && (
+                                    <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                                      {d.quantity.toFixed(2)} {d.quantityUnit || 'units'} of {d.name}
                                     </span>
-                                  </div>
+                                  )
                                 ))}
-                                {takeoff.pageBreakdown.length === 0 && (
-                                  <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
-                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={() => handleEditTakeoff(takeoff)}
+                                  className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
+                                  title="Edit Takeoff"
+                                >
+                                  <Edit2 size={16} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTakeoff(takeoff.id)}
+                                  className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+                                  title="Delete Takeoff"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
                               </div>
                             </td>
                           </tr>
-                        )}
-                      </React.Fragment>
+                          {expandedTakeoffs[takeoff.id] && (
+                            <tr>
+                              <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
+                                <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
+                                  {takeoff.pageBreakdown.map(pb => (
+                                    <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                                      <Link
+                                        to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                                        state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
+                                        className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2"
+                                      >
+                                        <FileImage size={14} className="text-slate-400" />
+                                        {pb.pageName}
+                                      </Link>
+                                      <span className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                                        {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {takeoff.pageBreakdown.length === 0 && (
+                                    <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    };
+                    return (
+                      <>
+                        {packageOrder.map(pkg => (
+                          <React.Fragment key={`pkg-${pkg}`}>
+                            <tr className="bg-slate-50/70 dark:bg-slate-800/70">
+                              <td colSpan={7} className="px-6 py-2">
+                                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                              </td>
+                            </tr>
+                            {packageMap[pkg].map(renderRow)}
+                          </React.Fragment>
+                        ))}
+                        {ungrouped.map(renderRow)}
+                      </>
                     );
-                  })}
+                  })()}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile Takeoff Cards */}
             <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-700">
-              {getTakeoffTotals().map(takeoff => {
-                const totalCostPerUnit = takeoff.isAdvancedCost && takeoff.customCosts 
-                  ? takeoff.customCosts.reduce((sum, item) => sum + item.costPerUnit, 0)
-                  : (takeoff.costPerUnit || 0);
-                const totalCost = takeoff.totalRealValue * totalCostPerUnit;
+              {(() => {
+                const totals = getTakeoffTotals();
+                const packageOrder: string[] = [];
+                const packageMap: Record<string, typeof totals> = {};
+                const ungrouped: typeof totals = [];
+                for (const t of totals) {
+                  if (t.pricePackage) {
+                    if (!packageMap[t.pricePackage]) {
+                      packageMap[t.pricePackage] = [];
+                      packageOrder.push(t.pricePackage);
+                    }
+                    packageMap[t.pricePackage].push(t);
+                  } else {
+                    ungrouped.push(t);
+                  }
+                }
+                const renderCard = (takeoff: typeof totals[0]) => {
+                  const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+                  return (
+                    <div key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                            checked={selectedTakeoffIds.has(takeoff.id)}
+                            onChange={() => toggleTakeoffSelection(takeoff.id)}
+                          />
+                          <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
+                          <span className="font-bold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleEditTakeoff(takeoff)}
+                            className="p-1.5 text-slate-400 hover:text-accent-600"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTakeoff(takeoff.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
 
+                      <div className="grid grid-cols-2 gap-y-2 text-sm mb-3">
+                        <div className="text-slate-500 dark:text-slate-400">Type</div>
+                        <div className="text-slate-900 dark:text-slate-100 font-medium capitalize text-right">{takeoff.type}</div>
+
+                        <div className="text-slate-500 dark:text-slate-400">Quantity</div>
+                        <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
+                          {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                        </div>
+
+                        <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
+                        <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
+                          {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => toggleTakeoffExpanded(takeoff.id)}
+                        className="w-full py-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2"
+                      >
+                        {expandedTakeoffs[takeoff.id] ? 'Hide' : 'Show'} Page Breakdown
+                        <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
+                          <ChevronRight size={14} />
+                        </div>
+                      </button>
+
+                      {expandedTakeoffs[takeoff.id] && (
+                        <div className="mt-3 space-y-2 pt-3 border-t border-slate-100 dark:border-slate-700">
+                          {takeoff.pageBreakdown.map(pb => (
+                            <div key={pb.pageId} className="flex justify-between items-center text-xs">
+                              <Link
+                                to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                                className="text-accent-600 dark:text-accent-400 font-medium"
+                              >
+                                {pb.pageName}
+                              </Link>
+                              <span className="font-bold text-slate-700 dark:text-slate-300">
+                                {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
                 return (
-                  <div key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <input 
-                          type="checkbox" 
-                          className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
-                          checked={selectedTakeoffIds.has(takeoff.id)}
-                          onChange={() => toggleTakeoffSelection(takeoff.id)}
-                        />
-                        <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                        <span className="font-bold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => handleEditTakeoff(takeoff)} 
-                          className="p-1.5 text-slate-400 hover:text-accent-600"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteTakeoff(takeoff.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-600"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-y-2 text-sm mb-3">
-                      <div className="text-slate-500 dark:text-slate-400">Type</div>
-                      <div className="text-slate-900 dark:text-slate-100 font-medium capitalize text-right">{takeoff.type}</div>
-
-                      <div className="text-slate-500 dark:text-slate-400">Quantity</div>
-                      <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
-                        {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
-                      </div>
-
-                      <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
-                      <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
-                        {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
-                      </div>
-                    </div>
-
-                    <button 
-                      onClick={() => toggleTakeoffExpanded(takeoff.id)}
-                      className="w-full py-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2"
-                    >
-                      {expandedTakeoffs[takeoff.id] ? 'Hide' : 'Show'} Page Breakdown
-                      <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
-                        <ChevronRight size={14} />
-                      </div>
-                    </button>
-
-                    {expandedTakeoffs[takeoff.id] && (
-                      <div className="mt-3 space-y-2 pt-3 border-t border-slate-100 dark:border-slate-700">
-                        {takeoff.pageBreakdown.map(pb => (
-                          <div key={pb.pageId} className="flex justify-between items-center text-xs">
-                            <Link 
-                              to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
-                              className="text-accent-600 dark:text-accent-400 font-medium"
-                            >
-                              {pb.pageName}
-                            </Link>
-                            <span className="font-bold text-slate-700 dark:text-slate-300">
-                              {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <>
+                    {packageOrder.map(pkg => (
+                      <React.Fragment key={`pkg-${pkg}`}>
+                        <div className="px-4 py-2 bg-slate-50 dark:bg-slate-800/70">
+                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                        </div>
+                        {packageMap[pkg].map(renderCard)}
+                      </React.Fragment>
+                    ))}
+                    {ungrouped.map(renderCard)}
+                  </>
                 );
-              })}
+              })()}
             </div>
 
             {project.takeoffs.length === 0 && (
@@ -2645,6 +2708,25 @@ export const ProjectView: React.FC = () => {
                   autoFocus
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Price Package <span className="text-slate-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  list="price-package-options-new"
+                  value={newTakeoffPricePackage}
+                  onChange={(e) => setNewTakeoffPricePackage(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  placeholder="e.g. Flooring Package"
+                />
+                <datalist id="price-package-options-new">
+                  {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter(Boolean))).map(pkg => (
+                    <option key={pkg} value={pkg} />
+                  ))}
+                </datalist>
+                <p className="mt-1 text-xs text-slate-400">Takeoffs with the same package name are grouped together.</p>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Measurement Type</label>
@@ -2807,6 +2889,25 @@ export const ProjectView: React.FC = () => {
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Price Package <span className="text-slate-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  list="price-package-options-edit"
+                  value={editTakeoffPricePackage}
+                  onChange={(e) => setEditTakeoffPricePackage(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  placeholder="e.g. Flooring Package"
+                />
+                <datalist id="price-package-options-edit">
+                  {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter(Boolean))).map(pkg => (
+                    <option key={pkg} value={pkg} />
+                  ))}
+                </datalist>
+                <p className="mt-1 text-xs text-slate-400">Takeoffs with the same package name are grouped together.</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
