@@ -75,7 +75,7 @@ export const ServerSettings: React.FC = () => {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600"></div>
       </div>
     );
   }
@@ -95,14 +95,14 @@ export const ServerSettings: React.FC = () => {
                 <ArrowLeft size={20} />
               </button>
               <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Shield className="text-blue-600" size={24} />
+                <Shield className="text-accent-600" size={24} />
                 Server Settings
               </h1>
             </div>
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-all disabled:opacity-50 shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-accent-600 text-white rounded-lg font-medium hover:bg-accent-700 transition-all disabled:opacity-50 shadow-sm"
             >
               <Save size={18} />
               {isSaving ? 'Saving...' : 'Save Changes'}
@@ -120,7 +120,7 @@ export const ServerSettings: React.FC = () => {
                 onClick={() => setActiveTab('general')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                   activeTab === 'general'
-                    ? 'bg-blue-600 text-white shadow-md'
+                    ? 'bg-accent-600 text-white shadow-md'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
                 }`}
               >
@@ -131,7 +131,7 @@ export const ServerSettings: React.FC = () => {
                 onClick={() => setActiveTab('users')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                   activeTab === 'users'
-                    ? 'bg-blue-600 text-white shadow-md'
+                    ? 'bg-accent-600 text-white shadow-md'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
                 }`}
               >
@@ -159,7 +159,7 @@ export const ServerSettings: React.FC = () => {
                         type="text"
                         value={settings.appName}
                         onChange={e => setSettings({ ...settings, appName: e.target.value })}
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all"
                         placeholder="e.g. My Custom Takeoff"
                       />
                       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">

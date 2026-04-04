@@ -43,7 +43,7 @@ const EditModal: React.FC<{
       <div className="bg-white rounded-xl shadow-2xl p-6 w-96 max-w-[90vw]">
         <h3 className="text-lg font-semibold mb-4 text-slate-900">{title}</h3>
         <textarea
-          className="w-full h-32 p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none mb-4"
+          className="w-full h-32 p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-transparent outline-none resize-none mb-4"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           autoFocus
@@ -60,7 +60,7 @@ const EditModal: React.FC<{
               onSave(value);
               onClose();
             }}
-            className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-colors"
+            className="px-4 py-2 bg-accent-600 text-white hover:bg-accent-700 rounded-lg transition-colors"
           >
             Save
           </button>
@@ -1498,7 +1498,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
               }
             }}
             className={`p-2 rounded-lg transition-all flex flex-col items-center gap-1 ${
-              currentTool === tool.id ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'
+              currentTool === tool.id ? 'bg-accent-50 text-accent-600' : 'text-slate-600 hover:bg-slate-50'
             }`}
             title={tool.label}
           >
@@ -1510,7 +1510,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
         <button
           onClick={() => setShowGrid(!showGrid)}
           className={`p-2 rounded-lg transition-all ${
-            showGrid ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'
+            showGrid ? 'bg-accent-50 text-accent-600' : 'text-slate-600 hover:bg-slate-50'
           }`}
           title="Toggle Grid"
         >

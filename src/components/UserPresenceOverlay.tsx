@@ -19,11 +19,11 @@ export const UserPresenceOverlay: React.FC = () => {
     <div className="fixed bottom-6 right-6 z-50">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-12 h-12 bg-white dark:bg-slate-800 rounded-full shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-blue-600 dark:hover:text-accent-400 hover:border-blue-200 dark:hover:border-accent-600 transition-all active:scale-95 relative"
+        className="w-12 h-12 bg-white dark:bg-slate-800 rounded-full shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:border-accent-200 dark:hover:border-accent-600 transition-all active:scale-95 relative"
       >
         <Users size={24} />
         {otherUsers.length > 0 && (
-          <span className="absolute -top-1 -right-1 w-5 h-5 bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white dark:border-slate-800">
+          <span className="absolute -top-1 -right-1 w-5 h-5 bg-accent-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white dark:border-slate-800">
             {otherUsers.length}
           </span>
         )}
@@ -39,7 +39,7 @@ export const UserPresenceOverlay: React.FC = () => {
           >
             <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-900/50">
               <h3 className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                <Users size={18} className="text-blue-600 dark:text-accent-400" />
+                <Users size={18} className="text-accent-600 dark:text-accent-400" />
                 Active Users
               </h3>
               <button onClick={() => setIsOpen(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">
@@ -89,9 +89,9 @@ export const UserPresenceOverlay: React.FC = () => {
                           type="checkbox"
                           checked={followedUserId === user.id}
                           onChange={(e) => setFollowedUserId(e.target.checked ? user.id : null)}
-                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          className="w-4 h-4 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                         />
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${followedUserId === user.id ? 'text-blue-600 dark:text-accent-400' : 'text-slate-400 dark:text-slate-500'}`}>
+                        <span className={`text-[10px] font-bold uppercase tracking-wider ${followedUserId === user.id ? 'text-accent-600 dark:text-accent-400' : 'text-slate-400 dark:text-slate-500'}`}>
                           {followedUserId === user.id ? 'Following' : 'Follow'}
                         </span>
                       </label>

@@ -52,7 +52,7 @@ const CustomCostRow: React.FC<{
         <select
           value={item.type}
           onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
-          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50"
         >
           <option value="flat">Flat Cost</option>
           <option value="yield">Cost by Yield</option>
@@ -64,7 +64,7 @@ const CustomCostRow: React.FC<{
           value={item.name}
           onChange={(e) => onChange(index, { ...item, name: e.target.value })}
           placeholder="Line Name"
-          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
         />
         <button
           onClick={() => onRemove(index)}
@@ -74,7 +74,7 @@ const CustomCostRow: React.FC<{
         </button>
       </div>
       
-      <div className="flex gap-2 items-center pl-2 border-l-2 border-blue-100">
+      <div className="flex gap-2 items-center pl-2 border-l-2 border-accent-100">
         {item.type === 'flat' && (
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
@@ -85,7 +85,7 @@ const CustomCostRow: React.FC<{
                 value={item.cost || '0'}
                 onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                 onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
           </div>
@@ -100,7 +100,7 @@ const CustomCostRow: React.FC<{
                 value={item.yield || '0'}
                 onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
                 onBlur={(e) => handleMathBlur('yield', e.target.value)}
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
               <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
             </div>
@@ -113,7 +113,7 @@ const CustomCostRow: React.FC<{
                   value={item.cost || '0'}
                   onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                   onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
                 />
               </div>
             </div>
@@ -130,7 +130,7 @@ const CustomCostRow: React.FC<{
                 value={item.costPerUnit || '0'}
                 onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
                 onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
           </div>
@@ -147,7 +147,7 @@ const CustomCostRow: React.FC<{
                   value={item.amount || '0'}
                   onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
                   onBlur={(e) => handleMathBlur('amount', e.target.value)}
-                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
                 />
               </div>
             </div>
@@ -158,7 +158,7 @@ const CustomCostRow: React.FC<{
                 value={item.perUnits || '0'}
                 onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
                 onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
-                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
               <span className="text-[10px] text-slate-500">{unitLabel}s</span>
             </div>
@@ -920,7 +920,7 @@ const CanvasViewInner: React.FC = () => {
   if (isLoading || !project || !page || !imageUrl) {
     return (
       <div className="flex h-screen w-full bg-slate-50 items-center justify-center">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -1046,7 +1046,7 @@ const CanvasViewInner: React.FC = () => {
                           to={`/project/${project.id}/page/${pid}`}
                           state={{ pageIds }}
                           onClick={() => setShowPageJump(false)}
-                          className={`flex items-center gap-2 px-3 py-2 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${pid === pageId ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
+                          className={`flex items-center gap-2 px-3 py-2 text-xs hover:bg-accent-50 dark:hover:bg-accent-900/20 transition-colors ${pid === pageId ? 'bg-accent-50 dark:bg-accent-900/20 text-accent-700 dark:text-accent-400 font-semibold' : 'text-slate-700 dark:text-slate-300'}`}
                         >
                           <span className="text-slate-400 dark:text-slate-500 w-5 shrink-0">{idx + 1}.</span>
                           <span className="truncate">{pg?.name || `Page ${idx + 1}`}</span>
@@ -1138,7 +1138,7 @@ const CanvasViewInner: React.FC = () => {
               className={`p-2 rounded-lg transition-colors ${
                 history.length === 0
                   ? 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-blue-600'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-accent-600'
               }`}
               title="Undo (Ctrl+Z)"
             >
@@ -1150,7 +1150,7 @@ const CanvasViewInner: React.FC = () => {
               className={`p-2 rounded-lg transition-colors ${
                 redoStack.length === 0
                   ? 'text-slate-300 cursor-not-allowed'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-accent-600'
               }`}
               title="Redo (Ctrl+Shift+Z)"
             >
@@ -1158,7 +1158,7 @@ const CanvasViewInner: React.FC = () => {
             </button>
             <button
               onClick={() => setShowShortcutsHelp(true)}
-              className="p-2 rounded-lg transition-colors text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+              className="p-2 rounded-lg transition-colors text-slate-400 hover:bg-slate-100 hover:text-accent-600"
               title="Keyboard Shortcuts (?)"
             >
               <HelpCircle size={18} />
@@ -1182,7 +1182,7 @@ const CanvasViewInner: React.FC = () => {
                   setProject(updatedProject);
                   setPage(updatedProject.pages.find(p => p.id === page.id) || page);
                 }}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
               />
             </div>
 
@@ -1192,7 +1192,7 @@ const CanvasViewInner: React.FC = () => {
                 type="checkbox"
                 checked={page.showLegend || false}
                 onChange={(e) => savePageUpdates({ showLegend: e.target.checked })}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
               />
             </div>
 
@@ -1204,7 +1204,7 @@ const CanvasViewInner: React.FC = () => {
                     type="checkbox"
                     checked={page.showLegendTotals !== false} // Default to true
                     onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                   />
                 </div>
                 <div className="flex flex-col gap-1.5 pl-4">
@@ -1231,7 +1231,7 @@ const CanvasViewInner: React.FC = () => {
                 <select
                   value={page.scaleConfig?.label || (page.scaleConfig ? 'custom' : '')}
                   onChange={handleStandardScaleChange}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                 >
                   <option value="" disabled>Select a scale...</option>
                   <option value="custom">Custom (Calibrated)</option>
@@ -1257,7 +1257,7 @@ const CanvasViewInner: React.FC = () => {
                 {page.scaleRegions.map(region => (
                   <div 
                     key={region.id} 
-                    className={`border rounded-lg p-2 transition-colors cursor-pointer ${selectedRegionId === region.id ? 'bg-blue-50 border-blue-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'}`}
+                    className={`border rounded-lg p-2 transition-colors cursor-pointer ${selectedRegionId === region.id ? 'bg-accent-50 border-accent-300' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'}`}
                     onClick={() => setSelectedRegionId(region.id === selectedRegionId ? null : region.id)}
                   >
                     <div className="flex items-center justify-between mb-2">
@@ -1347,7 +1347,7 @@ const CanvasViewInner: React.FC = () => {
                           setProject(updatedProject);
                           setPage(updatedProject.pages.find(p => p.id === page.id) || page);
                         }}
-                        className="w-full border border-slate-300 rounded px-2 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                        className="w-full border border-slate-300 rounded px-2 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-accent-500 bg-white"
                       >
                         <option value="" disabled>Select a scale...</option>
                         <option value="custom">Custom (Calibrated)</option>
@@ -1374,7 +1374,7 @@ const CanvasViewInner: React.FC = () => {
                             setCalibratingRegionId(region.id);
                             setCurrentTool('scale');
                           }}
-                          className="text-[10px] text-blue-600 font-medium hover:underline"
+                          className="text-[10px] text-accent-600 font-medium hover:underline"
                         >
                           {region.scaleConfig ? 'Recalibrate' : 'Set Scale'}
                         </button>
@@ -1424,7 +1424,7 @@ const CanvasViewInner: React.FC = () => {
                       <div key={user.id} className="flex items-center justify-between gap-2 text-sm">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: user.color }}></div>
-                          <div className="min-w-0 cursor-pointer hover:text-blue-600 transition-colors" onClick={() => navigate(user.pageId)}>
+                          <div className="min-w-0 cursor-pointer hover:text-accent-600 transition-colors" onClick={() => navigate(user.pageId)}>
                             <p className="text-slate-700 truncate font-medium" title={user.name}>{user.name}</p>
                             {user.pageId !== location.pathname && (
                               <p className="text-[10px] text-slate-400 truncate">
@@ -1438,9 +1438,9 @@ const CanvasViewInner: React.FC = () => {
                             type="checkbox"
                             checked={followedUserId === user.id}
                             onChange={(e) => setFollowedUserId(e.target.checked ? user.id : null)}
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            className="w-3.5 h-3.5 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                           />
-                          <span className="text-[10px] font-medium text-slate-400 group-hover:text-blue-600 transition-colors">Follow</span>
+                          <span className="text-[10px] font-medium text-slate-400 group-hover:text-accent-600 transition-colors">Follow</span>
                         </label>
                       </div>
                     ))}
@@ -1482,7 +1482,7 @@ const CanvasViewInner: React.FC = () => {
           >
             <Layers size={22} />
             {aggregatedMeasurements.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-accent-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white shadow-sm">
                 {aggregatedMeasurements.length}
               </span>
             )}
@@ -1593,7 +1593,7 @@ const CanvasViewInner: React.FC = () => {
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   history.length === 0
                     ? 'text-slate-300 cursor-not-allowed'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600 active:bg-slate-200'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-accent-600 active:bg-slate-200'
                 }`}
                 title="Undo (Ctrl+Z)"
               >
@@ -1605,7 +1605,7 @@ const CanvasViewInner: React.FC = () => {
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   redoStack.length === 0
                     ? 'text-slate-300 cursor-not-allowed'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-blue-600 active:bg-slate-200'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-accent-600 active:bg-slate-200'
                 }`}
                 title="Redo (Ctrl+Shift+Z)"
               >
@@ -1613,7 +1613,7 @@ const CanvasViewInner: React.FC = () => {
               </button>
               <button
                 onClick={() => setShowShortcutsHelp(true)}
-                className="p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 text-slate-400 hover:bg-slate-100 hover:text-blue-600"
+                className="p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 text-slate-400 hover:bg-slate-100 hover:text-accent-600"
                 title="Keyboard Shortcuts (?)"
               >
                 <HelpCircle size={20} />
@@ -1764,7 +1764,7 @@ const CanvasViewInner: React.FC = () => {
                     type="checkbox" 
                     checked={showCurrentPageOnly}
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
-                    className="rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
                   />
                   <span className="hidden sm:inline">Current page only</span>
                   <span className="sm:hidden">Page only</span>
@@ -1772,7 +1772,7 @@ const CanvasViewInner: React.FC = () => {
                 {page.scaleConfig && (
                   <button
                     onClick={() => setShowTakeoffModal(true)}
-                    className="text-xs flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 px-2 py-1 rounded transition-colors"
+                    className="text-xs flex items-center gap-1 text-accent-600 dark:text-accent-400 hover:text-accent-700 font-medium bg-accent-50 dark:bg-accent-900/30 hover:bg-accent-100 dark:hover:bg-accent-900/50 px-2 py-1 rounded transition-colors"
                   >
                     <Plus size={12} />
                     New
@@ -1789,7 +1789,7 @@ const CanvasViewInner: React.FC = () => {
                 value={measurementFilter}
                 onChange={(e) => setMeasurementFilter(e.target.value)}
                 placeholder="Filter takeoffs & measurements..."
-                className="w-full text-xs border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+                className="w-full text-xs border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
               />
             </div>
 
@@ -1814,18 +1814,18 @@ const CanvasViewInner: React.FC = () => {
               return (
                 <div
                   key={takeoff.id}
-                  className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200 dark:border-slate-700'}`}
+                  className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
                   style={{ borderLeftColor: takeoff.color }}
                   onDragOver={(e) => {
                     e.preventDefault();
-                    e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
+                    e.currentTarget.classList.add('ring-2', 'ring-accent-400', 'ring-inset');
                   }}
                   onDragLeave={(e) => {
-                    e.currentTarget.classList.remove('ring-2', 'ring-blue-400', 'ring-inset');
+                    e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
-                    e.currentTarget.classList.remove('ring-2', 'ring-blue-400', 'ring-inset');
+                    e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
                     const measurementId = e.dataTransfer.getData('text/plain');
                     const measurement = (showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === measurementId);
                     
@@ -1848,7 +1848,7 @@ const CanvasViewInner: React.FC = () => {
                   }}
                 >
                   <div 
-                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
+                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
                     onClick={() => {
                       if (isActive) {
                         setSelectedTakeoffId(null);
@@ -1872,7 +1872,7 @@ const CanvasViewInner: React.FC = () => {
                         {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-blue-800 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200'}`}>{takeoff.name}</span>
+                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>{takeoff.name}</span>
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={(e) => {
@@ -1889,7 +1889,7 @@ const CanvasViewInner: React.FC = () => {
                             e.stopPropagation();
                             handleEditTakeoff(takeoff);
                           }}
-                          className="text-slate-400 hover:text-blue-500 p-2 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-slate-400 hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
                           title="Edit Takeoff"
                         >
                           <Edit2 size={16} />
@@ -1897,7 +1897,7 @@ const CanvasViewInner: React.FC = () => {
                       </div>
                     </div>
                     <div className="flex flex-col items-end shrink-0 ml-2">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-blue-600 text-white border-blue-700 shadow-sm' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
+                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
                         {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
                       </span>
                       {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
@@ -1952,7 +1952,7 @@ const CanvasViewInner: React.FC = () => {
                             <Link 
                               to={`/project/${project.id}/page/${p.id}`}
                               state={{ pageIds: project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id) }}
-                              className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline truncate"
+                              className="text-sm font-medium text-accent-600 dark:text-accent-400 hover:text-accent-800 dark:hover:text-accent-300 hover:underline truncate"
                             >
                               {p.name}
                             </Link>
@@ -1972,17 +1972,17 @@ const CanvasViewInner: React.FC = () => {
             {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
               .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
               <div 
-                className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200 dark:border-slate-700'}`}
+                className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
                 onDragOver={(e) => {
                   e.preventDefault();
-                  e.currentTarget.classList.add('ring-2', 'ring-blue-400', 'ring-inset');
+                  e.currentTarget.classList.add('ring-2', 'ring-accent-400', 'ring-inset');
                 }}
                 onDragLeave={(e) => {
-                  e.currentTarget.classList.remove('ring-2', 'ring-blue-400', 'ring-inset');
+                  e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
                 }}
                 onDrop={(e) => {
                   e.preventDefault();
-                  e.currentTarget.classList.remove('ring-2', 'ring-blue-400', 'ring-inset');
+                  e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
                   const measurementId = e.dataTransfer.getData('text/plain');
                   if (measurementId) {
                     updateMeasurement(measurementId, { takeoffId: undefined });
@@ -1990,10 +1990,10 @@ const CanvasViewInner: React.FC = () => {
                 }}
               >
                 <div 
-                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
+                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
                   onClick={() => setSelectedTakeoffId(null)}
                 >
-                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-blue-800 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
+                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
                 </div>
                 <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
                   {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
@@ -2055,7 +2055,7 @@ const CanvasViewInner: React.FC = () => {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') confirmScale();
                     }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
                     autoFocus
                   />
                 </div>
@@ -2064,7 +2064,7 @@ const CanvasViewInner: React.FC = () => {
                   <select
                     value={scaleUnit}
                     onChange={(e) => setScaleUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="ft">ft</option>
                     <option value="in">in</option>
@@ -2084,7 +2084,7 @@ const CanvasViewInner: React.FC = () => {
               </button>
               <button
                 onClick={confirmScale}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:scale-95 rounded-lg transition-all"
+                className="px-4 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 active:scale-95 rounded-lg transition-all"
               >
                 Set Scale
               </button>
@@ -2136,7 +2136,7 @@ const CanvasViewInner: React.FC = () => {
                   <select
                     value={selectedTemplateId}
                     onChange={(e) => handleTemplateChange(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Select a template...</option>
                     {templates.map(t => (
@@ -2151,7 +2151,7 @@ const CanvasViewInner: React.FC = () => {
                   type="text"
                   value={newTakeoffName}
                   onChange={(e) => setNewTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
@@ -2165,7 +2165,7 @@ const CanvasViewInner: React.FC = () => {
                       setNewTakeoffType(e.target.value as 'length' | 'area' | 'count');
                       setNewTakeoffUnit('');
                     }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="length">Length</option>
                     <option value="area">Area</option>
@@ -2190,7 +2190,7 @@ const CanvasViewInner: React.FC = () => {
                   <select
                     value={newTakeoffUnit}
                     onChange={(e) => setNewTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {newTakeoffType === 'length' && (
@@ -2229,7 +2229,7 @@ const CanvasViewInner: React.FC = () => {
                         if (result !== null) setNewTakeoffCostPerUnit(result.toString());
                       }
                     }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
                     placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
@@ -2241,7 +2241,7 @@ const CanvasViewInner: React.FC = () => {
                   id="isNewTakeoffAdvanced"
                   checked={isNewTakeoffAdvanced}
                   onChange={(e) => setIsNewTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
+                  className="w-4 h-4 text-accent-600 rounded border-slate-300 dark:border-slate-600 focus:ring-accent-500"
                 />
                 <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
                   Advanced Costing (Custom Items)
@@ -2254,7 +2254,7 @@ const CanvasViewInner: React.FC = () => {
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
                       onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
-                      className="text-[10px] flex items-center gap-1 text-blue-600 hover:text-blue-700 font-bold uppercase tracking-tight"
+                      className="text-[10px] flex items-center gap-1 text-accent-600 hover:text-accent-700 font-bold uppercase tracking-tight"
                     >
                       <Plus size={12} />
                       Add Cost Item
@@ -2291,7 +2291,7 @@ const CanvasViewInner: React.FC = () => {
               <button
                 onClick={handleCreateTakeoff}
                 disabled={!newTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
               >
                 Create Takeoff
               </button>
@@ -2344,7 +2344,7 @@ const CanvasViewInner: React.FC = () => {
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white"
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
@@ -2377,7 +2377,7 @@ const CanvasViewInner: React.FC = () => {
                   <select
                     value={editTakeoffUnit}
                     onChange={(e) => setEditTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {editingTakeoff.type === 'length' && (
@@ -2416,7 +2416,7 @@ const CanvasViewInner: React.FC = () => {
                         if (result !== null) setEditTakeoffCostPerUnit(result.toString());
                       }
                     }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
                     placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
@@ -2428,7 +2428,7 @@ const CanvasViewInner: React.FC = () => {
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
                   onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
+                  className="w-4 h-4 text-accent-600 rounded border-slate-300 dark:border-slate-600 focus:ring-accent-500"
                 />
                 <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
                   Advanced Costing (Custom Items)
@@ -2441,7 +2441,7 @@ const CanvasViewInner: React.FC = () => {
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
                     <button
                       onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
-                      className="text-[10px] flex items-center gap-1 text-blue-600 hover:text-blue-700 font-bold uppercase tracking-tight"
+                      className="text-[10px] flex items-center gap-1 text-accent-600 hover:text-accent-700 font-bold uppercase tracking-tight"
                     >
                       <Plus size={12} />
                       Add Cost Item
@@ -2478,7 +2478,7 @@ const CanvasViewInner: React.FC = () => {
               <button
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
               >
                 Save Changes
               </button>
@@ -2504,7 +2504,7 @@ const CanvasViewInner: React.FC = () => {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                <div className="w-10 h-10 rounded-full bg-accent-100 flex items-center justify-center text-accent-600">
                   <HelpCircle size={20} />
                 </div>
                 <h3 className="text-lg font-semibold text-slate-900">Keyboard Shortcuts</h3>
@@ -2536,7 +2536,7 @@ const CanvasViewInner: React.FC = () => {
                     ['A (while drawing)', 'Toggle arc mode'],
                   ].map(([key, action]) => (
                     <tr key={key} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-3 font-mono text-xs text-blue-700 bg-blue-50/50 whitespace-nowrap">{key}</td>
+                      <td className="px-6 py-3 font-mono text-xs text-accent-700 bg-accent-50/50 whitespace-nowrap">{key}</td>
                       <td className="px-6 py-3 text-slate-700">{action}</td>
                     </tr>
                   ))}
@@ -2567,7 +2567,7 @@ const CanvasViewInner: React.FC = () => {
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
               <button
                 onClick={() => setToolDisabledMessage(null)}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 rounded-xl transition-colors shadow-sm"
               >
                 Got it
               </button>
@@ -2632,7 +2632,7 @@ function ToolButton({
         flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
         ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' : 
           active 
-            ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' 
+            ? 'bg-accent-50 border-accent-200 text-accent-700 shadow-sm' 
             : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}
         ${className}
       `}
@@ -2687,7 +2687,7 @@ function MeasurementItem({
 
   return (
     <div 
-      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-blue-50 border-blue-500' : 'hover:bg-slate-50 border-transparent'}`}
+      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-50 border-accent-500' : 'hover:bg-slate-50 border-transparent'}`}
       onClick={onSelect}
       draggable
       onDragStart={(e) => {
@@ -2714,13 +2714,13 @@ function MeasurementItem({
                     setIsEditing(false);
                   }
                 }}
-                className="text-sm border border-blue-300 rounded px-1 py-0.5 w-full focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="text-sm border border-accent-300 rounded px-1 py-0.5 w-full focus:outline-none focus:ring-1 focus:ring-accent-500"
                 autoFocus
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <span 
-                className="text-sm text-slate-700 break-words whitespace-normal hover:text-blue-600"
+                className="text-sm text-slate-700 break-words whitespace-normal hover:text-accent-600"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   setIsEditing(true);
@@ -2734,7 +2734,7 @@ function MeasurementItem({
               <Link
                 to={`/project/${projectId}/page/${pageId}`}
                 state={{ pageIds }}
-                className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline font-medium uppercase tracking-wide truncate"
+                className="text-[10px] text-accent-500 hover:text-accent-700 hover:underline font-medium uppercase tracking-wide truncate"
                 onClick={(e) => e.stopPropagation()}
               >
                 Page: {pageName}
@@ -2769,7 +2769,7 @@ function MeasurementItem({
                 e.stopPropagation();
                 setIsEditing(true);
               }}
-              className="md:hidden p-2 text-slate-400 hover:text-blue-500 active:scale-95 transition-all"
+              className="md:hidden p-2 text-slate-400 hover:text-accent-500 active:scale-95 transition-all"
               title="Rename Measurement"
             >
               <Edit2 size={18} />
@@ -2795,14 +2795,14 @@ function MeasurementItem({
             {takeoffType === 'area' && measurement.type === 'length' && (
               <button
                 onClick={(e) => { e.stopPropagation(); onEditHeights?.(); }}
-                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
               >
                 <Edit2 size={10} /> Edit Heights
               </button>
             )}
             <button
               onClick={() => setIsEditing(true)}
-              className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
             >
               <Edit2 size={10} /> Rename
             </button>
@@ -2854,7 +2854,7 @@ function HeightsModal({
                     newHeights[i] = e.target.value;
                     setHeights(newHeights);
                   }}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   placeholder="Height"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
@@ -2869,7 +2869,7 @@ function HeightsModal({
                 type="checkbox"
                 checked={isTwoSided}
                 onChange={e => setIsTwoSided(e.target.checked)}
-                className="w-4 h-4 text-blue-600 rounded border-slate-300 dark:border-slate-600 focus:ring-blue-500"
+                className="w-4 h-4 text-accent-600 rounded border-slate-300 dark:border-slate-600 focus:ring-accent-500"
               />
               <span className="text-sm font-medium text-slate-700">Two-sided wall (doubles the area)</span>
             </label>
@@ -2877,7 +2877,7 @@ function HeightsModal({
         </div>
         <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
           <button onClick={onClose} className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors">Cancel</button>
-          <button onClick={handleSave} className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-sm">Save Heights</button>
+          <button onClick={handleSave} className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 rounded-xl transition-colors shadow-sm">Save Heights</button>
         </div>
       </div>
     </div>

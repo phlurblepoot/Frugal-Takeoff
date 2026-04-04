@@ -39,7 +39,7 @@ export const NotesOverlay: React.FC = () => {
       <div className="bg-white dark:bg-slate-900 w-full h-full rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200 dark:border-slate-700 animate-in zoom-in-95 duration-200">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg">
+            <div className="p-2 bg-accent-100 dark:bg-accent-900/30 text-accent-600 dark:text-accent-400 rounded-lg">
               <StickyNote size={20} />
             </div>
             <div>
@@ -59,7 +59,7 @@ export const NotesOverlay: React.FC = () => {
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 z-20">
               <div className="flex flex-col items-center gap-3">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600"></div>
                 <span className="text-sm text-slate-500 dark:text-slate-400 font-medium">Loading board...</span>
               </div>
             </div>

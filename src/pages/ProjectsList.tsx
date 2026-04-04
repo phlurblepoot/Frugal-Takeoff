@@ -497,7 +497,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                           <tr 
                             key={project.id}
                             onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                            className="hover:bg-blue-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
+                            className="hover:bg-accent-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
                           >
                             <td className="px-6 py-4">
                               <div className="flex flex-col gap-1">
@@ -511,7 +511,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                         if (e.key === 'Enter') handleRename(project);
                                         if (e.key === 'Escape') setEditingProjectId(null);
                                       }}
-                                      className="px-2 py-1 text-sm border border-blue-500 rounded outline-none w-full"
+                                      className="px-2 py-1 text-sm border border-accent-500 rounded outline-none w-full"
                                       autoFocus
                                     />
                                     <button 
@@ -529,7 +529,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2 group/name">
-                                    <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-accent-400 transition-colors">
+                                    <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                                       {project.name}
                                     </div>
                                     <button
@@ -538,7 +538,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                         setEditingProjectId(project.id);
                                         setEditingProjectName(project.name);
                                       }}
-                                      className="p-1 text-slate-400 hover:text-blue-600 opacity-0 group-hover/name:opacity-100 transition-all"
+                                      className="p-1 text-slate-400 hover:text-accent-600 opacity-0 group-hover/name:opacity-100 transition-all"
                                     >
                                       <Edit2 size={12} />
                                     </button>
@@ -546,7 +546,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                 )}
                                 <div className="flex flex-wrap gap-1.5 mt-1">
                                   {project.submitted && (
-                                    <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-accent-100 text-accent-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
                                   )}
                                   {project.responded && (
                                     <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
@@ -575,7 +575,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                    className="line-clamp-1 hover:text-accent-600 hover:underline transition-colors"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {project.address}
@@ -676,7 +676,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
                       <div className="flex flex-wrap gap-1.5">
                         {project.submitted && (
-                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                          <span className="px-2 py-0.5 rounded bg-accent-100 text-accent-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
                         )}
                         {project.responded && (
                           <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
@@ -707,7 +707,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.name}
                     onChange={e => setNewBid({ ...newBid, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. City Hall Renovation"
                   />
                 </div>
@@ -717,7 +717,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.contractor}
                     onChange={e => setNewBid({ ...newBid, contractor: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. ABC Construction"
                   />
                 </div>
@@ -727,7 +727,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.address}
                     onChange={e => setNewBid({ ...newBid, address: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. 123 Main St"
                   />
                 </div>
@@ -774,7 +774,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bid.address)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                className="line-clamp-1 hover:text-accent-600 hover:underline transition-colors"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {bid.address}

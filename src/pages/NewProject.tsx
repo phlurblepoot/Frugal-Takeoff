@@ -380,7 +380,7 @@ export const NewProject: React.FC = () => {
               <button
                 onClick={handleSaveChanges}
                 disabled={isProcessing}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {isProcessing ? (
                   <><Loader2 size={18} className="animate-spin" /> Saving...</>
@@ -412,7 +412,7 @@ export const NewProject: React.FC = () => {
                       )}
                       
                       {/* Hover Overlay */}
-                      <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
+                      <div className="absolute inset-0 bg-accent-600/0 group-hover:bg-accent-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
                         <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300">
                           <Eye size={24} />
                         </div>
@@ -422,7 +422,7 @@ export const NewProject: React.FC = () => {
                       </div>
 
                       {/* Page Badge */}
-                      <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-blue-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-blue-100">
+                      <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                         PAGE {index + 1}
                       </div>
                     </div>
@@ -442,7 +442,7 @@ export const NewProject: React.FC = () => {
                             type="text"
                             value={page.pageNumber || ''}
                             onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
                             placeholder="e.g. A-101"
                           />
                         </div>
@@ -461,7 +461,7 @@ export const NewProject: React.FC = () => {
                             type="text"
                             value={page.description || ''}
                             onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
-                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
+                            className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
                             placeholder="e.g. Floor Plan"
                           />
                         </div>
@@ -509,13 +509,13 @@ export const NewProject: React.FC = () => {
                   <div className="flex items-center gap-1 flex-1 sm:flex-none">
                     <button
                       onClick={() => setExtractionType('pageNumber')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-blue-300'}`}
+                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-accent-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-accent-300'}`}
                     >
                       Number
                     </button>
                     <button
                       onClick={() => setExtractionType('description')}
-                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-blue-300'}`}
+                      className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-all ${extractionType === 'description' ? 'bg-accent-600 text-white shadow-md' : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 hover:border-accent-300'}`}
                     >
                       Desc
                     </button>
@@ -666,7 +666,7 @@ export const NewProject: React.FC = () => {
                   />
                   {extractionRect && (
                     <div 
-                      className="absolute border-2 border-blue-500 bg-blue-500/20 cursor-move pointer-events-auto"
+                      className="absolute border-2 border-accent-500 bg-accent-500/20 cursor-move pointer-events-auto"
                       style={{
                         left: `${extractionRect.x}%`,
                         top: `${extractionRect.y}%`,
@@ -680,10 +680,10 @@ export const NewProject: React.FC = () => {
                         setInitialRect({ ...extractionRect });
                       }}
                     >
-                      <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                      <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                      <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                      <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                      <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
                     </div>
                   )}
                   {!extractionType && zoom === 1 && (
@@ -700,7 +700,7 @@ export const NewProject: React.FC = () => {
                 <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 w-full sm:w-auto">
                   {extractionRect ? (
                     <>
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                      <div className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" />
                       Area selected. Ready to extract.
                     </>
                   ) : (
@@ -729,7 +729,7 @@ export const NewProject: React.FC = () => {
                   <button
                     onClick={() => handleExtractText(true)}
                     disabled={isExtracting || !extractionRect}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                    className="flex-1 sm:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-xs font-bold hover:bg-accent-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-accent-200 disabled:opacity-50"
                   >
                     {isExtracting ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
                     All Pages
@@ -768,7 +768,7 @@ export const NewProject: React.FC = () => {
                   id="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                   placeholder="e.g. Main Floor Plan"
                   required
                   disabled={isProcessing}
@@ -789,7 +789,7 @@ export const NewProject: React.FC = () => {
                       setShowSuggestions(true);
                     }}
                     onFocus={() => setShowSuggestions(true)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                     placeholder="e.g. ABC Construction"
                     disabled={isProcessing}
                     autoComplete="off"
@@ -835,7 +835,7 @@ export const NewProject: React.FC = () => {
                     id="bidDueDate"
                     value={bidDueDate}
                     onChange={(e) => setBidDueDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
                     disabled={isProcessing}
                   />
                 </div>
@@ -851,7 +851,7 @@ export const NewProject: React.FC = () => {
                     id="planSetName"
                     value={planSetName}
                     onChange={(e) => setPlanSetName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
                     placeholder="e.g. Initial Set"
                     required
                     disabled={isProcessing}
@@ -867,7 +867,7 @@ export const NewProject: React.FC = () => {
                     id="planSetDate"
                     value={planSetDate}
                     onChange={(e) => setPlanSetDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
                     required
                     disabled={isProcessing}
                   />
@@ -880,7 +880,7 @@ export const NewProject: React.FC = () => {
                 </label>
                 <div 
                   className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                    files.length > 0 ? 'border-blue-300 bg-blue-50' : 'border-slate-300 hover:border-blue-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
+                    files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-slate-300 hover:border-accent-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
                   }`}
                   onClick={() => !isProcessing && files.length === 0 && fileInputRef.current?.click()}
                 >
@@ -888,9 +888,9 @@ export const NewProject: React.FC = () => {
                     <div className="flex flex-col items-center w-full">
                       <div className="w-full max-w-md space-y-3 mb-4">
                         {files.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-3 rounded-lg border border-blue-200 shadow-sm">
+                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-3 rounded-lg border border-accent-200 shadow-sm">
                             <div className="flex items-center gap-3 overflow-hidden">
-                              <FileText size={20} className="text-blue-500 shrink-0" />
+                              <FileText size={20} className="text-accent-500 shrink-0" />
                               <div className="text-left overflow-hidden">
                                 <p className="text-sm font-medium text-slate-900 truncate" title={file.name}>{file.name}</p>
                                 <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
@@ -913,7 +913,7 @@ export const NewProject: React.FC = () => {
                         <button 
                           type="button" 
                           onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                          className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                          className="mt-2 text-sm text-accent-600 hover:text-accent-700 font-medium flex items-center gap-1"
                         >
                           <Plus size={16} /> Add more PDFs
                         </button>
@@ -950,7 +950,7 @@ export const NewProject: React.FC = () => {
               <button
                 type="submit"
                 disabled={!name || files.length === 0 || isProcessing}
-                className="flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                className="flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {isProcessing ? (
                   <>

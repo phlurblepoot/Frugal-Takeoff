@@ -35,7 +35,7 @@ const CustomCostRow: React.FC<{
         <select
           value={item.type}
           onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
-          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50"
         >
           <option value="flat">Flat Cost</option>
           <option value="yield">Cost by Yield</option>
@@ -47,7 +47,7 @@ const CustomCostRow: React.FC<{
           value={item.name}
           onChange={(e) => onChange(index, { ...item, name: e.target.value })}
           placeholder="Line Name"
-          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
         />
         <button
           onClick={() => onRemove(index)}
@@ -57,7 +57,7 @@ const CustomCostRow: React.FC<{
         </button>
       </div>
       
-      <div className="flex gap-2 items-center pl-2 border-l-2 border-blue-100">
+      <div className="flex gap-2 items-center pl-2 border-l-2 border-accent-100">
         {item.type === 'flat' && (
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
@@ -68,7 +68,7 @@ const CustomCostRow: React.FC<{
                 value={item.cost || '0'}
                 onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                 onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
           </div>
@@ -83,7 +83,7 @@ const CustomCostRow: React.FC<{
                 value={item.yield || '0'}
                 onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
                 onBlur={(e) => handleMathBlur('yield', e.target.value)}
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
               <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
             </div>
@@ -94,7 +94,7 @@ const CustomCostRow: React.FC<{
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. bags"
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -106,7 +106,7 @@ const CustomCostRow: React.FC<{
                   value={item.cost || '0'}
                   onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                   onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
                 />
               </div>
             </div>
@@ -123,7 +123,7 @@ const CustomCostRow: React.FC<{
                 value={item.costPerUnit || '0'}
                 onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
                 onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
           </div>
@@ -140,7 +140,7 @@ const CustomCostRow: React.FC<{
                   value={item.amount || '0'}
                   onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
                   onBlur={(e) => handleMathBlur('amount', e.target.value)}
-                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
                 />
               </div>
             </div>
@@ -151,7 +151,7 @@ const CustomCostRow: React.FC<{
                 value={item.perUnits || '0'}
                 onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
                 onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
-                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
               <span className="text-[10px] text-slate-500">{unitLabel}s</span>
             </div>
@@ -162,7 +162,7 @@ const CustomCostRow: React.FC<{
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. bags"
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
             </div>
           </>
@@ -1489,7 +1489,7 @@ export const ProjectView: React.FC = () => {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex justify-center items-center">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -1516,7 +1516,7 @@ export const ProjectView: React.FC = () => {
                     if (e.key === 'Enter') handleSaveProjectName();
                     if (e.key === 'Escape') setIsEditingProjectName(false);
                   }}
-                  className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white border-b-2 border-blue-500 focus:outline-none bg-transparent dark:bg-transparent px-1 min-w-[300px]"
+                  className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white border-b-2 border-accent-500 focus:outline-none bg-transparent dark:bg-transparent px-1 min-w-[300px]"
                   autoFocus
                 />
                 <button
@@ -1540,7 +1540,7 @@ export const ProjectView: React.FC = () => {
                     setEditProjectName(project.name);
                     setIsEditingProjectName(true);
                   }}
-                  className="p-1.5 text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-blue-50"
+                  className="p-1.5 text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-accent-50"
                   title="Edit project name"
                 >
                   <Edit2 size={18} />
@@ -1553,8 +1553,8 @@ export const ProjectView: React.FC = () => {
                 onClick={() => handleToggleStatus('submitted')}
                 className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
                   project.submitted 
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-blue-300 hover:text-blue-500'
+                    ? 'bg-accent-600 text-white border-accent-600 shadow-sm'
+                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-accent-300 hover:text-accent-500'
                 }`}
               >
                 Submitted
@@ -1581,7 +1581,7 @@ export const ProjectView: React.FC = () => {
               </button>
               <button
                 onClick={() => projectId && openNotes(projectId)}
-                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-blue-600 border-blue-200 hover:border-blue-400 hover:bg-blue-50 flex items-center gap-1.5 shadow-sm"
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
               >
                 <StickyNote size={14} />
                 Notes Board
@@ -1603,7 +1603,7 @@ export const ProjectView: React.FC = () => {
                       value={editContractor}
                       onChange={(e) => setEditContractor(e.target.value)}
                       placeholder="Contractor"
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent-500"
                     />
                     <button onClick={handleSaveContractor} className="text-green-600 hover:bg-green-50 p-1 rounded">
                       <Check size={14} />
@@ -1620,7 +1620,7 @@ export const ProjectView: React.FC = () => {
                         setEditContractor(project.contractor || '');
                         setIsEditingContractor(true);
                       }}
-                      className="text-slate-400 hover:text-blue-500 transition-opacity p-1"
+                      className="text-slate-400 hover:text-accent-500 transition-opacity p-1"
                     >
                       <Edit2 size={12} />
                     </button>
@@ -1651,7 +1651,7 @@ export const ProjectView: React.FC = () => {
                         href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="hover:text-blue-600 hover:underline transition-colors truncate"
+                        className="hover:text-accent-600 hover:underline transition-colors truncate"
                       >
                         {project.address}
                       </a>
@@ -1663,7 +1663,7 @@ export const ProjectView: React.FC = () => {
                         setEditAddress(project.address || '');
                         setIsEditingAddress(true);
                       }}
-                      className="text-slate-400 hover:text-blue-500 transition-opacity p-1"
+                      className="text-slate-400 hover:text-accent-500 transition-opacity p-1"
                     >
                       <Edit2 size={12} />
                     </button>
@@ -1679,7 +1679,7 @@ export const ProjectView: React.FC = () => {
                       type="date"
                       value={editDueDate}
                       onChange={(e) => setEditDueDate(e.target.value)}
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent-500"
                     />
                     <button onClick={handleSaveDueDate} className="text-green-600 hover:bg-green-50 p-1 rounded">
                       <Check size={14} />
@@ -1698,7 +1698,7 @@ export const ProjectView: React.FC = () => {
                         setEditDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
                         setIsEditingDueDate(true);
                       }}
-                      className="text-slate-400 hover:text-blue-600 transition-opacity p-1"
+                      className="text-slate-400 hover:text-accent-600 transition-opacity p-1"
                     >
                       <Edit2 size={12} />
                     </button>
@@ -1731,34 +1731,34 @@ export const ProjectView: React.FC = () => {
           <button
             onClick={() => setActiveTab('pages')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'pages' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              activeTab === 'pages' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Pages
             {activeTab === 'pages' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
             )}
           </button>
           <button
             onClick={() => setActiveTab('takeoffs')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'takeoffs' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              activeTab === 'takeoffs' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Takeoffs
             {activeTab === 'takeoffs' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
             )}
           </button>
           <button
             onClick={() => setActiveTab('printouts')}
             className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'printouts' ? 'text-blue-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              activeTab === 'printouts' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
             Printouts
             {activeTab === 'printouts' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
             )}
           </button>
         </div>
@@ -1773,7 +1773,7 @@ export const ProjectView: React.FC = () => {
                   placeholder="Search pages and text..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                  className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
                 />
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
@@ -1799,7 +1799,7 @@ export const ProjectView: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setShowAddPagesModal(true)}
-                  className="flex-1 lg:flex-none px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="flex-1 lg:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                   <Plus size={16} />
                   Add Pages
@@ -1819,7 +1819,7 @@ export const ProjectView: React.FC = () => {
                 {!searchTerm && (
                   <button
                     onClick={() => setShowAddPagesModal(true)}
-                    className="mt-6 px-4 py-2 text-blue-600 font-medium hover:bg-blue-50 rounded-lg transition-colors"
+                    className="mt-6 px-4 py-2 text-accent-600 font-medium hover:bg-accent-50 rounded-lg transition-colors"
                   >
                     Add your first page
                   </button>
@@ -1832,7 +1832,7 @@ export const ProjectView: React.FC = () => {
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
-                    className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all hover:border-blue-300 dark:hover:border-blue-500 flex flex-col group"
+                    className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all hover:border-accent-300 dark:hover:border-accent-500 flex flex-col group"
                   >
                     <div className="h-40 bg-slate-100 dark:bg-slate-700 relative overflow-hidden border-b border-slate-200 dark:border-slate-600">
                       <img 
@@ -1852,7 +1852,7 @@ export const ProjectView: React.FC = () => {
                                 type="text"
                                 value={editingPageNumber}
                                 onChange={(e) => setEditingPageNumber(e.target.value)}
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                                 placeholder="e.g. A-01"
                                 autoFocus
                                 onClick={e => e.stopPropagation()}
@@ -1864,7 +1864,7 @@ export const ProjectView: React.FC = () => {
                                 type="text"
                                 value={editingPageDescription}
                                 onChange={(e) => setEditingPageDescription(e.target.value)}
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                                 placeholder="e.g. Floor Plan"
                                 onClick={e => e.stopPropagation()}
                                 onKeyDown={e => {
@@ -1884,10 +1884,10 @@ export const ProjectView: React.FC = () => {
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 group-hover:text-blue-600 transition-colors line-clamp-1">{page.name}</h3>
+                            <h3 className="font-semibold text-slate-900 group-hover:text-accent-600 transition-colors line-clamp-1">{page.name}</h3>
                             <button 
                               onClick={(e) => handleStartRenamePage(e, page)}
-                              className="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-blue-50"
+                              className="text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent-50"
                             >
                               <Edit2 size={14} />
                             </button>
@@ -2340,7 +2340,7 @@ export const ProjectView: React.FC = () => {
                   <select
                     value={selectedTemplateId}
                     onChange={(e) => handleTemplateChange(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                   >
                     <option value="">Select a template...</option>
                     {templates.map(t => (
@@ -2355,7 +2355,7 @@ export const ProjectView: React.FC = () => {
                   type="text"
                   value={newTakeoffName}
                   onChange={(e) => setNewTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
@@ -2369,7 +2369,7 @@ export const ProjectView: React.FC = () => {
                       setNewTakeoffType(e.target.value as 'length' | 'area' | 'count');
                       setNewTakeoffUnit('');
                     }}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                   >
                     <option value="length">Length</option>
                     <option value="area">Area</option>
@@ -2394,7 +2394,7 @@ export const ProjectView: React.FC = () => {
                   <select
                     value={newTakeoffUnit}
                     onChange={(e) => setNewTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {newTakeoffType === 'length' && (
@@ -2429,7 +2429,7 @@ export const ProjectView: React.FC = () => {
                     disabled={isNewTakeoffAdvanced}
                     value={isNewTakeoffAdvanced ? '' : newTakeoffCostPerUnit}
                     onChange={(e) => setNewTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-slate-50 disabled:text-slate-400"
                     placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
                   />
                 </div>
@@ -2441,7 +2441,7 @@ export const ProjectView: React.FC = () => {
                   id="isNewTakeoffAdvanced"
                   checked={isNewTakeoffAdvanced}
                   onChange={(e) => setIsNewTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
                 />
                 <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
                   Advanced Costing (Custom Items)
@@ -2454,7 +2454,7 @@ export const ProjectView: React.FC = () => {
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
                     <button
                       onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
+                      className="text-accent-600 hover:text-accent-700 p-1 rounded-full hover:bg-accent-50 transition-colors"
                       title="Add Cost Item"
                     >
                       <Plus size={16} />
@@ -2496,7 +2496,7 @@ export const ProjectView: React.FC = () => {
               <button
                 onClick={handleCreateTakeoff}
                 disabled={!newTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
               >
                 Create Takeoff
               </button>
@@ -2518,7 +2518,7 @@ export const ProjectView: React.FC = () => {
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
@@ -2551,7 +2551,7 @@ export const ProjectView: React.FC = () => {
                   <select
                     value={editTakeoffUnit}
                     onChange={(e) => setEditTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {editingTakeoff.type === 'length' && (
@@ -2586,7 +2586,7 @@ export const ProjectView: React.FC = () => {
                     disabled={isEditTakeoffAdvanced}
                     value={isEditTakeoffAdvanced ? '' : editTakeoffCostPerUnit}
                     onChange={(e) => setEditTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-slate-50 disabled:text-slate-400"
                     placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
                   />
                 </div>
@@ -2598,7 +2598,7 @@ export const ProjectView: React.FC = () => {
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
                   onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
                 />
                 <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
                   Advanced Costing (Custom Items)
@@ -2611,7 +2611,7 @@ export const ProjectView: React.FC = () => {
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
                     <button
                       onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
-                      className="text-blue-600 hover:text-blue-700 p-1 rounded-full hover:bg-blue-50 transition-colors"
+                      className="text-accent-600 hover:text-accent-700 p-1 rounded-full hover:bg-accent-50 transition-colors"
                       title="Add Cost Item"
                     >
                       <Plus size={16} />
@@ -2653,7 +2653,7 @@ export const ProjectView: React.FC = () => {
               <button
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
               >
                 Save Changes
               </button>
@@ -2699,7 +2699,7 @@ export const ProjectView: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setUseExistingPlanSet(false)}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${!useExistingPlanSet ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${!useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       New Plan Set
                     </button>
@@ -2711,7 +2711,7 @@ export const ProjectView: React.FC = () => {
                           setTargetPlanSetId(project.planSets[0].id);
                         }
                       }}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${useExistingPlanSet ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       Existing Plan Set
                     </button>
@@ -2723,7 +2723,7 @@ export const ProjectView: React.FC = () => {
                       <select
                         value={targetPlanSetId}
                         onChange={(e) => setTargetPlanSetId(e.target.value)}
-                        className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                        className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
                         required
                       >
                         {project.planSets?.map(ps => (
@@ -2739,7 +2739,7 @@ export const ProjectView: React.FC = () => {
                           type="text"
                           value={newPlanSetName}
                           onChange={(e) => setNewPlanSetName(e.target.value)}
-                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
                           placeholder="e.g. Revised Floor Plan"
                           required={!useExistingPlanSet}
                           disabled={isAddingPages}
@@ -2751,7 +2751,7 @@ export const ProjectView: React.FC = () => {
                           type="date"
                           value={newPlanSetDate}
                           onChange={(e) => setNewPlanSetDate(e.target.value)}
-                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
                           required={!useExistingPlanSet}
                           disabled={isAddingPages}
                         />
@@ -2762,7 +2762,7 @@ export const ProjectView: React.FC = () => {
                     <label className="block text-sm font-medium text-slate-700 mb-1.5">Blueprint PDFs</label>
                     <div 
                       className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
-                        newPlanSetFiles.length > 0 ? 'border-blue-300 bg-blue-50' : 'border-slate-300 hover:border-blue-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
+                        newPlanSetFiles.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-slate-300 hover:border-accent-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
                       }`}
                       onClick={() => !isAddingPages && newPlanSetFiles.length === 0 && fileInputRef.current?.click()}
                     >
@@ -2770,9 +2770,9 @@ export const ProjectView: React.FC = () => {
                         <div className="flex flex-col items-center w-full">
                           <div className="w-full space-y-2 mb-3">
                             {newPlanSetFiles.map((file, index) => (
-                              <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-2 rounded-lg border border-blue-200 shadow-sm">
+                              <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-2 rounded-lg border border-accent-200 shadow-sm">
                                 <div className="flex items-center gap-2 overflow-hidden">
-                                  <FileImage size={16} className="text-blue-500 shrink-0" />
+                                  <FileImage size={16} className="text-accent-500 shrink-0" />
                                   <div className="text-left overflow-hidden">
                                     <p className="text-xs font-medium text-slate-900 truncate" title={file.name}>{file.name}</p>
                                   </div>
@@ -2794,7 +2794,7 @@ export const ProjectView: React.FC = () => {
                             <button 
                               type="button" 
                               onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                              className="mt-1 text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
+                              className="mt-1 text-sm text-accent-600 hover:text-accent-700 font-medium flex items-center gap-1"
                             >
                               <Plus size={14} /> Add more PDFs
                             </button>
@@ -2846,7 +2846,7 @@ export const ProjectView: React.FC = () => {
                   <button
                     type="submit"
                     disabled={(!newPlanSetName && !useExistingPlanSet) || (useExistingPlanSet && !targetPlanSetId) || newPlanSetFiles.length === 0 || isAddingPages}
-                    className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                    className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
                   >
                     {isAddingPages ? (
                       <>
@@ -2885,7 +2885,7 @@ export const ProjectView: React.FC = () => {
                           )}
                           
                           {/* Hover Overlay */}
-                          <div className="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
+                          <div className="absolute inset-0 bg-accent-600/0 group-hover:bg-accent-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
                             <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300">
                               <Eye size={24} />
                             </div>
@@ -2895,7 +2895,7 @@ export const ProjectView: React.FC = () => {
                           </div>
 
                           {/* Page Badge */}
-                          <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-blue-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-blue-100">
+                          <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                             PAGE {index + 1}
                           </div>
                         </div>
@@ -2915,7 +2915,7 @@ export const ProjectView: React.FC = () => {
                                 type="text"
                                 value={page.pageNumber || ''}
                                 onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
                                 placeholder="e.g. A-101"
                               />
                             </div>
@@ -2934,7 +2934,7 @@ export const ProjectView: React.FC = () => {
                                 type="text"
                                 value={page.description || ''}
                                 onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
+                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
                                 placeholder="e.g. Floor Plan"
                               />
                             </div>
@@ -2974,7 +2974,7 @@ export const ProjectView: React.FC = () => {
                   <button
                     onClick={handleConfirmAddPages}
                     disabled={isAddingPages}
-                    className="flex items-center gap-2 px-6 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
+                    className="flex items-center gap-2 px-6 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
                   >
                     {isAddingPages ? (
                       <><Loader2 size={16} className="animate-spin" /> Saving...</>
@@ -3029,13 +3029,13 @@ export const ProjectView: React.FC = () => {
 
                 <button
                   onClick={() => setExtractionType('pageNumber')}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-accent-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-accent-300'}`}
                 >
                   Extract Number
                 </button>
                 <button
                   onClick={() => setExtractionType('description')}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-blue-300'}`}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-accent-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-accent-300'}`}
                 >
                   Extract Description
                 </button>
@@ -3185,7 +3185,7 @@ export const ProjectView: React.FC = () => {
                 />
                 {extractionRect && (
                   <div 
-                    className="absolute border-2 border-blue-500 bg-blue-500/20 cursor-move pointer-events-auto"
+                    className="absolute border-2 border-accent-500 bg-accent-500/20 cursor-move pointer-events-auto"
                     style={{
                       left: `${extractionRect.x}%`,
                       top: `${extractionRect.y}%`,
@@ -3199,10 +3199,10 @@ export const ProjectView: React.FC = () => {
                       setInitialRect({ ...extractionRect });
                     }}
                   >
-                    <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-blue-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-blue-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                    <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                    <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                    <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                    <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
                   </div>
                 )}
                 {!extractionType && zoom === 1 && (
@@ -3219,7 +3219,7 @@ export const ProjectView: React.FC = () => {
               <div className="flex items-center gap-2 text-sm text-slate-600">
                 {extractionRect ? (
                   <>
-                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <div className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" />
                     Area selected. Ready to extract {extractionType === 'pageNumber' ? 'page number' : 'description'}.
                   </>
                 ) : (
@@ -3248,7 +3248,7 @@ export const ProjectView: React.FC = () => {
                 <button
                   onClick={() => handleExtractText(true)}
                   disabled={isExtracting || !extractionRect}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-all flex items-center gap-2 shadow-lg shadow-blue-200 disabled:opacity-50"
+                  className="px-6 py-2 bg-accent-600 text-white rounded-lg text-sm font-bold hover:bg-accent-700 transition-all flex items-center gap-2 shadow-lg shadow-accent-200 disabled:opacity-50"
                 >
                   {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                   Extract All Pages
