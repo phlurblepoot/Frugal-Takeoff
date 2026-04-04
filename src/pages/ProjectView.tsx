@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -200,6 +200,10 @@ export const ProjectView: React.FC = () => {
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [proposalIncludeCostDetail, setProposalIncludeCostDetail] = useState(false);
+  const [proposalCustomTitle, setProposalCustomTitle] = useState('');
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -980,6 +984,275 @@ export const ProjectView: React.FC = () => {
       console.error('Error generating Excel:', error);
       alert('Failed to generate Excel.');
       setIsExportingExcel(false);
+    }
+  };
+
+  const formatCurrency = (n: number) =>
+    '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const handleGenerateProposal = async (includeCostDetail: boolean) => {
+    if (!project || selectedTakeoffIds.size === 0) return;
+    setShowProposalModal(false);
+    setIsGeneratingProposal(true);
+
+    try {
+      const settings = await getSettings();
+      const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
+
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      const W = pdf.internal.pageSize.getWidth();
+      const H = pdf.internal.pageSize.getHeight();
+
+      // ── COVER PAGE ──────────────────────────────────────────────────────
+      // Header band
+      pdf.setFillColor(30, 41, 59);
+      pdf.rect(0, 0, W, 120, 'F');
+
+      // Logo
+      let logoLoaded = false;
+      if (settings.logoUrl) {
+        try {
+          const logoImg = new Image();
+          logoImg.crossOrigin = 'anonymous';
+          logoImg.src = settings.logoUrl;
+          await new Promise<void>(r => { logoImg.onload = () => r(); logoImg.onerror = () => r(); });
+          if (logoImg.complete && logoImg.naturalWidth > 0) {
+            pdf.addImage(logoImg, 40, 18, 84, 84);
+            logoLoaded = true;
+          }
+        } catch { /* skip */ }
+      }
+
+      const textX = logoLoaded ? 144 : 40;
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(15);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(settings.companyName || settings.appName || 'Proposal', textX, 52);
+
+      const contactParts = [settings.companyPhone, settings.companyEmail, settings.companyAddress].filter(Boolean);
+      if (contactParts.length > 0) {
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(contactParts.join('   ·   '), textX, 72);
+      }
+
+      // "PROPOSAL" heading
+      pdf.setTextColor(30, 41, 59);
+      pdf.setFontSize(52);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('PROPOSAL', W / 2, 235, { align: 'center' });
+
+      // Decorative rule
+      pdf.setDrawColor(148, 163, 184);
+      pdf.setLineWidth(1);
+      pdf.line(40, 255, W - 40, 255);
+
+      // Project name
+      const title = proposalCustomTitle || project.name;
+      pdf.setFontSize(22);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(15, 23, 42);
+      const titleLines = pdf.splitTextToSize(title, W - 80) as string[];
+      pdf.text(titleLines, W / 2, 300, { align: 'center' });
+      let coverY = 300 + titleLines.length * 28;
+
+      if (project.address) {
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(project.address, W / 2, coverY + 10, { align: 'center' });
+        coverY += 30;
+      }
+
+      if (project.bidDueDate) {
+        pdf.setFontSize(11);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(`Bid Due: ${new Date(project.bidDueDate).toLocaleDateString()}`, W / 2, coverY + 14, { align: 'center' });
+        coverY += 30;
+      }
+
+      // Grand total box
+      const grandTotal = selectedTakeoffs.reduce(
+        (sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0
+      );
+      const boxTop = Math.max(coverY + 40, 420);
+      pdf.setFillColor(241, 245, 249);
+      pdf.setDrawColor(226, 232, 240);
+      pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(100, 116, 139);
+      pdf.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
+      pdf.setFontSize(28);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(15, 23, 42);
+      pdf.text(formatCurrency(grandTotal), W / 2, boxTop + 60, { align: 'center' });
+
+      // Footer
+      pdf.setFontSize(9);
+      pdf.setTextColor(148, 163, 184);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+
+      // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
+      pdf.addPage();
+
+      pdf.setFillColor(30, 41, 59);
+      pdf.rect(0, 0, W, 50, 'F');
+      pdf.setFontSize(13);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text('Takeoff Summary', 40, 33);
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
+      pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
+
+      // Table columns
+      const COL = { swatch: 40, name: 62, type: 258, qty: 330, unit: 400, cost: W - 40 };
+      const tableTop = 78;
+      const rowH = 28;
+
+      // Table header
+      pdf.setFillColor(241, 245, 249);
+      pdf.rect(40, tableTop - 17, W - 80, 20, 'F');
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(100, 116, 139);
+      pdf.text('TAKEOFF', COL.name, tableTop - 4);
+      pdf.text('TYPE', COL.type, tableTop - 4);
+      pdf.text('QTY', COL.qty, tableTop - 4);
+      pdf.text('UNIT', COL.unit, tableTop - 4);
+      pdf.text('COST', COL.cost, tableTop - 4, { align: 'right' });
+
+      let y = tableTop + 10;
+
+      for (let i = 0; i < selectedTakeoffs.length; i++) {
+        const t = selectedTakeoffs[i];
+        const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
+        const unitLabel = UNIT_LABELS[t.unit || ''] || t.unit ||
+          (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
+
+        // New page if near bottom
+        if (y > H - 80) {
+          pdf.addPage();
+          pdf.setFillColor(30, 41, 59);
+          pdf.rect(0, 0, W, 50, 'F');
+          pdf.setFontSize(13);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('Takeoff Summary (cont.)', 40, 33);
+          y = 70;
+        }
+
+        // Alternating row bg
+        if (i % 2 === 0) {
+          pdf.setFillColor(248, 250, 252);
+          pdf.rect(40, y - 15, W - 80, rowH, 'F');
+        }
+
+        // Color swatch
+        const hex = (t.color || '#3b82f6').replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        pdf.setFillColor(r, g, b);
+        pdf.roundedRect(COL.swatch, y - 9, 13, 13, 2, 2, 'F');
+
+        // Name
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(15, 23, 42);
+        const name = t.name.length > 28 ? t.name.substring(0, 27) + '…' : t.name;
+        pdf.text(name, COL.name, y);
+
+        // Type / Qty / Unit
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(t.type, COL.type, y);
+        pdf.text(t.totalRealValue.toFixed(2), COL.qty, y);
+        pdf.text(unitLabel, COL.unit, y);
+
+        // Cost
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(15, 23, 42);
+        pdf.text(formatCurrency(totalCost), COL.cost, y, { align: 'right' });
+
+        y += rowH;
+
+        // Cost detail sub-rows
+        if (includeCostDetail) {
+          if (t.isAdvancedCost && t.customCosts?.length) {
+            const details = calculateTakeoffCostDetails(t, t.totalRealValue);
+            for (const detail of details) {
+              pdf.setFontSize(8);
+              pdf.setFont('helvetica', 'normal');
+              pdf.setTextColor(148, 163, 184);
+              const detailName = `  · ${detail.name}`;
+              pdf.text(detailName, COL.name, y);
+              pdf.text(formatCurrency(detail.costValue), COL.cost, y, { align: 'right' });
+              y += 18;
+            }
+          } else if (t.costPerUnit) {
+            pdf.setFontSize(8);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setTextColor(148, 163, 184);
+            pdf.text(`  · ${formatCurrency(t.costPerUnit)} / ${unitLabel}`, COL.name, y);
+            y += 18;
+          }
+        }
+      }
+
+      // Grand total row
+      y += 8;
+      pdf.setDrawColor(226, 232, 240);
+      pdf.setLineWidth(1);
+      pdf.line(40, y, W - 40, y);
+      y += 18;
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(15, 23, 42);
+      pdf.text('TOTAL', COL.name, y);
+      pdf.text(formatCurrency(grandTotal), COL.cost, y, { align: 'right' });
+
+      // Footer on last page
+      pdf.setFontSize(9);
+      pdf.setTextColor(148, 163, 184);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+
+      // ── SAVE ────────────────────────────────────────────────────────────
+      const pdfBlob = pdf.output('blob');
+      const reader = new FileReader();
+      reader.readAsDataURL(pdfBlob);
+      reader.onloadend = async () => {
+        const base64data = reader.result as string;
+        const fileId = uuidv4();
+        await saveFile(fileId, base64data);
+        const printoutName = (proposalCustomTitle || project.name).trim()
+          ? `Proposal – ${proposalCustomTitle || project.name}`
+          : `Proposal – ${new Date().toLocaleString()}`;
+        const newPrintout: Printout = {
+          id: uuidv4(),
+          name: printoutName,
+          fileId,
+          createdAt: Date.now(),
+          type: 'pdf',
+        };
+        const updatedProject = {
+          ...project,
+          printouts: [...(project.printouts || []), newPrintout],
+        };
+        await saveProject(updatedProject);
+        setProject(updatedProject);
+        setIsGeneratingProposal(false);
+        setSelectedTakeoffIds(new Set());
+        setActiveTab('printouts');
+      };
+    } catch (error) {
+      console.error('Error generating proposal:', error);
+      alert('Failed to generate proposal PDF.');
+      setIsGeneratingProposal(false);
     }
   };
 
@@ -1930,6 +2203,18 @@ export const ProjectView: React.FC = () => {
                     >
                       {isExportingExcel ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
                       Excel ({selectedTakeoffIds.size})
+                    </button>
+                    <button
+                      onClick={() => {
+                        setProposalCustomTitle(project.name);
+                        setProposalIncludeCostDetail(false);
+                        setShowProposalModal(true);
+                      }}
+                      disabled={isGeneratingProposal}
+                      className="flex-1 sm:flex-none px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                    >
+                      {isGeneratingProposal ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                      Proposal ({selectedTakeoffIds.size})
                     </button>
                   </div>
                 )}
@@ -3254,6 +3539,76 @@ export const ProjectView: React.FC = () => {
                   Extract All Pages
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Proposal PDF Modal */}
+      {showProposalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3">
+              <div className="p-2 bg-violet-50 dark:bg-violet-900/30 rounded-lg">
+                <FileText size={20} className="text-violet-600 dark:text-violet-400" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Generate Proposal PDF</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {selectedTakeoffIds.size} takeoff{selectedTakeoffIds.size !== 1 ? 's' : ''} selected
+                </p>
+              </div>
+            </div>
+            <div className="p-6 space-y-5">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  Proposal Title
+                </label>
+                <input
+                  type="text"
+                  value={proposalCustomTitle}
+                  onChange={e => setProposalCustomTitle(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all"
+                  placeholder={project.name}
+                />
+              </div>
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={proposalIncludeCostDetail}
+                  onChange={e => setProposalIncludeCostDetail(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+                    Include cost detail
+                  </span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Show unit rates and custom cost line items under each takeoff
+                  </span>
+                </span>
+              </label>
+              {project.address && (
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-lg px-3 py-2">
+                  <MapPin size={13} />
+                  <span>{project.address}</span>
+                </div>
+              )}
+            </div>
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700 rounded-b-2xl flex justify-end gap-3">
+              <button
+                onClick={() => setShowProposalModal(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleGenerateProposal(proposalIncludeCostDetail)}
+                className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
+              >
+                <FileText size={15} />
+                Generate PDF
+              </button>
             </div>
           </div>
         </div>

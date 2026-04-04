@@ -8,7 +8,11 @@ export const ServerSettings: React.FC = () => {
   const navigate = useNavigate();
   const [settings, setSettings] = useState<Record<string, string>>({
     appName: 'Takeoff Pro',
-    logoUrl: ''
+    logoUrl: '',
+    companyName: '',
+    companyPhone: '',
+    companyEmail: '',
+    companyAddress: '',
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -206,6 +210,65 @@ export const ServerSettings: React.FC = () => {
                             Recommended: Square or horizontal logo with transparent background. Max 2MB.
                           </p>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Contractor Information</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Shown on proposal PDFs generated from projects.</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                          Company Name
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.companyName || ''}
+                          onChange={e => setSettings({ ...settings, companyName: e.target.value })}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all"
+                          placeholder="e.g. Acme Contracting LLC"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                          Phone
+                        </label>
+                        <input
+                          type="tel"
+                          value={settings.companyPhone || ''}
+                          onChange={e => setSettings({ ...settings, companyPhone: e.target.value })}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all"
+                          placeholder="e.g. (555) 123-4567"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                          Email
+                        </label>
+                        <input
+                          type="email"
+                          value={settings.companyEmail || ''}
+                          onChange={e => setSettings({ ...settings, companyEmail: e.target.value })}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all"
+                          placeholder="e.g. info@acmecontracting.com"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider">
+                          Address
+                        </label>
+                        <input
+                          type="text"
+                          value={settings.companyAddress || ''}
+                          onChange={e => setSettings({ ...settings, companyAddress: e.target.value })}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all"
+                          placeholder="e.g. 123 Main St, Springfield, IL"
+                        />
                       </div>
                     </div>
                   </div>
