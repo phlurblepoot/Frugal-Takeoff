@@ -1238,7 +1238,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative">
       {isSearching && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur border border-slate-200 rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
           <span className="text-sm font-medium text-slate-700">Searching...</span>
         </div>
       )}
@@ -1248,7 +1248,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
             <button
               onClick={handleZoomOut}
-              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
               title="Zoom Out"
             >
               <ZoomOut size={18} />
@@ -1260,7 +1260,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             
             <button
               onClick={handleZoomIn}
-              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
               title="Zoom In"
             >
               <ZoomIn size={18} />
@@ -1270,7 +1270,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             
             <button
               onClick={handleResetView}
-              className="p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
               title="Reset View"
             >
               <RotateCcw size={18} />
