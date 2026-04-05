@@ -216,6 +216,7 @@ const CanvasViewInner: React.FC = () => {
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [newTakeoffName, setNewTakeoffName] = useState('');
   const [newTakeoffPricePackage, setNewTakeoffPricePackage] = useState('');
+  const [showPkgSuggestions, setShowPkgSuggestions] = useState(false);
   const [newTakeoffColor, setNewTakeoffColor] = useState('#3b82f6');
   const [newTakeoffType, setNewTakeoffType] = useState<'length' | 'area' | 'count'>('length');
   const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
@@ -795,6 +796,7 @@ const CanvasViewInner: React.FC = () => {
     setShowTakeoffModal(false);
     setNewTakeoffName('');
     setNewTakeoffPricePackage('');
+    setShowPkgSuggestions(false);
     setNewTakeoffUnit('');
     setNewTakeoffCostPerUnit('');
     setIsNewTakeoffAdvanced(false);
@@ -2161,11 +2163,6 @@ const CanvasViewInner: React.FC = () => {
       {/* Takeoff Modal */}
       {showTakeoffModal && (
         <>
-        <datalist id="canvas-price-package-suggestions">
-          {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter((p): p is string => !!p))).map(pkg => (
-            <option key={pkg} value={pkg} />
-          ))}
-        </datalist>
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-slate-100 dark:border-slate-700">
@@ -2198,16 +2195,36 @@ const CanvasViewInner: React.FC = () => {
                   autoFocus
                 />
               </div>
-              <div>
+              <div className="relative">
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Price Package <span className="text-slate-400 font-normal">(optional)</span></label>
                 <input
                   type="text"
                   value={newTakeoffPricePackage}
-                  onChange={(e) => setNewTakeoffPricePackage(e.target.value)}
-                  list="canvas-price-package-suggestions"
+                  onChange={(e) => { setNewTakeoffPricePackage(e.target.value); setShowPkgSuggestions(true); }}
+                  onFocus={() => setShowPkgSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowPkgSuggestions(false), 150)}
                   className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Phase 1, Exterior, Base Bid"
+                  autoComplete="off"
                 />
+                {showPkgSuggestions && (() => {
+                  const allPkgs = Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter((p): p is string => !!p)));
+                  const filtered = allPkgs.filter(p => !newTakeoffPricePackage || p.toLowerCase().includes(newTakeoffPricePackage.toLowerCase()));
+                  if (filtered.length === 0) return null;
+                  return (
+                    <ul className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-xl shadow-lg overflow-hidden">
+                      {filtered.map(pkg => (
+                        <li
+                          key={pkg}
+                          onMouseDown={() => { setNewTakeoffPricePackage(pkg); setShowPkgSuggestions(false); }}
+                          className="px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-accent-50 dark:hover:bg-accent-900/20 cursor-pointer"
+                        >
+                          {pkg}
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                })()}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
