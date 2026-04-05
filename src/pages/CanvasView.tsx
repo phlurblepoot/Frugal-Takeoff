@@ -1481,9 +1481,9 @@ const CanvasViewInner: React.FC = () => {
             className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg relative active:scale-95 transition-transform"
           >
             <Layers size={22} />
-            {aggregatedMeasurements.length > 0 && (
+            {page.measurements.length > 0 && (
               <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 bg-accent-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white shadow-sm">
-                {aggregatedMeasurements.length}
+                {page.measurements.length}
               </span>
             )}
           </button>
@@ -1629,7 +1629,7 @@ const CanvasViewInner: React.FC = () => {
             currentTool={currentTool}
             searchTerm={searchTerm}
             scaleConfig={page.scaleConfig}
-            measurements={aggregatedMeasurements}
+            measurements={page.measurements}
             pageMeasurements={page.measurements}
             takeoffs={project.takeoffs}
             onAddMeasurement={addMeasurement}
