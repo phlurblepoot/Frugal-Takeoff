@@ -215,6 +215,7 @@ const CanvasViewInner: React.FC = () => {
 
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [newTakeoffName, setNewTakeoffName] = useState('');
+  const [newTakeoffPricePackage, setNewTakeoffPricePackage] = useState('');
   const [newTakeoffColor, setNewTakeoffColor] = useState('#3b82f6');
   const [newTakeoffType, setNewTakeoffType] = useState<'length' | 'area' | 'count'>('length');
   const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
@@ -770,6 +771,7 @@ const CanvasViewInner: React.FC = () => {
       unit: newTakeoffUnit || undefined,
       costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? (evaluateMathExpression(newTakeoffCostPerUnit) ?? 0) : undefined,
       isAdvancedCost: isNewTakeoffAdvanced,
+      pricePackage: newTakeoffPricePackage.trim() || undefined,
       customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts.map(c => ({
         ...c,
         cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
@@ -792,6 +794,7 @@ const CanvasViewInner: React.FC = () => {
     setCurrentTool(newTakeoff.type);
     setShowTakeoffModal(false);
     setNewTakeoffName('');
+    setNewTakeoffPricePackage('');
     setNewTakeoffUnit('');
     setNewTakeoffCostPerUnit('');
     setIsNewTakeoffAdvanced(false);
@@ -1800,17 +1803,35 @@ const CanvasViewInner: React.FC = () => {
             )}
 
             {/* Takeoff Totals */}
-            {takeoffTotals.filter(takeoff => {
-              if (!measurementFilter) return true;
-              const fl = measurementFilter.toLowerCase();
-              if (takeoff.name.toLowerCase().includes(fl)) return true;
-              return (showCurrentPageOnly ? pageVersions : project.pages).some(p =>
-                p.measurements.some(m => m.takeoffId === takeoff.id && m.name.toLowerCase().includes(fl))
-              );
-            }).map(takeoff => {
+            {(() => {
+              const filteredTakeoffs = takeoffTotals.filter(takeoff => {
+                if (!measurementFilter) return true;
+                const fl = measurementFilter.toLowerCase();
+                if (takeoff.name.toLowerCase().includes(fl)) return true;
+                return (showCurrentPageOnly ? pageVersions : project.pages).some(p =>
+                  p.measurements.some(m => m.takeoffId === takeoff.id && m.name.toLowerCase().includes(fl))
+                );
+              });
+
+              const packageOrder: string[] = [];
+              const packageMap: Record<string, typeof filteredTakeoffs> = {};
+              const ungrouped: typeof filteredTakeoffs = [];
+              for (const t of filteredTakeoffs) {
+                if (t.pricePackage) {
+                  if (!packageMap[t.pricePackage]) {
+                    packageMap[t.pricePackage] = [];
+                    packageOrder.push(t.pricePackage);
+                  }
+                  packageMap[t.pricePackage].push(t);
+                } else {
+                  ungrouped.push(t);
+                }
+              }
+
+              const renderTakeoffCard = (takeoff: typeof filteredTakeoffs[0]) => {
               const isActive = selectedTakeoffId === takeoff.id;
               const isExpanded = expandedTakeoffs[takeoff.id] !== false; // Default to expanded
-              
+
               return (
                 <div
                   key={takeoff.id}
@@ -1966,7 +1987,22 @@ const CanvasViewInner: React.FC = () => {
                   )}
                 </div>
               );
-            })}
+              };
+
+              return (
+                <>
+                  {packageOrder.map(pkg => (
+                    <React.Fragment key={`pkg-${pkg}`}>
+                      <div className="px-2 pt-3 pb-1">
+                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                      </div>
+                      {packageMap[pkg].map(renderTakeoffCard)}
+                    </React.Fragment>
+                  ))}
+                  {ungrouped.map(renderTakeoffCard)}
+                </>
+              );
+            })()}
 
             {/* Ungrouped Measurements */}
             {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
@@ -2155,6 +2191,22 @@ const CanvasViewInner: React.FC = () => {
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Price Package <span className="text-slate-400 font-normal">(optional)</span></label>
+                <input
+                  type="text"
+                  value={newTakeoffPricePackage}
+                  onChange={(e) => setNewTakeoffPricePackage(e.target.value)}
+                  list="canvas-price-package-suggestions"
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                  placeholder="e.g. Phase 1, Exterior, Base Bid"
+                />
+                <datalist id="canvas-price-package-suggestions">
+                  {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter(Boolean))).map(pkg => (
+                    <option key={pkg} value={pkg} />
+                  ))}
+                </datalist>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
