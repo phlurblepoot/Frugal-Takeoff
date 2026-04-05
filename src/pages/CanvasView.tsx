@@ -2160,6 +2160,12 @@ const CanvasViewInner: React.FC = () => {
       )}
       {/* Takeoff Modal */}
       {showTakeoffModal && (
+        <>
+        <datalist id="canvas-price-package-suggestions">
+          {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter((p): p is string => !!p))).map(pkg => (
+            <option key={pkg} value={pkg} />
+          ))}
+        </datalist>
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-slate-100 dark:border-slate-700">
@@ -2202,11 +2208,6 @@ const CanvasViewInner: React.FC = () => {
                   className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
                   placeholder="e.g. Phase 1, Exterior, Base Bid"
                 />
-                <datalist id="canvas-price-package-suggestions">
-                  {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter(Boolean))).map(pkg => (
-                    <option key={pkg} value={pkg} />
-                  ))}
-                </datalist>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -2350,6 +2351,7 @@ const CanvasViewInner: React.FC = () => {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* Delete Takeoff Confirmation Modal */}
