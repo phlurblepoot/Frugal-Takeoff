@@ -4,6 +4,7 @@ import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plu
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
+import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
@@ -214,17 +215,7 @@ const CanvasViewInner: React.FC = () => {
   const [measurementToDelete, setMeasurementToDelete] = useState<{id: string, targetPageId?: string} | null>(null);
 
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
-  const [newTakeoffName, setNewTakeoffName] = useState('');
-  const [newTakeoffPricePackage, setNewTakeoffPricePackage] = useState('');
-  const [showPkgSuggestions, setShowPkgSuggestions] = useState(false);
-  const [newTakeoffColor, setNewTakeoffColor] = useState('#3b82f6');
-  const [newTakeoffType, setNewTakeoffType] = useState<'length' | 'area' | 'count'>('length');
-  const [newTakeoffUnit, setNewTakeoffUnit] = useState('');
-  const [newTakeoffCostPerUnit, setNewTakeoffCostPerUnit] = useState<string>('');
-  const [isNewTakeoffAdvanced, setIsNewTakeoffAdvanced] = useState(false);
-  const [newTakeoffCustomCosts, setNewTakeoffCustomCosts] = useState<any[]>([]);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<MeasurementTakeoff | null>(null);
@@ -759,72 +750,6 @@ const CanvasViewInner: React.FC = () => {
     setMeasurementToDelete(null);
     
     sendMeasurementUpdate(sourcePageId, 'delete', mToDelete);
-  };
-
-  const handleCreateTakeoff = async () => {
-    if (!project || !newTakeoffName) return;
-
-    const newTakeoff: MeasurementTakeoff = {
-      id: uuidv4(),
-      name: newTakeoffName,
-      color: newTakeoffColor,
-      type: newTakeoffType,
-      unit: newTakeoffUnit || undefined,
-      costPerUnit: !isNewTakeoffAdvanced && newTakeoffCostPerUnit !== '' ? (evaluateMathExpression(newTakeoffCostPerUnit) ?? 0) : undefined,
-      isAdvancedCost: isNewTakeoffAdvanced,
-      pricePackage: newTakeoffPricePackage.trim() || undefined,
-      customCosts: isNewTakeoffAdvanced ? newTakeoffCustomCosts.map(c => ({
-        ...c,
-        cost: evaluateMathExpression(c.cost?.toString() || '') ?? 0,
-        yield: evaluateMathExpression(c.yield?.toString() || '') ?? 0,
-        costPerUnit: evaluateMathExpression(c.costPerUnit?.toString() || '') ?? 0,
-        amount: evaluateMathExpression(c.amount?.toString() || '') ?? 0,
-        perUnits: evaluateMathExpression(c.perUnits?.toString() || '') ?? 0,
-      })) : undefined,
-    };
-
-    const updatedProject = {
-      ...project,
-      takeoffs: [...project.takeoffs, newTakeoff],
-    };
-
-    await saveProject(updatedProject);
-    setProject(updatedProject);
-    setSelectedTakeoffId(newTakeoff.id);
-    setSelectedColor(newTakeoff.color);
-    setCurrentTool(newTakeoff.type);
-    setShowTakeoffModal(false);
-    setNewTakeoffName('');
-    setNewTakeoffPricePackage('');
-    setShowPkgSuggestions(false);
-    setNewTakeoffUnit('');
-    setNewTakeoffCostPerUnit('');
-    setIsNewTakeoffAdvanced(false);
-    setNewTakeoffCustomCosts([]);
-    setSelectedTemplateId('');
-  };
-
-  const handleTemplateChange = (templateId: string) => {
-    setSelectedTemplateId(templateId);
-    const template = templates.find(t => t.id === templateId);
-    if (template) {
-      setNewTakeoffName(template.name);
-      if (template.type !== 'scale') {
-        setNewTakeoffType(template.type);
-      }
-      setNewTakeoffColor(template.color);
-      setNewTakeoffUnit(template.unit || '');
-      setNewTakeoffCostPerUnit(template.costPerUnit?.toString() || '');
-      setIsNewTakeoffAdvanced(template.isAdvancedCost || false);
-      setNewTakeoffCustomCosts(template.customCosts?.map(c => ({
-        ...c,
-        cost: c.cost?.toString() || '0',
-        yield: c.yield?.toString() || '0',
-        costPerUnit: c.costPerUnit?.toString() || '0',
-        amount: c.amount?.toString() || '0',
-        perUnits: c.perUnits?.toString() || '0',
-      })) || []);
-    }
   };
 
   const confirmDeleteTakeoff = async () => {
@@ -2161,215 +2086,24 @@ const CanvasViewInner: React.FC = () => {
         </div>
       )}
       {/* Takeoff Modal */}
-      {showTakeoffModal && (
-        <>
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Create Measurement Takeoff</h3>
-            </div>
-            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-              {templates.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Use Template (Optional)</label>
-                  <select
-                    value={selectedTemplateId}
-                    onChange={(e) => handleTemplateChange(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="">Select a template...</option>
-                    {templates.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
-                <input
-                  type="text"
-                  value={newTakeoffName}
-                  onChange={(e) => setNewTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
-                  placeholder="e.g. Hardwood Flooring"
-                  autoFocus
-                />
-              </div>
-              <div className="relative">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Price Package <span className="text-slate-400 font-normal">(optional)</span></label>
-                <input
-                  type="text"
-                  value={newTakeoffPricePackage}
-                  onChange={(e) => { setNewTakeoffPricePackage(e.target.value); setShowPkgSuggestions(true); }}
-                  onFocus={() => setShowPkgSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowPkgSuggestions(false), 150)}
-                  className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
-                  placeholder="e.g. Phase 1, Exterior, Base Bid"
-                  autoComplete="off"
-                />
-                {showPkgSuggestions && (() => {
-                  const allPkgs = Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter((p): p is string => !!p)));
-                  const filtered = allPkgs.filter(p => !newTakeoffPricePackage || p.toLowerCase().includes(newTakeoffPricePackage.toLowerCase()));
-                  if (filtered.length === 0) return null;
-                  return (
-                    <ul className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-xl shadow-lg overflow-hidden">
-                      {filtered.map(pkg => (
-                        <li
-                          key={pkg}
-                          onMouseDown={() => { setNewTakeoffPricePackage(pkg); setShowPkgSuggestions(false); }}
-                          className="px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-accent-50 dark:hover:bg-accent-900/20 cursor-pointer"
-                        >
-                          {pkg}
-                        </li>
-                      ))}
-                    </ul>
-                  );
-                })()}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Measurement Type</label>
-                  <select
-                    value={newTakeoffType}
-                    onChange={(e) => {
-                      setNewTakeoffType(e.target.value as 'length' | 'area' | 'count');
-                      setNewTakeoffUnit('');
-                    }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="length">Length</option>
-                    <option value="area">Area</option>
-                    <option value="count">Count</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Color</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={newTakeoffColor}
-                      onChange={(e) => setNewTakeoffColor(e.target.value)}
-                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-1"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Unit</label>
-                  <select
-                    value={newTakeoffUnit}
-                    onChange={(e) => setNewTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="">Default (Scale Unit)</option>
-                    {newTakeoffType === 'length' && (
-                      <>
-                        <option value="in">Inches (in)</option>
-                        <option value="ft">Feet (ft)</option>
-                        <option value="yd">Yards (yd)</option>
-                        <option value="cm">Centimeters (cm)</option>
-                        <option value="m">Meters (m)</option>
-                      </>
-                    )}
-                    {newTakeoffType === 'area' && (
-                      <>
-                        <option value="sqin">Square Inches (sq in)</option>
-                        <option value="sqft">Square Feet (sq ft)</option>
-                        <option value="sqyd">Square Yards (sq yd)</option>
-                        <option value="sqcm">Square Centimeters (sq cm)</option>
-                        <option value="sqm">Square Meters (sq m)</option>
-                      </>
-                    )}
-                    {newTakeoffType === 'count' && (
-                      <option value="each">Each</option>
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cost Per Unit ($)</label>
-                  <input
-                    type="text"
-                    disabled={isNewTakeoffAdvanced}
-                    value={isNewTakeoffAdvanced ? '' : newTakeoffCostPerUnit}
-                    onChange={(e) => setNewTakeoffCostPerUnit(e.target.value)}
-                    onBlur={() => {
-                      if (newTakeoffCostPerUnit.startsWith('=')) {
-                        const result = evaluateMathExpression(newTakeoffCostPerUnit);
-                        if (result !== null) setNewTakeoffCostPerUnit(result.toString());
-                      }
-                    }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
-                    placeholder={isNewTakeoffAdvanced ? "Disabled in Advanced" : "0.00 or =95*40%"}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 py-2">
-                <input
-                  type="checkbox"
-                  id="isNewTakeoffAdvanced"
-                  checked={isNewTakeoffAdvanced}
-                  onChange={(e) => setIsNewTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-accent-600 rounded border-slate-300 dark:border-slate-600 focus:ring-accent-500"
-                />
-                <label htmlFor="isNewTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
-                  Advanced Costing (Custom Items)
-                </label>
-              </div>
-
-              {isNewTakeoffAdvanced && (
-                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
-                  <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
-                    <button
-                      onClick={() => setNewTakeoffCustomCosts([...newTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
-                      className="text-[10px] flex items-center gap-1 text-accent-600 hover:text-accent-700 font-bold uppercase tracking-tight"
-                    >
-                      <Plus size={12} />
-                      Add Cost Item
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    {newTakeoffCustomCosts.map((cost, idx) => (
-                      <CustomCostRow
-                        key={cost.id}
-                        item={cost}
-                        index={idx}
-                        unitLabel={UNIT_LABELS[newTakeoffUnit as keyof typeof UNIT_LABELS] || newTakeoffUnit || 'unit'}
-                        onChange={(index, updated) => {
-                          const newCosts = [...newTakeoffCustomCosts];
-                          newCosts[index] = updated;
-                          setNewTakeoffCustomCosts(newCosts);
-                        }}
-                        onRemove={(index) => {
-                          setNewTakeoffCustomCosts(newTakeoffCustomCosts.filter((_, i) => i !== index));
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
-              <button
-                onClick={() => setShowTakeoffModal(false)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-xl transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateTakeoff}
-                disabled={!newTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
-              >
-                Create Takeoff
-              </button>
-            </div>
-          </div>
-        </div>
-        </>
-      )}
+      <NewTakeoffModal
+        open={showTakeoffModal}
+        onClose={() => setShowTakeoffModal(false)}
+        project={project}
+        templates={templates}
+        onCreateTakeoff={async (newTakeoff) => {
+          const updatedProject = {
+            ...project,
+            takeoffs: [...project.takeoffs, newTakeoff],
+          };
+          await saveProject(updatedProject);
+          setProject(updatedProject);
+          setSelectedTakeoffId(newTakeoff.id);
+          setSelectedColor(newTakeoff.color);
+          setCurrentTool(newTakeoff.type);
+          setShowTakeoffModal(false);
+        }}
+      />
 
       {/* Delete Takeoff Confirmation Modal */}
       {takeoffToDelete && (
