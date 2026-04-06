@@ -1070,8 +1070,25 @@ export const ProjectView: React.FC = () => {
 
       let y = tableTop + 10;
 
-      for (let i = 0; i < selectedTakeoffs.length; i++) {
-        const t = selectedTakeoffs[i];
+      // Build grouped structure matching the project view
+      const packageOrder: string[] = [];
+      const packageMap: Record<string, typeof selectedTakeoffs> = {};
+      const ungrouped: typeof selectedTakeoffs = [];
+      for (const t of selectedTakeoffs) {
+        if (t.pricePackage) {
+          if (!packageMap[t.pricePackage]) {
+            packageMap[t.pricePackage] = [];
+            packageOrder.push(t.pricePackage);
+          }
+          packageMap[t.pricePackage].push(t);
+        } else {
+          ungrouped.push(t);
+        }
+      }
+
+      // Helper: draw a single takeoff row (and optional cost-detail sub-rows)
+      let rowIndex = 0;
+      const drawTakeoffRow = (t: typeof selectedTakeoffs[0]) => {
         const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
         const unitLabel = UNIT_LABELS[t.unit || ''] || t.unit ||
           (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
@@ -1086,13 +1103,15 @@ export const ProjectView: React.FC = () => {
           pdf.setTextColor(255, 255, 255);
           pdf.text('Takeoff Summary (cont.)', 40, 33);
           y = 70;
+          rowIndex = 0;
         }
 
         // Alternating row bg
-        if (i % 2 === 0) {
+        if (rowIndex % 2 === 0) {
           pdf.setFillColor(248, 250, 252);
           pdf.rect(40, y - 15, W - 80, rowH, 'F');
         }
+        rowIndex++;
 
         // Color swatch
         const hex = (t.color || '#3b82f6').replace('#', '');
@@ -1128,11 +1147,21 @@ export const ProjectView: React.FC = () => {
           if (t.isAdvancedCost && t.customCosts?.length) {
             const details = calculateTakeoffCostDetails(t, t.totalRealValue);
             for (const detail of details) {
+              if (y > H - 60) {
+                pdf.addPage();
+                pdf.setFillColor(30, 41, 59);
+                pdf.rect(0, 0, W, 50, 'F');
+                pdf.setFontSize(13);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setTextColor(255, 255, 255);
+                pdf.text('Takeoff Summary (cont.)', 40, 33);
+                y = 70;
+                rowIndex = 0;
+              }
               pdf.setFontSize(8);
               pdf.setFont('helvetica', 'normal');
               pdf.setTextColor(148, 163, 184);
-              const detailName = `  · ${detail.name}`;
-              pdf.text(detailName, COL.name, y);
+              pdf.text(`  · ${detail.name}`, COL.name, y);
               pdf.text(formatCurrency(detail.costValue), COL.cost, y, { align: 'right' });
               y += 18;
             }
@@ -1140,9 +1169,63 @@ export const ProjectView: React.FC = () => {
             pdf.setFontSize(8);
             pdf.setFont('helvetica', 'normal');
             pdf.setTextColor(148, 163, 184);
-            pdf.text(`  · ${formatCurrency(t.costPerUnit)} / ${unitLabel}`, COL.name, y);
+            const unitLabel2 = UNIT_LABELS[t.unit || ''] || t.unit ||
+              (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
+            pdf.text(`  · ${formatCurrency(t.costPerUnit)} / ${unitLabel2}`, COL.name, y);
             y += 18;
           }
+        }
+      };
+
+      // Helper: draw a package group header + its takeoffs + subtotal
+      const drawPackageGroup = (pkg: string, takeoffs: typeof selectedTakeoffs) => {
+        // Ensure there's room for at least the header + one row
+        if (y > H - 110) {
+          pdf.addPage();
+          pdf.setFillColor(30, 41, 59);
+          pdf.rect(0, 0, W, 50, 'F');
+          pdf.setFontSize(13);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(255, 255, 255);
+          pdf.text('Takeoff Summary (cont.)', 40, 33);
+          y = 70;
+          rowIndex = 0;
+        }
+
+        // Package header row
+        pdf.setFillColor(226, 232, 240); // slate-200
+        pdf.rect(40, y - 12, W - 80, 20, 'F');
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(71, 85, 105); // slate-600
+        pdf.text(pkg.toUpperCase(), COL.name, y + 2);
+
+        // Package subtotal (right-aligned in header)
+        const pkgTotal = takeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(formatCurrency(pkgTotal), COL.cost, y + 2, { align: 'right' });
+
+        y += 22;
+        rowIndex = 0; // reset alternating stripes per group
+
+        for (const t of takeoffs) {
+          drawTakeoffRow(t);
+        }
+      };
+
+      // Render grouped takeoffs
+      for (const pkg of packageOrder) {
+        drawPackageGroup(pkg, packageMap[pkg]);
+      }
+
+      // Render ungrouped takeoffs (no package label)
+      if (ungrouped.length > 0) {
+        if (packageOrder.length > 0) {
+          // Add a small spacer if there were grouped items above
+          y += 4;
+        }
+        for (const t of ungrouped) {
+          drawTakeoffRow(t);
         }
       }
 
