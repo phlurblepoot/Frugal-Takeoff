@@ -2,9 +2,9 @@ name: Docker Image CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "testing", "claude/code-review-nuJ1Q" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "testing", "claude/code-review-nuJ1Q" ]
   workflow_dispatch:
 
 env:
