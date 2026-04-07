@@ -1383,7 +1383,7 @@ const CanvasViewInner: React.FC = () => {
       </div>
       <button
         onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-        className={`absolute right-0 translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-l-0 rounded-r-md p-1 shadow-sm hover:bg-slate-50 text-slate-500 ${isLeftSidebarOpen ? 'hidden md:block' : 'block'}`}
+        className={`absolute right-0 translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-l-0 rounded-r-md p-1 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 ${isLeftSidebarOpen ? 'hidden md:block' : 'block'}`}
       >
         {isLeftSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
       </button>
@@ -2492,7 +2492,7 @@ function MeasurementItem({
 
   return (
     <div 
-      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-50 border-accent-500' : 'hover:bg-slate-50 border-transparent'}`}
+      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-500' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
       onClick={onSelect}
       draggable
       onDragStart={(e) => {
@@ -2524,8 +2524,8 @@ function MeasurementItem({
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span 
-                className="text-sm text-slate-700 break-words whitespace-normal hover:text-accent-600"
+              <span
+                className="text-sm text-slate-700 dark:text-slate-300 break-words whitespace-normal hover:text-accent-600 dark:hover:text-accent-400"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   setIsEditing(true);
@@ -2558,7 +2558,7 @@ function MeasurementItem({
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0 ml-2">
-          <span className="text-sm font-semibold text-slate-900 whitespace-pre-line text-right">
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
             {measurement.type === 'count'
               ? formatMeasurement(1, 'count', scaleConfig, takeoff)
               : measurement.type === 'length' 
