@@ -384,6 +384,12 @@ export const ProjectView: React.FC = () => {
   const [proposalIncludeCostDetail, setProposalIncludeCostDetail] = useState(false);
   const [proposalIncludeHighlights, setProposalIncludeHighlights] = useState(false);
   const [proposalCustomTitle, setProposalCustomTitle] = useState('');
+  const [proposalHeaderColor, setProposalHeaderColor] = useState('#1e293b');
+  const [proposalCoverNotes, setProposalCoverNotes] = useState('');
+  const [proposalFontFamily, setProposalFontFamily] = useState<'helvetica' | 'times' | 'courier'>('helvetica');
+  const [proposalValidUntil, setProposalValidUntil] = useState('');
+  const [proposalTerms, setProposalTerms] = useState('');
+  const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -872,7 +878,16 @@ export const ProjectView: React.FC = () => {
   const formatCurrency = (n: number) =>
     '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const handleGenerateProposal = async (includeCostDetail: boolean, includeHighlights: boolean) => {
+  const handleGenerateProposal = async (
+    includeCostDetail: boolean,
+    includeHighlights: boolean,
+    headerColor = '#1e293b',
+    coverNotes = '',
+    fontFamily: 'helvetica' | 'times' | 'courier' = 'helvetica',
+    validUntil = '',
+    terms = '',
+    includeSignature = false,
+  ) => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setShowProposalModal(false);
     setIsGeneratingProposal(true);
@@ -885,9 +900,21 @@ export const ProjectView: React.FC = () => {
       const W = pdf.internal.pageSize.getWidth();
       const H = pdf.internal.pageSize.getHeight();
 
+      // Derive header RGB + a lighter accent tint (60% header + 40% white)
+      const hexToRgb = (hex: string): [number, number, number] => {
+        const c = hex.replace('#', '');
+        const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
+        return [parseInt(full.slice(0,2),16), parseInt(full.slice(2,4),16), parseInt(full.slice(4,6),16)];
+      };
+      const [hR, hG, hB] = hexToRgb(headerColor);
+      const accentR = Math.round(hR + (255-hR)*0.4);
+      const accentG = Math.round(hG + (255-hG)*0.4);
+      const accentB = Math.round(hB + (255-hB)*0.4);
+      const font = fontFamily;
+
       // ── COVER PAGE ──────────────────────────────────────────────────────
       // Header band
-      pdf.setFillColor(30, 41, 59);
+      pdf.setFillColor(hR, hG, hB);
       pdf.rect(0, 0, W, 120, 'F');
 
       // Logo
@@ -908,39 +935,41 @@ export const ProjectView: React.FC = () => {
       const textX = logoLoaded ? 144 : 40;
       pdf.setTextColor(255, 255, 255);
       pdf.setFontSize(15);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.text(settings.companyName || settings.appName || 'Proposal', textX, 52);
 
       const contactParts = [settings.companyPhone, settings.companyEmail, settings.companyAddress].filter(Boolean);
       if (contactParts.length > 0) {
         pdf.setFontSize(9);
-        pdf.setFont('helvetica', 'normal');
+        pdf.setFont(font, 'normal');
         pdf.text(contactParts.join('   ·   '), textX, 72);
       }
 
-      // "PROPOSAL" heading
-      pdf.setTextColor(30, 41, 59);
-      pdf.setFontSize(52);
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('PROPOSAL', W / 2, 235, { align: 'center' });
-
-      // Decorative rule
-      pdf.setDrawColor(148, 163, 184);
-      pdf.setLineWidth(1);
-      pdf.line(40, 255, W - 40, 255);
+      // "PROPOSAL" heading — 38pt with branded accent bar
+      pdf.setTextColor(hR, hG, hB);
+      pdf.setFontSize(38);
+      pdf.setFont(font, 'bold');
+      pdf.text('PROPOSAL', W / 2, 210, { align: 'center' });
+      // Short bold accent bar
+      pdf.setFillColor(hR, hG, hB);
+      pdf.rect(W / 2 - 50, 220, 100, 3, 'F');
+      // Thin tinted full-width rule
+      pdf.setDrawColor(accentR, accentG, accentB);
+      pdf.setLineWidth(0.5);
+      pdf.line(40, 230, W - 40, 230);
 
       // Project name
       const title = proposalCustomTitle || project.name;
       pdf.setFontSize(22);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
       const titleLines = pdf.splitTextToSize(title, W - 80) as string[];
-      pdf.text(titleLines, W / 2, 300, { align: 'center' });
-      let coverY = 300 + titleLines.length * 28;
+      pdf.text(titleLines, W / 2, 265, { align: 'center' });
+      let coverY = 265 + titleLines.length * 28;
 
       if (project.address) {
         pdf.setFontSize(12);
-        pdf.setFont('helvetica', 'normal');
+        pdf.setFont(font, 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(project.address, W / 2, coverY + 10, { align: 'center' });
         coverY += 30;
@@ -948,6 +977,7 @@ export const ProjectView: React.FC = () => {
 
       if (project.bidDueDate) {
         pdf.setFontSize(11);
+        pdf.setFont(font, 'normal');
         pdf.setTextColor(100, 116, 139);
         pdf.text(`Bid Due: ${new Date(project.bidDueDate).toLocaleDateString()}`, W / 2, coverY + 14, { align: 'center' });
         coverY += 30;
@@ -957,36 +987,94 @@ export const ProjectView: React.FC = () => {
       const grandTotal = selectedTakeoffs.reduce(
         (sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0
       );
-      const boxTop = Math.max(coverY + 40, 420);
+      const boxTop = Math.max(coverY + 40, 400);
       pdf.setFillColor(241, 245, 249);
-      pdf.setDrawColor(226, 232, 240);
+      pdf.setDrawColor(accentR, accentG, accentB);
+      pdf.setLineWidth(0.75);
       pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
+      // Left accent stripe on box
+      pdf.setFillColor(hR, hG, hB);
+      pdf.rect(W / 2 - 115, boxTop, 4, 84, 'F');
       pdf.setFontSize(9);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setTextColor(100, 116, 139);
       pdf.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
       pdf.setFontSize(28);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
       pdf.text(formatCurrency(grandTotal), W / 2, boxTop + 60, { align: 'center' });
 
-      // Footer
+      // Cover notes box
+      if (coverNotes.trim()) {
+        const notesBoxTop = boxTop + 100;
+        const notesX = 60;
+        const notesMaxW = W - 120;
+        pdf.setFontSize(10);
+        pdf.setFont(font, 'normal');
+        const notesLines = pdf.splitTextToSize(coverNotes.trim(), notesMaxW - 20) as string[];
+        const lineH = 15;
+        const padV = 14;
+        const notesBH = notesLines.length * lineH + padV * 2;
+        pdf.setFillColor(248, 250, 252);
+        pdf.setDrawColor(accentR, accentG, accentB);
+        pdf.setLineWidth(0.75);
+        pdf.roundedRect(notesX, notesBoxTop, notesMaxW, notesBH, 4, 4, 'FD');
+        pdf.setFillColor(hR, hG, hB);
+        pdf.rect(notesX, notesBoxTop, 3, notesBH, 'F');
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(notesLines, notesX + 14, notesBoxTop + padV + 10);
+      }
+
+      // Valid until
+      if (validUntil) {
+        const validY = boxTop + (coverNotes.trim() ? 110 + pdf.splitTextToSize(coverNotes.trim(), W - 140).length * 15 + 28 * 2 : 100);
+        pdf.setFontSize(9);
+        pdf.setFont(font, 'italic');
+        pdf.setTextColor(100, 116, 139);
+        pdf.text(`This proposal is valid until ${new Date(validUntil + 'T00:00:00').toLocaleDateString()}.`, W / 2, Math.min(validY, H - 90), { align: 'center' });
+      }
+
+      // Signature block
+      if (includeSignature) {
+        const sigY = H - 130;
+        pdf.setDrawColor(accentR, accentG, accentB);
+        pdf.setLineWidth(0.5);
+        // Authorized signature
+        pdf.line(40, sigY, 220, sigY);
+        pdf.setFontSize(8);
+        pdf.setFont(font, 'normal');
+        pdf.setTextColor(100, 116, 139);
+        pdf.text('Authorized Signature', 40, sigY + 12);
+        // Date
+        pdf.line(260, sigY, 380, sigY);
+        pdf.text('Date', 260, sigY + 12);
+        // Printed name
+        pdf.line(W / 2 + 20, sigY, W - 40, sigY);
+        pdf.text('Printed Name', W / 2 + 20, sigY + 12);
+        // "Accepted by" label above
+        pdf.setFontSize(9);
+        pdf.setFont(font, 'bold');
+        pdf.setTextColor(hR, hG, hB);
+        pdf.text('ACCEPTED BY', 40, sigY - 14);
+      }
+
+      // Cover page footer
       pdf.setFontSize(9);
       pdf.setTextColor(148, 163, 184);
-      pdf.setFont('helvetica', 'normal');
+      pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
 
       // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
       pdf.addPage();
 
-      pdf.setFillColor(30, 41, 59);
+      pdf.setFillColor(hR, hG, hB);
       pdf.rect(0, 0, W, 50, 'F');
       pdf.setFontSize(13);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setTextColor(255, 255, 255);
       pdf.text('Takeoff Summary', 40, 33);
       pdf.setFontSize(10);
-      pdf.setFont('helvetica', 'normal');
+      pdf.setFont(font, 'normal');
       const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
       pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
 
@@ -995,12 +1083,13 @@ export const ProjectView: React.FC = () => {
       const tableTop = 78;
       const rowH = 28;
 
-      // Table header
-      pdf.setFillColor(241, 245, 249);
-      pdf.rect(40, tableTop - 17, W - 80, 20, 'F');
+      // Table header — bottom border line instead of fill
+      pdf.setDrawColor(accentR, accentG, accentB);
+      pdf.setLineWidth(0.5);
+      pdf.line(40, tableTop - 1, W - 40, tableTop - 1);
       pdf.setFontSize(8);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(100, 116, 139);
+      pdf.setFont(font, 'bold');
+      pdf.setTextColor(hR, hG, hB);
       pdf.text('TAKEOFF', COL.name, tableTop - 4);
       pdf.text('TYPE', COL.type, tableTop - 4);
       pdf.text('QTY', COL.qty, tableTop - 4);
@@ -1035,21 +1124,19 @@ export const ProjectView: React.FC = () => {
         // New page if near bottom
         if (y > H - 80) {
           pdf.addPage();
-          pdf.setFillColor(30, 41, 59);
+          pdf.setFillColor(hR, hG, hB);
           pdf.rect(0, 0, W, 50, 'F');
           pdf.setFontSize(13);
-          pdf.setFont('helvetica', 'bold');
+          pdf.setFont(font, 'bold');
           pdf.setTextColor(255, 255, 255);
           pdf.text('Takeoff Summary (cont.)', 40, 33);
+          pdf.setFontSize(10);
+          pdf.setFont(font, 'normal');
+          pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
           y = 70;
           rowIndex = 0;
         }
 
-        // Alternating row bg
-        if (rowIndex % 2 === 0) {
-          pdf.setFillColor(248, 250, 252);
-          pdf.rect(40, y - 15, W - 80, rowH, 'F');
-        }
         rowIndex++;
 
         // Color swatch
@@ -1062,22 +1149,27 @@ export const ProjectView: React.FC = () => {
 
         // Name
         pdf.setFontSize(10);
-        pdf.setFont('helvetica', 'bold');
+        pdf.setFont(font, 'bold');
         pdf.setTextColor(15, 23, 42);
         const name = t.name.length > 28 ? t.name.substring(0, 27) + '…' : t.name;
         pdf.text(name, COL.name, y);
 
         // Type / Qty / Unit
-        pdf.setFont('helvetica', 'normal');
+        pdf.setFont(font, 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(t.type, COL.type, y);
         pdf.text(t.totalRealValue.toFixed(2), COL.qty, y);
         pdf.text(unitLabel, COL.unit, y);
 
         // Cost
-        pdf.setFont('helvetica', 'bold');
+        pdf.setFont(font, 'bold');
         pdf.setTextColor(15, 23, 42);
         pdf.text(formatCurrency(totalCost), COL.cost, y, { align: 'right' });
+
+        // Subtle bottom separator line
+        pdf.setDrawColor(226, 232, 240);
+        pdf.setLineWidth(0.3);
+        pdf.line(62, y + 13, W - 40, y + 13);
 
         y += rowH;
 
@@ -1088,17 +1180,20 @@ export const ProjectView: React.FC = () => {
             for (const detail of details) {
               if (y > H - 60) {
                 pdf.addPage();
-                pdf.setFillColor(30, 41, 59);
+                pdf.setFillColor(hR, hG, hB);
                 pdf.rect(0, 0, W, 50, 'F');
                 pdf.setFontSize(13);
-                pdf.setFont('helvetica', 'bold');
+                pdf.setFont(font, 'bold');
                 pdf.setTextColor(255, 255, 255);
                 pdf.text('Takeoff Summary (cont.)', 40, 33);
+                pdf.setFontSize(10);
+                pdf.setFont(font, 'normal');
+                pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
                 y = 70;
                 rowIndex = 0;
               }
               pdf.setFontSize(8);
-              pdf.setFont('helvetica', 'normal');
+              pdf.setFont(font, 'normal');
               pdf.setTextColor(148, 163, 184);
               pdf.text(`  · ${detail.name}`, COL.name, y);
               pdf.text(formatCurrency(detail.costValue), COL.cost, y, { align: 'right' });
@@ -1106,7 +1201,7 @@ export const ProjectView: React.FC = () => {
             }
           } else if (t.costPerUnit) {
             pdf.setFontSize(8);
-            pdf.setFont('helvetica', 'normal');
+            pdf.setFont(font, 'normal');
             pdf.setTextColor(148, 163, 184);
             const unitLabel2 = UNIT_LABELS[t.unit || ''] || t.unit ||
               (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
@@ -1121,22 +1216,27 @@ export const ProjectView: React.FC = () => {
         // Ensure there's room for at least the header + one row
         if (y > H - 110) {
           pdf.addPage();
-          pdf.setFillColor(30, 41, 59);
+          pdf.setFillColor(hR, hG, hB);
           pdf.rect(0, 0, W, 50, 'F');
           pdf.setFontSize(13);
-          pdf.setFont('helvetica', 'bold');
+          pdf.setFont(font, 'bold');
           pdf.setTextColor(255, 255, 255);
           pdf.text('Takeoff Summary (cont.)', 40, 33);
+          pdf.setFontSize(10);
+          pdf.setFont(font, 'normal');
+          pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
           y = 70;
           rowIndex = 0;
         }
 
-        // Package header row
-        pdf.setFillColor(226, 232, 240); // slate-200
-        pdf.rect(40, y - 12, W - 80, 20, 'F');
+        // Package header — left accent bar + subtle background
+        pdf.setFillColor(hR, hG, hB);
+        pdf.rect(40, y - 12, 3, 20, 'F');
+        pdf.setFillColor(241, 245, 249);
+        pdf.rect(43, y - 12, W - 83, 20, 'F');
         pdf.setFontSize(8);
-        pdf.setFont('helvetica', 'bold');
-        pdf.setTextColor(71, 85, 105); // slate-600
+        pdf.setFont(font, 'bold');
+        pdf.setTextColor(hR, hG, hB);
         pdf.text(pkg.toUpperCase(), COL.name, y + 2);
 
         // Package subtotal (right-aligned in header)
@@ -1170,21 +1270,69 @@ export const ProjectView: React.FC = () => {
 
       // Grand total row
       y += 8;
-      pdf.setDrawColor(226, 232, 240);
-      pdf.setLineWidth(1);
+      pdf.setDrawColor(accentR, accentG, accentB);
+      pdf.setLineWidth(0.75);
       pdf.line(40, y, W - 40, y);
       y += 18;
       pdf.setFontSize(11);
-      pdf.setFont('helvetica', 'bold');
+      pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
       pdf.text('TOTAL', COL.name, y);
       pdf.text(formatCurrency(grandTotal), COL.cost, y, { align: 'right' });
 
-      // Footer on last page
+      // Footer on last takeoff page
       pdf.setFontSize(9);
       pdf.setTextColor(148, 163, 184);
-      pdf.setFont('helvetica', 'normal');
+      pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+
+      // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
+      if (terms.trim()) {
+        pdf.addPage();
+        pdf.setFillColor(hR, hG, hB);
+        pdf.rect(0, 0, W, 50, 'F');
+        pdf.setFontSize(13);
+        pdf.setFont(font, 'bold');
+        pdf.setTextColor(255, 255, 255);
+        pdf.text('Terms & Conditions', 40, 33);
+        pdf.setFontSize(10);
+        pdf.setFont(font, 'normal');
+        pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
+
+        let ty = 78;
+        pdf.setFontSize(10);
+        pdf.setFont(font, 'normal');
+        pdf.setTextColor(71, 85, 105);
+        const termLines = pdf.splitTextToSize(terms.trim(), W - 80) as string[];
+        for (const line of termLines) {
+          if (ty > H - 60) {
+            pdf.addPage();
+            pdf.setFillColor(hR, hG, hB);
+            pdf.rect(0, 0, W, 50, 'F');
+            pdf.setFontSize(13);
+            pdf.setFont(font, 'bold');
+            pdf.setTextColor(255, 255, 255);
+            pdf.text('Terms & Conditions (cont.)', 40, 33);
+            ty = 70;
+          }
+          pdf.text(line, 40, ty);
+          ty += 16;
+        }
+        pdf.setFontSize(9);
+        pdf.setTextColor(148, 163, 184);
+        pdf.setFont(font, 'normal');
+        pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+      }
+
+      // ── PAGE NUMBERS ────────────────────────────────────────────────────
+      const totalPages = (pdf as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(8);
+        pdf.setFont(font, 'normal');
+        pdf.setTextColor(148, 163, 184);
+        pdf.text(`Page ${i} of ${totalPages}`, W - 40, H - 20, { align: 'right' });
+      }
 
       // ── SAVE (merge with highlights if requested) ────────────────────────
       let finalBlob: Blob;
@@ -1301,10 +1449,10 @@ export const ProjectView: React.FC = () => {
       link.click();
       document.body.removeChild(link);
     } else {
-      const win = window.open();
-      if (win) {
-        win.document.write(`<iframe src="${dataUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-      }
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
     }
   };
 
@@ -3477,6 +3625,98 @@ export const ProjectView: React.FC = () => {
                   placeholder={project.name}
                 />
               </div>
+              {/* Header color */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Header Color</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="color"
+                    value={proposalHeaderColor}
+                    onChange={e => setProposalHeaderColor(e.target.value)}
+                    className="h-10 w-14 rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-0.5 bg-white dark:bg-slate-800"
+                  />
+                  <span className="text-sm text-slate-500 dark:text-slate-400 font-mono">{proposalHeaderColor}</span>
+                  <button
+                    type="button"
+                    onClick={() => setProposalHeaderColor('#1e293b')}
+                    className="ml-auto text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              {/* Font family */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Font Style</label>
+                <select
+                  value={proposalFontFamily}
+                  onChange={e => setProposalFontFamily(e.target.value as 'helvetica' | 'times' | 'courier')}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white focus:ring-2 focus:ring-violet-500 outline-none transition-all text-sm"
+                >
+                  <option value="helvetica">Helvetica (Modern)</option>
+                  <option value="times">Times (Traditional)</option>
+                  <option value="courier">Courier (Monospace)</option>
+                </select>
+              </div>
+
+              {/* Cover notes */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  Cover Page Notes
+                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional</span>
+                </label>
+                <textarea
+                  value={proposalCoverNotes}
+                  onChange={e => setProposalCoverNotes(e.target.value)}
+                  rows={3}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all resize-none text-sm"
+                  placeholder="e.g. This proposal is valid for 30 days. Pricing excludes permits and inspections."
+                />
+              </div>
+
+              {/* Valid until */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  Valid Until
+                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional</span>
+                </label>
+                <input
+                  type="date"
+                  value={proposalValidUntil}
+                  onChange={e => setProposalValidUntil(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white focus:ring-2 focus:ring-violet-500 outline-none transition-all text-sm"
+                />
+              </div>
+
+              {/* Terms & conditions */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  Terms &amp; Conditions
+                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional — adds a page after the summary</span>
+                </label>
+                <textarea
+                  value={proposalTerms}
+                  onChange={e => setProposalTerms(e.target.value)}
+                  rows={3}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all resize-none text-sm"
+                  placeholder="e.g. Payment due within 30 days. All work is subject to standard industry practices..."
+                />
+              </div>
+
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={proposalIncludeSignature}
+                  onChange={e => setProposalIncludeSignature(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">Include signature block</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add acceptance signature lines to the cover page</span>
+                </span>
+              </label>
+
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
@@ -3524,7 +3764,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights)}
+                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature)}
                 className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
               >
                 <FileText size={15} />
