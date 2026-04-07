@@ -329,6 +329,35 @@ async function renderPageToDataUrl(
   return canvas.toDataURL('image/jpeg', 0.8);
 }
 
+// Builds the highlighted-plans PDF using the exact same logic as the Print button.
+// Returns the PDF as an ArrayBuffer so it can be saved directly or merged into another PDF.
+async function buildHighlightsPdf(
+  project: Project,
+  selectedTakeoffIds: Set<string>
+): Promise<ArrayBuffer | null> {
+  const pagesToPrint = project.pages.filter(page =>
+    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+  );
+  if (pagesToPrint.length === 0) return null;
+
+  const pdf = new jsPDF({
+    orientation: 'landscape',
+    unit: 'px',
+    format: [pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight],
+  });
+
+  for (let i = 0; i < pagesToPrint.length; i++) {
+    const page = pagesToPrint[i];
+    const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds);
+    if (!dataUrl) continue;
+    if (i > 0) pdf.addPage([page.imageWidth, page.imageHeight], 'landscape');
+    pdf.setPage(i + 1);
+    pdf.addImage(dataUrl, 'JPEG', 0, 0, page.imageWidth, page.imageHeight);
+  }
+
+  return pdf.output('arraybuffer') as ArrayBuffer;
+}
+
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
   const { projectId } = useParams<{ projectId: string }>();
@@ -739,33 +768,15 @@ export const ProjectView: React.FC = () => {
     setIsPrinting(true);
 
     try {
-      // Find all pages that have measurements belonging to the selected takeoffs
-      const pagesToPrint = project.pages.filter(page => 
-        page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
-      );
+      const pdfBuffer = await buildHighlightsPdf(project, selectedTakeoffIds);
 
-      if (pagesToPrint.length === 0) {
+      if (!pdfBuffer) {
         alert('No pages found with the selected takeoffs.');
         setIsPrinting(false);
         return;
       }
 
-      const pdf = new jsPDF({
-        orientation: 'landscape',
-        unit: 'px',
-        format: [pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight]
-      });
-
-      for (let i = 0; i < pagesToPrint.length; i++) {
-        const page = pagesToPrint[i];
-        const pageDataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds);
-        if (!pageDataUrl) continue;
-        if (i > 0) pdf.addPage([page.imageWidth, page.imageHeight], 'landscape');
-        pdf.setPage(i + 1);
-        pdf.addImage(pageDataUrl, 'JPEG', 0, 0, page.imageWidth, page.imageHeight);
-      }
-
-      const pdfBlob = pdf.output('blob');
+      const pdfBlob = new Blob([pdfBuffer], { type: 'application/pdf' });
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
       reader.onloadend = async () => {
@@ -1175,44 +1186,34 @@ export const ProjectView: React.FC = () => {
       pdf.setFont('helvetica', 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
 
-      // ── HIGHLIGHTED BLUEPRINT PAGES ────────────────────────────────────
+      // ── SAVE (merge with highlights if requested) ────────────────────────
+      let finalBlob: Blob;
       if (includeHighlights) {
-        const pagesToAppend = project.pages.filter(page =>
-          page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
-        );
+        // Generate the highlights PDF using the exact same path as the Print button,
+        // then merge it with the proposal using pdf-lib.
+        const { PDFDocument } = await import('pdf-lib');
+        const highlightsBuffer = await buildHighlightsPdf(project, selectedTakeoffIds);
+        const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
 
-        // A4 landscape dimensions in pt
-        const pW = H; // 841.89
-        const pH = W; // 595.28
+        const mergedDoc = await PDFDocument.create();
 
-        for (const page of pagesToAppend) {
-          const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds);
-          if (!dataUrl) continue;
+        const proposalDoc = await PDFDocument.load(proposalBuffer);
+        const proposalPages = await mergedDoc.copyPages(proposalDoc, proposalDoc.getPageIndices());
+        proposalPages.forEach(p => mergedDoc.addPage(p));
 
-          // Letterbox into A4 landscape
-          const imgAspect = page.imageWidth / page.imageHeight;
-          const pageAspect = pW / pH;
-          let imgW: number, imgH: number, imgX: number, imgY: number;
-          if (imgAspect > pageAspect) {
-            imgW = pW; imgH = pW / imgAspect; imgX = 0; imgY = (pH - imgH) / 2;
-          } else {
-            imgH = pH; imgW = pH * imgAspect; imgX = (pW - imgW) / 2; imgY = 0;
-          }
-
-          pdf.addPage([pW, pH]);
-          // Dark header bar with page name
-          pdf.setFillColor(30, 41, 59);
-          pdf.rect(0, 0, pW, 28, 'F');
-          pdf.setFontSize(10);
-          pdf.setFont('helvetica', 'bold');
-          pdf.setTextColor(255, 255, 255);
-          pdf.text(page.name || 'Page', 16, 18);
-          pdf.addImage(dataUrl, 'JPEG', imgX, 28 + imgY * ((pH - 28) / pH), imgW, imgH * ((pH - 28) / pH));
+        if (highlightsBuffer) {
+          const highlightsDoc = await PDFDocument.load(highlightsBuffer);
+          const highlightsPages = await mergedDoc.copyPages(highlightsDoc, highlightsDoc.getPageIndices());
+          highlightsPages.forEach(p => mergedDoc.addPage(p));
         }
+
+        const mergedBytes = await mergedDoc.save();
+        finalBlob = new Blob([mergedBytes], { type: 'application/pdf' });
+      } else {
+        finalBlob = pdf.output('blob');
       }
 
-      // ── SAVE ────────────────────────────────────────────────────────────
-      const pdfBlob = pdf.output('blob');
+      const pdfBlob = finalBlob;
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
       reader.onloadend = async () => {
