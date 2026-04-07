@@ -1301,10 +1301,10 @@ export const ProjectView: React.FC = () => {
       link.click();
       document.body.removeChild(link);
     } else {
-      const win = window.open();
-      if (win) {
-        win.document.write(`<iframe src="${dataUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`);
-      }
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
     }
   };
 
