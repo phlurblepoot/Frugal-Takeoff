@@ -197,6 +197,7 @@ export const ProjectView: React.FC = () => {
   const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
   const [showProposalModal, setShowProposalModal] = useState(false);
   const [proposalIncludeCostDetail, setProposalIncludeCostDetail] = useState(false);
+  const [proposalIncludeHighlights, setProposalIncludeHighlights] = useState(false);
   const [proposalCustomTitle, setProposalCustomTitle] = useState('');
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
@@ -933,7 +934,7 @@ export const ProjectView: React.FC = () => {
   const formatCurrency = (n: number) =>
     '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const handleGenerateProposal = async (includeCostDetail: boolean) => {
+  const handleGenerateProposal = async (includeCostDetail: boolean, includeHighlights: boolean) => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setShowProposalModal(false);
     setIsGeneratingProposal(true);
@@ -1246,6 +1247,183 @@ export const ProjectView: React.FC = () => {
       pdf.setTextColor(148, 163, 184);
       pdf.setFont('helvetica', 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+
+      // ── HIGHLIGHTED BLUEPRINT PAGES ────────────────────────────────────
+      if (includeHighlights) {
+        const pagesToAppend = project.pages.filter(page =>
+          page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+        );
+
+        // A4 landscape dimensions in pt
+        const pW = H; // 841.89
+        const pH = W; // 595.28
+
+        for (const page of pagesToAppend) {
+          const canvas = document.createElement('canvas');
+          canvas.width = page.imageWidth;
+          canvas.height = page.imageHeight;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) continue;
+
+          // Draw background image
+          const img = new Image();
+          img.src = getImageUrl(page.imageId);
+          await new Promise<void>(r => { img.onload = () => r(); img.onerror = () => r(); });
+          ctx.drawImage(img, 0, 0);
+
+          // Draw measurements
+          page.measurements.forEach(m => {
+            if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
+            const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
+            const color = takeoff?.color || m.color || '#3b82f6';
+            ctx.strokeStyle = color;
+            ctx.fillStyle = `${color}40`;
+            ctx.lineWidth = m.type === 'length' ? 8 : 3;
+            if (m.type === 'count') {
+              const p = m.points[0];
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
+              ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
+              ctx.stroke();
+            } else {
+              ctx.beginPath();
+              ctx.moveTo(m.points[0].x, m.points[0].y);
+              for (let j = 1; j < m.points.length; j++) ctx.lineTo(m.points[j].x, m.points[j].y);
+              if (m.type === 'area') { ctx.closePath(); ctx.fill(); }
+              ctx.stroke();
+
+              // Label
+              let cx = 0, cy = 0;
+              if (m.type === 'length') {
+                const mid = Math.floor((m.points.length - 1) / 2);
+                cx = (m.points[mid].x + m.points[mid + 1].x) / 2;
+                cy = (m.points[mid].y + m.points[mid + 1].y) / 2;
+              } else {
+                m.points.forEach(p => { cx += p.x; cy += p.y; });
+                cx /= m.points.length; cy /= m.points.length;
+              }
+              const isSurf = takeoff?.type === 'area' && m.type === 'length';
+              let text = '';
+              if (isSurf) text = formatMeasurement(calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, page.scaleConfig), 'area', page.scaleConfig, takeoff);
+              else if (m.type === 'length') text = formatMeasurement(calculatePolylineLength(m.points), 'length', page.scaleConfig, takeoff);
+              else text = formatMeasurement(calculatePolygonArea(m.points), 'area', page.scaleConfig, takeoff);
+              if (text) {
+                ctx.font = '14px sans-serif';
+                const tw = ctx.measureText(text).width;
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.fillRect(cx - tw / 2 - 4, cy - 18, tw + 8, 24);
+                ctx.fillStyle = '#000';
+                ctx.textAlign = 'center';
+                ctx.fillText(text, cx, cy);
+              }
+            }
+          });
+
+          // Draw legend (same as handlePrint)
+          if (page.showLegend && project.takeoffs.length > 0) {
+            const legendItems: { color: string; name: string; total: string }[] = [];
+            project.takeoffs.forEach(takeoff => {
+              let totalRealValue = 0;
+              let hasMeasurements = false;
+              page.measurements.filter(m => m.takeoffId === takeoff.id && selectedTakeoffIds.has(m.takeoffId || '')).forEach(m => {
+                hasMeasurements = true;
+                let currentScale = page.scaleConfig;
+                if (page.isMultiRegion && m.regionId) {
+                  const region = page.scaleRegions?.find(r => r.id === m.regionId);
+                  if (region?.scaleConfig) currentScale = region.scaleConfig;
+                }
+                let pixelValue = 0;
+                if (takeoff.type === 'length' && m.type === 'length') pixelValue = calculatePolylineLength(m.points);
+                else if (takeoff.type === 'area' && m.type === 'area') pixelValue = calculatePolygonArea(m.points);
+                else if (takeoff.type === 'area' && m.type === 'length') pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+                else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
+                if (pixelValue > 0) {
+                  const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+                  const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+                  const sourceUnit = currentScale?.unit || 'ft';
+                  if (takeoff.type === 'count') totalRealValue += realValue;
+                  else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+                }
+              });
+              if (hasMeasurements) {
+                const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+                const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
+                legendItems.push({
+                  color: takeoff.color,
+                  name: takeoff.name,
+                  total: page.showLegendTotals !== false ? `${takeoff.type === 'count' ? Math.round(totalRealValue) : totalRealValue.toFixed(2)}${unitLabel}` : '',
+                });
+              }
+            });
+            if (legendItems.length > 0) {
+              const fs = page.legendFontSize || 14;
+              const pad = fs * 0.8;
+              const itemH = fs * 1.6;
+              const csz = fs;
+              const tOffX = csz + 10;
+              const lw = page.legendWidth || 350;
+              const lh = pad * 2 + legendItems.length * itemH + fs * 2;
+              const pos = page.legendPosition || { x: 20, y: 20 };
+              ctx.save();
+              ctx.translate(pos.x, pos.y);
+              ctx.fillStyle = 'white';
+              ctx.shadowColor = 'rgba(0,0,0,0.1)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+              ctx.beginPath(); ctx.roundRect(0, 0, lw, lh, 6); ctx.fill();
+              ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1; ctx.stroke();
+              ctx.shadowColor = 'transparent';
+              ctx.fillStyle = '#334155'; ctx.font = `bold ${fs + 2}px sans-serif`;
+              ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+              ctx.fillText('Legend', pad, pad);
+              legendItems.forEach((item, idx) => {
+                const iy = pad + fs * 2 + idx * itemH;
+                ctx.fillStyle = item.color;
+                ctx.beginPath(); ctx.roundRect(pad, iy + 2, csz, csz, 3); ctx.fill();
+                ctx.fillStyle = '#475569'; ctx.font = `${fs}px sans-serif`;
+                ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+                let nameText = item.name;
+                const maxW = lw - pad * 2 - tOffX - (page.showLegendTotals !== false ? fs * 10 : 0);
+                while (nameText.length > 0 && ctx.measureText(nameText).width > maxW) nameText = nameText.slice(0, -1);
+                if (nameText !== item.name) nameText += '...';
+                ctx.fillText(nameText, pad + tOffX, iy + 2);
+                if (page.showLegendTotals !== false) {
+                  ctx.fillStyle = '#0f172a'; ctx.font = `bold ${fs}px sans-serif`;
+                  ctx.textAlign = 'right';
+                  ctx.fillText(item.total, lw - pad, iy + 2);
+                }
+              });
+              ctx.restore();
+            }
+          }
+
+          const pageDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+          // Letterbox into A4 landscape
+          const imgAspect = page.imageWidth / page.imageHeight;
+          const pageAspect = pW / pH;
+          let imgW: number, imgH: number, imgX: number, imgY: number;
+          if (imgAspect > pageAspect) {
+            imgW = pW; imgH = pW / imgAspect; imgX = 0; imgY = (pH - imgH) / 2;
+          } else {
+            imgH = pH; imgW = pH * imgAspect; imgX = (pW - imgW) / 2; imgY = 0;
+          }
+
+          pdf.addPage([pW, pH]);
+          // Dark header bar with page name
+          pdf.setFillColor(30, 41, 59);
+          pdf.rect(0, 0, pW, 28, 'F');
+          pdf.setFontSize(10);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(page.name || 'Page', 16, 18);
+          pdf.addImage(pageDataUrl, 'JPEG', imgX, 28 + imgY * ((pH - 28) / pH), imgW, imgH * ((pH - 28) / pH));
+        }
+      }
 
       // ── SAVE ────────────────────────────────────────────────────────────
       const pdfBlob = pdf.output('blob');
@@ -3528,6 +3706,22 @@ export const ProjectView: React.FC = () => {
                   </span>
                 </span>
               </label>
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={proposalIncludeHighlights}
+                  onChange={e => setProposalIncludeHighlights(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+                    Append highlighted plans
+                  </span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Add annotated blueprint pages to the end of the PDF
+                  </span>
+                </span>
+              </label>
               {project.address && (
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-lg px-3 py-2">
                   <MapPin size={13} />
@@ -3543,7 +3737,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => handleGenerateProposal(proposalIncludeCostDetail)}
+                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights)}
                 className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
               >
                 <FileText size={15} />
