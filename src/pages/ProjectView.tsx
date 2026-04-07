@@ -1853,12 +1853,12 @@ export const ProjectView: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500 dark:text-slate-400">
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
+              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <Calendar size={14} className="text-slate-400 flex-shrink-0" />
                 <span className="truncate">Created {new Date(project.createdAt).toLocaleDateString()}</span>
               </div>
               
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
+              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <Building2 size={14} className="text-slate-400 flex-shrink-0" />
                 {isEditingContractor ? (
                   <div className="flex items-center gap-1 flex-1">
@@ -1892,7 +1892,7 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
+              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <MapPin size={14} className="text-slate-400 flex-shrink-0" />
                 {isEditingAddress ? (
                   <div className="flex items-center gap-1 flex-1">
@@ -1935,7 +1935,7 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 p-2 rounded-lg lg:bg-transparent lg:p-0">
+              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <Clock size={14} className="text-slate-400 flex-shrink-0" />
                 {isEditingDueDate ? (
                   <div className="flex items-center gap-1 flex-1">
@@ -2148,7 +2148,7 @@ export const ProjectView: React.FC = () => {
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 group-hover:text-accent-600 transition-colors line-clamp-1">{page.name}</h3>
+                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">{page.name}</h3>
                             <button 
                               onClick={(e) => handleStartRenamePage(e, page)}
                               className="text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent-50"
