@@ -38,6 +38,23 @@ export const saveSettings = async (settings: Record<string, string>): Promise<vo
   await handleResponse(res);
 };
 
+export const getUserPreferences = async (): Promise<Record<string, string>> => {
+  const res = await fetch('/api/user-preferences', {
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const saveUserPreferences = async (prefs: Record<string, string>): Promise<void> => {
+  const res = await fetch('/api/user-preferences', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(prefs),
+  });
+  await handleResponse(res);
+};
+
 export const saveProject = async (project: Project): Promise<void> => {
   const res = await fetch('/api/projects/' + project.id, {
     method: 'PUT',
