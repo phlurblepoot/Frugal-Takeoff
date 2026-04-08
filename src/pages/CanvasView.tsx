@@ -1350,15 +1350,15 @@ const CanvasViewInner: React.FC = () => {
                 <div className="pt-2">
                   <p className="text-xs text-slate-500 mb-2">Other Users:</p>
                   <div className="space-y-2">
-                    {globalUsers.filter(u => u.id !== socket?.id).map(user => (
+                    {withDisplayNames(globalUsers.filter(u => u.id !== socket?.id)).map(user => (
                       <div key={user.id} className="flex items-center justify-between gap-2 text-sm">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: user.color }}></div>
                           <div className="min-w-0 cursor-pointer hover:text-accent-600 transition-colors" onClick={() => navigate(user.pageId)}>
-                            <p className="text-slate-700 truncate font-medium" title={user.name}>{user.name}</p>
+                            <p className="text-slate-700 truncate font-medium" title={user.displayName}>{user.displayName}</p>
                             {user.pageId !== location.pathname && (
                               <p className="text-[10px] text-slate-400 truncate">
-                                {user.pageId === '/' ? 'Home' : user.pageId.split('/').pop()}
+                                {user.pageName || 'Unknown'}
                               </p>
                             )}
                           </div>
@@ -2383,6 +2383,19 @@ const CanvasViewInner: React.FC = () => {
     </div>
   );
 };
+
+interface CollabUser { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; }
+
+function withDisplayNames(users: CollabUser[]): (CollabUser & { displayName: string })[] {
+  const counts: Record<string, number> = {};
+  users.forEach(u => { counts[u.name] = (counts[u.name] || 0) + 1; });
+  const indexes: Record<string, number> = {};
+  return users.map(u => {
+    if (counts[u.name] <= 1) return { ...u, displayName: u.name };
+    indexes[u.name] = (indexes[u.name] || 0) + 1;
+    return { ...u, displayName: `${u.name} (${indexes[u.name]})` };
+  });
+}
 
 export const CanvasView: React.FC = () => {
   const { pageId } = useParams<{ pageId: string }>();

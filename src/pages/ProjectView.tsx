@@ -13,6 +13,7 @@ import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
+import { useCollaboration } from '../context/CollaborationContext';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -398,6 +399,7 @@ function getProposalPrefsKey(): string {
 
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
+  const { setPageName } = useCollaboration();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -431,6 +433,11 @@ export const ProjectView: React.FC = () => {
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
 
   // ── Proposal preference persistence ──────────────────────────────────────
+  // Update collaboration page name when project loads
+  useEffect(() => {
+    if (project) setPageName(project.name);
+  }, [project, setPageName]);
+
   // Load saved prefs on mount: localStorage first (instant), then server (source of truth)
   useEffect(() => {
     try {

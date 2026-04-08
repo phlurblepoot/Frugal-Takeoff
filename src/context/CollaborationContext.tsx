@@ -34,7 +34,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [users, setUsers] = useState<User[]>([]);
   const [globalUsers, setGlobalUsers] = useState<User[]>([]);
   const [followedUserId, setFollowedUserId] = useState<string | null>(null);
-  const [currentPageName, setCurrentPageName] = useState('Home');
+  const [currentPageName, setCurrentPageName] = useState('Projects');
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
   
@@ -86,6 +86,13 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
       newSocket.close();
     };
   }, []);
+
+  // Reset page name when returning to the home/projects page
+  useEffect(() => {
+    if (location.pathname === '/') {
+      setCurrentPageName('Projects');
+    }
+  }, [location.pathname]);
 
   // Update location when URL changes
   useEffect(() => {
