@@ -1,8 +1,136 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Globe, Image as ImageIcon, Users, Shield } from 'lucide-react';
+import { ArrowLeft, Save, Globe, Image as ImageIcon, Users, Shield, History } from 'lucide-react';
 import { getSettings, saveSettings } from '../utils/store';
 import { UsersView } from './UsersView';
+
+interface ChangelogEntry {
+  version: string;
+  date: string;
+  changes: string[];
+}
+
+const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.8.0',
+    date: 'April 7–8, 2026',
+    changes: [
+      'Proposal PDF enhancements: header color picker, custom fonts, cover page notes, valid-until date, terms & conditions page, signature block, and page numbers',
+      'Highlight print quality selector with preset options for proposal and standalone printing',
+      'Server-side user preference sync for cross-browser persistence',
+      'Collaboration user list improvements: numbered duplicate instances and readable page location names',
+    ],
+  },
+  {
+    version: '0.7.0',
+    date: 'April 5–6, 2026',
+    changes: [
+      'Price package field on takeoffs with automatic grouping in sidebar',
+      'Custom autocomplete dropdown for price package selection',
+      'Shared NewTakeoffModal component extracted for reuse',
+      'Proposal PDF takeoff list grouped by price package',
+      'Append highlighted blueprint pages to proposal PDF using pdf-lib merge',
+    ],
+  },
+  {
+    version: '0.6.0',
+    date: 'April 4, 2026',
+    changes: [
+      'Proposal PDF generator with branded cover page and takeoff summary',
+      'Accent color system replacing all hardcoded blues throughout the app',
+    ],
+  },
+  {
+    version: '0.5.0',
+    date: 'April 3, 2026',
+    changes: [
+      'Glass UI design with dark mode support',
+      'Accent color picker in user settings',
+      'Dark mode applied across all pages and components',
+      'Toast notifications for user feedback',
+      'Undo/redo support for measurements',
+      'Keyboard shortcuts for common actions',
+    ],
+  },
+  {
+    version: '0.4.0',
+    date: 'April 2, 2026',
+    changes: [
+      'Security hardening: rate limiting, input validation, and query optimization',
+      'Fixed authentication header handling across all views',
+      'Performance improvements for large project lists',
+    ],
+  },
+  {
+    version: '0.3.0',
+    date: 'March 29–31, 2026',
+    changes: [
+      'Project notes with rich text support',
+      'Server settings page for application branding and contractor info',
+      'Search with persistence and term highlighting',
+      'Global user presence and real-time collaboration controls',
+    ],
+  },
+  {
+    version: '0.2.0',
+    date: 'March 24–28, 2026',
+    changes: [
+      'Legend display and customization on canvas pages',
+      'Copy/paste functionality for measurements',
+      'Ability to resume incomplete measurements',
+    ],
+  },
+  {
+    version: '0.1.0',
+    date: 'March 11–21, 2026',
+    changes: [
+      'Initial project structure with React, TypeScript, and Tailwind CSS',
+      'Express.js backend with SQLite database',
+      'JWT authentication and user management',
+      'PDF blueprint upload, rendering, and page navigation',
+      'Canvas-based measurement tools (linear, area, count)',
+      'Takeoff cost management and bid tracking',
+      'Real-time collaboration via Socket.IO',
+      'Thumbnail generation and plan set versioning',
+      'Docker deployment configuration',
+    ],
+  },
+];
+
+const ChangelogView: React.FC = () => (
+  <div className="space-y-6">
+    {CHANGELOG.map((entry, i) => (
+      <div
+        key={entry.version}
+        className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden"
+      >
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3">
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300">
+            v{entry.version}
+          </span>
+          <span className="text-sm text-slate-500 dark:text-slate-400">
+            {entry.date}
+          </span>
+          {i === 0 && (
+            <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+              Latest
+            </span>
+          )}
+        </div>
+        <div className="p-6">
+          <ul className="space-y-2">
+            {entry.changes.map((change, j) => (
+              <li key={j} className="flex items-start gap-3 text-sm text-slate-700 dark:text-slate-300">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-500 shrink-0" />
+                {change}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    ))}
+  </div>
+);
 
 export const ServerSettings: React.FC = () => {
   const navigate = useNavigate();
@@ -16,7 +144,7 @@ export const ServerSettings: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<'general' | 'users'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'users' | 'changelog'>('general');
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
@@ -142,12 +270,23 @@ export const ServerSettings: React.FC = () => {
                 <Users size={18} />
                 User Management
               </button>
+              <button
+                onClick={() => setActiveTab('changelog')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  activeTab === 'changelog'
+                    ? 'bg-accent-600 text-white shadow-md'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
+                }`}
+              >
+                <History size={18} />
+                Changelog
+              </button>
             </nav>
           </aside>
 
           {/* Content Area */}
           <div className="flex-1">
-            {activeTab === 'general' ? (
+            {activeTab === 'general' && (
               <div className="space-y-6">
                 <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                   <div className="p-6 border-b border-slate-100 dark:border-slate-700">
@@ -274,10 +413,14 @@ export const ServerSettings: React.FC = () => {
                   </div>
                 </div>
               </div>
-            ) : (
+            )}
+            {activeTab === 'users' && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">
                 <UsersView />
               </div>
+            )}
+            {activeTab === 'changelog' && (
+              <ChangelogView />
             )}
           </div>
         </div>
