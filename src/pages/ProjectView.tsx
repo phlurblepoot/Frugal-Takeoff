@@ -179,11 +179,13 @@ const CustomCostRow: React.FC<{
 async function renderPageToDataUrl(
   page: ProjectPage,
   project: Project,
-  selectedTakeoffIds: Set<string>
+  selectedTakeoffIds: Set<string>,
+  scale = 1.0,
+  jpegQuality = 0.80,
 ): Promise<string | null> {
   const canvas = document.createElement('canvas');
-  canvas.width = page.imageWidth;
-  canvas.height = page.imageHeight;
+  canvas.width  = Math.round(page.imageWidth  * scale);
+  canvas.height = Math.round(page.imageHeight * scale);
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
@@ -191,7 +193,11 @@ async function renderPageToDataUrl(
   const img = new Image();
   img.src = getImageUrl(page.imageId);
   await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-  ctx.drawImage(img, 0, 0);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  // Scale ctx so all measurement/legend coords (in original image-space) render correctly
+  ctx.save();
+  ctx.scale(scale, scale);
 
   // Measurements
   page.measurements.forEach(m => {
@@ -326,36 +332,68 @@ async function renderPageToDataUrl(
     }
   }
 
-  return canvas.toDataURL('image/jpeg', 0.8);
+  ctx.restore();
+  return canvas.toDataURL('image/jpeg', jpegQuality);
 }
 
 // Builds the highlighted-plans PDF using the exact same logic as the Print button.
 // Returns the PDF as an ArrayBuffer so it can be saved directly or merged into another PDF.
 async function buildHighlightsPdf(
   project: Project,
-  selectedTakeoffIds: Set<string>
+  selectedTakeoffIds: Set<string>,
+  quality: HighlightQuality = 'standard',
 ): Promise<ArrayBuffer | null> {
+  const preset = HIGHLIGHT_QUALITY_PRESETS[quality];
   const pagesToPrint = project.pages.filter(page =>
     page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
   );
   if (pagesToPrint.length === 0) return null;
 
+  const getPageScale = (w: number, h: number) =>
+    preset.maxDim === Infinity ? 1.0 : Math.min(1.0, preset.maxDim / Math.max(w, h));
+
+  const firstScale = getPageScale(pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight);
   const pdf = new jsPDF({
     orientation: 'landscape',
     unit: 'px',
-    format: [pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight],
+    format: [
+      Math.round(pagesToPrint[0].imageWidth  * firstScale),
+      Math.round(pagesToPrint[0].imageHeight * firstScale),
+    ],
   });
 
   for (let i = 0; i < pagesToPrint.length; i++) {
     const page = pagesToPrint[i];
-    const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds);
+    const sc = getPageScale(page.imageWidth, page.imageHeight);
+    const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds, sc, preset.jpegQuality);
     if (!dataUrl) continue;
-    if (i > 0) pdf.addPage([page.imageWidth, page.imageHeight], 'landscape');
+    const pw = Math.round(page.imageWidth  * sc);
+    const ph = Math.round(page.imageHeight * sc);
+    if (i > 0) pdf.addPage([pw, ph], 'landscape');
     pdf.setPage(i + 1);
-    pdf.addImage(dataUrl, 'JPEG', 0, 0, page.imageWidth, page.imageHeight);
+    pdf.addImage(dataUrl, 'JPEG', 0, 0, pw, ph);
   }
 
   return pdf.output('arraybuffer') as ArrayBuffer;
+}
+
+// ── Highlight quality presets ────────────────────────────────────────────────
+const HIGHLIGHT_QUALITY_PRESETS = {
+  full:     { label: 'Full Resolution',              maxDim: Infinity, jpegQuality: 0.90 },
+  large:    { label: 'Large  (≈A2 — high quality)',  maxDim: 1680,     jpegQuality: 0.85 },
+  standard: { label: 'Standard  (≈A3)',              maxDim: 1190,     jpegQuality: 0.80 },
+  compact:  { label: 'Compact  (near A4)',            maxDim: 680,      jpegQuality: 0.72 },
+} as const;
+type HighlightQuality = keyof typeof HIGHLIGHT_QUALITY_PRESETS;
+
+// ── Per-user localStorage key for proposal preferences ───────────────────────
+function getProposalPrefsKey(): string {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return `proposal-prefs-${user.id || 'default'}`;
+  } catch {
+    return 'proposal-prefs-default';
+  }
 }
 
 export const ProjectView: React.FC = () => {
@@ -390,6 +428,37 @@ export const ProjectView: React.FC = () => {
   const [proposalValidUntil, setProposalValidUntil] = useState('');
   const [proposalTerms, setProposalTerms] = useState('');
   const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
+  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+
+  // ── Proposal preference persistence ──────────────────────────────────────
+  // Load saved prefs once on mount (text fields excluded — they're project-specific)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(getProposalPrefsKey());
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (p.headerColor)                setProposalHeaderColor(p.headerColor);
+      if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
+      if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
+      if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
+      if (p.includeSignature  != null)  setProposalIncludeSignature(p.includeSignature);
+      if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+    } catch { /* ignore corrupt data */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save whenever any persistent pref changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(getProposalPrefsKey(), JSON.stringify({
+        headerColor:       proposalHeaderColor,
+        fontFamily:        proposalFontFamily,
+        includeCostDetail: proposalIncludeCostDetail,
+        includeHighlights: proposalIncludeHighlights,
+        includeSignature:  proposalIncludeSignature,
+        highlightQuality,
+      }));
+    } catch { /* ignore quota errors */ }
+  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, highlightQuality]);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -774,7 +843,7 @@ export const ProjectView: React.FC = () => {
     setIsPrinting(true);
 
     try {
-      const pdfBuffer = await buildHighlightsPdf(project, selectedTakeoffIds);
+      const pdfBuffer = await buildHighlightsPdf(project, selectedTakeoffIds, highlightQuality);
 
       if (!pdfBuffer) {
         alert('No pages found with the selected takeoffs.');
@@ -983,16 +1052,45 @@ export const ProjectView: React.FC = () => {
         coverY += 30;
       }
 
-      // Grand total box
+      // ── COVER PAGE: notes (context) first, then grand total ─────────────
       const grandTotal = selectedTakeoffs.reduce(
         (sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0
       );
-      const boxTop = Math.max(coverY + 40, 400);
+
+      let boxTop: number;
+
+      if (coverNotes.trim()) {
+        // Notes box first — sets context for the reader
+        const notesX = 60;
+        const notesMaxW = W - 120;
+        pdf.setFontSize(10);
+        pdf.setFont(font, 'normal');
+        const notesLines = pdf.splitTextToSize(coverNotes.trim(), notesMaxW - 20) as string[];
+        const lineH = 15;
+        const padV = 14;
+        const notesBH = notesLines.length * lineH + padV * 2;
+        const notesBoxTop = Math.max(coverY + 40, 380);
+
+        pdf.setFillColor(248, 250, 252);
+        pdf.setDrawColor(accentR, accentG, accentB);
+        pdf.setLineWidth(0.75);
+        pdf.roundedRect(notesX, notesBoxTop, notesMaxW, notesBH, 4, 4, 'FD');
+        pdf.setFillColor(hR, hG, hB);
+        pdf.rect(notesX, notesBoxTop, 3, notesBH, 'F');
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(notesLines, notesX + 14, notesBoxTop + padV + 10);
+
+        // Total box below notes
+        boxTop = notesBoxTop + notesBH + 24;
+      } else {
+        boxTop = Math.max(coverY + 40, 400);
+      }
+
+      // Grand total box
       pdf.setFillColor(241, 245, 249);
       pdf.setDrawColor(accentR, accentG, accentB);
       pdf.setLineWidth(0.75);
       pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
-      // Left accent stripe on box
       pdf.setFillColor(hR, hG, hB);
       pdf.rect(W / 2 - 115, boxTop, 4, 84, 'F');
       pdf.setFontSize(9);
@@ -1004,30 +1102,9 @@ export const ProjectView: React.FC = () => {
       pdf.setTextColor(15, 23, 42);
       pdf.text(formatCurrency(grandTotal), W / 2, boxTop + 60, { align: 'center' });
 
-      // Cover notes box
-      if (coverNotes.trim()) {
-        const notesBoxTop = boxTop + 100;
-        const notesX = 60;
-        const notesMaxW = W - 120;
-        pdf.setFontSize(10);
-        pdf.setFont(font, 'normal');
-        const notesLines = pdf.splitTextToSize(coverNotes.trim(), notesMaxW - 20) as string[];
-        const lineH = 15;
-        const padV = 14;
-        const notesBH = notesLines.length * lineH + padV * 2;
-        pdf.setFillColor(248, 250, 252);
-        pdf.setDrawColor(accentR, accentG, accentB);
-        pdf.setLineWidth(0.75);
-        pdf.roundedRect(notesX, notesBoxTop, notesMaxW, notesBH, 4, 4, 'FD');
-        pdf.setFillColor(hR, hG, hB);
-        pdf.rect(notesX, notesBoxTop, 3, notesBH, 'F');
-        pdf.setTextColor(71, 85, 105);
-        pdf.text(notesLines, notesX + 14, notesBoxTop + padV + 10);
-      }
-
       // Valid until
       if (validUntil) {
-        const validY = boxTop + (coverNotes.trim() ? 110 + pdf.splitTextToSize(coverNotes.trim(), W - 140).length * 15 + 28 * 2 : 100);
+        const validY = boxTop + 100;
         pdf.setFontSize(9);
         pdf.setFont(font, 'italic');
         pdf.setTextColor(100, 116, 139);
@@ -1340,7 +1417,7 @@ export const ProjectView: React.FC = () => {
         // Generate the highlights PDF using the exact same path as the Print button,
         // then merge it with the proposal using pdf-lib.
         const { PDFDocument } = await import('pdf-lib');
-        const highlightsBuffer = await buildHighlightsPdf(project, selectedTakeoffIds);
+        const highlightsBuffer = await buildHighlightsPdf(project, selectedTakeoffIds, highlightQuality);
         const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
 
         const mergedDoc = await PDFDocument.create();
@@ -2327,6 +2404,16 @@ export const ProjectView: React.FC = () => {
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 {selectedTakeoffIds.size > 0 && (
                   <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <select
+                      value={highlightQuality}
+                      onChange={e => setHighlightQuality(e.target.value as HighlightQuality)}
+                      title="Blueprint print quality"
+                      className="text-xs px-2 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white focus:ring-1 focus:ring-accent-500 outline-none transition-colors"
+                    >
+                      {(Object.entries(HIGHLIGHT_QUALITY_PRESETS) as [HighlightQuality, { label: string }][]).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label}</option>
+                      ))}
+                    </select>
                     <button
                       onClick={handlePrint}
                       disabled={isPrinting || isExportingExcel}
@@ -3733,22 +3820,40 @@ export const ProjectView: React.FC = () => {
                   </span>
                 </span>
               </label>
-              <label className="flex items-start gap-3 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={proposalIncludeHighlights}
-                  onChange={e => setProposalIncludeHighlights(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
-                    Append highlighted plans
+              <div>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={proposalIncludeHighlights}
+                    onChange={e => setProposalIncludeHighlights(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
+                      Append highlighted plans
+                    </span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Add annotated blueprint pages to the end of the PDF
+                    </span>
                   </span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Add annotated blueprint pages to the end of the PDF
-                  </span>
-                </span>
-              </label>
+                </label>
+                {proposalIncludeHighlights && (
+                  <div className="mt-3 ml-7">
+                    <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                      Blueprint Print Quality
+                    </label>
+                    <select
+                      value={highlightQuality}
+                      onChange={e => setHighlightQuality(e.target.value as HighlightQuality)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm focus:ring-2 focus:ring-violet-500 outline-none transition-all"
+                    >
+                      {(Object.entries(HIGHLIGHT_QUALITY_PRESETS) as [HighlightQuality, { label: string }][]).map(([k, v]) => (
+                        <option key={k} value={k}>{v.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
               {project.address && (
                 <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-lg px-3 py-2">
                   <MapPin size={13} />
