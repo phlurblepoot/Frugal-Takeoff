@@ -24,7 +24,7 @@ export const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="street-address"
-        className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+        className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
       />
     </div>
   );

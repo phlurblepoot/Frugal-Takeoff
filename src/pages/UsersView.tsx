@@ -87,7 +87,7 @@ export const UsersView: React.FC = () => {
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
-        <Loader2 size={32} className="text-blue-600 animate-spin" />
+        <Loader2 size={32} className="text-accent-600 animate-spin" />
       </div>
     );
   }
@@ -110,7 +110,7 @@ export const UsersView: React.FC = () => {
               type="text"
               value={newUsername}
               onChange={e => setNewUsername(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none"
               placeholder="e.g. jdoe"
               required
             />
@@ -121,7 +121,7 @@ export const UsersView: React.FC = () => {
               type="password"
               value={newPassword}
               onChange={e => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none"
               placeholder="Enter password"
               required
             />
@@ -131,7 +131,7 @@ export const UsersView: React.FC = () => {
             <select
               value={newRole}
               onChange={e => setNewRole(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-accent-500 outline-none"
             >
               <option value="user">User</option>
               <option value="admin">Admin</option>
@@ -140,7 +140,7 @@ export const UsersView: React.FC = () => {
           <button
             type="submit"
             disabled={isAdding || !newUsername || !newPassword}
-            className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
+            className="flex items-center justify-center gap-2 bg-accent-600 hover:bg-accent-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
           >
             {isAdding ? <Loader2 size={18} className="animate-spin" /> : <UserPlus size={18} />}
             Add User
@@ -175,7 +175,7 @@ export const UsersView: React.FC = () => {
                     <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
                       user.role === 'admin'
                         ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                        : 'bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
                     }`}>
                       {user.role === 'admin' && <Shield size={12} />}
                       {user.role.charAt(0).toUpperCase() + user.role.slice(1)}

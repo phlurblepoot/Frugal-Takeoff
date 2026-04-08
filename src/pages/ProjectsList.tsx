@@ -235,7 +235,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown size={14} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />;
-    return sortDirection === 'asc' ? <ArrowUp size={14} className="text-blue-500" /> : <ArrowDown size={14} className="text-blue-500" />;
+    return sortDirection === 'asc' ? <ArrowUp size={14} className="text-accent-500" /> : <ArrowDown size={14} className="text-accent-500" />;
   };
 
   const getDueDateColor = (project: Project) => {
@@ -318,7 +318,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                 )}
                 <Link
                   to="/new"
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm text-sm sm:text-base"
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-accent-600 hover:bg-accent-700 text-white px-4 sm:px-5 py-2.5 rounded-lg font-medium transition-colors shadow-sm text-sm sm:text-base"
                 >
                   <Plus size={20} />
                   New Project
@@ -328,7 +328,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             {isAdmin && (
               <button
                 onClick={() => navigate('/settings')}
-                className="flex items-center gap-2 text-slate-500 hover:text-blue-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
+                className="flex items-center gap-2 text-slate-500 hover:text-accent-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
                 title="Server Settings"
               >
                 <Settings size={18} />
@@ -410,7 +410,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           <>
             {isLoading ? (
               <div className="flex justify-center py-12">
-                <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : projects.length === 0 ? (
               <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
@@ -419,7 +419,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                 <p className="text-slate-500 dark:text-slate-400 mb-6">Create your first project to start measuring blueprints.</p>
                 <Link
                   to="/new"
-                  className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 hover:bg-blue-100 px-4 py-2 rounded-lg font-medium transition-colors"
+                  className="inline-flex items-center gap-2 bg-accent-50 text-accent-700 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-900/50 px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   <Plus size={18} />
                   Create Project
@@ -497,7 +497,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                           <tr 
                             key={project.id}
                             onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                            className="hover:bg-blue-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
+                            className="hover:bg-accent-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
                           >
                             <td className="px-6 py-4">
                               <div className="flex flex-col gap-1">
@@ -511,7 +511,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                         if (e.key === 'Enter') handleRename(project);
                                         if (e.key === 'Escape') setEditingProjectId(null);
                                       }}
-                                      className="px-2 py-1 text-sm border border-blue-500 rounded outline-none w-full"
+                                      className="px-2 py-1 text-sm border border-accent-500 rounded outline-none w-full"
                                       autoFocus
                                     />
                                     <button 
@@ -529,7 +529,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2 group/name">
-                                    <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-accent-400 transition-colors">
+                                    <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                                       {project.name}
                                     </div>
                                     <button
@@ -538,7 +538,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                         setEditingProjectId(project.id);
                                         setEditingProjectName(project.name);
                                       }}
-                                      className="p-1 text-slate-400 hover:text-blue-600 opacity-0 group-hover/name:opacity-100 transition-all"
+                                      className="p-1 text-slate-400 hover:text-accent-600 opacity-0 group-hover/name:opacity-100 transition-all"
                                     >
                                       <Edit2 size={12} />
                                     </button>
@@ -546,7 +546,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                 )}
                                 <div className="flex flex-wrap gap-1.5 mt-1">
                                   {project.submitted && (
-                                    <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-accent-100 text-accent-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
                                   )}
                                   {project.responded && (
                                     <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
@@ -575,7 +575,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                    className="line-clamp-1 hover:text-accent-600 hover:underline transition-colors"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {project.address}
@@ -635,7 +635,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                       className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm active:bg-slate-50 dark:active:bg-slate-700 transition-colors"
                     >
                       <div className="flex justify-between items-start mb-3">
-                        <div className="font-bold text-slate-900 text-lg">{project.name}</div>
+                        <div className="font-bold text-slate-900 dark:text-white text-lg">{project.name}</div>
                         <button
                           onClick={(e) => handleDeleteClick(e, project)}
                           className="text-slate-400 hover:text-red-500 p-1"
@@ -676,7 +676,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
                       <div className="flex flex-wrap gap-1.5">
                         {project.submitted && (
-                          <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
+                          <span className="px-2 py-0.5 rounded bg-accent-100 text-accent-700 text-[10px] font-bold uppercase tracking-wider">Submitted</span>
                         )}
                         {project.responded && (
                           <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wider">Responded</span>
@@ -698,8 +698,8 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
           >
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-200 bg-slate-50">
-              <h2 className="text-lg font-bold text-slate-900 mb-4">Add Potential Bid</h2>
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Add Potential Bid</h2>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
@@ -707,7 +707,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.name}
                     onChange={e => setNewBid({ ...newBid, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. City Hall Renovation"
                   />
                 </div>
@@ -717,7 +717,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.contractor}
                     onChange={e => setNewBid({ ...newBid, contractor: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. ABC Construction"
                   />
                 </div>
@@ -727,14 +727,14 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     type="text"
                     value={newBid.address}
                     onChange={e => setNewBid({ ...newBid, address: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
                     placeholder="e.g. 123 Main St"
                   />
                 </div>
                 <button
                   onClick={handleAddBid}
                   disabled={!newBid.name}
-                  className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
+                  className="flex items-center justify-center gap-2 bg-accent-600 hover:bg-accent-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
                 >
                   <Plus size={18} />
                   Add Bid
@@ -764,7 +764,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                   ) : (
                     bids.map((bid) => (
                       <tr key={bid.id} className="hover:bg-slate-50 transition-colors group">
-                        <td className="px-6 py-4 font-medium text-slate-900">{bid.name}</td>
+                        <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-100">{bid.name}</td>
                         <td className="px-6 py-4 text-slate-600">{bid.contractor || '-'}</td>
                         <td className="px-6 py-4">
                           {bid.address ? (
@@ -774,7 +774,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                 href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bid.address)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="line-clamp-1 hover:text-blue-600 hover:underline transition-colors"
+                                className="line-clamp-1 hover:text-accent-600 hover:underline transition-colors"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {bid.address}
@@ -803,7 +803,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                           <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => handleConvertBid(bid)}
-                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors opacity-0 group-hover:opacity-100"
+                              className="text-accent-600 hover:text-accent-700 hover:bg-accent-50 dark:hover:bg-accent-900/30 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors opacity-0 group-hover:opacity-100"
                             >
                               Convert to Project
                             </button>
@@ -833,7 +833,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                 bids.map((bid) => (
                   <div key={bid.id} className="p-4 space-y-3">
                     <div className="flex justify-between items-start">
-                      <div className="font-bold text-slate-900">{bid.name}</div>
+                      <div className="font-bold text-slate-900 dark:text-white">{bid.name}</div>
                       <button
                         onClick={() => handleDeleteBid(bid.id)}
                         className="text-slate-400 hover:text-red-500 p-1"
@@ -874,7 +874,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                       
                       <button
                         onClick={() => handleConvertBid(bid)}
-                        className="text-blue-600 hover:text-blue-700 text-sm font-bold uppercase tracking-wider"
+                        className="text-accent-600 hover:text-accent-700 text-sm font-bold uppercase tracking-wider"
                       >
                         Convert
                       </button>

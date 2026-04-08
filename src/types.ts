@@ -38,6 +38,7 @@ export interface MeasurementTakeoff {
   costPerUnit?: number;
   isAdvancedCost?: boolean;
   customCosts?: CustomCost[];
+  pricePackage?: string;
 }
 
 export interface TakeoffTemplate {

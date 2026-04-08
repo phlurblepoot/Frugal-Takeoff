@@ -97,6 +97,12 @@ function initDb() {
         key TEXT PRIMARY KEY,
         value TEXT
       );
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        userId TEXT NOT NULL,
+        key    TEXT NOT NULL,
+        value  TEXT,
+        UNIQUE(userId, key)
+      );
       CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
       CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
       CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
@@ -184,7 +190,7 @@ function migrateOldData() {
   }
 }
 
-const users: Record<string, { id: string; name: string; pageId: string; cursor: { x: number; y: number } | null; color: string }> = {};
+const users: Record<string, { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string }> = {};
 
 async function startServer() {
   await ensureDirs();
@@ -319,6 +325,7 @@ async function startServer() {
       }
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+      db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete user' });
@@ -627,13 +634,41 @@ async function startServer() {
     }
   });
 
+  // User Preferences API (per-user, cross-browser)
+  app.get("/api/user-preferences", authenticateToken, (req, res) => {
+    try {
+      const rows = db.prepare('SELECT key, value FROM user_preferences WHERE userId = ?').all((req as any).user.id) as { key: string; value: string }[];
+      const prefs: Record<string, string> = {};
+      rows.forEach(row => { prefs[row.key] = row.value; });
+      res.json(prefs);
+    } catch (error) {
+      console.error("Error fetching user preferences:", error);
+      res.status(500).json({ error: "Failed to fetch preferences" });
+    }
+  });
+
+  app.put("/api/user-preferences", authenticateToken, (req, res) => {
+    try {
+      const prefs = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
+      const userId = (req as any).user.id;
+      Object.entries(prefs).forEach(([key, value]) => {
+        stmt.run(userId, key, value as string);
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving user preferences:", error);
+      res.status(500).json({ error: "Failed to save preferences" });
+    }
+  });
+
   // WebSocket Logic
 
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
-    socket.on("join-page", ({ pageId, name, color }) => {
-      users[socket.id] = { id: socket.id, name, pageId, cursor: null, color };
+    socket.on("join-page", ({ pageId, pageName, name, color }) => {
+      users[socket.id] = { id: socket.id, name, pageId, pageName: pageName || '', cursor: null, color };
       socket.join(pageId);
       
       // Notify others in the room
