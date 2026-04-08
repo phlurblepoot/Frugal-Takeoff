@@ -325,6 +325,7 @@ async function startServer() {
       }
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+      db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete user' });

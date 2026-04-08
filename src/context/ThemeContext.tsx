@@ -66,7 +66,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
 
   // Sync from server on mount — server is source of truth for cross-browser
+  // Guard: only fetch if logged in (ThemeProvider renders on /login too)
   useEffect(() => {
+    if (!localStorage.getItem('token')) return;
     getUserPreferences().then(prefs => {
       if (prefs['theme-mode'] && prefs['theme-mode'] !== mode) {
         setMode(prefs['theme-mode'] as ThemeMode);
@@ -90,14 +92,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       el.classList.remove('dark');
     }
     localStorage.setItem('theme-mode', mode);
-    saveUserPreferences({ 'theme-mode': mode }).catch(() => {});
+    if (localStorage.getItem('token')) saveUserPreferences({ 'theme-mode': mode }).catch(() => {});
   }, [mode]);
 
   // Apply accent on mount and changes
   useEffect(() => {
     applyAccent(accentColor);
     localStorage.setItem('theme-accent', accentColor);
-    saveUserPreferences({ 'theme-accent': accentColor }).catch(() => {});
+    if (localStorage.getItem('token')) saveUserPreferences({ 'theme-accent': accentColor }).catch(() => {});
   }, [accentColor]);
 
   // Apply reduced motion on mount and changes
@@ -109,7 +111,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       el.classList.remove('motion-reduce');
     }
     localStorage.setItem('theme-motion', reducedMotion ? 'reduced' : 'full');
-    saveUserPreferences({ 'theme-motion': reducedMotion ? 'reduced' : 'full' }).catch(() => {});
+    if (localStorage.getItem('token')) saveUserPreferences({ 'theme-motion': reducedMotion ? 'reduced' : 'full' }).catch(() => {});
   }, [reducedMotion]);
 
   const toggleMode = () => setMode(prev => prev === 'light' ? 'dark' : 'light');
