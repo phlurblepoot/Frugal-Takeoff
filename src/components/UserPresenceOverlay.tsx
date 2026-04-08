@@ -4,6 +4,19 @@ import { Users, X, ExternalLink } from 'lucide-react';
 import { useCollaboration } from '../context/CollaborationContext';
 import { motion, AnimatePresence } from 'motion/react';
 
+interface User { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; }
+
+function withDisplayNames(users: User[]): (User & { displayName: string })[] {
+  const counts: Record<string, number> = {};
+  users.forEach(u => { counts[u.name] = (counts[u.name] || 0) + 1; });
+  const indexes: Record<string, number> = {};
+  return users.map(u => {
+    if (counts[u.name] <= 1) return { ...u, displayName: u.name };
+    indexes[u.name] = (indexes[u.name] || 0) + 1;
+    return { ...u, displayName: `${u.name} (${indexes[u.name]})` };
+  });
+}
+
 export const UserPresenceOverlay: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { globalUsers, socket, followedUserId, setFollowedUserId } = useCollaboration();
@@ -54,7 +67,7 @@ export const UserPresenceOverlay: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {otherUsers.map(user => (
+                  {withDisplayNames(otherUsers).map(user => (
                     <div
                       key={user.id}
                       className="group flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
@@ -76,10 +89,10 @@ export const UserPresenceOverlay: React.FC = () => {
                           <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-slate-800 rounded-full"></div>
                         </div>
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{user.name}</p>
+                          <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{user.displayName}</p>
                           <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
                             <ExternalLink size={10} />
-                            {user.pageName || (user.pageId === '/' ? 'Home' : user.pageId.split('/').pop())}
+                            {user.pageName || 'Unknown'}
                           </p>
                         </div>
                       </div>

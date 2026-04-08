@@ -190,7 +190,7 @@ function migrateOldData() {
   }
 }
 
-const users: Record<string, { id: string; name: string; pageId: string; cursor: { x: number; y: number } | null; color: string }> = {};
+const users: Record<string, { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string }> = {};
 
 async function startServer() {
   await ensureDirs();
@@ -667,8 +667,8 @@ async function startServer() {
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
-    socket.on("join-page", ({ pageId, name, color }) => {
-      users[socket.id] = { id: socket.id, name, pageId, cursor: null, color };
+    socket.on("join-page", ({ pageId, pageName, name, color }) => {
+      users[socket.id] = { id: socket.id, name, pageId, pageName: pageName || '', cursor: null, color };
       socket.join(pageId);
       
       // Notify others in the room
