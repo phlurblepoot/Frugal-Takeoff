@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -431,23 +431,35 @@ export const ProjectView: React.FC = () => {
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
 
   // ── Proposal preference persistence ──────────────────────────────────────
-  // Load saved prefs once on mount (text fields excluded — they're project-specific)
+  // Load saved prefs on mount: localStorage first (instant), then server (source of truth)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(getProposalPrefsKey());
-      if (!raw) return;
-      const p = JSON.parse(raw);
-      if (p.headerColor)                setProposalHeaderColor(p.headerColor);
-      if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
-      if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
-      if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
-      if (p.includeSignature  != null)  setProposalIncludeSignature(p.includeSignature);
-      if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p.headerColor)                setProposalHeaderColor(p.headerColor);
+        if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
+        if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
+        if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
+        if (p.includeSignature  != null)  setProposalIncludeSignature(p.includeSignature);
+        if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+      }
     } catch { /* ignore corrupt data */ }
+
+    // Server prefs override localStorage (cross-browser sync)
+    getUserPreferences().then(prefs => {
+      if (prefs['proposal-headerColor'])                setProposalHeaderColor(prefs['proposal-headerColor']);
+      if (prefs['proposal-fontFamily'])                 setProposalFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
+      if (prefs['proposal-includeCostDetail'] != null)  setProposalIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
+      if (prefs['proposal-includeHighlights'] != null)  setProposalIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
+      if (prefs['proposal-includeSignature']  != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
+      if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+    }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save whenever any persistent pref changes
+  // Auto-save whenever any persistent pref changes (localStorage + server)
   useEffect(() => {
+    // Cache in localStorage (fast, offline-safe)
     try {
       localStorage.setItem(getProposalPrefsKey(), JSON.stringify({
         headerColor:       proposalHeaderColor,
@@ -458,6 +470,15 @@ export const ProjectView: React.FC = () => {
         highlightQuality,
       }));
     } catch { /* ignore quota errors */ }
+    // Persist to server (source of truth, cross-browser)
+    saveUserPreferences({
+      'proposal-headerColor':       proposalHeaderColor,
+      'proposal-fontFamily':        proposalFontFamily,
+      'proposal-includeCostDetail': String(proposalIncludeCostDetail),
+      'proposal-includeHighlights': String(proposalIncludeHighlights),
+      'proposal-includeSignature':  String(proposalIncludeSignature),
+      'proposal-highlightQuality':  highlightQuality,
+    }).catch(() => {});
   }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, highlightQuality]);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
