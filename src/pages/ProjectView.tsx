@@ -40,9 +40,9 @@ const CustomCostRow: React.FC<{
           className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50"
         >
           <option value="flat">Flat Cost</option>
-          <option value="yield">Cost by Yield</option>
+          <option value="yield">Material Yield</option>
           <option value="unit">Cost per {unitLabel}</option>
-          <option value="amount_per_units">Amount per {unitLabel}s</option>
+          <option value="amount_per_units">Rate per {unitLabel}s</option>
         </select>
         <input
           type="text"

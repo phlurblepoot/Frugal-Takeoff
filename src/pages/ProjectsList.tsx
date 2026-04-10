@@ -1,16 +1,15 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, LogOut, Edit2, Check, X, Settings, Palette } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Project, Bid } from '../types';
 import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid, saveProject } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
-import { UserSettingsPanel } from '../components/UserSettingsPanel';
 import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
-type Tab = 'projects' | 'templates' | 'bids' | 'users' | 'settings';
+type Tab = 'projects' | 'templates' | 'bids' | 'users';
 
 export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const navigate = useNavigate();
@@ -46,25 +45,19 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [activePages, setActivePages] = useState<string[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin] = useState(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      return user.role === 'admin';
+    } catch { return false; }
+  });
 
   // New Bid state
   const [newBid, setNewBid] = useState({ name: '', contractor: '', address: '', decision: 'pending' as const });
 
   useEffect(() => {
     loadData();
-    
-    // Check if user is admin
-    try {
-      const userStr = localStorage.getItem('user');
-      if (userStr) {
-        const user = JSON.parse(userStr);
-        setIsAdmin(user.role === 'admin');
-      }
-    } catch (e) {
-      console.error('Failed to parse user data', e);
-    }
-    
+
     // Poll for active pages
     const fetchActivePages = async () => {
       try {
@@ -266,12 +259,6 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     return 'text-slate-400';
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    navigate('/login');
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
       <div className="max-w-6xl mx-auto">
@@ -325,24 +312,6 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                 </Link>
               </div>
             )}
-            {isAdmin && (
-              <button
-                onClick={() => navigate('/settings')}
-                className="flex items-center gap-2 text-slate-500 hover:text-accent-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
-                title="Server Settings"
-              >
-                <Settings size={18} />
-                <span className="hidden sm:inline">Settings</span>
-              </button>
-            )}
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2 rounded-lg font-medium transition-colors ml-auto lg:ml-0"
-              title="Logout"
-            >
-              <LogOut size={18} />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
           </div>
         </div>
 
@@ -380,29 +349,10 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             <Building2 size={18} />
             Bid Pipeline
           </button>
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all whitespace-nowrap ${
-              activeTab === 'settings'
-                ? 'bg-white dark:bg-slate-800 text-accent-600 dark:text-accent-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-            }`}
-          >
-            <Palette size={18} />
-            Settings
-          </button>
         </div>
 
         <AnimatePresence mode="wait">
-        {activeTab === 'settings' ? (
-          <motion.div key="settings"
-            initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -12 }} transition={{ duration: 0.22 }}
-          >
-            <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">User Settings</h2>
-            <UserSettingsPanel />
-          </motion.div>
-        ) : activeTab === 'projects' ? (
+        {activeTab === 'projects' ? (
           <motion.div key="projects"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             exit={{ opacity: 0 }} transition={{ duration: 0.15 }}

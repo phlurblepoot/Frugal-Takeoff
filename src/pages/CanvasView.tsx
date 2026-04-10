@@ -56,9 +56,9 @@ const CustomCostRow: React.FC<{
           className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50"
         >
           <option value="flat">Flat Cost</option>
-          <option value="yield">Cost by Yield</option>
+          <option value="yield">Material Yield</option>
           <option value="unit">Cost per {unitLabel}</option>
-          <option value="amount_per_units">Amount per {unitLabel}s</option>
+          <option value="amount_per_units">Rate per {unitLabel}s</option>
         </select>
         <input
           type="text"
@@ -106,6 +106,16 @@ const CustomCostRow: React.FC<{
               <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
             </div>
             <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. bags"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              />
+            </div>
+            <div className="flex items-center gap-2">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
               <div className="relative">
                 <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
@@ -120,7 +130,7 @@ const CustomCostRow: React.FC<{
             </div>
           </>
         )}
-        
+
         {item.type === 'unit' && (
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}:</span>
@@ -136,7 +146,7 @@ const CustomCostRow: React.FC<{
             </div>
           </div>
         )}
-        
+
         {item.type === 'amount_per_units' && (
           <>
             <div className="flex items-center gap-2">
@@ -162,6 +172,16 @@ const CustomCostRow: React.FC<{
                 className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
               />
               <span className="text-[10px] text-slate-500">{unitLabel}s</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <input
+                type="text"
+                value={item.unit || ''}
+                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
+                placeholder="e.g. days"
+                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              />
             </div>
           </>
         )}
