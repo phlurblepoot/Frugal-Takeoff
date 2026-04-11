@@ -11,7 +11,9 @@ import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import {
   FolderOpen, Save, MousePointer, Pen, Minus, ArrowRight,
   Square, Circle, Type, Image as ImageIcon, PenLine,
-  ChevronDown, Undo2, Redo2, Trash2, Plus, X,
+  ChevronDown, ChevronLeft, ChevronRight,
+  Undo2, Redo2, Trash2, Plus, X,
+  ZoomIn, ZoomOut, Layers, BookOpen,
 } from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -176,6 +178,10 @@ export const PdfEditor: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [loadMsg, setLoadMsg] = useState('');
   const [saving, setSaving] = useState(false);
+  const [zoom, setZoom] = useState(1.0);
+  const [viewMode, setViewMode] = useState<'scroll' | 'single'>('scroll');
+  const [currentPage, setCurrentPage] = useState(0);
+  const [showZoomMenu, setShowZoomMenu] = useState(false);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
@@ -204,17 +210,55 @@ export const PdfEditor: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const sigInputRef = useRef<HTMLInputElement>(null);
   const sigMenuRef = useRef<HTMLDivElement>(null);
+  const zoomMenuRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Close sig dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (sigMenuRef.current && !sigMenuRef.current.contains(e.target as Node)) {
         setShowSigMenu(false);
       }
+      if (zoomMenuRef.current && !zoomMenuRef.current.contains(e.target as Node)) {
+        setShowZoomMenu(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // ── Zoom helpers ──────────────────────────────────────────────────────────────
+
+  const clampZoom = (z: number) => Math.min(5, Math.max(0.1, Math.round(z * 100) / 100));
+
+  const applyZoom = (z: number) => setZoom(clampZoom(z));
+
+  const fitWidth = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom((container.clientWidth - 48) / page.width);
+  };
+
+  const fitHeight = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom((container.clientHeight - 48) / page.height);
+  };
+
+  const fitPage = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom(Math.min(
+      (container.clientWidth - 48) / page.width,
+      (container.clientHeight - 48) / page.height,
+    ));
+  };
 
   // ── History ──────────────────────────────────────────────────────────────────
 
@@ -270,10 +314,31 @@ export const PdfEditor: React.FC = () => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault(); redo();
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault(); setZoom((z) => clampZoom(z + 0.1));
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault(); setZoom((z) => clampZoom(z - 0.1));
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault(); setZoom(1);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [undo, redo, pushHistory]);
+
+  // Ctrl+wheel to zoom
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z - e.deltaY * 0.001));
+    };
+    const el = scrollContainerRef.current;
+    el?.addEventListener('wheel', handler, { passive: false });
+    return () => el?.removeEventListener('wheel', handler);
+  });
 
   // ── PDF Loading ───────────────────────────────────────────────────────────────
 
@@ -311,7 +376,14 @@ export const PdfEditor: React.FC = () => {
     canvas.width = 0; canvas.height = 0;
     setRenderedPages(pages);
     renderedPagesRef.current = pages;
+    setCurrentPage(0);
     setLoading(false);
+    // Auto fit-width after load
+    requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (!container || !pages.length) return;
+      setZoom(clampZoom((container.clientWidth - 48) / pages[0].width));
+    });
   };
 
   // ── Konva Event Handlers ──────────────────────────────────────────────────────
@@ -845,10 +917,105 @@ export const PdfEditor: React.FC = () => {
             Click on page to place signature
           </span>
         )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* View mode toggle */}
+        <button
+          title={viewMode === 'scroll' ? 'Switch to single-page view' : 'Switch to scroll view'}
+          onClick={() => { setViewMode((m) => m === 'scroll' ? 'single' : 'scroll'); setCurrentPage(0); }}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          {viewMode === 'scroll' ? <BookOpen size={15} /> : <Layers size={15} />}
+          <span className="hidden sm:inline">{viewMode === 'scroll' ? 'Single' : 'All Pages'}</span>
+        </button>
+
+        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+
+        {/* Zoom controls */}
+        <button
+          onClick={() => setZoom((z) => clampZoom(Math.round((z - 0.1) * 10) / 10))}
+          title="Zoom out (Ctrl+-)"
+          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          <ZoomOut size={16} />
+        </button>
+
+        <div className="relative" ref={zoomMenuRef}>
+          <button
+            onClick={() => setShowZoomMenu((v) => !v)}
+            className="min-w-[56px] px-2 py-1.5 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center"
+            title="Zoom level"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          {showZoomMenu && (
+            <div className="absolute bottom-full right-0 mb-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
+              {[
+                { label: '50%',  value: 0.5 },
+                { label: '75%',  value: 0.75 },
+                { label: '100%', value: 1 },
+                { label: '125%', value: 1.25 },
+                { label: '150%', value: 1.5 },
+                { label: '200%', value: 2 },
+              ].map(({ label, value }) => (
+                <button key={value} onClick={() => { applyZoom(value); setShowZoomMenu(false); }}
+                  className={`w-full px-3 py-1.5 text-sm text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-700 ${Math.round(zoom * 100) === Math.round(value * 100) ? 'text-accent-600 dark:text-accent-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}`}>
+                  {label}
+                </button>
+              ))}
+              <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+              <button onClick={() => { fitWidth(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Width
+              </button>
+              <button onClick={() => { fitHeight(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Height
+              </button>
+              <button onClick={() => { fitPage(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Page
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={() => setZoom((z) => clampZoom(Math.round((z + 0.1) * 10) / 10))}
+          title="Zoom in (Ctrl++)"
+          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          <ZoomIn size={16} />
+        </button>
       </div>
 
+      {/* ── Single-page navigation bar ── */}
+      {viewMode === 'single' && hasPdf && (
+        <div className="flex items-center justify-center gap-3 px-4 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
+          <button
+            onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+            disabled={currentPage === 0}
+            className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="text-sm font-medium text-slate-600 dark:text-slate-300 min-w-[100px] text-center">
+            Page {currentPage + 1} of {renderedPages.length}
+          </span>
+          <button
+            onClick={() => setCurrentPage((p) => Math.min(renderedPages.length - 1, p + 1))}
+            disabled={currentPage === renderedPages.length - 1}
+            className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+
       {/* ── Canvas Area ── */}
-      <div className="flex-1 overflow-y-auto flex flex-col items-center py-6 gap-4 bg-slate-300 dark:bg-slate-950">
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto flex flex-col items-center py-6 gap-4 bg-slate-300 dark:bg-slate-950">
         {loading && (
           <div className="flex flex-col items-center gap-3 py-20">
             <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
@@ -874,10 +1041,15 @@ export const PdfEditor: React.FC = () => {
           </div>
         )}
 
-        {renderedPages.map((page, pageIndex) => (
+        {(viewMode === 'scroll' ? renderedPages : renderedPages.slice(currentPage, currentPage + 1))
+          .map((page, idx) => {
+          const pageIndex = viewMode === 'scroll' ? idx : currentPage;
+          const displayW = Math.round(page.width * zoom);
+          const displayH = Math.round(page.height * zoom);
+          return (
           <div
             key={pageIndex}
-            style={{ position: 'relative', width: page.width, height: page.height }}
+            style={{ position: 'relative', width: displayW, height: displayH }}
             className="shadow-xl rounded-sm flex-shrink-0 bg-white"
           >
             {/* PDF page image — non-interactive background */}
@@ -887,15 +1059,17 @@ export const PdfEditor: React.FC = () => {
               draggable={false}
               style={{
                 position: 'absolute', top: 0, left: 0,
-                width: page.width, height: page.height,
+                width: displayW, height: displayH,
                 display: 'block', userSelect: 'none', pointerEvents: 'none',
               }}
             />
 
-            {/* Konva annotation layer */}
+            {/* Konva annotation layer — scaleX/Y maps annotation coords to display coords */}
             <Stage
-              width={page.width}
-              height={page.height}
+              width={displayW}
+              height={displayH}
+              scaleX={zoom}
+              scaleY={zoom}
               style={{
                 position: 'absolute', top: 0, left: 0,
                 cursor: activeTool === 'select' ? 'default' : 'crosshair',
@@ -942,14 +1116,15 @@ export const PdfEditor: React.FC = () => {
               </Layer>
             </Stage>
 
-            {/* Page number badge */}
-            {renderedPages.length > 1 && (
+            {/* Page number badge — only in scroll mode (single mode has nav bar) */}
+            {viewMode === 'scroll' && renderedPages.length > 1 && (
               <div className="absolute bottom-2 right-3 text-xs text-slate-500 bg-white/80 dark:bg-slate-900/80 rounded px-1.5 py-0.5 pointer-events-none select-none">
                 {pageIndex + 1} / {renderedPages.length}
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
