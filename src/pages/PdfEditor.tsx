@@ -4,7 +4,7 @@ import {
   Text as KonvaText, Image as KonvaImage, Arrow, Transformer,
 } from 'react-konva';
 import useImage from 'use-image';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, degrees } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
@@ -44,6 +44,8 @@ interface Signature {
   id: string;
   name: string;
   dataUrl: string;
+  naturalWidth: number;
+  naturalHeight: number;
 }
 
 interface RenderedPage {
@@ -51,6 +53,7 @@ interface RenderedPage {
   thumbUrl: string;
   width: number;
   height: number;
+  rotation: number;
 }
 
 interface TabSnapshot {
@@ -77,7 +80,12 @@ const removeWhiteBackground = (dataUrl: string): Promise<string> =>
       const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const d = data.data;
       for (let i = 0; i < d.length; i += 4) {
-        if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 200) d[i + 3] = 0;
+        const min = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (min > 220) {
+          d[i + 3] = 0;
+        } else if (min > 170) {
+          d[i + 3] = Math.round(d[i + 3] * (220 - min) / 50);
+        }
       }
       ctx.putImageData(data, 0, 0);
       resolve(canvas.toDataURL('image/png'));
@@ -101,6 +109,13 @@ const dataUrlToBytes = (dataUrl: string): Uint8Array => {
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+const loadImgEl = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve(img);
+    img.src = src;
+  });
 
 const SIGS_KEY = 'pdfEditorSignatures';
 const loadSigs = (): Signature[] => {
@@ -197,6 +212,7 @@ export const PdfEditor: React.FC = () => {
   const [tabs, setTabs] = useState<TabSnapshot[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [editingText, setEditingText] = useState<{ pageIndex: number; x: number; y: number; text: string } | null>(null);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
@@ -450,6 +466,7 @@ export const PdfEditor: React.FC = () => {
         dataUrl: canvas.toDataURL('image/jpeg', 0.85),
         thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
         width: vp.width, height: vp.height,
+        rotation: vp.rotation,
       });
       page.cleanup();
     }
@@ -496,8 +513,13 @@ export const PdfEditor: React.FC = () => {
 
   // ── Konva Event Handlers ──────────────────────────────────────────────────────
 
-  const getPos = (e: any) =>
-    e.target.getStage()?.getPointerPosition() as { x: number; y: number } | null;
+  const getPos = (e: any) => {
+    const stage = e.target.getStage();
+    if (!stage) return null;
+    const p = stage.getPointerPosition();
+    if (!p) return null;
+    return { x: p.x / (stage.scaleX() || 1), y: p.y / (stage.scaleY() || 1) };
+  };
 
   const handleMouseDown = useCallback((e: any, pageIndex: number) => {
     const tool = activeToolRef.current;
@@ -510,25 +532,19 @@ export const PdfEditor: React.FC = () => {
     }
 
     if (tool === 'text') {
-      const text = window.prompt('Enter text:');
-      if (!text) return;
-      const ann: Annotation = {
-        id: uid(), pageIndex, type: 'text',
-        x: pos.x, y: pos.y,
-        color: colorRef.current, strokeWidth: swRef.current,
-        text, fontSize: 16,
-      };
-      pushHistory([...annotationsRef.current, ann]);
+      setEditingText({ pageIndex, x: pos.x, y: pos.y, text: '' });
       return;
     }
 
     if (tool === 'signature') {
       const sig = pendingSigRef.current;
       if (!sig) return;
+      const sigW = 200;
+      const sigH = sig.naturalWidth > 0 ? sigW * (sig.naturalHeight / sig.naturalWidth) : 80;
       const ann: Annotation = {
         id: uid(), pageIndex, type: 'signature',
-        x: pos.x - 75, y: pos.y - 40,
-        width: 150, height: 80,
+        x: pos.x - sigW / 2, y: pos.y - sigH / 2,
+        width: sigW, height: sigH,
         color: colorRef.current, strokeWidth: swRef.current,
         imageDataUrl: sig.dataUrl,
       };
@@ -601,13 +617,17 @@ export const PdfEditor: React.FC = () => {
   const insertImageFile = (file: File) => {
     const reader = new FileReader();
     reader.onloadend = () => {
+      const id = uid();
       const ann: Annotation = {
-        id: uid(), pageIndex: 0, type: 'image',
+        id, pageIndex: 0, type: 'image',
         x: 50, y: 50, width: 200, height: 150,
         color: colorRef.current, strokeWidth: swRef.current,
         imageDataUrl: reader.result as string,
       };
       pushHistory([...annotationsRef.current, ann]);
+      setSelectedId(id);
+      setActiveTool('select');
+      activeToolRef.current = 'select';
     };
     reader.readAsDataURL(file);
   };
@@ -621,10 +641,13 @@ export const PdfEditor: React.FC = () => {
       reader.readAsDataURL(file);
     });
     const cleaned = await removeWhiteBackground(dataUrl);
+    const img = await loadImgEl(cleaned);
     const sig: Signature = {
       id: uid(),
       name: file.name.replace(/\.[^/.]+$/, '') || 'Signature',
       dataUrl: cleaned,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
     };
     const next = [...loadSigs(), sig];
     setSignatures(next);
@@ -639,6 +662,57 @@ export const PdfEditor: React.FC = () => {
   };
 
   // ── PDF Export ────────────────────────────────────────────────────────────────
+  // Renders annotations to a transparent canvas overlay per page, then embeds
+  // the overlay as a PNG. This avoids coordinate-mapping issues with rotated PDFs.
+
+  const renderOverlay = async (pageIndex: number): Promise<HTMLCanvasElement | null> => {
+    const anns = annotationsRef.current.filter((a) => a.pageIndex === pageIndex);
+    if (anns.length === 0) return null;
+    const rp = renderedPagesRef.current[pageIndex];
+    const c = document.createElement('canvas');
+    c.width = rp.width; c.height = rp.height;
+    const ctx = c.getContext('2d')!;
+
+    for (const ann of anns) {
+      ctx.strokeStyle = ann.color;
+      ctx.fillStyle = ann.color;
+      ctx.lineWidth = ann.strokeWidth;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if ((ann.type === 'freehand' || ann.type === 'line') && ann.points && ann.points.length >= 4) {
+        ctx.beginPath();
+        ctx.moveTo(ann.points[0], ann.points[1]);
+        for (let i = 2; i < ann.points.length; i += 2) ctx.lineTo(ann.points[i], ann.points[i + 1]);
+        ctx.stroke();
+      } else if (ann.type === 'arrow' && ann.points && ann.points.length >= 4) {
+        const pts = ann.points;
+        ctx.beginPath(); ctx.moveTo(pts[0], pts[1]); ctx.lineTo(pts[2], pts[3]); ctx.stroke();
+        const angle = Math.atan2(pts[3] - pts[1], pts[2] - pts[0]);
+        ctx.beginPath(); ctx.moveTo(pts[2], pts[3]);
+        ctx.lineTo(pts[2] - 12 * Math.cos(angle - 0.4), pts[3] - 12 * Math.sin(angle - 0.4));
+        ctx.lineTo(pts[2] - 12 * Math.cos(angle + 0.4), pts[3] - 12 * Math.sin(angle + 0.4));
+        ctx.closePath(); ctx.fill();
+      } else if (ann.type === 'rect') {
+        const w = ann.width ?? 0, h = ann.height ?? 0;
+        ctx.strokeRect(ann.x + (w < 0 ? w : 0), ann.y + (h < 0 ? h : 0), Math.abs(w), Math.abs(h));
+      } else if (ann.type === 'ellipse') {
+        const w = ann.width ?? 0, h = ann.height ?? 0;
+        ctx.beginPath();
+        ctx.ellipse(ann.x + w / 2, ann.y + h / 2, Math.abs(w / 2) || 1, Math.abs(h / 2) || 1, 0, 0, 2 * Math.PI);
+        ctx.stroke();
+      } else if (ann.type === 'text' && ann.text) {
+        ctx.font = `${ann.fontSize ?? 16}px sans-serif`;
+        ctx.fillText(ann.text, ann.x, ann.y + (ann.fontSize ?? 16));
+      } else if ((ann.type === 'image' || ann.type === 'signature') && ann.imageDataUrl) {
+        try {
+          const img = await loadImgEl(ann.imageDataUrl);
+          ctx.drawImage(img, ann.x, ann.y, ann.width ?? 150, ann.height ?? 80);
+        } catch { /* skip */ }
+      }
+    }
+    return c;
+  };
 
   const exportPdf = async () => {
     if (!pdfBytes) return;
@@ -647,66 +721,32 @@ export const PdfEditor: React.FC = () => {
       const pdfDoc = await PDFDocument.load(pdfBytes);
       const pdfPages = pdfDoc.getPages();
 
-      for (const ann of annotationsRef.current) {
-        const page = pdfPages[ann.pageIndex];
-        if (!page) continue;
-        const { width: pdfW, height: pdfH } = page.getSize();
-        const rp = renderedPagesRef.current[ann.pageIndex];
+      for (let i = 0; i < pdfPages.length; i++) {
+        const rp = renderedPagesRef.current[i];
         if (!rp) continue;
-        const sx = pdfW / rp.width;
-        const sy = pdfH / rp.height;
-        const c = hexToRgb(ann.color);
+        const overlay = await renderOverlay(i);
+        if (!overlay) continue;
 
-        if (ann.type === 'rect') {
-          const w = (ann.width ?? 0) * sx;
-          const h = (ann.height ?? 0) * sy;
-          page.drawRectangle({
-            x: ann.x * sx + (w < 0 ? w : 0),
-            y: pdfH - ann.y * sy - (h > 0 ? h : 0),
-            width: Math.abs(w), height: Math.abs(h),
-            borderColor: c, borderWidth: ann.strokeWidth,
-          });
-        } else if (ann.type === 'ellipse') {
-          const w = (ann.width ?? 0) * sx;
-          const h = (ann.height ?? 0) * sy;
-          page.drawEllipse({
-            x: ann.x * sx + w / 2,
-            y: pdfH - ann.y * sy - h / 2,
-            xScale: Math.abs(w / 2), yScale: Math.abs(h / 2),
-            borderColor: c, borderWidth: ann.strokeWidth,
-          });
-        } else if (ann.type === 'text' && ann.text) {
-          page.drawText(ann.text, {
-            x: ann.x * sx,
-            y: pdfH - (ann.y + (ann.fontSize ?? 16)) * sy,
-            size: (ann.fontSize ?? 16) * Math.min(sx, sy),
-            color: c,
-          });
-        } else if ((ann.type === 'image' || ann.type === 'signature') && ann.imageDataUrl) {
-          try {
-            const bytes = dataUrlToBytes(ann.imageDataUrl);
-            const emb = ann.imageDataUrl.includes('image/png')
-              ? await pdfDoc.embedPng(bytes)
-              : await pdfDoc.embedJpg(bytes);
-            const w = (ann.width ?? 150) * sx;
-            const h = (ann.height ?? 80) * sy;
-            page.drawImage(emb, {
-              x: ann.x * sx,
-              y: pdfH - ann.y * sy - h,
-              width: w, height: h,
-            });
-          } catch {
-            // skip if image cannot be embedded
-          }
-        } else if (ann.points && ann.points.length >= 4) {
-          const pts = ann.points;
-          for (let i = 0; i < pts.length - 2; i += 2) {
-            page.drawLine({
-              start: { x: pts[i] * sx, y: pdfH - pts[i + 1] * sy },
-              end: { x: pts[i + 2] * sx, y: pdfH - pts[i + 3] * sy },
-              color: c, thickness: ann.strokeWidth,
-            });
-          }
+        const overlayBytes = dataUrlToBytes(overlay.toDataURL('image/png'));
+        const overlayImg = await pdfDoc.embedPng(overlayBytes);
+        overlay.width = 0; overlay.height = 0;
+
+        const page = pdfPages[i];
+        const { width: rawW, height: rawH } = page.getSize();
+        const rot = page.getRotation().angle;
+
+        switch (rot) {
+          case 90:
+            page.drawImage(overlayImg, { x: 0, y: rawH, width: rawH, height: rawW, rotate: degrees(-90) });
+            break;
+          case 180:
+            page.drawImage(overlayImg, { x: rawW, y: rawH, width: rawW, height: rawH, rotate: degrees(-180) });
+            break;
+          case 270:
+            page.drawImage(overlayImg, { x: rawW, y: 0, width: rawH, height: rawW, rotate: degrees(90) });
+            break;
+          default:
+            page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
         }
       }
 
@@ -1098,7 +1138,7 @@ export const PdfEditor: React.FC = () => {
             {Math.round(zoom * 100)}%
           </button>
           {showZoomMenu && (
-            <div className="absolute bottom-full right-0 mb-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
+            <div className="absolute top-full right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
               {[
                 { label: '50%',  value: 0.5 },
                 { label: '75%',  value: 0.75 },
@@ -1315,6 +1355,45 @@ export const PdfEditor: React.FC = () => {
                 })()}
               </Layer>
             </Stage>
+
+            {/* In-place text editor */}
+            {editingText?.pageIndex === pageIndex && (
+              <textarea
+                autoFocus
+                value={editingText.text}
+                onChange={(e) => setEditingText((prev) => prev ? { ...prev, text: e.target.value } : null)}
+                onBlur={() => {
+                  if (editingText.text.trim()) {
+                    const ann: Annotation = {
+                      id: uid(), pageIndex, type: 'text',
+                      x: editingText.x, y: editingText.y,
+                      color: colorRef.current, strokeWidth: swRef.current,
+                      text: editingText.text, fontSize: 16,
+                    };
+                    pushHistory([...annotationsRef.current, ann]);
+                  }
+                  setEditingText(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setEditingText(null);
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    (e.target as HTMLTextAreaElement).blur();
+                  }
+                }}
+                style={{
+                  position: 'absolute',
+                  left: editingText.x * zoom,
+                  top: editingText.y * zoom,
+                  fontSize: 16 * zoom,
+                  lineHeight: 1.2,
+                  minWidth: 80 * zoom,
+                  minHeight: 20 * zoom,
+                  color: colorRef.current,
+                }}
+                className="bg-transparent border border-accent-400 rounded px-1 outline-none resize-none z-50 font-sans"
+              />
+            )}
 
             {/* Page number badge — only in scroll mode (single mode has nav bar) */}
             {viewMode === 'scroll' && renderedPages.length > 1 && (

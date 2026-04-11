@@ -15,6 +15,20 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2',
+    date: 'April 11, 2026',
+    changes: [
+      'PDF Editor: text annotations are now edited in-place with a floating textarea overlay — no more browser prompt popup',
+      'PDF Editor: fixed annotation coordinate offset at non-100% zoom levels — shapes now draw exactly where the cursor lands',
+      'PDF Editor: zoom preset menu now opens downward instead of off-screen above the toolbar',
+      'PDF Editor: signature and image aspect ratios are preserved when placed — signatures no longer appear squished',
+      'PDF Editor: white-background removal for signatures uses a softer gradient threshold (170–220), cleanly removing scanner backgrounds without erasing light ink',
+      'PDF Editor: images and signatures are automatically selected after insertion, showing the resize Transformer immediately',
+      'PDF Editor: Delete key now removes selected images and signatures in addition to other annotation types',
+      'PDF Editor: PDF export now correctly positions annotations on rotated pages (scanned landscape PDFs) using a canvas overlay with rotation-aware pdf-lib placement',
+    ],
+  },
+  {
     version: '0.9.1',
     date: 'April 11, 2026',
     changes: [
