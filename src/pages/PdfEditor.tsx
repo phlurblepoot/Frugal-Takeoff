@@ -11,7 +11,10 @@ import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import {
   FolderOpen, Save, MousePointer, Pen, Minus, ArrowRight,
   Square, Circle, Type, Image as ImageIcon, PenLine,
-  ChevronDown, Undo2, Redo2, Trash2, Plus, X,
+  ChevronDown, ChevronLeft, ChevronRight,
+  Undo2, Redo2, Trash2, Plus, X,
+  ZoomIn, ZoomOut, Layers, BookOpen,
+  PanelLeft, PanelLeftClose,
 } from 'lucide-react';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -45,8 +48,19 @@ interface Signature {
 
 interface RenderedPage {
   dataUrl: string;
+  thumbUrl: string;
   width: number;
   height: number;
+}
+
+interface TabSnapshot {
+  id: string;
+  fileName: string;
+  pdfBytes: ArrayBuffer;
+  renderedPages: RenderedPage[];
+  annotations: Annotation[];
+  history: Annotation[][];
+  histIdx: number;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -176,6 +190,13 @@ export const PdfEditor: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [loadMsg, setLoadMsg] = useState('');
   const [saving, setSaving] = useState(false);
+  const [zoom, setZoom] = useState(1.0);
+  const [viewMode, setViewMode] = useState<'scroll' | 'single'>('scroll');
+  const [currentPage, setCurrentPage] = useState(0);
+  const [showZoomMenu, setShowZoomMenu] = useState(false);
+  const [tabs, setTabs] = useState<TabSnapshot[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
@@ -204,17 +225,56 @@ export const PdfEditor: React.FC = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const sigInputRef = useRef<HTMLInputElement>(null);
   const sigMenuRef = useRef<HTMLDivElement>(null);
+  const zoomMenuRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Close sig dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (sigMenuRef.current && !sigMenuRef.current.contains(e.target as Node)) {
         setShowSigMenu(false);
       }
+      if (zoomMenuRef.current && !zoomMenuRef.current.contains(e.target as Node)) {
+        setShowZoomMenu(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // ── Zoom helpers ──────────────────────────────────────────────────────────────
+
+  const clampZoom = (z: number) => Math.min(5, Math.max(0.1, Math.round(z * 100) / 100));
+
+  const applyZoom = (z: number) => setZoom(clampZoom(z));
+
+  const fitWidth = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom((container.clientWidth - 48) / page.width);
+  };
+
+  const fitHeight = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom((container.clientHeight - 48) / page.height);
+  };
+
+  const fitPage = () => {
+    const container = scrollContainerRef.current;
+    const pages = renderedPagesRef.current;
+    if (!container || !pages.length) return;
+    const page = pages[viewMode === 'single' ? currentPage : 0];
+    applyZoom(Math.min(
+      (container.clientWidth - 48) / page.width,
+      (container.clientHeight - 48) / page.height,
+    ));
+  };
 
   // ── History ──────────────────────────────────────────────────────────────────
 
@@ -270,48 +330,168 @@ export const PdfEditor: React.FC = () => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
         e.preventDefault(); redo();
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault(); setZoom((z) => clampZoom(z + 0.1));
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault(); setZoom((z) => clampZoom(z - 0.1));
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault(); setZoom(1);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [undo, redo, pushHistory]);
 
+  // Ctrl+wheel to zoom
+  useEffect(() => {
+    const handler = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z - e.deltaY * 0.001));
+    };
+    const el = scrollContainerRef.current;
+    el?.addEventListener('wheel', handler, { passive: false });
+    return () => el?.removeEventListener('wheel', handler);
+  });
+
+  // ── Tab management ────────────────────────────────────────────────────────────
+
+  const saveCurrentTabState = useCallback((tabId: string) => {
+    setTabs((prev) => prev.map((t) =>
+      t.id === tabId
+        ? { ...t, annotations: annotationsRef.current, history: historyRef.current, histIdx: histIdxRef.current }
+        : t,
+    ));
+  }, []);
+
+  const switchTab = useCallback((tabId: string, currentId: string | null) => {
+    if (tabId === currentId) return;
+    if (currentId) saveCurrentTabState(currentId);
+
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === tabId);
+      if (!tab) return prev;
+      // Load tab state
+      annotationsRef.current = tab.annotations;
+      historyRef.current = tab.history;
+      histIdxRef.current = tab.histIdx;
+      renderedPagesRef.current = tab.renderedPages;
+      setActiveTabId(tabId);
+      setAnnotations(tab.annotations);
+      setHistory(tab.history);
+      setHistIdx(tab.histIdx);
+      setRenderedPages(tab.renderedPages);
+      setPdfBytes(tab.pdfBytes);
+      setFileName(tab.fileName);
+      setSelectedId(null);
+      setCurrentAnn(null);
+      setCurrentPage(0);
+      return prev;
+    });
+  }, [saveCurrentTabState]);
+
+  const closeTab = useCallback((tabId: string, currentId: string | null, allTabs: TabSnapshot[]) => {
+    const remaining = allTabs.filter((t) => t.id !== tabId);
+    setTabs(remaining);
+    if (tabId !== currentId) return; // closing a non-active tab — no state change needed
+
+    if (remaining.length === 0) {
+      // Last tab closed — reset to empty
+      setActiveTabId(null);
+      annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
+      renderedPagesRef.current = [];
+      setAnnotations([]); setHistory([[]]); setHistIdx(0);
+      setRenderedPages([]); setPdfBytes(null); setFileName('');
+      setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
+    } else {
+      // Switch to the nearest remaining tab
+      const newTab = remaining[Math.min(allTabs.findIndex((t) => t.id === tabId), remaining.length - 1)];
+      annotationsRef.current = newTab.annotations;
+      historyRef.current = newTab.history;
+      histIdxRef.current = newTab.histIdx;
+      renderedPagesRef.current = newTab.renderedPages;
+      setActiveTabId(newTab.id);
+      setAnnotations(newTab.annotations); setHistory(newTab.history); setHistIdx(newTab.histIdx);
+      setRenderedPages(newTab.renderedPages); setPdfBytes(newTab.pdfBytes); setFileName(newTab.fileName);
+      setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
+    }
+  }, []);
+
   // ── PDF Loading ───────────────────────────────────────────────────────────────
 
-  const openPdf = async (file: File) => {
+  const openPdf = async (file: File, currentTabId: string | null, currentTabs: TabSnapshot[]) => {
     setLoading(true);
-    setLoadMsg('Reading file…');
-    setAnnotations([]); setHistory([[]]); setHistIdx(0); setSelectedId(null);
-    annotationsRef.current = []; historyRef.current = [[]], histIdxRef.current = 0;
-    setFileName(file.name);
+    setLoadMsg('Rendering pages…');
 
     const buf = await file.arrayBuffer();
-    setPdfBytes(buf);
-
     const objectUrl = URL.createObjectURL(file);
     const pdf = await pdfjsLib.getDocument({ url: objectUrl }).promise;
     const pages: RenderedPage[] = [];
     const canvas = document.createElement('canvas');
+    const thumbCanvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
+    const thumbCtx = thumbCanvas.getContext('2d')!;
+    const THUMB_W = 148;
 
     for (let i = 1; i <= pdf.numPages; i++) {
       setLoadMsg(`Rendering page ${i} of ${pdf.numPages}…`);
       const page = await pdf.getPage(i);
       const vp = page.getViewport({ scale: 1.5 });
-      canvas.width = vp.width;
-      canvas.height = vp.height;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, vp.width, vp.height);
+      canvas.width = vp.width; canvas.height = vp.height;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
       await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
-      pages.push({ dataUrl: canvas.toDataURL('image/jpeg', 0.85), width: vp.width, height: vp.height });
+      // Generate thumbnail
+      const thumbH = Math.round(THUMB_W * vp.height / vp.width);
+      thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
+      thumbCtx.drawImage(canvas, 0, 0, THUMB_W, thumbH);
+      pages.push({
+        dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+        thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
+        width: vp.width, height: vp.height,
+      });
       page.cleanup();
     }
 
     await pdf.destroy();
     URL.revokeObjectURL(objectUrl);
-    canvas.width = 0; canvas.height = 0;
-    setRenderedPages(pages);
+    canvas.width = 0; canvas.height = 0; thumbCanvas.width = 0; thumbCanvas.height = 0;
+
+    const newTabId = uid();
+    const newTab: TabSnapshot = {
+      id: newTabId, fileName: file.name, pdfBytes: buf,
+      renderedPages: pages, annotations: [], history: [[]], histIdx: 0,
+    };
+
+    if (currentTabs.length === 0) {
+      // First file — save current snapshot state too
+      setTabs([newTab]);
+    } else {
+      // Save current tab before adding new one
+      if (currentTabId) saveCurrentTabState(currentTabId);
+      setTabs((prev) => [...prev.map((t) =>
+        t.id === currentTabId
+          ? { ...t, annotations: annotationsRef.current, history: historyRef.current, histIdx: histIdxRef.current }
+          : t,
+      ), newTab]);
+    }
+
+    // Load new tab into flat state
+    setActiveTabId(newTabId);
+    annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
     renderedPagesRef.current = pages;
+    setAnnotations([]); setHistory([[]]); setHistIdx(0);
+    setRenderedPages(pages); setPdfBytes(buf); setFileName(file.name);
+    setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
     setLoading(false);
+
+    // Auto fit-width after load
+    requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (!container || !pages.length) return;
+      setZoom(clampZoom((container.clientWidth - 48) / pages[0].width));
+    });
   };
 
   // ── Konva Event Handlers ──────────────────────────────────────────────────────
@@ -699,7 +879,35 @@ export const PdfEditor: React.FC = () => {
     <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden">
       {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) openPdf(f); e.target.value = ''; }} />
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) openPdf(f, activeTabId, tabs); e.target.value = ''; }} />
+
+      {/* ── Tab Bar ── */}
+      {tabs.length > 0 && (
+        <div className="flex items-end gap-0.5 px-2 pt-1 bg-slate-200 dark:bg-slate-900 border-b border-slate-300 dark:border-slate-700 flex-shrink-0 overflow-x-auto no-scrollbar">
+          {tabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            return (
+              <div
+                key={tab.id}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-sm font-medium cursor-pointer select-none flex-shrink-0 max-w-[200px] border border-b-0 transition-colors ${
+                  isActive
+                    ? 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-slate-300 dark:border-slate-600'
+                    : 'bg-slate-100 dark:bg-slate-850 text-slate-500 dark:text-slate-400 border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                }`}
+                onClick={() => switchTab(tab.id, activeTabId)}
+              >
+                <span className="truncate min-w-0">{tab.fileName}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); closeTab(tab.id, activeTabId, tabs); }}
+                  className="flex-shrink-0 p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <input ref={imageInputRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImageFile(f); e.target.value = ''; }} />
       <input ref={sigInputRef} type="file" accept="image/*" className="hidden"
@@ -707,6 +915,17 @@ export const PdfEditor: React.FC = () => {
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-1 px-3 py-2 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm flex-shrink-0 flex-wrap">
+        {/* Sidebar toggle */}
+        <button
+          onClick={() => setSidebarOpen((v) => !v)}
+          title={sidebarOpen ? 'Hide page panel' : 'Show page panel'}
+          className="p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeft size={16} />}
+        </button>
+
+        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+
         {/* File */}
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -845,10 +1064,157 @@ export const PdfEditor: React.FC = () => {
             Click on page to place signature
           </span>
         )}
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* View mode toggle */}
+        <button
+          title={viewMode === 'scroll' ? 'Switch to single-page view' : 'Switch to scroll view'}
+          onClick={() => { setViewMode((m) => m === 'scroll' ? 'single' : 'scroll'); setCurrentPage(0); }}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          {viewMode === 'scroll' ? <BookOpen size={15} /> : <Layers size={15} />}
+          <span className="hidden sm:inline">{viewMode === 'scroll' ? 'Single' : 'All Pages'}</span>
+        </button>
+
+        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+
+        {/* Zoom controls */}
+        <button
+          onClick={() => setZoom((z) => clampZoom(Math.round((z - 0.1) * 10) / 10))}
+          title="Zoom out (Ctrl+-)"
+          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          <ZoomOut size={16} />
+        </button>
+
+        <div className="relative" ref={zoomMenuRef}>
+          <button
+            onClick={() => setShowZoomMenu((v) => !v)}
+            className="min-w-[56px] px-2 py-1.5 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center"
+            title="Zoom level"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          {showZoomMenu && (
+            <div className="absolute bottom-full right-0 mb-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
+              {[
+                { label: '50%',  value: 0.5 },
+                { label: '75%',  value: 0.75 },
+                { label: '100%', value: 1 },
+                { label: '125%', value: 1.25 },
+                { label: '150%', value: 1.5 },
+                { label: '200%', value: 2 },
+              ].map(({ label, value }) => (
+                <button key={value} onClick={() => { applyZoom(value); setShowZoomMenu(false); }}
+                  className={`w-full px-3 py-1.5 text-sm text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-700 ${Math.round(zoom * 100) === Math.round(value * 100) ? 'text-accent-600 dark:text-accent-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}`}>
+                  {label}
+                </button>
+              ))}
+              <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+              <button onClick={() => { fitWidth(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Width
+              </button>
+              <button onClick={() => { fitHeight(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Height
+              </button>
+              <button onClick={() => { fitPage(); setShowZoomMenu(false); }}
+                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                Fit Page
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={() => setZoom((z) => clampZoom(Math.round((z + 0.1) * 10) / 10))}
+          title="Zoom in (Ctrl++)"
+          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+        >
+          <ZoomIn size={16} />
+        </button>
       </div>
 
+      {/* ── Main content: sidebar + canvas ── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── Page Thumbnail Sidebar ── */}
+        {sidebarOpen && (
+          <div className="w-44 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0">
+              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pages</span>
+            </div>
+            <div className="flex-1 overflow-y-auto py-2 px-2 space-y-2">
+              {renderedPages.map((page, idx) => {
+                const isActive = viewMode === 'single'
+                  ? idx === currentPage
+                  : false; // scroll mode — no single "active" page
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      if (viewMode === 'single') {
+                        setCurrentPage(idx);
+                      } else {
+                        pageRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                    }}
+                    className={`w-full rounded-lg overflow-hidden border-2 transition-colors ${
+                      isActive
+                        ? 'border-accent-500'
+                        : 'border-transparent hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                  >
+                    <img
+                      src={page.thumbUrl}
+                      alt={`Page ${idx + 1}`}
+                      className="w-full block"
+                      draggable={false}
+                    />
+                    <div className={`text-center text-xs py-0.5 ${
+                      isActive
+                        ? 'text-accent-600 dark:text-accent-400 font-semibold'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}>
+                      {idx + 1}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Right column: optional nav bar + canvas ── */}
+        <div className="flex flex-col flex-1 overflow-hidden">
+          {/* Single-page navigation bar */}
+          {viewMode === 'single' && hasPdf && (
+            <div className="flex items-center justify-center gap-3 px-4 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                disabled={currentPage === 0}
+                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="text-sm font-medium text-slate-600 dark:text-slate-300 min-w-[100px] text-center">
+                Page {currentPage + 1} of {renderedPages.length}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(renderedPages.length - 1, p + 1))}
+                disabled={currentPage === renderedPages.length - 1}
+                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+
       {/* ── Canvas Area ── */}
-      <div className="flex-1 overflow-y-auto flex flex-col items-center py-6 gap-4 bg-slate-300 dark:bg-slate-950">
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto flex flex-col items-center py-6 gap-4 bg-slate-300 dark:bg-slate-950">
         {loading && (
           <div className="flex flex-col items-center gap-3 py-20">
             <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
@@ -874,10 +1240,16 @@ export const PdfEditor: React.FC = () => {
           </div>
         )}
 
-        {renderedPages.map((page, pageIndex) => (
+        {(viewMode === 'scroll' ? renderedPages : renderedPages.slice(currentPage, currentPage + 1))
+          .map((page, idx) => {
+          const pageIndex = viewMode === 'scroll' ? idx : currentPage;
+          const displayW = Math.round(page.width * zoom);
+          const displayH = Math.round(page.height * zoom);
+          return (
           <div
             key={pageIndex}
-            style={{ position: 'relative', width: page.width, height: page.height }}
+            ref={(el) => { pageRefs.current[pageIndex] = el; }}
+            style={{ position: 'relative', width: displayW, height: displayH }}
             className="shadow-xl rounded-sm flex-shrink-0 bg-white"
           >
             {/* PDF page image — non-interactive background */}
@@ -887,15 +1259,17 @@ export const PdfEditor: React.FC = () => {
               draggable={false}
               style={{
                 position: 'absolute', top: 0, left: 0,
-                width: page.width, height: page.height,
+                width: displayW, height: displayH,
                 display: 'block', userSelect: 'none', pointerEvents: 'none',
               }}
             />
 
-            {/* Konva annotation layer */}
+            {/* Konva annotation layer — scaleX/Y maps annotation coords to display coords */}
             <Stage
-              width={page.width}
-              height={page.height}
+              width={displayW}
+              height={displayH}
+              scaleX={zoom}
+              scaleY={zoom}
               style={{
                 position: 'absolute', top: 0, left: 0,
                 cursor: activeTool === 'select' ? 'default' : 'crosshair',
@@ -942,15 +1316,18 @@ export const PdfEditor: React.FC = () => {
               </Layer>
             </Stage>
 
-            {/* Page number badge */}
-            {renderedPages.length > 1 && (
+            {/* Page number badge — only in scroll mode (single mode has nav bar) */}
+            {viewMode === 'scroll' && renderedPages.length > 1 && (
               <div className="absolute bottom-2 right-3 text-xs text-slate-500 bg-white/80 dark:bg-slate-900/80 rounded px-1.5 py-0.5 pointer-events-none select-none">
                 {pageIndex + 1} / {renderedPages.length}
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
+        </div> {/* end right column */}
+      </div> {/* end main content flex-row */}
     </div>
   );
 };

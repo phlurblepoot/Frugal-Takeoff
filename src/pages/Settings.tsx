@@ -15,6 +15,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.1',
+    date: 'April 11, 2026',
+    changes: [
+      'PDF Editor: multi-file tabs — opening a second PDF creates a new tab above the toolbar; switching tabs preserves each file\'s annotation and undo history independently',
+      'PDF Editor: page thumbnail sidebar with per-page thumbnails; clicking scrolls to the page in scroll mode or switches to it in single-page mode; toggleable via toolbar button',
+      'PDF Editor: zoom controls — zoom in/out buttons, preset levels (50%–200%), Fit Width, Fit Height, Fit Page; Ctrl+wheel and Ctrl+=/- keyboard shortcuts',
+      'PDF Editor: single-page view mode toggle with Previous/Next navigation bar',
+    ],
+  },
+  {
     version: '0.9.0',
     date: 'April 11, 2026',
     changes: [
