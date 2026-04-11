@@ -15,6 +15,20 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.0',
+    date: 'April 11, 2026',
+    changes: [
+      'PDF Editor sub-application: open local PDFs, annotate with freehand pen, lines, arrows, rectangles, ellipses, text, and images, then export back to PDF',
+      'Signature tool: save reusable signatures from image files with automatic white-background removal, place and resize on any page',
+      'Full undo/redo history and keyboard shortcuts in the PDF Editor',
+      'Side dock navigation: collapsible/hideable left sidebar with per-app navigation, persistent across sessions',
+      'Merged Settings page: user preferences and server settings combined under one route with admin-only tab gating',
+      'Advanced costing: Unit label field added to Material Yield and Rate per Units cost types in all takeoff editors',
+      'Fixed username display in the active users overlay — eliminated intermittent "User" placeholder caused by async state race',
+      'Version changelog added to Settings',
+    ],
+  },
+  {
     version: '0.8.0',
     date: 'April 7–8, 2026',
     changes: [
