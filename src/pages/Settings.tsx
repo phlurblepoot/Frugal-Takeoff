@@ -15,6 +15,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2.2',
+    date: 'April 13, 2026',
+    changes: [
+      'PDF Editor: fixed exported annotations appearing upside-down — pdf-lib already handles PDF y-up coordinates for embedded images, so the manual vertical flip was double-flipping the overlay',
+    ],
+  },
+  {
     version: '0.9.2.1',
     date: 'April 13, 2026',
     changes: [
