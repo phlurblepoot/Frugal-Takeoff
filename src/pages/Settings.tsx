@@ -15,6 +15,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2.3',
+    date: 'April 13, 2026',
+    changes: [
+      'Printouts tab: clicking the View button on a PDF now opens it directly in the PDF Editor instead of a new browser tab',
+    ],
+  },
+  {
     version: '0.9.2.2',
     date: 'April 13, 2026',
     changes: [

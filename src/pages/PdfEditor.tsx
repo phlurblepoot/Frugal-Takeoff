@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Stage, Layer, Line, Rect, Ellipse,
   Text as KonvaText, Image as KonvaImage, Arrow, Transformer,
@@ -188,6 +189,7 @@ const ImageAnnotationNode: React.FC<{
 // ── PdfEditor ─────────────────────────────────────────────────────────────────
 
 export const PdfEditor: React.FC = () => {
+  const location = useLocation();
   const [renderedPages, setRenderedPages] = useState<RenderedPage[]>([]);
   const [pdfBytes, setPdfBytes] = useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState('');
@@ -222,6 +224,18 @@ export const PdfEditor: React.FC = () => {
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [editingText]);
+
+  // Auto-open a PDF passed via router location state (e.g. from the Printouts tab)
+  useEffect(() => {
+    const incoming = (location.state as { file?: File } | null)?.file;
+    if (incoming instanceof File) {
+      // Clear the state so navigating back and forward doesn't re-open the file
+      window.history.replaceState({}, '');
+      openPdf(incoming, null, []);
+    }
+  // openPdf is stable (defined outside state loop), location.state only read once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
