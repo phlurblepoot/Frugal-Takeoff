@@ -37,6 +37,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [currentPageName, setCurrentPageName] = useState('Projects');
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
+  const currentUserNameRef = useRef<string>('');
   
   const location = useLocation();
   const navigate = useNavigate();
@@ -48,6 +49,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     const storedUser = localStorage.getItem('user');
     const user = storedUser ? JSON.parse(storedUser) : null;
     const userName = user?.username || `User${Math.floor(Math.random() * 1000)}`;
+    currentUserNameRef.current = userName;
     
     const storedColor = localStorage.getItem('userColor');
     const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
@@ -100,7 +102,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
       socket.emit('join-page', { 
         pageId: location.pathname, 
         pageName: currentPageName,
-        name: globalUsers.find(u => u.id === socket.id)?.name || JSON.parse(localStorage.getItem('user') || '{}').username || 'User',
+        name: currentUserNameRef.current,
         color: localStorage.getItem('userColor') || '#3b82f6'
       });
     }
