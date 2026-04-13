@@ -15,6 +15,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2.1',
+    date: 'April 13, 2026',
+    changes: [
+      'PDF Editor: text box now reliably appears when clicking — fixed focus being stolen by the Konva canvas on mousedown',
+      'PDF Editor: PDF export annotations are no longer upside-down — canvas overlay is now counter-rotated and vertically flipped to match pdf-lib\'s y-up coordinate system before embedding',
+    ],
+  },
+  {
     version: '0.9.2',
     date: 'April 11, 2026',
     changes: [
