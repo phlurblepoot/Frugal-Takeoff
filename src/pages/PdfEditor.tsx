@@ -741,43 +741,28 @@ export const PdfEditor: React.FC = () => {
         const { width: rawW, height: rawH } = page.getSize();
         const rot = page.getRotation().angle;
 
-        // The overlay is in screen/canvas space (y-down, already visually rotated by pdfjs).
-        // pdf-lib drawImage places the first pixel row at the BOTTOM of the destination rect
-        // (PDF y-up), so we must:
-        //   1. Undo the pdfjs rotation (rotate back to raw PDF orientation).
-        //      /Rotate N means the viewer rotates the raw page N° CW to display it;
-        //      pdfjs applied that same N° CW, so we undo with N° CCW.
-        //   2. Flip vertically (convert y-down → y-up), because pdf-lib inverts row order.
+        // pdfjs already renders the page with /Rotate applied visually, so our overlay
+        // is in the rendered (visual) orientation. pdf-lib's drawImage internally handles
+        // the y-axis difference (PDF y-up) — embedded images are NOT vertically flipped.
+        //
+        // For rotated pages, however, the viewer will apply /Rotate CW to whatever we
+        // embed, so we must counter-rotate the overlay (CCW) back to raw PDF orientation
+        // first. The viewer's later CW rotation then restores the correct visual layout.
         const prepareCanvas = (src: HTMLCanvasElement, undoCCW: number): HTMLCanvasElement => {
-          // Step 1: undo rotation (CCW by undoCCW degrees)
-          let rotated: HTMLCanvasElement;
-          if (undoCCW === 0) {
-            rotated = src;
-          } else {
-            const swap = undoCCW === 90 || undoCCW === 270;
-            rotated = document.createElement('canvas');
-            rotated.width  = swap ? src.height : src.width;
-            rotated.height = swap ? src.width  : src.height;
-            const rctx = rotated.getContext('2d')!;
-            rctx.translate(rotated.width / 2, rotated.height / 2);
-            rctx.rotate((-undoCCW * Math.PI) / 180);
-            rctx.drawImage(src, -src.width / 2, -src.height / 2);
-          }
-          // Step 2: flip vertically
-          const flipped = document.createElement('canvas');
-          flipped.width = rotated.width; flipped.height = rotated.height;
-          const fctx = flipped.getContext('2d')!;
-          fctx.translate(0, rotated.height);
-          fctx.scale(1, -1);
-          fctx.drawImage(rotated, 0, 0);
-          if (rotated !== src) { rotated.width = 0; rotated.height = 0; }
-          return flipped;
+          if (undoCCW === 0) return src;
+          const swap = undoCCW === 90 || undoCCW === 270;
+          const out = document.createElement('canvas');
+          out.width  = swap ? src.height : src.width;
+          out.height = swap ? src.width  : src.height;
+          const octx = out.getContext('2d')!;
+          octx.translate(out.width / 2, out.height / 2);
+          octx.rotate((-undoCCW * Math.PI) / 180); // negative = CCW in canvas 2D
+          octx.drawImage(src, -src.width / 2, -src.height / 2);
+          return out;
         };
 
-        // /Rotate N → pdfjs applied N° CW → undo with N° CCW
-        const undoCCW = rot; // rot is 0 / 90 / 180 / 270
-        const prepared = prepareCanvas(overlay, undoCCW);
-        overlay.width = 0; overlay.height = 0;
+        const prepared = prepareCanvas(overlay, rot);
+        if (prepared !== overlay) { overlay.width = 0; overlay.height = 0; }
 
         const overlayBytes = dataUrlToBytes(prepared.toDataURL('image/png'));
         prepared.width = 0; prepared.height = 0;
