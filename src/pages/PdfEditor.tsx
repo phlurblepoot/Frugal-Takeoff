@@ -4,7 +4,7 @@ import {
   Text as KonvaText, Image as KonvaImage, Arrow, Transformer,
 } from 'react-konva';
 import useImage from 'use-image';
-import { PDFDocument, rgb, degrees } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
@@ -213,6 +213,15 @@ export const PdfEditor: React.FC = () => {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingText, setEditingText] = useState<{ pageIndex: number; x: number; y: number; text: string } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Focus textarea whenever editingText changes
+  useEffect(() => {
+    if (editingText) {
+      // rAF ensures the textarea is in the DOM before we call focus()
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }, [editingText]);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
@@ -532,6 +541,7 @@ export const PdfEditor: React.FC = () => {
     }
 
     if (tool === 'text') {
+      e.evt?.preventDefault(); // prevent canvas from stealing focus from the textarea
       setEditingText({ pageIndex, x: pos.x, y: pos.y, text: '' });
       return;
     }
@@ -727,27 +737,54 @@ export const PdfEditor: React.FC = () => {
         const overlay = await renderOverlay(i);
         if (!overlay) continue;
 
-        const overlayBytes = dataUrlToBytes(overlay.toDataURL('image/png'));
-        const overlayImg = await pdfDoc.embedPng(overlayBytes);
-        overlay.width = 0; overlay.height = 0;
-
         const page = pdfPages[i];
         const { width: rawW, height: rawH } = page.getSize();
         const rot = page.getRotation().angle;
 
-        switch (rot) {
-          case 90:
-            page.drawImage(overlayImg, { x: 0, y: rawH, width: rawH, height: rawW, rotate: degrees(-90) });
-            break;
-          case 180:
-            page.drawImage(overlayImg, { x: rawW, y: rawH, width: rawW, height: rawH, rotate: degrees(-180) });
-            break;
-          case 270:
-            page.drawImage(overlayImg, { x: rawW, y: 0, width: rawH, height: rawW, rotate: degrees(90) });
-            break;
-          default:
-            page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
-        }
+        // The overlay is in screen/canvas space (y-down, already visually rotated by pdfjs).
+        // pdf-lib drawImage places the first pixel row at the BOTTOM of the destination rect
+        // (PDF y-up), so we must:
+        //   1. Undo the pdfjs rotation (rotate back to raw PDF orientation).
+        //      /Rotate N means the viewer rotates the raw page N° CW to display it;
+        //      pdfjs applied that same N° CW, so we undo with N° CCW.
+        //   2. Flip vertically (convert y-down → y-up), because pdf-lib inverts row order.
+        const prepareCanvas = (src: HTMLCanvasElement, undoCCW: number): HTMLCanvasElement => {
+          // Step 1: undo rotation (CCW by undoCCW degrees)
+          let rotated: HTMLCanvasElement;
+          if (undoCCW === 0) {
+            rotated = src;
+          } else {
+            const swap = undoCCW === 90 || undoCCW === 270;
+            rotated = document.createElement('canvas');
+            rotated.width  = swap ? src.height : src.width;
+            rotated.height = swap ? src.width  : src.height;
+            const rctx = rotated.getContext('2d')!;
+            rctx.translate(rotated.width / 2, rotated.height / 2);
+            rctx.rotate((-undoCCW * Math.PI) / 180);
+            rctx.drawImage(src, -src.width / 2, -src.height / 2);
+          }
+          // Step 2: flip vertically
+          const flipped = document.createElement('canvas');
+          flipped.width = rotated.width; flipped.height = rotated.height;
+          const fctx = flipped.getContext('2d')!;
+          fctx.translate(0, rotated.height);
+          fctx.scale(1, -1);
+          fctx.drawImage(rotated, 0, 0);
+          if (rotated !== src) { rotated.width = 0; rotated.height = 0; }
+          return flipped;
+        };
+
+        // /Rotate N → pdfjs applied N° CW → undo with N° CCW
+        const undoCCW = rot; // rot is 0 / 90 / 180 / 270
+        const prepared = prepareCanvas(overlay, undoCCW);
+        overlay.width = 0; overlay.height = 0;
+
+        const overlayBytes = dataUrlToBytes(prepared.toDataURL('image/png'));
+        prepared.width = 0; prepared.height = 0;
+        const overlayImg = await pdfDoc.embedPng(overlayBytes);
+
+        // Always place at the full raw page rect; viewer then applies /Rotate visually
+        page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
       }
 
       const saved = await pdfDoc.save();
@@ -1359,7 +1396,7 @@ export const PdfEditor: React.FC = () => {
             {/* In-place text editor */}
             {editingText?.pageIndex === pageIndex && (
               <textarea
-                autoFocus
+                ref={textareaRef}
                 value={editingText.text}
                 onChange={(e) => setEditingText((prev) => prev ? { ...prev, text: e.target.value } : null)}
                 onBlur={() => {
