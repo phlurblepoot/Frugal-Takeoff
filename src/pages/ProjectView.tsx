@@ -1567,14 +1567,22 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  const copyShareUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`Share link copied to clipboard:\n${url}`);
+    } catch {
+      // Clipboard API not available (non-HTTPS/non-localhost) — show the URL directly
+      window.prompt('Copy this share link (Ctrl+A, Ctrl+C):', url);
+    }
+  };
+
   const handleSharePrintout = async (printout: Printout) => {
     try {
       const id = await createShare('printout', printout.fileId, printout.name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      const url = `${host}/share/${id}`;
-      await navigator.clipboard.writeText(url);
-      alert(`Share link copied to clipboard:\n${url}`);
+      await copyShareUrl(`${host}/share/${id}`);
     } catch {
       alert('Failed to create share link');
     }
@@ -1585,9 +1593,7 @@ export const ProjectView: React.FC = () => {
       const id = await createShare('page', page.imageId, page.name || page.description || 'Page');
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      const url = `${host}/share/${id}`;
-      await navigator.clipboard.writeText(url);
-      alert(`Share link copied to clipboard:\n${url}`);
+      await copyShareUrl(`${host}/share/${id}`);
     } catch {
       alert('Failed to create share link');
     }
