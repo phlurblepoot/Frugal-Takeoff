@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -1567,6 +1567,32 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  const handleSharePrintout = async (printout: Printout) => {
+    try {
+      const id = await createShare('printout', printout.fileId, printout.name);
+      const settings = await getSettings();
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      const url = `${host}/share/${id}`;
+      await navigator.clipboard.writeText(url);
+      alert(`Share link copied to clipboard:\n${url}`);
+    } catch {
+      alert('Failed to create share link');
+    }
+  };
+
+  const handleSharePage = async (page: { imageId: string; name?: string; description?: string }) => {
+    try {
+      const id = await createShare('page', page.imageId, page.name || page.description || 'Page');
+      const settings = await getSettings();
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      const url = `${host}/share/${id}`;
+      await navigator.clipboard.writeText(url);
+      alert(`Share link copied to clipboard:\n${url}`);
+    } catch {
+      alert('Failed to create share link');
+    }
+  };
+
   const handleOpenNamePages = () => {
     if (!project) return;
     
@@ -2408,12 +2434,21 @@ export const ProjectView: React.FC = () => {
                         ) : (
                           <div className="flex items-center justify-between mb-1">
                             <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">{page.name}</h3>
-                            <button 
-                              onClick={(e) => handleStartRenamePage(e, page)}
-                              className="text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent-50"
-                            >
-                              <Edit2 size={14} />
-                            </button>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                title="Copy share link"
+                              >
+                                <LinkIcon size={14} />
+                              </button>
+                              <button
+                                onClick={(e) => handleStartRenamePage(e, page)}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                            </div>
                           </div>
                         )}
                         <p className="text-sm text-slate-500">
@@ -2806,7 +2841,14 @@ export const ProjectView: React.FC = () => {
                           {printout.type === 'excel' ? <FileSpreadsheet size={24} /> : <FileText size={24} />}
                         </div>
                         <div className="flex items-center gap-1">
-                          <button 
+                          <button
+                            onClick={() => handleSharePrintout(printout)}
+                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
+                            title="Copy share link"
+                          >
+                            <LinkIcon size={18} />
+                          </button>
+                          <button
                             onClick={() => handleViewPrintout(printout)}
                             className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
                             title={printout.type === 'excel' ? "Download Excel" : "View PDF"}

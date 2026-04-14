@@ -186,3 +186,20 @@ export const saveProjectNotes = async (projectId: string, note: ProjectNote): Pr
   });
   await handleResponse(res);
 };
+
+export const createShare = async (type: string, resourceId: string, name: string): Promise<string> => {
+  const res = await fetch('/api/shares', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ type, resourceId, name }),
+  });
+  await handleResponse(res);
+  const { id } = await res.json();
+  return id;
+};
+
+export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string }> => {
+  const res = await fetch(`/api/share/${shareId}/info`);
+  await handleResponse(res);
+  return res.json();
+};

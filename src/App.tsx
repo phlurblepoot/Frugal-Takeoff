@@ -8,6 +8,7 @@ import { CanvasView } from './pages/CanvasView';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
+import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
@@ -114,6 +115,10 @@ export default function App() {
           element: <PdfEditor />,
         },
       ],
+    },
+    {
+      path: '/share/:shareId',
+      element: <ShareView />,
     },
   ]);
 

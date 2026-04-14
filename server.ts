@@ -103,6 +103,13 @@ function initDb() {
         value  TEXT,
         UNIQUE(userId, key)
       );
+      CREATE TABLE IF NOT EXISTS shares (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        resourceId TEXT NOT NULL,
+        name TEXT,
+        createdAt INTEGER
+      );
       CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
       CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
       CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
@@ -631,6 +638,62 @@ async function startServer() {
     } catch (error) {
       console.error("Error saving settings:", error);
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // ── Sharing API ───────────────────────────────────────────────────────────────
+
+  // Public: get share info (does not expose internal resourceId)
+  app.get('/api/share/:shareId/info', (req, res) => {
+    try {
+      const row = db.prepare('SELECT type, name FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; name: string } | undefined;
+      if (!row) return res.status(404).json({ error: 'Share not found' });
+      res.json({ type: row.type, name: row.name });
+    } catch {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Public: serve the shared file directly
+  app.get('/api/share/:shareId', (req, res) => {
+    try {
+      const share = db.prepare('SELECT resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { resourceId: string } | undefined;
+      if (!share) return res.status(404).send('Share not found');
+      const img = db.prepare('SELECT data FROM images WHERE id = ?').get(share.resourceId) as { data: string } | undefined;
+      if (!img || !img.data) return res.status(404).send('File not found');
+      const matches = img.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches) return res.status(400).send('Invalid data');
+      res.set('Content-Type', matches[1]);
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.send(Buffer.from(matches[2], 'base64'));
+    } catch {
+      res.status(500).send('Server error');
+    }
+  });
+
+  // Authenticated: create a share
+  app.post('/api/shares', authenticateToken, (req, res) => {
+    try {
+      const { type, resourceId, name } = req.body as { type: string; resourceId: string; name: string };
+      if (!type || !resourceId) return res.status(400).json({ error: 'Missing fields' });
+      // Reuse existing share for same resourceId if it exists
+      const existing = db.prepare('SELECT id FROM shares WHERE resourceId = ?').get(resourceId) as { id: string } | undefined;
+      if (existing) return res.json({ id: existing.id });
+      const id = crypto.randomUUID();
+      db.prepare('INSERT INTO shares (id, type, resourceId, name, createdAt) VALUES (?, ?, ?, ?, ?)').run(id, type, resourceId, name || '', Date.now());
+      res.json({ id });
+    } catch {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Authenticated: delete a share
+  app.delete('/api/shares/:id', authenticateToken, (req, res) => {
+    try {
+      db.prepare('DELETE FROM shares WHERE id = ?').run(req.params.id);
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ error: 'Server error' });
     }
   });
 

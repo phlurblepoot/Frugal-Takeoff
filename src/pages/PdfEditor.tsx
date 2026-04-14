@@ -133,6 +133,52 @@ const loadSigs = (): Signature[] => {
 };
 const saveSigs = (s: Signature[]) => localStorage.setItem(SIGS_KEY, JSON.stringify(s));
 
+// ── IndexedDB persistence ────────────────────────────────────────────────────
+
+const IDB_NAME = 'frugal-pdf-editor';
+const IDB_VERSION = 1;
+
+const openIDB = (): Promise<IDBDatabase> =>
+  new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = (e.target as IDBOpenDBRequest).result;
+      ['tabs', 'pdfs', 'rendered', 'editorState'].forEach((s) => {
+        if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      });
+    };
+    req.onsuccess = (e) => resolve((e.target as IDBOpenDBRequest).result);
+    req.onerror = (e) => reject((e.target as IDBOpenDBRequest).error);
+  });
+
+const idbGet = <T,>(db: IDBDatabase, store: string, key: string): Promise<T | undefined> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readonly').objectStore(store).get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+
+const idbPut = (db: IDBDatabase, store: string, key: string, value: unknown): Promise<void> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readwrite').objectStore(store).put(value, key);
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+  });
+
+const idbDel = (db: IDBDatabase, store: string, key: string): Promise<void> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readwrite').objectStore(store).delete(key);
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+  });
+
+const idbGetAllKeys = (db: IDBDatabase, store: string): Promise<string[]> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    r.onsuccess = () => res(r.result as string[]);
+    r.onerror = () => rej(r.error);
+  });
+
 // ── ImageAnnotationNode ───────────────────────────────────────────────────────
 // Separate component so the useImage hook is called per annotation instance.
 
@@ -228,6 +274,9 @@ export const PdfEditor: React.FC = () => {
   const [currentSource, setCurrentSource] = useState<PrintoutSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const idbRef = useRef<IDBDatabase | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Focus textarea whenever editingText changes
   useEffect(() => {
     if (editingText) {
@@ -243,9 +292,82 @@ export const PdfEditor: React.FC = () => {
     if (incoming instanceof File) {
       // Clear the state so navigating back and forward doesn't re-open the file
       window.history.replaceState({}, '');
+      openIDB().then((db) => { idbRef.current = db; }).catch(() => {});
       openPdf(incoming, null, [], state?.source);
     }
   // openPdf is stable (defined outside state loop), location.state only read once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Restore persisted state from IndexedDB on mount (runs once, only if no file was passed via router state)
+  useEffect(() => {
+    const hasIncoming = !!(location.state as { file?: File } | null)?.file;
+    if (hasIncoming) return; // location.state handler will open the file, skip restore
+
+    const restore = async () => {
+      const db = await openIDB();
+      idbRef.current = db;
+
+      const state = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(db, 'editorState', 'current');
+      if (!state || !state.tabOrder.length) return;
+
+      const restoredTabs: TabSnapshot[] = [];
+      for (const tabId of state.tabOrder) {
+        const meta = await idbGet<{ id: string; fileName: string; source?: PrintoutSource; annotations: Annotation[]; history: Annotation[][]; histIdx: number }>(db, 'tabs', tabId);
+        const pdfBuf = await idbGet<ArrayBuffer>(db, 'pdfs', tabId);
+        if (!meta || !pdfBuf) continue;
+        restoredTabs.push({
+          id: meta.id, fileName: meta.fileName, source: meta.source,
+          pdfBytes: pdfBuf, renderedPages: [], // pages re-rendered below
+          annotations: meta.annotations, history: meta.history, histIdx: meta.histIdx,
+        });
+      }
+      if (!restoredTabs.length) return;
+
+      // Re-render pages for all tabs, starting with active
+      const sorted = [...restoredTabs].sort((a, b) =>
+        a.id === state.activeTabId ? -1 : b.id === state.activeTabId ? 1 : 0,
+      );
+      const withPages: TabSnapshot[] = [];
+      for (const tab of sorted) {
+        const rendered = await idbGet<RenderedPage[]>(db, 'rendered', tab.id);
+        withPages.push({ ...tab, renderedPages: rendered ?? [] });
+      }
+      // Sort back to original order
+      const ordered = state.tabOrder.map((id) => withPages.find((t) => t.id === id)!).filter(Boolean);
+
+      const activeTab = ordered.find((t) => t.id === state.activeTabId) ?? ordered[0];
+      annotationsRef.current = activeTab.annotations;
+      historyRef.current = activeTab.history;
+      histIdxRef.current = activeTab.histIdx;
+      renderedPagesRef.current = activeTab.renderedPages;
+      sourceRef.current = activeTab.source ?? null;
+
+      setTabs(ordered);
+      setActiveTabId(activeTab.id);
+      setAnnotations(activeTab.annotations);
+      setHistory(activeTab.history);
+      setHistIdx(activeTab.histIdx);
+      setRenderedPages(activeTab.renderedPages);
+      setPdfBytes(activeTab.pdfBytes);
+      setFileName(activeTab.fileName);
+      setCurrentSource(activeTab.source ?? null);
+
+      // If rendered pages were not cached, re-render them now
+      if (!activeTab.renderedPages.length && activeTab.pdfBytes.byteLength > 0) {
+        const file = new File([activeTab.pdfBytes], activeTab.fileName, { type: 'application/pdf' });
+        await openPdf(file, null, ordered.filter((t) => t.id !== activeTab.id), activeTab.source);
+      } else {
+        requestAnimationFrame(() => {
+          const container = scrollContainerRef.current;
+          if (!container || !activeTab.renderedPages.length) return;
+          setZoom(clampZoom((container.clientWidth - 48) / activeTab.renderedPages[0].width));
+        });
+      }
+    };
+
+    openIDB().then((db) => { idbRef.current = db; }).catch(() => {});
+    restore().catch(console.error);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -409,6 +531,27 @@ export const PdfEditor: React.FC = () => {
     return () => el?.removeEventListener('wheel', handler);
   });
 
+  const saveStateToIDB = useCallback(async () => {
+    const db = idbRef.current;
+    if (!db) return;
+    // Persist editor-level state
+    await idbPut(db, 'editorState', 'current', { activeTabId, tabOrder: tabs.map((t) => t.id) });
+    // Persist each tab's metadata
+    for (const tab of tabs) {
+      await idbPut(db, 'tabs', tab.id, {
+        id: tab.id, fileName: tab.fileName, source: tab.source ?? null,
+        annotations: tab.annotations, history: tab.history, histIdx: tab.histIdx,
+      });
+    }
+  }, [tabs, activeTabId]);
+
+  // Debounced IDB save on every state change
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => { saveStateToIDB(); }, 1500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [annotations, tabs, activeTabId, saveStateToIDB]);
+
   // ── Tab management ────────────────────────────────────────────────────────────
 
   const saveCurrentTabState = useCallback((tabId: string) => {
@@ -450,6 +593,13 @@ export const PdfEditor: React.FC = () => {
   const closeTab = useCallback((tabId: string, currentId: string | null, allTabs: TabSnapshot[]) => {
     const remaining = allTabs.filter((t) => t.id !== tabId);
     setTabs(remaining);
+    // Clean up IDB data for closed tab
+    if (idbRef.current) {
+      const db = idbRef.current;
+      idbDel(db, 'tabs', tabId).catch(() => {});
+      idbDel(db, 'pdfs', tabId).catch(() => {});
+      idbDel(db, 'rendered', tabId).catch(() => {});
+    }
     if (tabId !== currentId) return; // closing a non-active tab — no state change needed
 
     if (remaining.length === 0) {
@@ -497,7 +647,7 @@ export const PdfEditor: React.FC = () => {
     for (let i = 1; i <= pdf.numPages; i++) {
       setLoadMsg(`Rendering page ${i} of ${pdf.numPages}…`);
       const page = await pdf.getPage(i);
-      const vp = page.getViewport({ scale: 1.5 });
+      const vp = page.getViewport({ scale: 2.0 });
       canvas.width = vp.width; canvas.height = vp.height;
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
       await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
@@ -506,7 +656,7 @@ export const PdfEditor: React.FC = () => {
       thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
       thumbCtx.drawImage(canvas, 0, 0, THUMB_W, thumbH);
       pages.push({
-        dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
         thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
         width: vp.width, height: vp.height,
         rotation: vp.rotation,
@@ -548,6 +698,13 @@ export const PdfEditor: React.FC = () => {
     setCurrentSource(source ?? null);
     setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
     setLoading(false);
+
+    // Persist to IndexedDB
+    if (idbRef.current) {
+      const db = idbRef.current;
+      await idbPut(db, 'pdfs', newTabId, buf);
+      await idbPut(db, 'rendered', newTabId, pages);
+    }
 
     // Auto fit-width after load
     requestAnimationFrame(() => {
