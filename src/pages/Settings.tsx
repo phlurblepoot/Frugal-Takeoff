@@ -15,6 +15,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.2.4',
+    date: 'April 14, 2026',
+    changes: [
+      'PDF Editor: split "Save PDF" into two buttons — Save overwrites the original Printout on the server (or downloads locally if opened from a file), Save As always downloads a local annotated copy',
+    ],
+  },
+  {
     version: '0.9.2.3',
     date: 'April 13, 2026',
     changes: [
