@@ -1554,12 +1554,16 @@ export const ProjectView: React.FC = () => {
       link.click();
       document.body.removeChild(link);
     } else {
-      // Convert data URL to File and open in the PDF Editor
+      // Convert data URL to File and open in the PDF Editor. Pass source info so
+      // Save in the editor overwrites this same printout via the file API.
       const response = await fetch(dataUrl);
       const blob = await response.blob();
       const fileName = printout.name.endsWith('.pdf') ? printout.name : `${printout.name}.pdf`;
       const file = new File([blob], fileName, { type: 'application/pdf' });
-      navigate('/pdf-editor', { state: { file } });
+      const source = projectId
+        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
+        : undefined;
+      navigate('/pdf-editor', { state: { file, source } });
     }
   };
 
