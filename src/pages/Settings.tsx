@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings } from '../utils/store';
 import { UsersView } from './UsersView';
@@ -333,6 +333,7 @@ export const Settings: React.FC = () => {
     companyPhone: '',
     companyEmail: '',
     companyAddress: '',
+    publicHost: '',
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -523,6 +524,28 @@ export const Settings: React.FC = () => {
                         </div>
                       ))}
                     </div>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Link size={20} className="text-accent-600" /> Sharing
+                    </h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Configure the public URL used when generating share links for printouts and project pages.</p>
+                  </div>
+                  <div className="p-6">
+                    <label className={labelCls}>Public Host URL</label>
+                    <input
+                      type="url"
+                      value={serverSettings.publicHost || ''}
+                      onChange={e => setServerSettings({ ...serverSettings, publicHost: e.target.value })}
+                      className={inputCls}
+                      placeholder="e.g. https://takeoff.mydomain.com"
+                    />
+                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      Used to build share links (e.g. <span className="font-mono">https://takeoff.mydomain.com/share/…</span>). If left blank, the app's current origin is used instead.
+                    </p>
                   </div>
                 </div>
               </div>
