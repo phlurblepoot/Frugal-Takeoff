@@ -2859,9 +2859,9 @@ export const ProjectView: React.FC = () => {
                           <button
                             onClick={() => handleViewPrintout(printout)}
                             className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
-                            title={printout.type === 'excel' ? "Download Excel" : "View PDF"}
+                            title={printout.type === 'excel' ? "Open in Spreadsheet Editor" : "View PDF"}
                           >
-                            {printout.type === 'excel' ? <Download size={18} /> : <Eye size={18} />}
+                            <Eye size={18} />
                           </button>
                           <button
                             onClick={() => handleDownloadPrintout(printout)}

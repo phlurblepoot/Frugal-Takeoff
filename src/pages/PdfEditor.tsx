@@ -285,58 +285,52 @@ export const PdfEditor: React.FC = () => {
     }
   }, [editingText]);
 
-  // Auto-open a PDF passed via router location state (e.g. from the Printouts tab)
+  // Auto-open from router state AND restore from IDB — single combined effect so opening a
+  // new file from the Printouts tab preserves any previously-open tabs rather than wiping them.
   useEffect(() => {
     const state = location.state as { file?: File; source?: PrintoutSource } | null;
     const incoming = state?.file;
-    if (incoming instanceof File) {
-      // Clear the state so navigating back and forward doesn't re-open the file
-      window.history.replaceState({}, '');
-      openIDB().then((db) => { idbRef.current = db; }).catch(() => {});
-      openPdf(incoming, null, [], state?.source);
-    }
-  // openPdf is stable (defined outside state loop), location.state only read once on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // Restore persisted state from IndexedDB on mount (runs once, only if no file was passed via router state)
-  useEffect(() => {
-    const hasIncoming = !!(location.state as { file?: File } | null)?.file;
-    if (hasIncoming) return; // location.state handler will open the file, skip restore
-
-    const restore = async () => {
+    const init = async () => {
       const db = await openIDB();
       idbRef.current = db;
 
-      const state = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(db, 'editorState', 'current');
-      if (!state || !state.tabOrder.length) return;
-
+      // Always load any existing tabs from IDB first
+      const savedState = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(db, 'editorState', 'current');
       const restoredTabs: TabSnapshot[] = [];
-      for (const tabId of state.tabOrder) {
-        const meta = await idbGet<{ id: string; fileName: string; source?: PrintoutSource; annotations: Annotation[]; history: Annotation[][]; histIdx: number }>(db, 'tabs', tabId);
-        const pdfBuf = await idbGet<ArrayBuffer>(db, 'pdfs', tabId);
-        if (!meta || !pdfBuf) continue;
-        restoredTabs.push({
-          id: meta.id, fileName: meta.fileName, source: meta.source,
-          pdfBytes: pdfBuf, renderedPages: [], // pages re-rendered below
-          annotations: meta.annotations, history: meta.history, histIdx: meta.histIdx,
-        });
+
+      if (savedState?.tabOrder.length) {
+        for (const tabId of savedState.tabOrder) {
+          const meta = await idbGet<{ id: string; fileName: string; source?: PrintoutSource; annotations: Annotation[]; history: Annotation[][]; histIdx: number }>(db, 'tabs', tabId);
+          const pdfBuf = await idbGet<ArrayBuffer>(db, 'pdfs', tabId);
+          if (!meta || !pdfBuf) continue;
+          const rendered = await idbGet<RenderedPage[]>(db, 'rendered', tabId);
+          restoredTabs.push({
+            id: meta.id, fileName: meta.fileName, source: meta.source,
+            pdfBytes: pdfBuf, renderedPages: rendered ?? [],
+            annotations: meta.annotations, history: meta.history, histIdx: meta.histIdx,
+          });
+        }
       }
+
+      if (incoming instanceof File) {
+        // Clear router state so navigating back doesn't re-open
+        window.history.replaceState({}, '');
+        // Pre-populate the tab bar with any already-open tabs before rendering the new file
+        if (restoredTabs.length) setTabs(restoredTabs);
+        // Open new file; pass null currentTabId so we don't overwrite restored annotations
+        await openPdf(incoming, null, restoredTabs, state?.source);
+        return;
+      }
+
+      // No incoming file — just restore persisted state
       if (!restoredTabs.length) return;
 
-      // Re-render pages for all tabs, starting with active
-      const sorted = [...restoredTabs].sort((a, b) =>
-        a.id === state.activeTabId ? -1 : b.id === state.activeTabId ? 1 : 0,
-      );
-      const withPages: TabSnapshot[] = [];
-      for (const tab of sorted) {
-        const rendered = await idbGet<RenderedPage[]>(db, 'rendered', tab.id);
-        withPages.push({ ...tab, renderedPages: rendered ?? [] });
-      }
-      // Sort back to original order
-      const ordered = state.tabOrder.map((id) => withPages.find((t) => t.id === id)!).filter(Boolean);
+      const ordered = savedState!.tabOrder
+        .map((id) => restoredTabs.find((t) => t.id === id)!)
+        .filter(Boolean);
 
-      const activeTab = ordered.find((t) => t.id === state.activeTabId) ?? ordered[0];
+      const activeTab = ordered.find((t) => t.id === savedState?.activeTabId) ?? ordered[0];
       annotationsRef.current = activeTab.annotations;
       historyRef.current = activeTab.history;
       histIdxRef.current = activeTab.histIdx;
@@ -353,7 +347,6 @@ export const PdfEditor: React.FC = () => {
       setFileName(activeTab.fileName);
       setCurrentSource(activeTab.source ?? null);
 
-      // If rendered pages were not cached, re-render them now
       if (!activeTab.renderedPages.length && activeTab.pdfBytes.byteLength > 0) {
         const file = new File([activeTab.pdfBytes], activeTab.fileName, { type: 'application/pdf' });
         await openPdf(file, null, ordered.filter((t) => t.id !== activeTab.id), activeTab.source);
@@ -366,8 +359,7 @@ export const PdfEditor: React.FC = () => {
       }
     };
 
-    openIDB().then((db) => { idbRef.current = db; }).catch(() => {});
-    restore().catch(console.error);
+    init().catch(console.error);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

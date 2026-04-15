@@ -129,6 +129,9 @@ export const SpreadsheetEditor: React.FC = () => {
   const idbRef = useRef<IDBDatabase | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Deferred init: stores sheets that need to be handed to jspreadsheet once the
+  // container div is in the DOM (it is only rendered when tabs.length > 0).
+  const pendingInitRef = useRef<SheetData[] | null>(null);
 
   // Stable refs so callbacks don't go stale
   const tabsRef = useRef<TabSnapshot[]>([]);
@@ -138,6 +141,21 @@ export const SpreadsheetEditor: React.FC = () => {
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+
+  // ── Deferred jspreadsheet init ─────────────────────────────────────────────
+  // The container div is only rendered when tabs.length > 0, so we cannot call
+  // initSpreadsheet synchronously inside openXlsx/switchTab (containerRef is null
+  // at that point). Instead, store sheets in pendingInitRef and initialize here
+  // after React has committed the new tabs to the DOM.
+  useEffect(() => {
+    if (pendingInitRef.current !== null && containerRef.current) {
+      const toInit = pendingInitRef.current;
+      pendingInitRef.current = null;
+      initSpreadsheet(toInit);
+    }
+  // initSpreadsheet is stable (useCallback); activeTabId change triggers this after re-render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
 
   // ── Capture current jspreadsheet data ─────────────────────────────────────
 
@@ -237,7 +255,7 @@ export const SpreadsheetEditor: React.FC = () => {
         tabsRef.current = updated;
         activeTabIdRef.current = tabId;
 
-        initSpreadsheet(sheets);
+        pendingInitRef.current = sheets;
         scheduleSave();
       } catch (err) {
         console.error('Failed to open file', err);
@@ -291,7 +309,7 @@ export const SpreadsheetEditor: React.FC = () => {
       setActiveTabId(active.id);
       tabsRef.current = restored;
       activeTabIdRef.current = active.id;
-      initSpreadsheet(active.sheets);
+      pendingInitRef.current = active.sheets;
     };
 
     restore().catch(console.error);
@@ -320,9 +338,9 @@ export const SpreadsheetEditor: React.FC = () => {
       const target = tabsRef.current.find((t) => t.id === tabId);
       if (!target) return;
 
+      pendingInitRef.current = target.sheets;
       setActiveTabId(tabId);
       activeTabIdRef.current = tabId;
-      initSpreadsheet(target.sheets);
       scheduleSave();
     },
     [captureCurrentSheets, initSpreadsheet, scheduleSave],
@@ -366,9 +384,9 @@ export const SpreadsheetEditor: React.FC = () => {
       tabsRef.current = remaining;
 
       if (wasActive) {
+        pendingInitRef.current = newActive.sheets;
         setActiveTabId(newActive.id);
         activeTabIdRef.current = newActive.id;
-        initSpreadsheet(newActive.sheets);
       }
       scheduleSave();
     },
