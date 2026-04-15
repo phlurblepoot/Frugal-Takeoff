@@ -9,6 +9,7 @@ import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
+import { ChecklistEditor } from './pages/ChecklistEditor';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
@@ -118,6 +119,10 @@ export default function App() {
         {
           path: 'spreadsheet-editor',
           element: <SpreadsheetEditor />,
+        },
+        {
+          path: 'checklist',
+          element: <ChecklistEditor />,
         },
       ],
     },
