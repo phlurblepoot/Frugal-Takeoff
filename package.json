@@ -21,6 +21,7 @@
     "express-rate-limit": "^8.3.2",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.0",
+    "jspreadsheet-ce": "^5.0.4",
     "konva": "^10.2.0",
     "localforage": "^1.10.0",
     "lucide-react": "^0.546.0",

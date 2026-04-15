@@ -15,6 +15,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.3',
+    date: 'April 15, 2026',
+    changes: [
+      'Spreadsheet Editor: Excel printouts now open in a full in-browser spreadsheet editor (jspreadsheet) instead of triggering a download — supports editing, multiple sheets, and saving changes back to the Printout or downloading a local copy',
+      'Spreadsheet Editor: state persists across navigation and browser restarts via IndexedDB, with multi-tab support for working on several files simultaneously',
+      'PDF Editor: rendering quality improved (scale 2×, JPEG quality 0.92) and state now persists across navigation via IndexedDB',
+      'Sharing: share links for printouts and project pages — generate a public URL from the Printouts tab or any project page; configure the public host URL under Settings → General → Sharing',
+      'Settings: added Sharing card to General Settings tab for configuring the public host URL used in share links',
+    ],
+  },
+  {
     version: '0.9.2.4',
     date: 'April 14, 2026',
     changes: [

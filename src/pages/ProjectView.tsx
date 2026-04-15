@@ -1546,13 +1546,15 @@ export const ProjectView: React.FC = () => {
     if (!dataUrl) return;
 
     if (printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-      // For Excel files, trigger download since browsers can't preview them in iframe easily
-      const link = document.createElement('a');
-      link.href = dataUrl;
-      link.download = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      // Open Excel files in the Spreadsheet Editor
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const fileName = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
+      const file = new File([blob], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const source = projectId
+        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
+        : undefined;
+      navigate('/spreadsheet-editor', { state: { file, source } });
     } else {
       // Convert data URL to File and open in the PDF Editor. Pass source info so
       // Save in the editor overwrites this same printout via the file API.
