@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
+import { Workbook } from '@fortune-sheet/react';
+import type { Sheet as FortuneSheet } from '@fortune-sheet/core';
+import '@fortune-sheet/react/dist/index.css';
 import * as XLSX from 'xlsx';
-import jspreadsheet from 'jspreadsheet-ce';
-import 'jspreadsheet-ce/dist/jspreadsheet.css';
-import 'jsuites/dist/jsuites.css';
 import {
   FolderOpen, Save, Download, X, Plus, FileSpreadsheet, Loader2,
 } from 'lucide-react';
@@ -18,31 +18,29 @@ interface PrintoutSource {
   fileId: string;
 }
 
-interface SheetData {
-  name: string;
-  data: (string | number | boolean)[][];
-}
-
-interface TabSnapshot {
+interface FileTab {
   id: string;
   fileName: string;
-  sheets: SheetData[];
+  sheets: FortuneSheet[];
   source?: PrintoutSource;
 }
 
 // ── IDB helpers ───────────────────────────────────────────────────────────────
 
 const IDB_NAME = 'frugal-spreadsheet-editor';
-const IDB_VERSION = 1;
+const IDB_VERSION = 2; // bumped from v1 (jspreadsheet) to avoid stale stores
 
 const openIDB = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const req = indexedDB.open(IDB_NAME, IDB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = (e.target as IDBOpenDBRequest).result;
-      ['ss-tabs', 'ss-state'].forEach((s) => {
-        if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
-      });
+      // Clear old stores if upgrading from jspreadsheet schema
+      for (const name of Array.from(db.objectStoreNames)) {
+        db.deleteObjectStore(name);
+      }
+      db.createObjectStore('ss-tabs');
+      db.createObjectStore('ss-state');
     };
     req.onsuccess = (e) => resolve((e.target as IDBOpenDBRequest).result);
     req.onerror = (e) => reject((e.target as IDBOpenDBRequest).error);
@@ -69,27 +67,70 @@ const idbDel = (db: IDBDatabase, store: string, key: string): Promise<void> =>
     r.onerror = () => rej(r.error);
   });
 
-// ── Conversion helpers ────────────────────────────────────────────────────────
+// ── xlsx ↔ FortuneSheet conversion ────────────────────────────────────────────
 
-const uid = () => Math.random().toString(36).slice(2, 10);
-
-const xlsxBufToSheets = (buffer: ArrayBuffer): SheetData[] => {
+const xlsxToFortuneSheets = (buffer: ArrayBuffer): FortuneSheet[] => {
   const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-  return wb.SheetNames.map((name) => ({
-    name,
-    data: (XLSX.utils.sheet_to_json(wb.Sheets[name], {
-      header: 1,
-      defval: '',
-    }) as (string | number | boolean)[][]),
-  }));
+  return wb.SheetNames.map((name, i) => {
+    const ws = wb.Sheets[name];
+    const celldata: FortuneSheet['celldata'] = [];
+
+    for (const ref in ws) {
+      if (ref[0] === '!') continue;
+      const addr = XLSX.utils.decode_cell(ref);
+      const cell = ws[ref] as XLSX.CellObject;
+      if (cell.v == null && !cell.f) continue;
+      celldata.push({
+        r: addr.r,
+        c: addr.c,
+        v: {
+          v: cell.v as string | number | boolean | undefined,
+          m: String(cell.w ?? cell.v ?? ''),
+          ...(cell.f ? { f: '=' + cell.f } : {}),
+        },
+      });
+    }
+
+    return {
+      name,
+      id: `sheet_${i}_${name}`,
+      status: i === 0 ? 1 : 0,
+      order: i,
+      celldata,
+    } as FortuneSheet;
+  });
 };
 
-const sheetsToXlsxBytes = (sheets: SheetData[]): Uint8Array => {
+const fortuneSheetsToXlsxBytes = (sheets: FortuneSheet[]): Uint8Array => {
   const wb = XLSX.utils.book_new();
-  for (const s of sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(s.data);
-    XLSX.utils.book_append_sheet(wb, ws, s.name);
+
+  for (const sheet of sheets) {
+    const ws: XLSX.WorkSheet = {};
+    let maxR = 0;
+    let maxC = 0;
+    let hasData = false;
+
+    for (const cell of sheet.celldata ?? []) {
+      const { r, c, v } = cell;
+      if (!v || (v.v == null && !v.f)) continue;
+      const cellRef = XLSX.utils.encode_cell({ r, c });
+      const value = v.v;
+      ws[cellRef] = {
+        v: value as XLSX.CellObject['v'],
+        t: typeof value === 'number' ? 'n' : typeof value === 'boolean' ? 'b' : 's',
+      };
+      if (v.f) ws[cellRef].f = v.f.startsWith('=') ? v.f.slice(1) : v.f;
+      maxR = Math.max(maxR, r);
+      maxC = Math.max(maxC, c);
+      hasData = true;
+    }
+
+    ws['!ref'] = hasData
+      ? XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } })
+      : 'A1';
+    XLSX.utils.book_append_sheet(wb, ws, sheet.name);
   }
+
   return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as Uint8Array;
 };
 
@@ -112,150 +153,95 @@ const downloadFile = (bytes: Uint8Array, name: string) => {
   URL.revokeObjectURL(url);
 };
 
+const uid = () => Math.random().toString(36).slice(2, 10);
+
 // ── SpreadsheetEditor ─────────────────────────────────────────────────────────
 
 export const SpreadsheetEditor: React.FC = () => {
   const location = useLocation();
   const { toast } = useToast();
 
-  const [tabs, setTabs] = useState<TabSnapshot[]>([]);
+  const [tabs, setTabs] = useState<FileTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  // FortuneSheet's current sheet data — updated via onChange on every edit
+  const [currentSheets, setCurrentSheets] = useState<FortuneSheet[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ssRef = useRef<any>(null);
   const idbRef = useRef<IDBDatabase | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Deferred init: stores sheets that need to be handed to jspreadsheet once the
-  // container div is in the DOM (it is only rendered when tabs.length > 0).
-  const pendingInitRef = useRef<SheetData[] | null>(null);
 
-  // Stable refs so callbacks don't go stale
-  const tabsRef = useRef<TabSnapshot[]>([]);
+  // Stable refs for use inside callbacks without stale closure issues
+  const tabsRef = useRef<FileTab[]>([]);
   const activeTabIdRef = useRef<string | null>(null);
+  const currentSheetsRef = useRef<FortuneSheet[]>([]);
 
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
-  // ── Deferred jspreadsheet init ─────────────────────────────────────────────
-  // The container div is only rendered when tabs.length > 0, so we cannot call
-  // initSpreadsheet synchronously inside openXlsx/switchTab (containerRef is null
-  // at that point). Instead, store sheets in pendingInitRef and initialize here
-  // after React has committed the new tabs to the DOM.
-  useEffect(() => {
-    if (pendingInitRef.current !== null && containerRef.current) {
-      const toInit = pendingInitRef.current;
-      pendingInitRef.current = null;
-      initSpreadsheet(toInit);
-    }
-  // initSpreadsheet is stable (useCallback); activeTabId change triggers this after re-render
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId]);
-
-  // ── Capture current jspreadsheet data ─────────────────────────────────────
-
-  const captureCurrentSheets = useCallback((): SheetData[] | null => {
-    if (!ssRef.current) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return ssRef.current.worksheets.map((ws: any, i: number) => ({
-      name: (ws.options?.worksheetName as string | undefined) || `Sheet${i + 1}`,
-      data: ws.getData() as (string | number | boolean)[][],
-    }));
-  }, []);
-
-  // ── IDB: persist state ─────────────────────────────────────────────────────
+  // ── IDB persistence ───────────────────────────────────────────────────────
 
   const saveStateToIDB = useCallback(async () => {
     const db = idbRef.current;
     if (!db) return;
 
-    const currentTabId = activeTabIdRef.current;
+    const currentId = activeTabIdRef.current;
+    // Flush live FortuneSheet data into the active tab
     let allTabs = tabsRef.current;
-
-    // Flush live jspreadsheet data into the active tab snapshot
-    if (currentTabId && ssRef.current) {
-      const live = captureCurrentSheets();
-      if (live) {
-        allTabs = allTabs.map((t) =>
-          t.id === currentTabId ? { ...t, sheets: live } : t,
-        );
-      }
+    if (currentId) {
+      allTabs = allTabs.map((t) =>
+        t.id === currentId ? { ...t, sheets: currentSheetsRef.current } : t,
+      );
     }
 
     await idbPut(db, 'ss-state', 'current', {
-      activeTabId: currentTabId,
+      activeTabId: currentId,
       tabOrder: allTabs.map((t) => t.id),
     });
-
     for (const tab of allTabs) {
       await idbPut(db, 'ss-tabs', tab.id, tab);
     }
-  }, [captureCurrentSheets]);
+  }, []);
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => saveStateToIDB(), 1500);
   }, [saveStateToIDB]);
 
-  // ── Init / destroy jspreadsheet ────────────────────────────────────────────
+  // ── FortuneSheet onChange ─────────────────────────────────────────────────
 
-  const initSpreadsheet = useCallback(
-    (sheets: SheetData[]) => {
-      if (!containerRef.current) return;
-
-      // Destroy any existing instance first
-      if (ssRef.current) {
-        try { jspreadsheet.destroy(containerRef.current as never); } catch { /* ignore */ }
-        ssRef.current = null;
-      }
-      containerRef.current.innerHTML = '';
-
-      if (!sheets.length) return;
-
-      const ss = jspreadsheet(containerRef.current, {
-        worksheets: sheets.map((s) => ({
-          worksheetName: s.name,
-          data: s.data as never,
-          minDimensions: [
-            Math.max(10, (s.data[0]?.length ?? 0) + 2),
-            Math.max(30, s.data.length + 5),
-          ],
-          tableOverflow: true,
-          tableHeight: 'calc(100vh - 96px)',
-        })),
-        onchange: () => scheduleSave(),
-      });
-
-      ssRef.current = ss;
+  const handleChange = useCallback(
+    (data: FortuneSheet[]) => {
+      setCurrentSheets(data);
+      currentSheetsRef.current = data;
+      scheduleSave();
     },
     [scheduleSave],
   );
 
-  // ── Open a file ────────────────────────────────────────────────────────────
+  // ── Open a file ───────────────────────────────────────────────────────────
 
   const openXlsx = useCallback(
     async (file: File, source?: PrintoutSource) => {
       setLoading(true);
       try {
         const buf = await file.arrayBuffer();
-        const sheets = xlsxBufToSheets(buf);
+        const sheets = xlsxToFortuneSheets(buf);
         if (!sheets.length) throw new Error('No sheets found');
 
         const tabId = uid();
-        const newTab: TabSnapshot = { id: tabId, fileName: file.name, sheets, source };
+        const newTab: FileTab = { id: tabId, fileName: file.name, sheets, source };
 
         const updated = [...tabsRef.current, newTab];
         setTabs(updated);
-        setActiveTabId(tabId);
         tabsRef.current = updated;
+        setActiveTabId(tabId);
         activeTabIdRef.current = tabId;
-
-        pendingInitRef.current = sheets;
+        setCurrentSheets(sheets);
+        currentSheetsRef.current = sheets;
         scheduleSave();
       } catch (err) {
         console.error('Failed to open file', err);
@@ -264,144 +250,126 @@ export const SpreadsheetEditor: React.FC = () => {
         setLoading(false);
       }
     },
-    [initSpreadsheet, scheduleSave, toast],
+    [scheduleSave, toast],
   );
 
-  // ── Auto-open from router state (e.g. Printouts tab) ──────────────────────
+  // ── Auto-open + IDB restore on mount ──────────────────────────────────────
 
   useEffect(() => {
     const state = location.state as { file?: File; source?: PrintoutSource } | null;
     const incoming = state?.file;
-    if (incoming instanceof File) {
-      window.history.replaceState({}, '');
-      openIDB().then((db) => { idbRef.current = db; }).catch(() => {});
-      openXlsx(incoming, state?.source);
-    }
-  // Only run on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // ── Restore persisted state from IDB on mount ──────────────────────────────
-
-  useEffect(() => {
-    const hasIncoming = !!(location.state as { file?: File } | null)?.file;
-    if (hasIncoming) return;
-
-    const restore = async () => {
+    const init = async () => {
       const db = await openIDB();
       idbRef.current = db;
 
-      const state = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(
+      // Load any existing tabs from IDB
+      const saved = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(
         db, 'ss-state', 'current',
       );
-      if (!state?.tabOrder.length) return;
-
-      const restored: TabSnapshot[] = [];
-      for (const id of state.tabOrder) {
-        const tab = await idbGet<TabSnapshot>(db, 'ss-tabs', id);
-        if (tab) restored.push(tab);
-      }
-      if (!restored.length) return;
-
-      const active = restored.find((t) => t.id === state.activeTabId) ?? restored[0];
-
-      setTabs(restored);
-      setActiveTabId(active.id);
-      tabsRef.current = restored;
-      activeTabIdRef.current = active.id;
-      pendingInitRef.current = active.sheets;
-    };
-
-    restore().catch(console.error);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── Switch tab ─────────────────────────────────────────────────────────────
-
-  const switchTab = useCallback(
-    (tabId: string) => {
-      if (tabId === activeTabIdRef.current) return;
-
-      // Flush live data into current tab before switching
-      const currentId = activeTabIdRef.current;
-      if (currentId) {
-        const live = captureCurrentSheets();
-        if (live) {
-          const flushed = tabsRef.current.map((t) =>
-            t.id === currentId ? { ...t, sheets: live } : t,
-          );
-          setTabs(flushed);
-          tabsRef.current = flushed;
+      const restoredTabs: FileTab[] = [];
+      if (saved?.tabOrder.length) {
+        for (const id of saved.tabOrder) {
+          const tab = await idbGet<FileTab>(db, 'ss-tabs', id);
+          if (tab) restoredTabs.push(tab);
         }
       }
 
-      const target = tabsRef.current.find((t) => t.id === tabId);
-      if (!target) return;
-
-      pendingInitRef.current = target.sheets;
-      setActiveTabId(tabId);
-      activeTabIdRef.current = tabId;
-      scheduleSave();
-    },
-    [captureCurrentSheets, initSpreadsheet, scheduleSave],
-  );
-
-  // ── Close tab ──────────────────────────────────────────────────────────────
-
-  const closeTab = useCallback(
-    (tabId: string) => {
-      const all = tabsRef.current;
-      const remaining = all.filter((t) => t.id !== tabId);
-
-      if (idbRef.current) {
-        idbDel(idbRef.current, 'ss-tabs', tabId).catch(() => {});
-      }
-
-      if (!remaining.length) {
-        setTabs([]);
-        setActiveTabId(null);
-        tabsRef.current = [];
-        activeTabIdRef.current = null;
-        if (containerRef.current && ssRef.current) {
-          try { jspreadsheet.destroy(containerRef.current as never); } catch { /* ignore */ }
-          ssRef.current = null;
-          containerRef.current.innerHTML = '';
+      if (incoming instanceof File) {
+        window.history.replaceState({}, '');
+        if (restoredTabs.length) {
+          setTabs(restoredTabs);
+          tabsRef.current = restoredTabs;
         }
-        if (idbRef.current) {
-          idbPut(idbRef.current, 'ss-state', 'current', {
-            activeTabId: null, tabOrder: [],
-          }).catch(() => {});
-        }
+        await openXlsx(incoming, state?.source);
         return;
       }
 
-      const wasActive = tabId === activeTabIdRef.current;
-      const newActive = wasActive
-        ? remaining[Math.min(all.findIndex((t) => t.id === tabId), remaining.length - 1)]
-        : all.find((t) => t.id === activeTabIdRef.current)!;
+      if (!restoredTabs.length) return;
 
-      setTabs(remaining);
-      tabsRef.current = remaining;
+      const active = restoredTabs.find((t) => t.id === saved?.activeTabId) ?? restoredTabs[0];
+      setTabs(restoredTabs);
+      tabsRef.current = restoredTabs;
+      setActiveTabId(active.id);
+      activeTabIdRef.current = active.id;
+      setCurrentSheets(active.sheets);
+      currentSheetsRef.current = active.sheets;
+    };
 
-      if (wasActive) {
-        pendingInitRef.current = newActive.sheets;
-        setActiveTabId(newActive.id);
-        activeTabIdRef.current = newActive.id;
+    init().catch(console.error);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Switch tab ────────────────────────────────────────────────────────────
+
+  const switchTab = useCallback((tabId: string) => {
+    if (tabId === activeTabIdRef.current) return;
+
+    // Flush live data into the outgoing tab
+    const outId = activeTabIdRef.current;
+    if (outId) {
+      const flushed = tabsRef.current.map((t) =>
+        t.id === outId ? { ...t, sheets: currentSheetsRef.current } : t,
+      );
+      setTabs(flushed);
+      tabsRef.current = flushed;
+    }
+
+    const target = tabsRef.current.find((t) => t.id === tabId);
+    if (!target) return;
+
+    setActiveTabId(tabId);
+    activeTabIdRef.current = tabId;
+    setCurrentSheets(target.sheets);
+    currentSheetsRef.current = target.sheets;
+    scheduleSave();
+  }, [scheduleSave]);
+
+  // ── Close tab ─────────────────────────────────────────────────────────────
+
+  const closeTab = useCallback((tabId: string) => {
+    const all = tabsRef.current;
+    const remaining = all.filter((t) => t.id !== tabId);
+
+    if (idbRef.current) idbDel(idbRef.current, 'ss-tabs', tabId).catch(() => {});
+
+    if (!remaining.length) {
+      setTabs([]);
+      setActiveTabId(null);
+      setCurrentSheets([]);
+      tabsRef.current = [];
+      activeTabIdRef.current = null;
+      currentSheetsRef.current = [];
+      if (idbRef.current) {
+        idbPut(idbRef.current, 'ss-state', 'current', { activeTabId: null, tabOrder: [] }).catch(() => {});
       }
-      scheduleSave();
-    },
-    [initSpreadsheet, scheduleSave],
-  );
+      return;
+    }
 
-  // ── Save ───────────────────────────────────────────────────────────────────
+    const wasActive = tabId === activeTabIdRef.current;
+    const newActive = wasActive
+      ? remaining[Math.min(all.findIndex((t) => t.id === tabId), remaining.length - 1)]
+      : all.find((t) => t.id === activeTabIdRef.current)!;
+
+    setTabs(remaining);
+    tabsRef.current = remaining;
+
+    if (wasActive) {
+      setActiveTabId(newActive.id);
+      activeTabIdRef.current = newActive.id;
+      setCurrentSheets(newActive.sheets);
+      currentSheetsRef.current = newActive.sheets;
+    }
+    scheduleSave();
+  }, [scheduleSave]);
+
+  // ── Save ──────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
     if (!activeTab) return;
     setSaving(true);
     try {
-      const sheets = captureCurrentSheets() ?? activeTab.sheets;
-      const bytes = sheetsToXlsxBytes(sheets);
-
+      const bytes = fortuneSheetsToXlsxBytes(currentSheetsRef.current);
       if (activeTab.source) {
         await saveFile(activeTab.source.fileId, bytesToDataUrl(bytes));
         toast('Saved to Printouts', { type: 'success' });
@@ -416,14 +384,13 @@ export const SpreadsheetEditor: React.FC = () => {
     }
   };
 
-  // ── Save As ────────────────────────────────────────────────────────────────
+  // ── Save As ───────────────────────────────────────────────────────────────
 
   const handleSaveAs = async () => {
     if (!activeTab) return;
     setSaving(true);
     try {
-      const sheets = captureCurrentSheets() ?? activeTab.sheets;
-      const bytes = sheetsToXlsxBytes(sheets);
+      const bytes = fortuneSheetsToXlsxBytes(currentSheetsRef.current);
       const base = activeTab.fileName.replace(/\.(xlsx|xls|csv)$/i, '');
       downloadFile(bytes, `${base}_edited.xlsx`);
     } catch (err) {
@@ -434,7 +401,7 @@ export const SpreadsheetEditor: React.FC = () => {
     }
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
   const btnBase =
     'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40';
@@ -455,7 +422,7 @@ export const SpreadsheetEditor: React.FC = () => {
       />
 
       {/* ── Toolbar ── */}
-      <div className="h-12 flex items-center gap-1 px-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shrink-0">
+      <div className="h-12 flex items-center gap-1 px-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shrink-0 z-10">
         <button
           onClick={() => fileInputRef.current?.click()}
           className={`${btnBase} bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200`}
@@ -491,19 +458,19 @@ export const SpreadsheetEditor: React.FC = () => {
 
       {/* ── File tabs ── */}
       {tabs.length > 0 && (
-        <div className="flex items-center gap-1 px-3 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 overflow-x-auto shrink-0">
+        <div className="flex items-center gap-1 px-3 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 overflow-x-auto shrink-0 z-10">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => switchTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-sm max-w-[200px] whitespace-nowrap transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-sm whitespace-nowrap transition-colors ${
                 tab.id === activeTabId
                   ? 'bg-accent-600 text-white'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
               <FileSpreadsheet size={13} className="shrink-0" />
-              <span className="truncate max-w-[140px]">{tab.fileName}</span>
+              <span className="truncate max-w-[160px]">{tab.fileName}</span>
               <span
                 role="button"
                 tabIndex={0}
@@ -526,9 +493,18 @@ export const SpreadsheetEditor: React.FC = () => {
         </div>
       )}
 
-      {/* ── Spreadsheet canvas or empty state ── */}
-      <div className="flex-1 overflow-hidden">
-        {tabs.length === 0 ? (
+      {/* ── Spreadsheet or empty state ── */}
+      <div className="flex-1 overflow-hidden relative">
+        {currentSheets.length > 0 ? (
+          <Workbook
+            data={currentSheets}
+            onChange={handleChange}
+            lang="en"
+            showToolbar
+            allowEdit
+            showSheetTabs
+          />
+        ) : (
           <div className="h-full flex flex-col items-center justify-center gap-5 text-slate-400 dark:text-slate-500">
             <FileSpreadsheet size={60} className="opacity-20" />
             <p className="text-lg font-medium">No file open</p>
@@ -539,8 +515,6 @@ export const SpreadsheetEditor: React.FC = () => {
               <FolderOpen size={16} /> Open Spreadsheet
             </button>
           </div>
-        ) : (
-          <div ref={containerRef} className="h-full w-full" />
         )}
       </div>
     </div>

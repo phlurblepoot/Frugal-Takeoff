@@ -11,6 +11,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@fortune-sheet/react": "^1.0.4",
     "@tailwindcss/vite": "^4.1.14",
     "@vis.gl/react-google-maps": "^1.7.1",
     "@vitejs/plugin-react": "^5.0.4",
@@ -21,7 +22,6 @@
     "express-rate-limit": "^8.3.2",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.0",
-    "jspreadsheet-ce": "^5.0.4",
     "konva": "^10.2.0",
     "localforage": "^1.10.0",
     "lucide-react": "^0.546.0",
