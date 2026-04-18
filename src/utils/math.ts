@@ -343,6 +343,9 @@ export const calculateTakeoffTotalCost = (takeoff: MeasurementTakeoff, totalValu
   return 0;
 };
 
+export const roundUpTo100 = (value: number): number =>
+  value <= 0 ? 0 : Math.ceil(value / 100) * 100;
+
 export const formatRealValue = (
   realValue: number,
   type: 'length' | 'area' | 'count',

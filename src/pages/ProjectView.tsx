@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'reac
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
@@ -284,7 +284,7 @@ async function renderPageToDataUrl(
       if (hasMeasurements) {
         const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
         const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
-        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
+        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : String(roundUpTo100(totalRealValue));
         legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
       }
     });
@@ -926,7 +926,7 @@ export const ProjectView: React.FC = () => {
         return {
           'Takeoff Name': t.name,
           'Type': t.type,
-          'Total Quantity': t.totalRealValue,
+          'Total Quantity': t.type === 'count' ? t.totalRealValue : roundUpTo100(t.totalRealValue),
           'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
           'Total Cost': totalCost
         };
@@ -1069,14 +1069,6 @@ export const ProjectView: React.FC = () => {
         pdf.setFont(font, 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(project.address, W / 2, coverY + 10, { align: 'center' });
-        coverY += 30;
-      }
-
-      if (project.bidDueDate) {
-        pdf.setFontSize(11);
-        pdf.setFont(font, 'normal');
-        pdf.setTextColor(100, 116, 139);
-        pdf.text(`Bid Due: ${new Date(project.bidDueDate).toLocaleDateString()}`, W / 2, coverY + 14, { align: 'center' });
         coverY += 30;
       }
 
@@ -1263,7 +1255,7 @@ export const ProjectView: React.FC = () => {
         pdf.setFont(font, 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(t.type, COL.type, y);
-        pdf.text(t.totalRealValue.toFixed(2), COL.qty, y);
+        pdf.text(String(t.type === 'count' ? Math.round(t.totalRealValue) : roundUpTo100(t.totalRealValue)), COL.qty, y);
         pdf.text(unitLabel, COL.unit, y);
 
         // Cost
@@ -2612,7 +2604,7 @@ export const ProjectView: React.FC = () => {
                               {takeoff.type}
                             </td>
                             <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
-                              {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                              {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.type === 'count' ? takeoff.totalRealValue : roundUpTo100(takeoff.totalRealValue), takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                             </td>
                             <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
                               {takeoff.isAdvancedCost ? (
@@ -2759,7 +2751,7 @@ export const ProjectView: React.FC = () => {
 
                         <div className="text-slate-500 dark:text-slate-400">Quantity</div>
                         <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
-                          {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                          {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.type === 'count' ? takeoff.totalRealValue : roundUpTo100(takeoff.totalRealValue), takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                         </div>
 
                         <div className="text-slate-500 dark:text-slate-400">Total Cost</div>

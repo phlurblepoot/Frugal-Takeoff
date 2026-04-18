@@ -813,10 +813,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
 
       const isSelected = selectedMeasurementId === m.id;
+      const isDrawingTool = currentTool === 'length' || currentTool === 'area' || currentTool === 'count';
 
       return (
-        <Group 
+        <Group
           key={m.id}
+          listening={!isDrawingTool}
           draggable={currentTool === 'pan'}
           onClick={(e) => {
             e.cancelBubble = true;
