@@ -8,6 +8,9 @@ import { CanvasView } from './pages/CanvasView';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
+import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
+import { ChecklistEditor } from './pages/ChecklistEditor';
+import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
@@ -113,7 +116,19 @@ export default function App() {
           path: 'pdf-editor',
           element: <PdfEditor />,
         },
+        {
+          path: 'spreadsheet-editor',
+          element: <SpreadsheetEditor />,
+        },
+        {
+          path: 'checklist',
+          element: <ChecklistEditor />,
+        },
       ],
+    },
+    {
+      path: '/share/:shareId',
+      element: <ShareView />,
     },
   ]);
 

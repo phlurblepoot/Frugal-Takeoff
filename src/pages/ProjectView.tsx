@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails } from '../utils/math';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
@@ -928,7 +928,7 @@ export const ProjectView: React.FC = () => {
           'Type': t.type,
           'Total Quantity': t.totalRealValue,
           'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Total Cost': totalCost
+          'Total Cost': roundUpTo100(totalCost)
         };
       });
 
@@ -1072,14 +1072,6 @@ export const ProjectView: React.FC = () => {
         coverY += 30;
       }
 
-      if (project.bidDueDate) {
-        pdf.setFontSize(11);
-        pdf.setFont(font, 'normal');
-        pdf.setTextColor(100, 116, 139);
-        pdf.text(`Bid Due: ${new Date(project.bidDueDate).toLocaleDateString()}`, W / 2, coverY + 14, { align: 'center' });
-        coverY += 30;
-      }
-
       // ── COVER PAGE: notes (context) first, then grand total ─────────────
       const grandTotal = selectedTakeoffs.reduce(
         (sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0
@@ -1128,7 +1120,7 @@ export const ProjectView: React.FC = () => {
       pdf.setFontSize(28);
       pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
-      pdf.text(formatCurrency(grandTotal), W / 2, boxTop + 60, { align: 'center' });
+      pdf.text(formatCurrency(roundUpTo100(grandTotal)), W / 2, boxTop + 60, { align: 'center' });
 
       // Valid until
       if (validUntil) {
@@ -1269,7 +1261,7 @@ export const ProjectView: React.FC = () => {
         // Cost
         pdf.setFont(font, 'bold');
         pdf.setTextColor(15, 23, 42);
-        pdf.text(formatCurrency(totalCost), COL.cost, y, { align: 'right' });
+        pdf.text(formatCurrency(roundUpTo100(totalCost)), COL.cost, y, { align: 'right' });
 
         // Subtle bottom separator line
         pdf.setDrawColor(226, 232, 240);
@@ -1347,7 +1339,7 @@ export const ProjectView: React.FC = () => {
         // Package subtotal (right-aligned in header)
         const pkgTotal = takeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
         pdf.setTextColor(100, 116, 139);
-        pdf.text(formatCurrency(pkgTotal), COL.cost, y + 2, { align: 'right' });
+        pdf.text(formatCurrency(roundUpTo100(pkgTotal)), COL.cost, y + 2, { align: 'right' });
 
         y += 22;
         rowIndex = 0; // reset alternating stripes per group
@@ -1383,7 +1375,7 @@ export const ProjectView: React.FC = () => {
       pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
       pdf.text('TOTAL', COL.name, y);
-      pdf.text(formatCurrency(grandTotal), COL.cost, y, { align: 'right' });
+      pdf.text(formatCurrency(roundUpTo100(grandTotal)), COL.cost, y, { align: 'right' });
 
       // Footer on last takeoff page
       pdf.setFontSize(9);
@@ -1546,18 +1538,58 @@ export const ProjectView: React.FC = () => {
     if (!dataUrl) return;
 
     if (printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-      // For Excel files, trigger download since browsers can't preview them in iframe easily
-      const link = document.createElement('a');
-      link.href = dataUrl;
-      link.download = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } else {
+      // Open Excel files in the Spreadsheet Editor
       const response = await fetch(dataUrl);
       const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      window.open(blobUrl, '_blank');
+      const fileName = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
+      const file = new File([blob], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const source = projectId
+        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
+        : undefined;
+      navigate('/spreadsheet-editor', { state: { file, source } });
+    } else {
+      // Convert data URL to File and open in the PDF Editor. Pass source info so
+      // Save in the editor overwrites this same printout via the file API.
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const fileName = printout.name.endsWith('.pdf') ? printout.name : `${printout.name}.pdf`;
+      const file = new File([blob], fileName, { type: 'application/pdf' });
+      const source = projectId
+        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
+        : undefined;
+      navigate('/pdf-editor', { state: { file, source } });
+    }
+  };
+
+  const copyShareUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`Share link copied to clipboard:\n${url}`);
+    } catch {
+      // Clipboard API not available (non-HTTPS/non-localhost) — show the URL directly
+      window.prompt('Copy this share link (Ctrl+A, Ctrl+C):', url);
+    }
+  };
+
+  const handleSharePrintout = async (printout: Printout) => {
+    try {
+      const id = await createShare('printout', printout.fileId, printout.name);
+      const settings = await getSettings();
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      await copyShareUrl(`${host}/share/${id}`);
+    } catch {
+      alert('Failed to create share link');
+    }
+  };
+
+  const handleSharePage = async (page: { imageId: string; name?: string; description?: string }) => {
+    try {
+      const id = await createShare('page', page.imageId, page.name || page.description || 'Page');
+      const settings = await getSettings();
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      await copyShareUrl(`${host}/share/${id}`);
+    } catch {
+      alert('Failed to create share link');
     }
   };
 
@@ -2402,12 +2434,21 @@ export const ProjectView: React.FC = () => {
                         ) : (
                           <div className="flex items-center justify-between mb-1">
                             <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">{page.name}</h3>
-                            <button 
-                              onClick={(e) => handleStartRenamePage(e, page)}
-                              className="text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent-50"
-                            >
-                              <Edit2 size={14} />
-                            </button>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                title="Copy share link"
+                              >
+                                <LinkIcon size={14} />
+                              </button>
+                              <button
+                                onClick={(e) => handleStartRenamePage(e, page)}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                            </div>
                           </div>
                         )}
                         <p className="text-sm text-slate-500">
@@ -2577,7 +2618,7 @@ export const ProjectView: React.FC = () => {
                             </td>
                             <td className="px-6 py-4 text-right font-bold text-accent-600 dark:text-accent-400">
                               <div className="flex flex-col items-end">
-                                <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
+                                <span>{totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}</span>
                                 {takeoff.isAdvancedCost && costDetails.map((d, i) => (
                                   d.quantity !== undefined && d.quantity > 0 && (
                                     <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
@@ -2715,7 +2756,7 @@ export const ProjectView: React.FC = () => {
 
                         <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
                         <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
-                          {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                          {totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}
                         </div>
                       </div>
 
@@ -2800,12 +2841,19 @@ export const ProjectView: React.FC = () => {
                           {printout.type === 'excel' ? <FileSpreadsheet size={24} /> : <FileText size={24} />}
                         </div>
                         <div className="flex items-center gap-1">
-                          <button 
+                          <button
+                            onClick={() => handleSharePrintout(printout)}
+                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
+                            title="Copy share link"
+                          >
+                            <LinkIcon size={18} />
+                          </button>
+                          <button
                             onClick={() => handleViewPrintout(printout)}
                             className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
-                            title={printout.type === 'excel' ? "Download Excel" : "View PDF"}
+                            title={printout.type === 'excel' ? "Open in Spreadsheet Editor" : "View PDF"}
                           >
-                            {printout.type === 'excel' ? <Download size={18} /> : <Eye size={18} />}
+                            <Eye size={18} />
                           </button>
                           <button
                             onClick={() => handleDownloadPrintout(printout)}

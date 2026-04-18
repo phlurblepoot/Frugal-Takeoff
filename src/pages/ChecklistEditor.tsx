@@ -1,0 +1,985 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  CheckSquare, Plus, Trash2, Camera, MapPin,
+  FileText, Printer, Download, Eye, ClipboardList,
+  ChevronDown, ChevronUp, X, Edit2, Check,
+} from 'lucide-react';
+import { jsPDF } from 'jspdf';
+
+// ─── IDB ─────────────────────────────────────────────────────────────────────
+
+const DB_NAME = 'checklist-db';
+const DB_VERSION = 1;
+
+function openIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = (e.target as IDBOpenDBRequest).result;
+      for (const name of ['checklists', 'photos', 'pdfs', 'state'] as const) {
+        if (!db.objectStoreNames.contains(name)) {
+          db.createObjectStore(name);
+        }
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbGet<T>(db: IDBDatabase, store: string, key: string): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result as T);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbPut(db: IDBDatabase, store: string, value: unknown, key: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readwrite').objectStore(store).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbDelete(db: IDBDatabase, store: string, key: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readwrite').objectStore(store).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbGetAll<T>(db: IDBDatabase, store: string): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).getAll();
+    req.onsuccess = () => resolve(req.result as T[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbGetAllKeys(db: IDBDatabase, store: string): Promise<IDBValidKey[]> {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function nanoid() {
+  return Math.random().toString(36).slice(2, 11) + Math.random().toString(36).slice(2, 6);
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ChecklistItem {
+  id: string;
+  description: string;
+  location: string;
+  done: boolean;
+  order: number;
+  beforePhotoId?: string;
+  afterPhotoId?: string;
+  createdAt: number;
+}
+
+interface ChecklistPrintout {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+interface Checklist {
+  id: string;
+  name: string;
+  createdAt: number;
+  items: ChecklistItem[];
+  printouts: ChecklistPrintout[];
+}
+
+// ─── Item Card ────────────────────────────────────────────────────────────────
+
+interface ItemCardProps {
+  item: ChecklistItem;
+  expanded: boolean;
+  beforePhoto?: string;
+  afterPhoto?: string;
+  onToggle: () => void;
+  onExpand: () => void;
+  onUpdate: (patch: Partial<ChecklistItem>) => void;
+  onDelete: () => void;
+  onPhotoUpload: (type: 'before' | 'after', file: File) => void;
+  onRemovePhoto: (type: 'before' | 'after') => void;
+}
+
+const ItemCard: React.FC<ItemCardProps> = ({
+  item, expanded, beforePhoto, afterPhoto,
+  onToggle, onExpand, onUpdate, onDelete, onPhotoUpload, onRemovePhoto,
+}) => {
+  const beforeRef = useRef<HTMLInputElement>(null);
+  const afterRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className={`bg-white dark:bg-slate-900 rounded-xl border transition-all ${
+      item.done ? 'border-green-200 dark:border-green-800/40' : 'border-slate-200 dark:border-slate-700'
+    }`}>
+      {/* Row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        {/* Checkbox */}
+        <button
+          onClick={onToggle}
+          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+            item.done
+              ? 'bg-green-500 border-green-500 text-white'
+              : 'border-slate-300 dark:border-slate-600 hover:border-green-400'
+          }`}
+        >
+          {item.done && <Check size={12} />}
+        </button>
+
+        {/* Summary */}
+        <button onClick={onExpand} className="flex-1 text-left min-w-0">
+          <p className={`text-sm font-medium truncate ${
+            item.done
+              ? 'text-slate-400 dark:text-slate-500 line-through'
+              : 'text-slate-900 dark:text-slate-100'
+          }`}>
+            {item.description || <span className="italic text-slate-400">No description</span>}
+          </p>
+          {item.location && (
+            <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-0.5">
+              <MapPin size={11} />{item.location}
+            </p>
+          )}
+        </button>
+
+        {/* Photo thumbnails */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {beforePhoto && (
+            <div className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+              <img src={beforePhoto} className="w-full h-full object-cover" alt="before" />
+            </div>
+          )}
+          {afterPhoto && (
+            <div className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+              <img src={afterPhoto} className="w-full h-full object-cover" alt="after" />
+            </div>
+          )}
+        </div>
+
+        <button onClick={onExpand} className="shrink-0 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+      </div>
+
+      {/* Expanded body */}
+      {expanded && (
+        <div className="border-t border-slate-100 dark:border-slate-800 px-4 py-4 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Description</label>
+            <textarea
+              value={item.description}
+              onChange={e => onUpdate({ description: e.target.value })}
+              rows={2}
+              placeholder="Describe the task..."
+              className="w-full text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              <MapPin size={11} /> Location
+            </label>
+            <input
+              type="text"
+              value={item.location}
+              onChange={e => onUpdate({ location: e.target.value })}
+              placeholder="e.g. Roof, Level 2, Unit 4..."
+              className="w-full text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {/* Before photo */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Before Photo</label>
+              {beforePhoto ? (
+                <div className="relative group">
+                  <img src={beforePhoto} className="w-full h-32 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt="before" />
+                  <button
+                    onClick={() => onRemovePhoto('before')}
+                    className="absolute top-1.5 right-1.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => beforeRef.current?.click()}
+                  className="w-full h-32 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors"
+                >
+                  <Camera size={20} />
+                  <span className="text-xs font-medium">Add Before</span>
+                </button>
+              )}
+              <input ref={beforeRef} type="file" accept="image/*" className="hidden"
+                onChange={e => { if (e.target.files?.[0]) onPhotoUpload('before', e.target.files[0]); e.target.value = ''; }} />
+            </div>
+
+            {/* After photo */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">After Photo</label>
+              {afterPhoto ? (
+                <div className="relative group">
+                  <img src={afterPhoto} className="w-full h-32 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt="after" />
+                  <button
+                    onClick={() => onRemovePhoto('after')}
+                    className="absolute top-1.5 right-1.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => afterRef.current?.click()}
+                  className="w-full h-32 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors"
+                >
+                  <Camera size={20} />
+                  <span className="text-xs font-medium">Add After</span>
+                </button>
+              )}
+              <input ref={afterRef} type="file" accept="image/*" className="hidden"
+                onChange={e => { if (e.target.files?.[0]) onPhotoUpload('after', e.target.files[0]); e.target.value = ''; }} />
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={onDelete}
+              className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 px-2 py-1.5 rounded-lg transition-colors"
+            >
+              <Trash2 size={13} /> Remove item
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export const ChecklistEditor: React.FC = () => {
+  const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'items' | 'printouts'>('items');
+  const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [beforePhotos, setBeforePhotos] = useState<Record<string, string>>({});
+  const [afterPhotos, setAfterPhotos] = useState<Record<string, string>>({});
+  const [generating, setGenerating] = useState(false);
+
+  const dbRef = useRef<IDBDatabase | null>(null);
+  const checklistsRef = useRef(checklists);
+  const activeIdRef = useRef(activeId);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { checklistsRef.current = checklists; }, [checklists]);
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  const active = checklists.find(c => c.id === activeId) ?? null;
+  const doneCount = active?.items.filter(i => i.done).length ?? 0;
+  const totalCount = active?.items.length ?? 0;
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      const db = await openIDB();
+      dbRef.current = db;
+
+      // Checklists are stored with their id as key
+      const keys = await idbGetAllKeys(db, 'checklists') as string[];
+      const loaded: Checklist[] = [];
+      for (const key of keys) {
+        const c = await idbGet<Checklist>(db, 'checklists', key);
+        if (c) loaded.push(c);
+      }
+      loaded.sort((a, b) => a.createdAt - b.createdAt);
+
+      const state = await idbGet<{ activeId: string | null }>(db, 'state', 'current');
+      if (loaded.length > 0) {
+        setChecklists(loaded);
+        const aid = state?.activeId && loaded.find(c => c.id === state.activeId)
+          ? state.activeId : loaded[0].id;
+        setActiveId(aid);
+        const list = loaded.find(c => c.id === aid);
+        if (list) await loadPhotos(db, list);
+      }
+    })().catch(console.error);
+  }, []);
+
+  const loadPhotos = async (db: IDBDatabase, list: Checklist) => {
+    const before: Record<string, string> = {};
+    const after: Record<string, string> = {};
+    for (const item of list.items) {
+      if (item.beforePhotoId) {
+        const p = await idbGet<string>(db, 'photos', item.beforePhotoId);
+        if (p) before[item.id] = p;
+      }
+      if (item.afterPhotoId) {
+        const p = await idbGet<string>(db, 'photos', item.afterPhotoId);
+        if (p) after[item.id] = p;
+      }
+    }
+    setBeforePhotos(before);
+    setAfterPhotos(after);
+  };
+
+  // ── Persistence ─────────────────────────────────────────────────────────────
+  const persist = useCallback((lists: Checklist[], aid: string | null) => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      const db = dbRef.current;
+      if (!db) return;
+      for (const list of lists) {
+        await idbPut(db, 'checklists', list, list.id);
+      }
+      await idbPut(db, 'state', { activeId: aid }, 'current');
+    }, 700);
+  }, []);
+
+  const setLists = useCallback((updated: Checklist[]) => {
+    setChecklists(updated);
+    persist(updated, activeIdRef.current);
+  }, [persist]);
+
+  // ── Checklist CRUD ──────────────────────────────────────────────────────────
+  const handleNew = async () => {
+    const id = nanoid();
+    const list: Checklist = {
+      id, name: `Checklist ${checklists.length + 1}`,
+      createdAt: Date.now(), items: [], printouts: [],
+    };
+    const updated = [...checklists, list];
+    setChecklists(updated);
+    setActiveId(id);
+    setActiveTab('items');
+    setExpandedItemId(null);
+    setBeforePhotos({});
+    setAfterPhotos({});
+    const db = dbRef.current;
+    if (db) {
+      await idbPut(db, 'checklists', list, list.id);
+      await idbPut(db, 'state', { activeId: id }, 'current');
+    }
+  };
+
+  const handleDeleteList = async (id: string) => {
+    if (!confirm('Delete this checklist and all its items?')) return;
+    const db = dbRef.current;
+    const list = checklists.find(c => c.id === id);
+    if (db && list) {
+      for (const item of list.items) {
+        if (item.beforePhotoId) await idbDelete(db, 'photos', item.beforePhotoId);
+        if (item.afterPhotoId) await idbDelete(db, 'photos', item.afterPhotoId);
+      }
+      for (const po of list.printouts) {
+        await idbDelete(db, 'pdfs', po.id);
+      }
+      await idbDelete(db, 'checklists', id);
+    }
+    const updated = checklists.filter(c => c.id !== id);
+    setChecklists(updated);
+    if (activeId === id) {
+      const next = updated[0]?.id ?? null;
+      setActiveId(next);
+      if (next && db) {
+        await idbPut(db, 'state', { activeId: next }, 'current');
+        const nextList = updated.find(c => c.id === next);
+        if (nextList) await loadPhotos(db, nextList);
+      }
+    }
+  };
+
+  const switchList = async (id: string) => {
+    setActiveId(id);
+    setActiveTab('items');
+    setExpandedItemId(null);
+    const db = dbRef.current;
+    if (db) await idbPut(db, 'state', { activeId: id }, 'current');
+    const list = checklistsRef.current.find(c => c.id === id);
+    if (list && db) await loadPhotos(db, list);
+  };
+
+  const commitRename = () => {
+    if (!active || !nameInput.trim()) { setEditingName(false); return; }
+    setLists(checklists.map(c => c.id === activeId ? { ...c, name: nameInput.trim() } : c));
+    setEditingName(false);
+  };
+
+  // ── Item CRUD ───────────────────────────────────────────────────────────────
+  const handleAddItem = () => {
+    if (!active) return;
+    const id = nanoid();
+    const maxOrder = active.items.reduce((m, i) => Math.max(m, i.order), -1);
+    const item: ChecklistItem = {
+      id, description: '', location: '', done: false,
+      order: maxOrder + 1, createdAt: Date.now(),
+    };
+    setLists(checklists.map(c => c.id !== activeId ? c : { ...c, items: [...c.items, item] }));
+    setExpandedItemId(id);
+  };
+
+  const updateItem = (itemId: string, patch: Partial<ChecklistItem>) => {
+    setLists(checklists.map(c => c.id !== activeId ? c : {
+      ...c, items: c.items.map(i => i.id === itemId ? { ...i, ...patch } : i),
+    }));
+  };
+
+  const deleteItem = async (itemId: string) => {
+    const db = dbRef.current;
+    const item = active?.items.find(i => i.id === itemId);
+    if (db && item) {
+      if (item.beforePhotoId) await idbDelete(db, 'photos', item.beforePhotoId);
+      if (item.afterPhotoId) await idbDelete(db, 'photos', item.afterPhotoId);
+    }
+    setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
+    setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
+    setLists(checklists.map(c => c.id !== activeId ? c : {
+      ...c, items: c.items.filter(i => i.id !== itemId),
+    }));
+    if (expandedItemId === itemId) setExpandedItemId(null);
+  };
+
+  // ── Photos ──────────────────────────────────────────────────────────────────
+  const handlePhotoUpload = (itemId: string, type: 'before' | 'after', file: File) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target?.result as string;
+      const photoId = `${itemId}_${type}`;
+      const db = dbRef.current;
+      if (db) await idbPut(db, 'photos', dataUrl, photoId);
+      if (type === 'before') {
+        setBeforePhotos(p => ({ ...p, [itemId]: dataUrl }));
+        updateItem(itemId, { beforePhotoId: photoId });
+      } else {
+        setAfterPhotos(p => ({ ...p, [itemId]: dataUrl }));
+        updateItem(itemId, { afterPhotoId: photoId });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemovePhoto = async (itemId: string, type: 'before' | 'after') => {
+    const db = dbRef.current;
+    const photoId = `${itemId}_${type}`;
+    if (db) await idbDelete(db, 'photos', photoId);
+    if (type === 'before') {
+      setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
+      updateItem(itemId, { beforePhotoId: undefined });
+    } else {
+      setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
+      updateItem(itemId, { afterPhotoId: undefined });
+    }
+  };
+
+  // ── PDF Generation ──────────────────────────────────────────────────────────
+  const handlePrint = async () => {
+    if (!active || generating) return;
+    setGenerating(true);
+    try {
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      const W = pdf.internal.pageSize.getWidth();
+      const H = pdf.internal.pageSize.getHeight();
+      const margin = 40;
+
+      // Header bar
+      pdf.setFillColor(37, 99, 235);
+      pdf.rect(0, 0, W, 82, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(20);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(active.name, margin, 36);
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text(`Generated: ${new Date().toLocaleString()}`, margin, 56);
+      pdf.text(
+        `${doneCount}/${totalCount} items completed`,
+        W - margin, 56, { align: 'right' }
+      );
+
+      let y = 100;
+
+      const undone = active.items.filter(i => !i.done).sort((a, b) => a.order - b.order);
+      const done = active.items.filter(i => i.done).sort((a, b) => a.order - b.order);
+
+      const drawSection = (label: string, count: number) => {
+        if (y + 28 > H - margin) { pdf.addPage(); y = margin; }
+        pdf.setFontSize(12);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(15, 23, 42);
+        pdf.text(`${label} (${count})`, margin, y + 14);
+        // underline
+        pdf.setDrawColor(203, 213, 225);
+        pdf.setLineWidth(0.5);
+        pdf.line(margin, y + 18, W - margin, y + 18);
+        y += 28;
+      };
+
+      const drawItem = (item: ChecklistItem, index: number, isDone: boolean) => {
+        const bPhoto = beforePhotos[item.id];
+        const aPhoto = afterPhotos[item.id];
+        const hasPhotos = !!(bPhoto || aPhoto);
+        const boxH = hasPhotos ? 165 : 72;
+
+        if (y + boxH > H - margin) { pdf.addPage(); y = margin; }
+
+        // Box background
+        if (isDone) {
+          pdf.setFillColor(240, 253, 244);
+          pdf.setDrawColor(187, 247, 208);
+        } else {
+          pdf.setFillColor(248, 250, 252);
+          pdf.setDrawColor(226, 232, 240);
+        }
+        pdf.setLineWidth(0.75);
+        pdf.rect(margin, y, W - margin * 2, boxH, 'FD');
+
+        const cx = margin + 16;
+        const cy = y + 16;
+
+        // Checkbox
+        if (isDone) {
+          pdf.setFillColor(34, 197, 94);
+          pdf.setDrawColor(34, 197, 94);
+          pdf.rect(cx, cy, 14, 14, 'F');
+          // checkmark lines
+          pdf.setDrawColor(255, 255, 255);
+          pdf.setLineWidth(1.5);
+          pdf.line(cx + 2, cy + 7, cx + 5, cy + 11);
+          pdf.line(cx + 5, cy + 11, cx + 12, cy + 3);
+        } else {
+          pdf.setDrawColor(148, 163, 184);
+          pdf.setLineWidth(1);
+          pdf.rect(cx, cy, 14, 14, 'S');
+        }
+
+        // Item number
+        pdf.setTextColor(148, 163, 184);
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`${index + 1}`, cx + 7, cy - 2, { align: 'center' });
+
+        const tx = cx + 22;
+        const tw = hasPhotos ? W - margin * 2 - 22 - 20 - 220 : W - margin * 2 - 22 - 20;
+
+        // Description
+        pdf.setTextColor(isDone ? 71 : 15, isDone ? 85 : 23, isDone ? 105 : 42);
+        pdf.setFontSize(11);
+        pdf.setFont('helvetica', isDone ? 'italic' : 'bold');
+        const descLines = pdf.splitTextToSize(item.description || '(No description)', tw) as string[];
+        pdf.text(descLines.slice(0, 2), tx, y + 22);
+
+        // Location
+        if (item.location) {
+          pdf.setFontSize(9);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setTextColor(100, 116, 139);
+          const locTrunc = item.location.length > 60 ? item.location.slice(0, 57) + '...' : item.location;
+          pdf.text(`Location: ${locTrunc}`, tx, y + 37);
+        }
+
+        // Status badge
+        const badgeX = W - margin - 72;
+        const badgeY = y + 12;
+        if (isDone) {
+          pdf.setFillColor(34, 197, 94);
+        } else {
+          pdf.setFillColor(234, 179, 8);
+        }
+        pdf.rect(badgeX, badgeY, 64, 16, 'F');
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFontSize(7);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(isDone ? 'COMPLETE' : 'PENDING', badgeX + 32, badgeY + 11, { align: 'center' });
+
+        // Photos
+        if (hasPhotos) {
+          const photoY = y + 52;
+          const photoW = 95;
+          const photoH = 70;
+          let photoX = tx;
+
+          if (bPhoto) {
+            pdf.setFontSize(7);
+            pdf.setTextColor(148, 163, 184);
+            pdf.setFont('helvetica', 'bold');
+            pdf.text('BEFORE', photoX, photoY - 2);
+            const fmt = bPhoto.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+            pdf.addImage(bPhoto, fmt, photoX, photoY, photoW, photoH);
+            photoX += photoW + 10;
+          }
+          if (aPhoto) {
+            pdf.setFontSize(7);
+            pdf.setTextColor(148, 163, 184);
+            pdf.setFont('helvetica', 'bold');
+            pdf.text('AFTER', photoX, photoY - 2);
+            const fmt = aPhoto.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+            pdf.addImage(aPhoto, fmt, photoX, photoY, photoW, photoH);
+          }
+        }
+
+        y += boxH + 8;
+      };
+
+      if (undone.length > 0) {
+        drawSection('Pending', undone.length);
+        undone.forEach((item, i) => drawItem(item, i, false));
+      }
+
+      if (done.length > 0) {
+        if (undone.length > 0) y += 8;
+        drawSection('Completed', done.length);
+        done.forEach((item, i) => drawItem(item, i, true));
+      }
+
+      if (totalCount === 0) {
+        pdf.setFontSize(12);
+        pdf.setTextColor(148, 163, 184);
+        pdf.text('No items in this checklist.', W / 2, y + 40, { align: 'center' });
+      }
+
+      const pdfDataUrl = pdf.output('datauristring');
+      const printoutId = nanoid();
+      const printoutName = `${active.name} — ${new Date().toLocaleString()}`;
+
+      const db = dbRef.current;
+      if (db) await idbPut(db, 'pdfs', pdfDataUrl, printoutId);
+
+      const po: ChecklistPrintout = { id: printoutId, name: printoutName, createdAt: Date.now() };
+      const updated = checklists.map(c => c.id !== activeId ? c : {
+        ...c, printouts: [...c.printouts, po],
+      });
+      setLists(updated);
+      setActiveTab('printouts');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ── Printout actions ────────────────────────────────────────────────────────
+  const getPdf = async (printoutId: string): Promise<string | undefined> => {
+    const db = dbRef.current;
+    return db ? idbGet<string>(db, 'pdfs', printoutId) : undefined;
+  };
+
+  const handleViewPrintout = async (po: ChecklistPrintout) => {
+    const data = await getPdf(po.id);
+    if (data) window.open(data, '_blank');
+  };
+
+  const handleDownloadPrintout = async (po: ChecklistPrintout) => {
+    const data = await getPdf(po.id);
+    if (!data) return;
+    const a = document.createElement('a');
+    a.href = data;
+    a.download = po.name.endsWith('.pdf') ? po.name : `${po.name}.pdf`;
+    a.click();
+  };
+
+  const handleDeletePrintout = async (printoutId: string) => {
+    const db = dbRef.current;
+    if (db) await idbDelete(db, 'pdfs', printoutId);
+    setLists(checklists.map(c => c.id !== activeId ? c : {
+      ...c, printouts: c.printouts.filter(p => p.id !== printoutId),
+    }));
+  };
+
+  // ── Sorted items ────────────────────────────────────────────────────────────
+  const sortedItems = active ? [
+    ...active.items.filter(i => !i.done).sort((a, b) => a.order - b.order),
+    ...active.items.filter(i => i.done).sort((a, b) => a.order - b.order),
+  ] : [];
+  const undoneItems = sortedItems.filter(i => !i.done);
+  const doneItems = sortedItems.filter(i => i.done);
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-950">
+      {/* Top bar */}
+      <div className="shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-3 flex items-center gap-4">
+        <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+          <ClipboardList size={20} />
+          <span className="text-sm font-medium">Checklists</span>
+        </div>
+        <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
+
+        {/* Checklist name */}
+        {active && (
+          editingName ? (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={nameInput}
+                onChange={e => setNameInput(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitRename();
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+                className="text-sm font-semibold bg-transparent border-b-2 border-accent-500 outline-none text-slate-900 dark:text-slate-100 min-w-[140px]"
+              />
+              <button onClick={commitRename} className="p-1 text-accent-600"><Check size={14} /></button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setNameInput(active.name); setEditingName(true); }}
+              className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-slate-100 hover:text-accent-600 transition-colors group"
+            >
+              {active.name}
+              <Edit2 size={13} className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400" />
+            </button>
+          )
+        )}
+
+        <div className="flex-1" />
+
+        {/* Progress bar */}
+        {active && totalCount > 0 && (
+          <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <div className="w-24 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-green-500 rounded-full transition-all"
+                style={{ width: `${(doneCount / totalCount) * 100}%` }}
+              />
+            </div>
+            <span>{doneCount}/{totalCount}</span>
+          </div>
+        )}
+
+        {/* Print */}
+        {active && (
+          <button
+            onClick={handlePrint}
+            disabled={generating}
+            className="flex items-center gap-2 px-4 py-2 bg-accent-600 text-white rounded-xl hover:bg-accent-700 disabled:opacity-50 text-sm font-medium shadow-sm"
+          >
+            <Printer size={16} />
+            {generating ? 'Generating...' : 'Print PDF'}
+          </button>
+        )}
+
+        {/* New */}
+        <button
+          onClick={handleNew}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 text-sm font-medium"
+        >
+          <Plus size={16} /> New
+        </button>
+      </div>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar: shown when >1 list */}
+        {checklists.length > 1 && (
+          <div className="w-56 shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-y-auto">
+            <div className="px-4 pt-4 pb-2 text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+              Lists
+            </div>
+            <div className="px-2 pb-4 space-y-0.5">
+              {checklists.map(list => (
+                <div
+                  key={list.id}
+                  onClick={() => switchList(list.id)}
+                  className={`group flex items-center gap-2 rounded-xl px-2 py-2 cursor-pointer transition-all ${
+                    list.id === activeId
+                      ? 'bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <ClipboardList size={15} className="shrink-0 opacity-60" />
+                  <span className="flex-1 text-sm font-medium truncate">{list.name}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleDeleteList(list.id); }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-500 transition-all"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Main area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {!active ? (
+            /* Empty state */
+            <div className="flex-1 flex flex-col items-center justify-center gap-5 text-slate-400 dark:text-slate-500">
+              <ClipboardList size={60} className="opacity-20" />
+              <p className="text-lg font-medium">No checklist yet</p>
+              <button
+                onClick={handleNew}
+                className="flex items-center gap-2 px-5 py-2.5 bg-accent-600 text-white rounded-xl hover:bg-accent-700 text-sm font-medium shadow-sm"
+              >
+                <Plus size={16} /> Create your first checklist
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Sub-tabs */}
+              <div className="shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 flex items-center gap-6">
+                {(['items', 'printouts'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === tab
+                        ? 'border-accent-600 text-accent-600'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                    }`}
+                  >
+                    {tab === 'printouts'
+                      ? `Printouts (${active.printouts.length})`
+                      : `Items (${totalCount})`}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6">
+                {activeTab === 'items' ? (
+                  /* ── Items tab ── */
+                  <div className="max-w-3xl mx-auto space-y-2">
+                    {totalCount === 0 && (
+                      <div className="text-center py-16 text-slate-400 dark:text-slate-500">
+                        <CheckSquare size={40} className="mx-auto mb-3 opacity-30" />
+                        <p className="text-sm">No items yet. Add your first item below.</p>
+                      </div>
+                    )}
+
+                    {/* Pending items */}
+                    {undoneItems.map(item => (
+                      <ItemCard
+                        key={item.id}
+                        item={item}
+                        expanded={expandedItemId === item.id}
+                        beforePhoto={beforePhotos[item.id]}
+                        afterPhoto={afterPhotos[item.id]}
+                        onToggle={() => updateItem(item.id, { done: true })}
+                        onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
+                        onUpdate={patch => updateItem(item.id, patch)}
+                        onDelete={() => deleteItem(item.id)}
+                        onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
+                        onRemovePhoto={type => handleRemovePhoto(item.id, type)}
+                      />
+                    ))}
+
+                    {/* Divider before done items */}
+                    {doneItems.length > 0 && undoneItems.length > 0 && (
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="flex-1 h-px bg-slate-200 dark:bg-slate-700" />
+                        <span className="text-xs font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wide">
+                          Completed · {doneItems.length}
+                        </span>
+                        <div className="flex-1 h-px bg-slate-200 dark:bg-slate-700" />
+                      </div>
+                    )}
+
+                    {/* Done items */}
+                    <div className={doneItems.length > 0 ? 'opacity-70 space-y-2' : ''}>
+                      {doneItems.map(item => (
+                        <ItemCard
+                          key={item.id}
+                          item={item}
+                          expanded={expandedItemId === item.id}
+                          beforePhoto={beforePhotos[item.id]}
+                          afterPhoto={afterPhotos[item.id]}
+                          onToggle={() => updateItem(item.id, { done: false })}
+                          onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
+                          onUpdate={patch => updateItem(item.id, patch)}
+                          onDelete={() => deleteItem(item.id)}
+                          onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
+                          onRemovePhoto={type => handleRemovePhoto(item.id, type)}
+                        />
+                      ))}
+                    </div>
+
+                    {/* Add item button */}
+                    <button
+                      onClick={handleAddItem}
+                      className="w-full flex items-center justify-center gap-2 py-3 border-2 border-dashed border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500 rounded-xl hover:border-accent-400 hover:text-accent-500 transition-colors text-sm font-medium mt-2"
+                    >
+                      <Plus size={16} /> Add Item
+                    </button>
+                  </div>
+                ) : (
+                  /* ── Printouts tab ── */
+                  <div className="max-w-5xl mx-auto space-y-6">
+                    <div className="flex justify-between items-center">
+                      <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Printouts</h2>
+                      <p className="text-sm text-slate-500">{active.printouts.length} files saved</p>
+                    </div>
+
+                    {active.printouts.length === 0 ? (
+                      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
+                        <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
+                          <Printer size={32} />
+                        </div>
+                        <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-1">No printouts yet</h3>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto">
+                          Click "Print PDF" to generate a checklist report.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {[...active.printouts].sort((a, b) => b.createdAt - a.createdAt).map(po => (
+                          <div key={po.id} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all">
+                            <div className="p-6">
+                              <div className="flex items-start justify-between mb-4">
+                                <div className="w-12 h-12 bg-accent-50 dark:bg-accent-900/30 text-accent-600 rounded-xl flex items-center justify-center">
+                                  <FileText size={24} />
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleViewPrintout(po)}
+                                    className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
+                                    title="View PDF"
+                                  >
+                                    <Eye size={18} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDownloadPrintout(po)}
+                                    className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
+                                    title="Download PDF"
+                                  >
+                                    <Download size={18} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeletePrintout(po.id)}
+                                    className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={18} />
+                                  </button>
+                                </div>
+                              </div>
+                              <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-1 line-clamp-1">{po.name}</h3>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Generated on {new Date(po.createdAt).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

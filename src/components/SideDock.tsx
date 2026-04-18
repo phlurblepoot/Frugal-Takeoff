@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Menu, Calculator, FileEdit, Settings, LogOut, PanelLeftClose } from 'lucide-react';
+import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Settings, LogOut, PanelLeftClose } from 'lucide-react';
 
 export type DockState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -26,6 +26,20 @@ const APPS: App[] = [
     Icon: FileEdit,
     path: '/pdf-editor',
     matchRoute: (p) => p.startsWith('/pdf-editor'),
+  },
+  {
+    id: 'spreadsheet-editor',
+    label: 'Spreadsheet',
+    Icon: Sheet,
+    path: '/spreadsheet-editor',
+    matchRoute: (p) => p.startsWith('/spreadsheet-editor'),
+  },
+  {
+    id: 'checklist',
+    label: 'Checklists',
+    Icon: ClipboardList,
+    path: '/checklist',
+    matchRoute: (p) => p.startsWith('/checklist'),
   },
 ];
 

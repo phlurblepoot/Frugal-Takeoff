@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Stage, Layer, Line, Rect, Ellipse,
   Text as KonvaText, Image as KonvaImage, Arrow, Transformer,
@@ -9,13 +10,15 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import {
-  FolderOpen, Save, MousePointer, Pen, Minus, ArrowRight,
+  FolderOpen, Save, Download, MousePointer, Pen, Minus, ArrowRight,
   Square, Circle, Type, Image as ImageIcon, PenLine,
   ChevronDown, ChevronLeft, ChevronRight,
   Undo2, Redo2, Trash2, Plus, X,
   ZoomIn, ZoomOut, Layers, BookOpen,
   PanelLeft, PanelLeftClose,
 } from 'lucide-react';
+import { saveFile } from '../utils/store';
+import { useToast } from '../components/Toast';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -56,6 +59,12 @@ interface RenderedPage {
   rotation: number;
 }
 
+interface PrintoutSource {
+  projectId: string;
+  printoutId: string;
+  fileId: string;
+}
+
 interface TabSnapshot {
   id: string;
   fileName: string;
@@ -64,6 +73,7 @@ interface TabSnapshot {
   annotations: Annotation[];
   history: Annotation[][];
   histIdx: number;
+  source?: PrintoutSource;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -122,6 +132,52 @@ const loadSigs = (): Signature[] => {
   try { return JSON.parse(localStorage.getItem(SIGS_KEY) || '[]'); } catch { return []; }
 };
 const saveSigs = (s: Signature[]) => localStorage.setItem(SIGS_KEY, JSON.stringify(s));
+
+// ── IndexedDB persistence ────────────────────────────────────────────────────
+
+const IDB_NAME = 'frugal-pdf-editor';
+const IDB_VERSION = 1;
+
+const openIDB = (): Promise<IDBDatabase> =>
+  new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = (e.target as IDBOpenDBRequest).result;
+      ['tabs', 'pdfs', 'rendered', 'editorState'].forEach((s) => {
+        if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
+      });
+    };
+    req.onsuccess = (e) => resolve((e.target as IDBOpenDBRequest).result);
+    req.onerror = (e) => reject((e.target as IDBOpenDBRequest).error);
+  });
+
+const idbGet = <T,>(db: IDBDatabase, store: string, key: string): Promise<T | undefined> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readonly').objectStore(store).get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+
+const idbPut = (db: IDBDatabase, store: string, key: string, value: unknown): Promise<void> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readwrite').objectStore(store).put(value, key);
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+  });
+
+const idbDel = (db: IDBDatabase, store: string, key: string): Promise<void> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readwrite').objectStore(store).delete(key);
+    r.onsuccess = () => res();
+    r.onerror = () => rej(r.error);
+  });
+
+const idbGetAllKeys = (db: IDBDatabase, store: string): Promise<string[]> =>
+  new Promise((res, rej) => {
+    const r = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    r.onsuccess = () => res(r.result as string[]);
+    r.onerror = () => rej(r.error);
+  });
 
 // ── ImageAnnotationNode ───────────────────────────────────────────────────────
 // Separate component so the useImage hook is called per annotation instance.
@@ -188,6 +244,8 @@ const ImageAnnotationNode: React.FC<{
 // ── PdfEditor ─────────────────────────────────────────────────────────────────
 
 export const PdfEditor: React.FC = () => {
+  const location = useLocation();
+  const { toast } = useToast();
   const [renderedPages, setRenderedPages] = useState<RenderedPage[]>([]);
   const [pdfBytes, setPdfBytes] = useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState('');
@@ -213,7 +271,11 @@ export const PdfEditor: React.FC = () => {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingText, setEditingText] = useState<{ pageIndex: number; x: number; y: number; text: string } | null>(null);
+  const [currentSource, setCurrentSource] = useState<PrintoutSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const idbRef = useRef<IDBDatabase | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Focus textarea whenever editingText changes
   useEffect(() => {
@@ -222,6 +284,84 @@ export const PdfEditor: React.FC = () => {
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [editingText]);
+
+  // Auto-open from router state AND restore from IDB — single combined effect so opening a
+  // new file from the Printouts tab preserves any previously-open tabs rather than wiping them.
+  useEffect(() => {
+    const state = location.state as { file?: File; source?: PrintoutSource } | null;
+    const incoming = state?.file;
+
+    const init = async () => {
+      const db = await openIDB();
+      idbRef.current = db;
+
+      // Always load any existing tabs from IDB first
+      const savedState = await idbGet<{ activeTabId: string | null; tabOrder: string[] }>(db, 'editorState', 'current');
+      const restoredTabs: TabSnapshot[] = [];
+
+      if (savedState?.tabOrder.length) {
+        for (const tabId of savedState.tabOrder) {
+          const meta = await idbGet<{ id: string; fileName: string; source?: PrintoutSource; annotations: Annotation[]; history: Annotation[][]; histIdx: number }>(db, 'tabs', tabId);
+          const pdfBuf = await idbGet<ArrayBuffer>(db, 'pdfs', tabId);
+          if (!meta || !pdfBuf) continue;
+          const rendered = await idbGet<RenderedPage[]>(db, 'rendered', tabId);
+          restoredTabs.push({
+            id: meta.id, fileName: meta.fileName, source: meta.source,
+            pdfBytes: pdfBuf, renderedPages: rendered ?? [],
+            annotations: meta.annotations, history: meta.history, histIdx: meta.histIdx,
+          });
+        }
+      }
+
+      if (incoming instanceof File) {
+        // Clear router state so navigating back doesn't re-open
+        window.history.replaceState({}, '');
+        // Pre-populate the tab bar with any already-open tabs before rendering the new file
+        if (restoredTabs.length) setTabs(restoredTabs);
+        // Open new file; pass null currentTabId so we don't overwrite restored annotations
+        await openPdf(incoming, null, restoredTabs, state?.source);
+        return;
+      }
+
+      // No incoming file — just restore persisted state
+      if (!restoredTabs.length) return;
+
+      const ordered = savedState!.tabOrder
+        .map((id) => restoredTabs.find((t) => t.id === id)!)
+        .filter(Boolean);
+
+      const activeTab = ordered.find((t) => t.id === savedState?.activeTabId) ?? ordered[0];
+      annotationsRef.current = activeTab.annotations;
+      historyRef.current = activeTab.history;
+      histIdxRef.current = activeTab.histIdx;
+      renderedPagesRef.current = activeTab.renderedPages;
+      sourceRef.current = activeTab.source ?? null;
+
+      setTabs(ordered);
+      setActiveTabId(activeTab.id);
+      setAnnotations(activeTab.annotations);
+      setHistory(activeTab.history);
+      setHistIdx(activeTab.histIdx);
+      setRenderedPages(activeTab.renderedPages);
+      setPdfBytes(activeTab.pdfBytes);
+      setFileName(activeTab.fileName);
+      setCurrentSource(activeTab.source ?? null);
+
+      if (!activeTab.renderedPages.length && activeTab.pdfBytes.byteLength > 0) {
+        const file = new File([activeTab.pdfBytes], activeTab.fileName, { type: 'application/pdf' });
+        await openPdf(file, null, ordered.filter((t) => t.id !== activeTab.id), activeTab.source);
+      } else {
+        requestAnimationFrame(() => {
+          const container = scrollContainerRef.current;
+          if (!container || !activeTab.renderedPages.length) return;
+          setZoom(clampZoom((container.clientWidth - 48) / activeTab.renderedPages[0].width));
+        });
+      }
+    };
+
+    init().catch(console.error);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Refs mirror state so event handlers always see current values
   const annotationsRef = useRef(annotations);
@@ -235,6 +375,7 @@ export const PdfEditor: React.FC = () => {
   const pendingSigRef = useRef<Signature | null>(pendingSig);
   const selectedIdRef = useRef<string | null>(selectedId);
   const renderedPagesRef = useRef(renderedPages);
+  const sourceRef = useRef<PrintoutSource | null>(null);
 
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
   useEffect(() => { historyRef.current = history; }, [history]);
@@ -245,6 +386,7 @@ export const PdfEditor: React.FC = () => {
   useEffect(() => { pendingSigRef.current = pendingSig; }, [pendingSig]);
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
   useEffect(() => { renderedPagesRef.current = renderedPages; }, [renderedPages]);
+  useEffect(() => { sourceRef.current = currentSource; }, [currentSource]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -381,12 +523,33 @@ export const PdfEditor: React.FC = () => {
     return () => el?.removeEventListener('wheel', handler);
   });
 
+  const saveStateToIDB = useCallback(async () => {
+    const db = idbRef.current;
+    if (!db) return;
+    // Persist editor-level state
+    await idbPut(db, 'editorState', 'current', { activeTabId, tabOrder: tabs.map((t) => t.id) });
+    // Persist each tab's metadata
+    for (const tab of tabs) {
+      await idbPut(db, 'tabs', tab.id, {
+        id: tab.id, fileName: tab.fileName, source: tab.source ?? null,
+        annotations: tab.annotations, history: tab.history, histIdx: tab.histIdx,
+      });
+    }
+  }, [tabs, activeTabId]);
+
+  // Debounced IDB save on every state change
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => { saveStateToIDB(); }, 1500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [annotations, tabs, activeTabId, saveStateToIDB]);
+
   // ── Tab management ────────────────────────────────────────────────────────────
 
   const saveCurrentTabState = useCallback((tabId: string) => {
     setTabs((prev) => prev.map((t) =>
       t.id === tabId
-        ? { ...t, annotations: annotationsRef.current, history: historyRef.current, histIdx: histIdxRef.current }
+        ? { ...t, annotations: annotationsRef.current, history: historyRef.current, histIdx: histIdxRef.current, source: sourceRef.current ?? undefined }
         : t,
     ));
   }, []);
@@ -403,6 +566,7 @@ export const PdfEditor: React.FC = () => {
       historyRef.current = tab.history;
       histIdxRef.current = tab.histIdx;
       renderedPagesRef.current = tab.renderedPages;
+      sourceRef.current = tab.source ?? null;
       setActiveTabId(tabId);
       setAnnotations(tab.annotations);
       setHistory(tab.history);
@@ -410,6 +574,7 @@ export const PdfEditor: React.FC = () => {
       setRenderedPages(tab.renderedPages);
       setPdfBytes(tab.pdfBytes);
       setFileName(tab.fileName);
+      setCurrentSource(tab.source ?? null);
       setSelectedId(null);
       setCurrentAnn(null);
       setCurrentPage(0);
@@ -420,6 +585,13 @@ export const PdfEditor: React.FC = () => {
   const closeTab = useCallback((tabId: string, currentId: string | null, allTabs: TabSnapshot[]) => {
     const remaining = allTabs.filter((t) => t.id !== tabId);
     setTabs(remaining);
+    // Clean up IDB data for closed tab
+    if (idbRef.current) {
+      const db = idbRef.current;
+      idbDel(db, 'tabs', tabId).catch(() => {});
+      idbDel(db, 'pdfs', tabId).catch(() => {});
+      idbDel(db, 'rendered', tabId).catch(() => {});
+    }
     if (tabId !== currentId) return; // closing a non-active tab — no state change needed
 
     if (remaining.length === 0) {
@@ -427,8 +599,10 @@ export const PdfEditor: React.FC = () => {
       setActiveTabId(null);
       annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
       renderedPagesRef.current = [];
+      sourceRef.current = null;
       setAnnotations([]); setHistory([[]]); setHistIdx(0);
       setRenderedPages([]); setPdfBytes(null); setFileName('');
+      setCurrentSource(null);
       setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
     } else {
       // Switch to the nearest remaining tab
@@ -437,16 +611,18 @@ export const PdfEditor: React.FC = () => {
       historyRef.current = newTab.history;
       histIdxRef.current = newTab.histIdx;
       renderedPagesRef.current = newTab.renderedPages;
+      sourceRef.current = newTab.source ?? null;
       setActiveTabId(newTab.id);
       setAnnotations(newTab.annotations); setHistory(newTab.history); setHistIdx(newTab.histIdx);
       setRenderedPages(newTab.renderedPages); setPdfBytes(newTab.pdfBytes); setFileName(newTab.fileName);
+      setCurrentSource(newTab.source ?? null);
       setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
     }
   }, []);
 
   // ── PDF Loading ───────────────────────────────────────────────────────────────
 
-  const openPdf = async (file: File, currentTabId: string | null, currentTabs: TabSnapshot[]) => {
+  const openPdf = async (file: File, currentTabId: string | null, currentTabs: TabSnapshot[], source?: PrintoutSource) => {
     setLoading(true);
     setLoadMsg('Rendering pages…');
 
@@ -463,7 +639,7 @@ export const PdfEditor: React.FC = () => {
     for (let i = 1; i <= pdf.numPages; i++) {
       setLoadMsg(`Rendering page ${i} of ${pdf.numPages}…`);
       const page = await pdf.getPage(i);
-      const vp = page.getViewport({ scale: 1.5 });
+      const vp = page.getViewport({ scale: 2.0 });
       canvas.width = vp.width; canvas.height = vp.height;
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
       await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
@@ -472,7 +648,7 @@ export const PdfEditor: React.FC = () => {
       thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
       thumbCtx.drawImage(canvas, 0, 0, THUMB_W, thumbH);
       pages.push({
-        dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
         thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
         width: vp.width, height: vp.height,
         rotation: vp.rotation,
@@ -488,6 +664,7 @@ export const PdfEditor: React.FC = () => {
     const newTab: TabSnapshot = {
       id: newTabId, fileName: file.name, pdfBytes: buf,
       renderedPages: pages, annotations: [], history: [[]], histIdx: 0,
+      source,
     };
 
     if (currentTabs.length === 0) {
@@ -507,10 +684,19 @@ export const PdfEditor: React.FC = () => {
     setActiveTabId(newTabId);
     annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
     renderedPagesRef.current = pages;
+    sourceRef.current = source ?? null;
     setAnnotations([]); setHistory([[]]); setHistIdx(0);
     setRenderedPages(pages); setPdfBytes(buf); setFileName(file.name);
+    setCurrentSource(source ?? null);
     setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
     setLoading(false);
+
+    // Persist to IndexedDB
+    if (idbRef.current) {
+      const db = idbRef.current;
+      await idbPut(db, 'pdfs', newTabId, buf);
+      await idbPut(db, 'rendered', newTabId, pages);
+    }
 
     // Auto fit-width after load
     requestAnimationFrame(() => {
@@ -724,61 +910,117 @@ export const PdfEditor: React.FC = () => {
     return c;
   };
 
-  const exportPdf = async () => {
+  // Bakes current annotations into the original PDF bytes and returns the new bytes.
+  // Shared between Save (overwrite origin) and Save As (download a copy).
+  const buildAnnotatedPdf = async (): Promise<Uint8Array | null> => {
+    if (!pdfBytes) return null;
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const pdfPages = pdfDoc.getPages();
+
+    for (let i = 0; i < pdfPages.length; i++) {
+      const rp = renderedPagesRef.current[i];
+      if (!rp) continue;
+      const overlay = await renderOverlay(i);
+      if (!overlay) continue;
+
+      const page = pdfPages[i];
+      const { width: rawW, height: rawH } = page.getSize();
+      const rot = page.getRotation().angle;
+
+      // pdfjs already renders the page with /Rotate applied visually, so our overlay
+      // is in the rendered (visual) orientation. pdf-lib's drawImage internally handles
+      // the y-axis difference (PDF y-up) — embedded images are NOT vertically flipped.
+      //
+      // For rotated pages, however, the viewer will apply /Rotate CW to whatever we
+      // embed, so we must counter-rotate the overlay (CCW) back to raw PDF orientation
+      // first. The viewer's later CW rotation then restores the correct visual layout.
+      const prepareCanvas = (src: HTMLCanvasElement, undoCCW: number): HTMLCanvasElement => {
+        if (undoCCW === 0) return src;
+        const swap = undoCCW === 90 || undoCCW === 270;
+        const out = document.createElement('canvas');
+        out.width  = swap ? src.height : src.width;
+        out.height = swap ? src.width  : src.height;
+        const octx = out.getContext('2d')!;
+        octx.translate(out.width / 2, out.height / 2);
+        octx.rotate((-undoCCW * Math.PI) / 180); // negative = CCW in canvas 2D
+        octx.drawImage(src, -src.width / 2, -src.height / 2);
+        return out;
+      };
+
+      const prepared = prepareCanvas(overlay, rot);
+      if (prepared !== overlay) { overlay.width = 0; overlay.height = 0; }
+
+      const overlayBytes = dataUrlToBytes(prepared.toDataURL('image/png'));
+      prepared.width = 0; prepared.height = 0;
+      const overlayImg = await pdfDoc.embedPng(overlayBytes);
+
+      // Always place at the full raw page rect; viewer then applies /Rotate visually
+      page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
+    }
+
+    return await pdfDoc.save();
+  };
+
+  const downloadBytes = (bytes: Uint8Array, downloadName: string) => {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = downloadName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const bytesToDataUrl = (bytes: Uint8Array): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+
+  // Save: if the file originated from a Printout, overwrite it on the server.
+  // Otherwise, download locally using the original filename (no suffix).
+  const savePdf = async () => {
     if (!pdfBytes) return;
     setSaving(true);
     try {
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      const pdfPages = pdfDoc.getPages();
-
-      for (let i = 0; i < pdfPages.length; i++) {
-        const rp = renderedPagesRef.current[i];
-        if (!rp) continue;
-        const overlay = await renderOverlay(i);
-        if (!overlay) continue;
-
-        const page = pdfPages[i];
-        const { width: rawW, height: rawH } = page.getSize();
-        const rot = page.getRotation().angle;
-
-        // pdfjs already renders the page with /Rotate applied visually, so our overlay
-        // is in the rendered (visual) orientation. pdf-lib's drawImage internally handles
-        // the y-axis difference (PDF y-up) — embedded images are NOT vertically flipped.
-        //
-        // For rotated pages, however, the viewer will apply /Rotate CW to whatever we
-        // embed, so we must counter-rotate the overlay (CCW) back to raw PDF orientation
-        // first. The viewer's later CW rotation then restores the correct visual layout.
-        const prepareCanvas = (src: HTMLCanvasElement, undoCCW: number): HTMLCanvasElement => {
-          if (undoCCW === 0) return src;
-          const swap = undoCCW === 90 || undoCCW === 270;
-          const out = document.createElement('canvas');
-          out.width  = swap ? src.height : src.width;
-          out.height = swap ? src.width  : src.height;
-          const octx = out.getContext('2d')!;
-          octx.translate(out.width / 2, out.height / 2);
-          octx.rotate((-undoCCW * Math.PI) / 180); // negative = CCW in canvas 2D
-          octx.drawImage(src, -src.width / 2, -src.height / 2);
-          return out;
-        };
-
-        const prepared = prepareCanvas(overlay, rot);
-        if (prepared !== overlay) { overlay.width = 0; overlay.height = 0; }
-
-        const overlayBytes = dataUrlToBytes(prepared.toDataURL('image/png'));
-        prepared.width = 0; prepared.height = 0;
-        const overlayImg = await pdfDoc.embedPng(overlayBytes);
-
-        // Always place at the full raw page rect; viewer then applies /Rotate visually
-        page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
+      const bytes = await buildAnnotatedPdf();
+      if (!bytes) return;
+      if (currentSource) {
+        const dataUrl = await bytesToDataUrl(bytes);
+        await saveFile(currentSource.fileId, dataUrl);
+        // Replace the tab's pdfBytes so subsequent saves build from the annotated version,
+        // and clear the annotations/history since they are now baked into the PDF.
+        const newBuf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        setPdfBytes(newBuf);
+        annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
+        setAnnotations([]); setHistory([[]]); setHistIdx(0);
+        setSelectedId(null);
+        toast('Saved to Printouts', { type: 'success' });
+      } else {
+        downloadBytes(bytes, fileName || 'document.pdf');
       }
+    } catch (err) {
+      console.error('Save failed', err);
+      toast('Save failed', { type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
 
-      const saved = await pdfDoc.save();
-      const url = URL.createObjectURL(new Blob([saved], { type: 'application/pdf' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName.replace(/\.pdf$/i, '') + '_annotated.pdf';
-      a.click();
-      URL.revokeObjectURL(url);
+  // Save As: always download a local copy with an _annotated suffix
+  const saveAsPdf = async () => {
+    if (!pdfBytes) return;
+    setSaving(true);
+    try {
+      const bytes = await buildAnnotatedPdf();
+      if (!bytes) return;
+      const base = (fileName || 'document').replace(/\.pdf$/i, '');
+      downloadBytes(bytes, `${base}_annotated.pdf`);
+    } catch (err) {
+      console.error('Save As failed', err);
+      toast('Save As failed', { type: 'error' });
     } finally {
       setSaving(false);
     }
@@ -996,11 +1238,20 @@ export const PdfEditor: React.FC = () => {
           <FolderOpen size={16} /> Open
         </button>
         <button
-          onClick={exportPdf}
+          onClick={savePdf}
           disabled={!hasPdf || saving}
+          title={currentSource ? 'Save over the original Printout' : 'Save a local copy'}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 dark:bg-slate-600 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-40 transition-colors"
         >
-          <Save size={16} /> {saving ? 'Saving…' : 'Save PDF'}
+          <Save size={16} /> {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          onClick={saveAsPdf}
+          disabled={!hasPdf || saving}
+          title="Save a local copy with a new name"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 dark:bg-slate-700 text-white text-sm font-medium hover:bg-slate-600 disabled:opacity-40 transition-colors"
+        >
+          <Download size={16} /> Save As
         </button>
 
         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
