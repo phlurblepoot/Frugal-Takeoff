@@ -284,7 +284,7 @@ async function renderPageToDataUrl(
       if (hasMeasurements) {
         const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
         const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
-        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : String(roundUpTo100(totalRealValue));
+        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
         legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
       }
     });
@@ -926,9 +926,9 @@ export const ProjectView: React.FC = () => {
         return {
           'Takeoff Name': t.name,
           'Type': t.type,
-          'Total Quantity': t.type === 'count' ? t.totalRealValue : roundUpTo100(t.totalRealValue),
+          'Total Quantity': t.totalRealValue,
           'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Total Cost': totalCost
+          'Total Cost': roundUpTo100(totalCost)
         };
       });
 
@@ -1120,7 +1120,7 @@ export const ProjectView: React.FC = () => {
       pdf.setFontSize(28);
       pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
-      pdf.text(formatCurrency(grandTotal), W / 2, boxTop + 60, { align: 'center' });
+      pdf.text(formatCurrency(roundUpTo100(grandTotal)), W / 2, boxTop + 60, { align: 'center' });
 
       // Valid until
       if (validUntil) {
@@ -1255,13 +1255,13 @@ export const ProjectView: React.FC = () => {
         pdf.setFont(font, 'normal');
         pdf.setTextColor(71, 85, 105);
         pdf.text(t.type, COL.type, y);
-        pdf.text(String(t.type === 'count' ? Math.round(t.totalRealValue) : roundUpTo100(t.totalRealValue)), COL.qty, y);
+        pdf.text(t.totalRealValue.toFixed(2), COL.qty, y);
         pdf.text(unitLabel, COL.unit, y);
 
         // Cost
         pdf.setFont(font, 'bold');
         pdf.setTextColor(15, 23, 42);
-        pdf.text(formatCurrency(totalCost), COL.cost, y, { align: 'right' });
+        pdf.text(formatCurrency(roundUpTo100(totalCost)), COL.cost, y, { align: 'right' });
 
         // Subtle bottom separator line
         pdf.setDrawColor(226, 232, 240);
@@ -1339,7 +1339,7 @@ export const ProjectView: React.FC = () => {
         // Package subtotal (right-aligned in header)
         const pkgTotal = takeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
         pdf.setTextColor(100, 116, 139);
-        pdf.text(formatCurrency(pkgTotal), COL.cost, y + 2, { align: 'right' });
+        pdf.text(formatCurrency(roundUpTo100(pkgTotal)), COL.cost, y + 2, { align: 'right' });
 
         y += 22;
         rowIndex = 0; // reset alternating stripes per group
@@ -1375,7 +1375,7 @@ export const ProjectView: React.FC = () => {
       pdf.setFont(font, 'bold');
       pdf.setTextColor(15, 23, 42);
       pdf.text('TOTAL', COL.name, y);
-      pdf.text(formatCurrency(grandTotal), COL.cost, y, { align: 'right' });
+      pdf.text(formatCurrency(roundUpTo100(grandTotal)), COL.cost, y, { align: 'right' });
 
       // Footer on last takeoff page
       pdf.setFontSize(9);
@@ -2604,7 +2604,7 @@ export const ProjectView: React.FC = () => {
                               {takeoff.type}
                             </td>
                             <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
-                              {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.type === 'count' ? takeoff.totalRealValue : roundUpTo100(takeoff.totalRealValue), takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                              {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                             </td>
                             <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
                               {takeoff.isAdvancedCost ? (
@@ -2618,7 +2618,7 @@ export const ProjectView: React.FC = () => {
                             </td>
                             <td className="px-6 py-4 text-right font-bold text-accent-600 dark:text-accent-400">
                               <div className="flex flex-col items-end">
-                                <span>{totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}</span>
+                                <span>{totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}</span>
                                 {takeoff.isAdvancedCost && costDetails.map((d, i) => (
                                   d.quantity !== undefined && d.quantity > 0 && (
                                     <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
@@ -2751,12 +2751,12 @@ export const ProjectView: React.FC = () => {
 
                         <div className="text-slate-500 dark:text-slate-400">Quantity</div>
                         <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
-                          {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.type === 'count' ? takeoff.totalRealValue : roundUpTo100(takeoff.totalRealValue), takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                          {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                         </div>
 
                         <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
                         <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
-                          {totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                          {totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}
                         </div>
                       </div>
 
