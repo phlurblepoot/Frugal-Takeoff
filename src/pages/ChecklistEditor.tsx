@@ -79,8 +79,8 @@ interface ChecklistItem {
   location: string;
   done: boolean;
   order: number;
-  beforePhotoId?: string;
-  afterPhotoId?: string;
+  beforePhotoIds?: string[];
+  afterPhotoIds?: string[];
   createdAt: number;
 }
 
@@ -103,22 +103,25 @@ interface Checklist {
 interface ItemCardProps {
   item: ChecklistItem;
   expanded: boolean;
-  beforePhoto?: string;
-  afterPhoto?: string;
+  beforePhotos?: string[];
+  afterPhotos?: string[];
   onToggle: () => void;
   onExpand: () => void;
   onUpdate: (patch: Partial<ChecklistItem>) => void;
   onDelete: () => void;
   onPhotoUpload: (type: 'before' | 'after', file: File) => void;
-  onRemovePhoto: (type: 'before' | 'after') => void;
+  onRemovePhoto: (type: 'before' | 'after', index: number) => void;
 }
 
 const ItemCard: React.FC<ItemCardProps> = ({
-  item, expanded, beforePhoto, afterPhoto,
+  item, expanded, beforePhotos, afterPhotos,
   onToggle, onExpand, onUpdate, onDelete, onPhotoUpload, onRemovePhoto,
 }) => {
   const beforeRef = useRef<HTMLInputElement>(null);
   const afterRef = useRef<HTMLInputElement>(null);
+  const bPhotos = beforePhotos ?? [];
+  const aPhotos = afterPhotos ?? [];
+  const totalThumbs = bPhotos.length + aPhotos.length;
 
   return (
     <div className={`bg-white dark:bg-slate-900 rounded-xl border transition-all ${
@@ -156,14 +159,19 @@ const ItemCard: React.FC<ItemCardProps> = ({
 
         {/* Photo thumbnails */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {beforePhoto && (
-            <div className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
-              <img src={beforePhoto} className="w-full h-full object-cover" alt="before" />
+          {bPhotos.slice(0, 2).map((src, i) => (
+            <div key={`b${i}`} className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+              <img src={src} className="w-full h-full object-cover" alt="before" />
             </div>
-          )}
-          {afterPhoto && (
-            <div className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
-              <img src={afterPhoto} className="w-full h-full object-cover" alt="after" />
+          ))}
+          {aPhotos.slice(0, 2).map((src, i) => (
+            <div key={`a${i}`} className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+              <img src={src} className="w-full h-full object-cover" alt="after" />
+            </div>
+          ))}
+          {totalThumbs > 4 && (
+            <div className="h-7 px-1.5 rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-medium text-slate-500">
+              +{totalThumbs - 4}
             </div>
           )}
         </div>
@@ -201,56 +209,74 @@ const ItemCard: React.FC<ItemCardProps> = ({
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            {/* Before photo */}
+            {/* Before photos */}
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Before Photo</label>
-              {beforePhoto ? (
-                <div className="relative group">
-                  <img src={beforePhoto} className="w-full h-32 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt="before" />
-                  <button
-                    onClick={() => onRemovePhoto('before')}
-                    className="absolute top-1.5 right-1.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={12} />
-                  </button>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+                Before Photos {bPhotos.length > 0 && <span className="text-slate-400">({bPhotos.length})</span>}
+              </label>
+              {bPhotos.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  {bPhotos.map((src, idx) => (
+                    <div key={idx} className="relative group">
+                      <img src={src} className="w-full h-24 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt={`before ${idx + 1}`} />
+                      <button
+                        onClick={() => onRemovePhoto('before', idx)}
+                        className="absolute top-1 right-1 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ) : (
-                <button
-                  onClick={() => beforeRef.current?.click()}
-                  className="w-full h-32 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors"
-                >
-                  <Camera size={20} />
-                  <span className="text-xs font-medium">Add Before</span>
-                </button>
               )}
-              <input ref={beforeRef} type="file" accept="image/*" className="hidden"
-                onChange={e => { if (e.target.files?.[0]) onPhotoUpload('before', e.target.files[0]); e.target.value = ''; }} />
+              <button
+                onClick={() => beforeRef.current?.click()}
+                className="w-full py-2.5 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex items-center justify-center gap-1.5 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors text-xs font-medium"
+              >
+                <Camera size={14} /> Add Before Photo
+              </button>
+              <input ref={beforeRef} type="file" accept="image/*" multiple className="hidden"
+                onChange={e => {
+                  if (e.target.files) {
+                    Array.from(e.target.files).forEach(f => onPhotoUpload('before', f));
+                  }
+                  e.target.value = '';
+                }} />
             </div>
 
-            {/* After photo */}
+            {/* After photos */}
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">After Photo</label>
-              {afterPhoto ? (
-                <div className="relative group">
-                  <img src={afterPhoto} className="w-full h-32 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt="after" />
-                  <button
-                    onClick={() => onRemovePhoto('after')}
-                    className="absolute top-1.5 right-1.5 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={12} />
-                  </button>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+                After Photos {aPhotos.length > 0 && <span className="text-slate-400">({aPhotos.length})</span>}
+              </label>
+              {aPhotos.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  {aPhotos.map((src, idx) => (
+                    <div key={idx} className="relative group">
+                      <img src={src} className="w-full h-24 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt={`after ${idx + 1}`} />
+                      <button
+                        onClick={() => onRemovePhoto('after', idx)}
+                        className="absolute top-1 right-1 p-0.5 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ) : (
-                <button
-                  onClick={() => afterRef.current?.click()}
-                  className="w-full h-32 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors"
-                >
-                  <Camera size={20} />
-                  <span className="text-xs font-medium">Add After</span>
-                </button>
               )}
-              <input ref={afterRef} type="file" accept="image/*" className="hidden"
-                onChange={e => { if (e.target.files?.[0]) onPhotoUpload('after', e.target.files[0]); e.target.value = ''; }} />
+              <button
+                onClick={() => afterRef.current?.click()}
+                className="w-full py-2.5 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg flex items-center justify-center gap-1.5 text-slate-400 hover:border-accent-400 hover:text-accent-500 transition-colors text-xs font-medium"
+              >
+                <Camera size={14} /> Add After Photo
+              </button>
+              <input ref={afterRef} type="file" accept="image/*" multiple className="hidden"
+                onChange={e => {
+                  if (e.target.files) {
+                    Array.from(e.target.files).forEach(f => onPhotoUpload('after', f));
+                  }
+                  e.target.value = '';
+                }} />
             </div>
           </div>
 
@@ -277,8 +303,8 @@ export const ChecklistEditor: React.FC = () => {
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
-  const [beforePhotos, setBeforePhotos] = useState<Record<string, string>>({});
-  const [afterPhotos, setAfterPhotos] = useState<Record<string, string>>({});
+  const [beforePhotos, setBeforePhotos] = useState<Record<string, string[]>>({});
+  const [afterPhotos, setAfterPhotos] = useState<Record<string, string[]>>({});
   const [generating, setGenerating] = useState(false);
 
   const dbRef = useRef<IDBDatabase | null>(null);
@@ -321,16 +347,24 @@ export const ChecklistEditor: React.FC = () => {
   }, []);
 
   const loadPhotos = async (db: IDBDatabase, list: Checklist) => {
-    const before: Record<string, string> = {};
-    const after: Record<string, string> = {};
+    const before: Record<string, string[]> = {};
+    const after: Record<string, string[]> = {};
     for (const item of list.items) {
-      if (item.beforePhotoId) {
-        const p = await idbGet<string>(db, 'photos', item.beforePhotoId);
-        if (p) before[item.id] = p;
+      if (item.beforePhotoIds?.length) {
+        const photos: string[] = [];
+        for (const pid of item.beforePhotoIds) {
+          const p = await idbGet<string>(db, 'photos', pid);
+          if (p) photos.push(p);
+        }
+        if (photos.length) before[item.id] = photos;
       }
-      if (item.afterPhotoId) {
-        const p = await idbGet<string>(db, 'photos', item.afterPhotoId);
-        if (p) after[item.id] = p;
+      if (item.afterPhotoIds?.length) {
+        const photos: string[] = [];
+        for (const pid of item.afterPhotoIds) {
+          const p = await idbGet<string>(db, 'photos', pid);
+          if (p) photos.push(p);
+        }
+        if (photos.length) after[item.id] = photos;
       }
     }
     setBeforePhotos(before);
@@ -382,8 +416,8 @@ export const ChecklistEditor: React.FC = () => {
     const list = checklists.find(c => c.id === id);
     if (db && list) {
       for (const item of list.items) {
-        if (item.beforePhotoId) await idbDelete(db, 'photos', item.beforePhotoId);
-        if (item.afterPhotoId) await idbDelete(db, 'photos', item.afterPhotoId);
+        for (const pid of item.beforePhotoIds ?? []) await idbDelete(db, 'photos', pid);
+        for (const pid of item.afterPhotoIds ?? []) await idbDelete(db, 'photos', pid);
       }
       for (const po of list.printouts) {
         await idbDelete(db, 'pdfs', po.id);
@@ -442,8 +476,8 @@ export const ChecklistEditor: React.FC = () => {
     const db = dbRef.current;
     const item = active?.items.find(i => i.id === itemId);
     if (db && item) {
-      if (item.beforePhotoId) await idbDelete(db, 'photos', item.beforePhotoId);
-      if (item.afterPhotoId) await idbDelete(db, 'photos', item.afterPhotoId);
+      for (const pid of item.beforePhotoIds ?? []) await idbDelete(db, 'photos', pid);
+      for (const pid of item.afterPhotoIds ?? []) await idbDelete(db, 'photos', pid);
     }
     setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
     setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
@@ -458,30 +492,53 @@ export const ChecklistEditor: React.FC = () => {
     const reader = new FileReader();
     reader.onload = async (e) => {
       const dataUrl = e.target?.result as string;
-      const photoId = `${itemId}_${type}`;
+      const photoId = `${itemId}_${type}_${nanoid()}`;
       const db = dbRef.current;
       if (db) await idbPut(db, 'photos', dataUrl, photoId);
+
+      const list = checklistsRef.current.find(c => c.id === activeIdRef.current);
+      const currentItem = list?.items.find(i => i.id === itemId);
+      if (!currentItem) return;
+
       if (type === 'before') {
-        setBeforePhotos(p => ({ ...p, [itemId]: dataUrl }));
-        updateItem(itemId, { beforePhotoId: photoId });
+        const newIds = [...(currentItem.beforePhotoIds ?? []), photoId];
+        setBeforePhotos(p => ({ ...p, [itemId]: [...(p[itemId] ?? []), dataUrl] }));
+        updateItem(itemId, { beforePhotoIds: newIds });
       } else {
-        setAfterPhotos(p => ({ ...p, [itemId]: dataUrl }));
-        updateItem(itemId, { afterPhotoId: photoId });
+        const newIds = [...(currentItem.afterPhotoIds ?? []), photoId];
+        setAfterPhotos(p => ({ ...p, [itemId]: [...(p[itemId] ?? []), dataUrl] }));
+        updateItem(itemId, { afterPhotoIds: newIds });
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleRemovePhoto = async (itemId: string, type: 'before' | 'after') => {
+  const handleRemovePhoto = async (itemId: string, type: 'before' | 'after', index: number) => {
     const db = dbRef.current;
-    const photoId = `${itemId}_${type}`;
-    if (db) await idbDelete(db, 'photos', photoId);
+    const list = checklistsRef.current.find(c => c.id === activeIdRef.current);
+    const currentItem = list?.items.find(i => i.id === itemId);
+    if (!currentItem) return;
+
     if (type === 'before') {
-      setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
-      updateItem(itemId, { beforePhotoId: undefined });
+      const ids = currentItem.beforePhotoIds ?? [];
+      const photoId = ids[index];
+      if (db && photoId) await idbDelete(db, 'photos', photoId);
+      setBeforePhotos(p => {
+        const photos = [...(p[itemId] ?? [])];
+        photos.splice(index, 1);
+        return { ...p, [itemId]: photos };
+      });
+      updateItem(itemId, { beforePhotoIds: ids.filter((_, i) => i !== index) });
     } else {
-      setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
-      updateItem(itemId, { afterPhotoId: undefined });
+      const ids = currentItem.afterPhotoIds ?? [];
+      const photoId = ids[index];
+      if (db && photoId) await idbDelete(db, 'photos', photoId);
+      setAfterPhotos(p => {
+        const photos = [...(p[itemId] ?? [])];
+        photos.splice(index, 1);
+        return { ...p, [itemId]: photos };
+      });
+      updateItem(itemId, { afterPhotoIds: ids.filter((_, i) => i !== index) });
     }
   };
 
@@ -528,11 +585,48 @@ export const ChecklistEditor: React.FC = () => {
         y += 28;
       };
 
+      const PHOTO_W = 95;
+      const PHOTO_H = 70;
+      const PHOTO_GAP = 8;
+      const PHOTO_LABEL_H = 10;
+      const PHOTOS_PER_ROW = 4;
+      const photoRowH = PHOTO_H + PHOTO_GAP;
+      const photoGroupH = (count: number) =>
+        count > 0 ? PHOTO_LABEL_H + Math.ceil(count / PHOTOS_PER_ROW) * photoRowH : 0;
+
+      const drawPhotoGroup = (
+        label: string, photos: string[], startX: number, startY: number, maxWidth: number,
+      ): number => {
+        if (photos.length === 0) return 0;
+        pdf.setFontSize(7);
+        pdf.setTextColor(148, 163, 184);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(label, startX, startY + 7);
+        let row = 0;
+        let col = 0;
+        const perRow = Math.max(1, Math.min(PHOTOS_PER_ROW, Math.floor((maxWidth + PHOTO_GAP) / (PHOTO_W + PHOTO_GAP))));
+        for (const src of photos) {
+          const px = startX + col * (PHOTO_W + PHOTO_GAP);
+          const py = startY + PHOTO_LABEL_H + row * photoRowH;
+          const fmt = src.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+          try { pdf.addImage(src, fmt, px, py, PHOTO_W, PHOTO_H); } catch { /* ignore bad image */ }
+          col++;
+          if (col >= perRow) { col = 0; row++; }
+        }
+        return PHOTO_LABEL_H + Math.ceil(photos.length / perRow) * photoRowH;
+      };
+
       const drawItem = (item: ChecklistItem, index: number, isDone: boolean) => {
-        const bPhoto = beforePhotos[item.id];
-        const aPhoto = afterPhotos[item.id];
-        const hasPhotos = !!(bPhoto || aPhoto);
-        const boxH = hasPhotos ? 165 : 72;
+        const bPhotosArr = beforePhotos[item.id] ?? [];
+        const aPhotosArr = afterPhotos[item.id] ?? [];
+        const hasPhotos = bPhotosArr.length > 0 || aPhotosArr.length > 0;
+
+        const photosTotalH =
+          photoGroupH(bPhotosArr.length) +
+          (bPhotosArr.length > 0 && aPhotosArr.length > 0 ? 6 : 0) +
+          photoGroupH(aPhotosArr.length);
+
+        const boxH = hasPhotos ? 52 + photosTotalH + 12 : 72;
 
         if (y + boxH > H - margin) { pdf.addPage(); y = margin; }
 
@@ -555,7 +649,6 @@ export const ChecklistEditor: React.FC = () => {
           pdf.setFillColor(34, 197, 94);
           pdf.setDrawColor(34, 197, 94);
           pdf.rect(cx, cy, 14, 14, 'F');
-          // checkmark lines
           pdf.setDrawColor(255, 255, 255);
           pdf.setLineWidth(1.5);
           pdf.line(cx + 2, cy + 7, cx + 5, cy + 11);
@@ -573,7 +666,7 @@ export const ChecklistEditor: React.FC = () => {
         pdf.text(`${index + 1}`, cx + 7, cy - 2, { align: 'center' });
 
         const tx = cx + 22;
-        const tw = hasPhotos ? W - margin * 2 - 22 - 20 - 220 : W - margin * 2 - 22 - 20;
+        const tw = W - margin * 2 - 22 - 20 - 80;
 
         // Description
         pdf.setTextColor(isDone ? 71 : 15, isDone ? 85 : 23, isDone ? 105 : 42);
@@ -607,27 +700,14 @@ export const ChecklistEditor: React.FC = () => {
 
         // Photos
         if (hasPhotos) {
-          const photoY = y + 52;
-          const photoW = 95;
-          const photoH = 70;
-          let photoX = tx;
-
-          if (bPhoto) {
-            pdf.setFontSize(7);
-            pdf.setTextColor(148, 163, 184);
-            pdf.setFont('helvetica', 'bold');
-            pdf.text('BEFORE', photoX, photoY - 2);
-            const fmt = bPhoto.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-            pdf.addImage(bPhoto, fmt, photoX, photoY, photoW, photoH);
-            photoX += photoW + 10;
+          const photoMaxW = W - margin * 2 - (tx - margin) - 16;
+          let photoY = y + 52;
+          if (bPhotosArr.length > 0) {
+            const used = drawPhotoGroup('BEFORE', bPhotosArr, tx, photoY, photoMaxW);
+            photoY += used + (aPhotosArr.length > 0 ? 6 : 0);
           }
-          if (aPhoto) {
-            pdf.setFontSize(7);
-            pdf.setTextColor(148, 163, 184);
-            pdf.setFont('helvetica', 'bold');
-            pdf.text('AFTER', photoX, photoY - 2);
-            const fmt = aPhoto.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-            pdf.addImage(aPhoto, fmt, photoX, photoY, photoW, photoH);
+          if (aPhotosArr.length > 0) {
+            drawPhotoGroup('AFTER', aPhotosArr, tx, photoY, photoMaxW);
           }
         }
 
@@ -864,14 +944,14 @@ export const ChecklistEditor: React.FC = () => {
                         key={item.id}
                         item={item}
                         expanded={expandedItemId === item.id}
-                        beforePhoto={beforePhotos[item.id]}
-                        afterPhoto={afterPhotos[item.id]}
+                        beforePhotos={beforePhotos[item.id]}
+                        afterPhotos={afterPhotos[item.id]}
                         onToggle={() => updateItem(item.id, { done: true })}
                         onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
                         onUpdate={patch => updateItem(item.id, patch)}
                         onDelete={() => deleteItem(item.id)}
                         onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
-                        onRemovePhoto={type => handleRemovePhoto(item.id, type)}
+                        onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
                       />
                     ))}
 
@@ -893,14 +973,14 @@ export const ChecklistEditor: React.FC = () => {
                           key={item.id}
                           item={item}
                           expanded={expandedItemId === item.id}
-                          beforePhoto={beforePhotos[item.id]}
-                          afterPhoto={afterPhotos[item.id]}
+                          beforePhotos={beforePhotos[item.id]}
+                          afterPhotos={afterPhotos[item.id]}
                           onToggle={() => updateItem(item.id, { done: false })}
                           onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
                           onUpdate={patch => updateItem(item.id, patch)}
                           onDelete={() => deleteItem(item.id)}
                           onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
-                          onRemovePhoto={type => handleRemovePhoto(item.id, type)}
+                          onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
                         />
                       ))}
                     </div>
