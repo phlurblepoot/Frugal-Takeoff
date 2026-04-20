@@ -8,12 +8,13 @@ import {
 import { jsPDF } from 'jspdf';
 import { saveFile, getFile, createShare, getSettings, getChecklists, saveChecklist, deleteChecklist } from '../utils/store';
 
-// ─── IDB (printout PDF cache only) ───────────────────────────────────────────
-// Checklist data and photos are stored server-side. IDB is kept only as a local
-// cache for generated PDF data URLs so View works without a round-trip.
+// ─── IDB helpers ─────────────────────────────────────────────────────────────
+// The legacy 'checklist-db' stored everything locally. New code uses the server.
+// 'checklist-pdfs' is kept as a local cache for generated PDF blobs only.
 
 const PDF_DB_NAME = 'checklist-pdfs';
 const PDF_DB_VERSION = 1;
+const LEGACY_DB_NAME = 'checklist-db';
 
 function openPdfIDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -25,6 +26,97 @@ function openPdfIDB(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+// Opens the legacy IDB if it exists (returns null if absent or on error).
+function openLegacyIDB(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    const probe = indexedDB.open(LEGACY_DB_NAME);
+    probe.onupgradeneeded = () => {
+      // DB didn't exist — abort so we leave no trace
+      probe.transaction?.abort();
+      probe.result.close();
+      resolve(null);
+    };
+    probe.onsuccess = () => resolve(probe.result);
+    probe.onerror = () => resolve(null);
+  });
+}
+
+function idbGetAllKeysFromStore(db: IDBDatabase, store: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    try {
+      if (!db.objectStoreNames.contains(store)) { resolve([]); return; }
+      const req = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+      req.onsuccess = () => resolve(req.result as string[]);
+      req.onerror = () => resolve([]);
+    } catch { resolve([]); }
+  });
+}
+
+function idbGetFromStore<T>(db: IDBDatabase, store: string, key: string): Promise<T | null> {
+  return new Promise((resolve) => {
+    try {
+      if (!db.objectStoreNames.contains(store)) { resolve(null); return; }
+      const req = db.transaction(store, 'readonly').objectStore(store).get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+
+// One-time migration: read all data from legacy IDB and push to server.
+// Runs only if localStorage flag 'checklist-migrated' is not set.
+async function migrateFromLegacyIDB(): Promise<Checklist[]> {
+  if (localStorage.getItem('checklist-migrated')) return [];
+  const db = await openLegacyIDB();
+  if (!db) { localStorage.setItem('checklist-migrated', '1'); return []; }
+
+  try {
+    const keys = await idbGetAllKeysFromStore(db, 'checklists');
+    if (keys.length === 0) { localStorage.setItem('checklist-migrated', '1'); return []; }
+
+    const migrated: Checklist[] = [];
+    for (const key of keys) {
+      const list = await idbGetFromStore<Checklist>(db, 'checklists', key);
+      if (!list) continue;
+
+      // Migrate photos: read from legacy 'photos' store and upload to server
+      for (const item of list.items) {
+        const newBeforeIds: string[] = [];
+        for (const pid of item.beforePhotoIds ?? []) {
+          const dataUrl = await idbGetFromStore<string>(db, 'photos', pid);
+          if (dataUrl) {
+            const newId = `checklist-photo-${nanoid()}`;
+            await saveFile(newId, dataUrl).catch(() => {});
+            newBeforeIds.push(newId);
+          }
+        }
+        if (newBeforeIds.length) item.beforePhotoIds = newBeforeIds;
+
+        const newAfterIds: string[] = [];
+        for (const pid of item.afterPhotoIds ?? []) {
+          const dataUrl = await idbGetFromStore<string>(db, 'photos', pid);
+          if (dataUrl) {
+            const newId = `checklist-photo-${nanoid()}`;
+            await saveFile(newId, dataUrl).catch(() => {});
+            newAfterIds.push(newId);
+          }
+        }
+        if (newAfterIds.length) item.afterPhotoIds = newAfterIds;
+      }
+
+      await saveChecklist(list).catch(() => {});
+      migrated.push(list);
+    }
+
+    localStorage.setItem('checklist-migrated', '1');
+    return migrated;
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
 }
 
 function idbGet<T>(db: IDBDatabase, store: string, key: string): Promise<T | undefined> {
@@ -366,6 +458,9 @@ export const ChecklistEditor: React.FC = () => {
     (async () => {
       // Open PDF IDB cache
       pdfDbRef.current = await openPdfIDB().catch(() => null);
+
+      // One-time migration from legacy local-only IDB to server storage
+      await migrateFromLegacyIDB().catch(console.error);
 
       // Load checklists from server
       const loaded = await getChecklists().catch(() => [] as Checklist[]);
