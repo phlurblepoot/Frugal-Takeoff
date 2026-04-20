@@ -6,23 +6,21 @@ import {
   ChevronDown, ChevronUp, X, Edit2, Check, Share2,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import { saveFile, getFile, createShare, getSettings } from '../utils/store';
+import { saveFile, getFile, createShare, getSettings, getChecklists, saveChecklist, deleteChecklist } from '../utils/store';
 
-// ─── IDB ─────────────────────────────────────────────────────────────────────
+// ─── IDB (printout PDF cache only) ───────────────────────────────────────────
+// Checklist data and photos are stored server-side. IDB is kept only as a local
+// cache for generated PDF data URLs so View works without a round-trip.
 
-const DB_NAME = 'checklist-db';
-const DB_VERSION = 1;
+const PDF_DB_NAME = 'checklist-pdfs';
+const PDF_DB_VERSION = 1;
 
-function openIDB(): Promise<IDBDatabase> {
+function openPdfIDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(PDF_DB_NAME, PDF_DB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = (e.target as IDBOpenDBRequest).result;
-      for (const name of ['checklists', 'photos', 'pdfs', 'state'] as const) {
-        if (!db.objectStoreNames.contains(name)) {
-          db.createObjectStore(name);
-        }
-      }
+      if (!db.objectStoreNames.contains('pdfs')) db.createObjectStore('pdfs');
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -49,22 +47,6 @@ function idbDelete(db: IDBDatabase, store: string, key: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const req = db.transaction(store, 'readwrite').objectStore(store).delete(key);
     req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function idbGetAll<T>(db: IDBDatabase, store: string): Promise<T[]> {
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(store, 'readonly').objectStore(store).getAll();
-    req.onsuccess = () => resolve(req.result as T[]);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function idbGetAllKeys(db: IDBDatabase, store: string): Promise<IDBValidKey[]> {
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
-    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
@@ -365,8 +347,9 @@ export const ChecklistEditor: React.FC = () => {
   const [beforePhotos, setBeforePhotos] = useState<Record<string, string[]>>({});
   const [afterPhotos, setAfterPhotos] = useState<Record<string, string[]>>({});
   const [generating, setGenerating] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const dbRef = useRef<IDBDatabase | null>(null);
+  const pdfDbRef = useRef<IDBDatabase | null>(null);
   const checklistsRef = useRef(checklists);
   const activeIdRef = useRef(activeId);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -381,71 +364,59 @@ export const ChecklistEditor: React.FC = () => {
   // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const db = await openIDB();
-      dbRef.current = db;
+      // Open PDF IDB cache
+      pdfDbRef.current = await openPdfIDB().catch(() => null);
 
-      // Checklists are stored with their id as key
-      const keys = await idbGetAllKeys(db, 'checklists') as string[];
-      const loaded: Checklist[] = [];
-      for (const key of keys) {
-        const c = await idbGet<Checklist>(db, 'checklists', key);
-        if (c) loaded.push(c);
-      }
-      loaded.sort((a, b) => a.createdAt - b.createdAt);
+      // Load checklists from server
+      const loaded = await getChecklists().catch(() => [] as Checklist[]);
+      setChecklists(loaded);
 
-      const state = await idbGet<{ activeId: string | null }>(db, 'state', 'current');
-      if (loaded.length > 0) {
-        setChecklists(loaded);
-        const aid = state?.activeId && loaded.find(c => c.id === state.activeId)
-          ? state.activeId : loaded[0].id;
-        setActiveId(aid);
+      // Restore last active list from localStorage
+      const savedId = localStorage.getItem('checklist-activeId');
+      const aid = (savedId && loaded.find(c => c.id === savedId)) ? savedId : loaded[0]?.id ?? null;
+      setActiveId(aid);
+
+      if (aid) {
         const list = loaded.find(c => c.id === aid);
-        if (list) await loadPhotos(db, list);
+        if (list) await loadPhotosForList(list);
       }
+      setLoading(false);
     })().catch(console.error);
   }, []);
 
-  const loadPhotos = async (db: IDBDatabase, list: Checklist) => {
+  const loadPhotosForList = async (list: Checklist) => {
+    const allIds = list.items.flatMap(item => [
+      ...(item.beforePhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'before' as const })),
+      ...(item.afterPhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'after' as const })),
+    ]);
     const before: Record<string, string[]> = {};
     const after: Record<string, string[]> = {};
-    for (const item of list.items) {
-      if (item.beforePhotoIds?.length) {
-        const photos: string[] = [];
-        for (const pid of item.beforePhotoIds) {
-          const p = await idbGet<string>(db, 'photos', pid);
-          if (p) photos.push(p);
-        }
-        if (photos.length) before[item.id] = photos;
+    await Promise.all(allIds.map(async ({ pid, itemId, type }) => {
+      const url = await getFile(pid).catch(() => null);
+      if (!url) return;
+      if (type === 'before') {
+        before[itemId] = [...(before[itemId] ?? []), url];
+      } else {
+        after[itemId] = [...(after[itemId] ?? []), url];
       }
-      if (item.afterPhotoIds?.length) {
-        const photos: string[] = [];
-        for (const pid of item.afterPhotoIds) {
-          const p = await idbGet<string>(db, 'photos', pid);
-          if (p) photos.push(p);
-        }
-        if (photos.length) after[item.id] = photos;
-      }
-    }
+    }));
     setBeforePhotos(before);
     setAfterPhotos(after);
   };
 
   // ── Persistence ─────────────────────────────────────────────────────────────
-  const persist = useCallback((lists: Checklist[], aid: string | null) => {
+  const persist = useCallback((lists: Checklist[]) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      const db = dbRef.current;
-      if (!db) return;
-      for (const list of lists) {
-        await idbPut(db, 'checklists', list, list.id);
-      }
-      await idbPut(db, 'state', { activeId: aid }, 'current');
+      const aid = activeIdRef.current;
+      const list = lists.find(c => c.id === aid);
+      if (list) await saveChecklist(list).catch(console.error);
     }, 700);
   }, []);
 
   const setLists = useCallback((updated: Checklist[]) => {
     setChecklists(updated);
-    persist(updated, activeIdRef.current);
+    persist(updated);
   }, [persist]);
 
   // ── Checklist CRUD ──────────────────────────────────────────────────────────
@@ -455,55 +426,48 @@ export const ChecklistEditor: React.FC = () => {
       id, name: `Checklist ${checklists.length + 1}`,
       createdAt: Date.now(), items: [], printouts: [],
     };
+    await saveChecklist(list).catch(console.error);
     const updated = [...checklists, list];
     setChecklists(updated);
     setActiveId(id);
+    localStorage.setItem('checklist-activeId', id);
     setActiveTab('items');
     setExpandedItemId(null);
     setBeforePhotos({});
     setAfterPhotos({});
-    const db = dbRef.current;
-    if (db) {
-      await idbPut(db, 'checklists', list, list.id);
-      await idbPut(db, 'state', { activeId: id }, 'current');
-    }
   };
 
   const handleDeleteList = async (id: string) => {
     if (!confirm('Delete this checklist and all its items?')) return;
-    const db = dbRef.current;
     const list = checklists.find(c => c.id === id);
-    if (db && list) {
-      for (const item of list.items) {
-        for (const pid of item.beforePhotoIds ?? []) await idbDelete(db, 'photos', pid);
-        for (const pid of item.afterPhotoIds ?? []) await idbDelete(db, 'photos', pid);
-      }
-      for (const po of list.printouts) {
-        await idbDelete(db, 'pdfs', po.id);
-      }
-      await idbDelete(db, 'checklists', id);
-    }
+    // Photos are stored in /api/images under their photo IDs; leave them for now
+    // (the images endpoint has no delete in the current server design)
+    await deleteChecklist(id).catch(console.error);
     const updated = checklists.filter(c => c.id !== id);
     setChecklists(updated);
     if (activeId === id) {
       const next = updated[0]?.id ?? null;
       setActiveId(next);
-      if (next && db) {
-        await idbPut(db, 'state', { activeId: next }, 'current');
+      if (next) {
+        localStorage.setItem('checklist-activeId', next);
         const nextList = updated.find(c => c.id === next);
-        if (nextList) await loadPhotos(db, nextList);
+        if (nextList) await loadPhotosForList(nextList);
+      } else {
+        localStorage.removeItem('checklist-activeId');
+        setBeforePhotos({});
+        setAfterPhotos({});
       }
     }
+    void list; // suppress unused warning
   };
 
   const switchList = async (id: string) => {
     setActiveId(id);
+    localStorage.setItem('checklist-activeId', id);
     setActiveTab('items');
     setExpandedItemId(null);
-    const db = dbRef.current;
-    if (db) await idbPut(db, 'state', { activeId: id }, 'current');
     const list = checklistsRef.current.find(c => c.id === id);
-    if (list && db) await loadPhotos(db, list);
+    if (list) await loadPhotosForList(list);
   };
 
   const commitRename = () => {
@@ -532,12 +496,6 @@ export const ChecklistEditor: React.FC = () => {
   };
 
   const deleteItem = async (itemId: string) => {
-    const db = dbRef.current;
-    const item = active?.items.find(i => i.id === itemId);
-    if (db && item) {
-      for (const pid of item.beforePhotoIds ?? []) await idbDelete(db, 'photos', pid);
-      for (const pid of item.afterPhotoIds ?? []) await idbDelete(db, 'photos', pid);
-    }
     setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
     setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
     setLists(checklists.map(c => c.id !== activeId ? c : {
@@ -550,9 +508,10 @@ export const ChecklistEditor: React.FC = () => {
   const handlePhotoUpload = async (itemId: string, type: 'before' | 'after', file: File) => {
     if (!file.type.startsWith('image/')) return;
     const dataUrl = await normalizeImage(file);
-    const photoId = `${itemId}_${type}_${nanoid()}`;
-    const db = dbRef.current;
-    if (db) await idbPut(db, 'photos', dataUrl, photoId);
+    const photoId = `checklist-photo-${nanoid()}`;
+
+    // Save to server so it's accessible cross-device
+    await saveFile(photoId, dataUrl).catch(console.error);
 
     const list = checklistsRef.current.find(c => c.id === activeIdRef.current);
     const currentItem = list?.items.find(i => i.id === itemId);
@@ -570,15 +529,12 @@ export const ChecklistEditor: React.FC = () => {
   };
 
   const handleRemovePhoto = async (itemId: string, type: 'before' | 'after', index: number) => {
-    const db = dbRef.current;
     const list = checklistsRef.current.find(c => c.id === activeIdRef.current);
     const currentItem = list?.items.find(i => i.id === itemId);
     if (!currentItem) return;
 
     if (type === 'before') {
       const ids = currentItem.beforePhotoIds ?? [];
-      const photoId = ids[index];
-      if (db && photoId) await idbDelete(db, 'photos', photoId);
       setBeforePhotos(p => {
         const photos = [...(p[itemId] ?? [])];
         photos.splice(index, 1);
@@ -587,8 +543,6 @@ export const ChecklistEditor: React.FC = () => {
       updateItem(itemId, { beforePhotoIds: ids.filter((_, i) => i !== index) });
     } else {
       const ids = currentItem.afterPhotoIds ?? [];
-      const photoId = ids[index];
-      if (db && photoId) await idbDelete(db, 'photos', photoId);
       setAfterPhotos(p => {
         const photos = [...(p[itemId] ?? [])];
         photos.splice(index, 1);
@@ -795,8 +749,8 @@ export const ChecklistEditor: React.FC = () => {
       // Save to the server so the PDF editor and share links can retrieve it.
       // Also keep a local IDB copy as an offline fallback.
       try { await saveFile(fileId, pdfDataUrl); } catch (err) { console.warn('saveFile failed', err); }
-      const db = dbRef.current;
-      if (db) await idbPut(db, 'pdfs', pdfDataUrl, printoutId);
+      const pdfDb = pdfDbRef.current;
+      if (pdfDb) await idbPut(pdfDb, 'pdfs', pdfDataUrl, printoutId).catch(() => {});
 
       const po: ChecklistPrintout = { id: printoutId, name: printoutName, createdAt: Date.now(), fileId };
       const updated = checklists.map(c => c.id !== activeId ? c : {
@@ -815,8 +769,9 @@ export const ChecklistEditor: React.FC = () => {
       const fromServer = await getFile(po.fileId).catch(() => null);
       if (fromServer) return fromServer;
     }
-    const db = dbRef.current;
-    return db ? idbGet<string>(db, 'pdfs', po.id) : undefined;
+    // Fall back to local IDB cache (e.g. offline or pre-migration printouts)
+    const pdfDb = pdfDbRef.current;
+    return pdfDb ? idbGet<string>(pdfDb, 'pdfs', po.id) : undefined;
   };
 
   const handleViewPrintout = async (po: ChecklistPrintout) => {
@@ -872,8 +827,8 @@ export const ChecklistEditor: React.FC = () => {
   };
 
   const handleDeletePrintout = async (printoutId: string) => {
-    const db = dbRef.current;
-    if (db) await idbDelete(db, 'pdfs', printoutId);
+    const pdfDb = pdfDbRef.current;
+    if (pdfDb) await idbDelete(pdfDb, 'pdfs', printoutId).catch(() => {});
     setLists(checklists.map(c => c.id !== activeId ? c : {
       ...c, printouts: c.printouts.filter(p => p.id !== printoutId),
     }));
@@ -1027,7 +982,11 @@ export const ChecklistEditor: React.FC = () => {
 
         {/* Main area */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {!active ? (
+          {loading ? (
+            <div className="flex-1 flex items-center justify-center text-slate-400 dark:text-slate-500">
+              <p className="text-sm">Loading...</p>
+            </div>
+          ) : !active ? (
             /* Empty state */
             <div className="flex-1 flex flex-col items-center justify-center gap-5 text-slate-400 dark:text-slate-500">
               <ClipboardList size={60} className="opacity-20" />

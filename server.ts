@@ -110,6 +110,11 @@ function initDb() {
         name TEXT,
         createdAt INTEGER
       );
+      CREATE TABLE IF NOT EXISTS checklists (
+        id TEXT PRIMARY KEY,
+        data TEXT,
+        createdAt INTEGER
+      );
       CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
       CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
       CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
@@ -694,6 +699,39 @@ async function startServer() {
       res.json({ success: true });
     } catch {
       res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Checklists API
+  app.get("/api/checklists", authenticateToken, (req, res) => {
+    try {
+      const rows = db.prepare('SELECT data FROM checklists ORDER BY createdAt ASC').all() as { data: string }[];
+      res.json(rows.map(r => JSON.parse(r.data)));
+    } catch (error) {
+      console.error("Error fetching checklists:", error);
+      res.status(500).json({ error: "Failed to fetch checklists" });
+    }
+  });
+
+  app.put("/api/checklists/:id", authenticateToken, (req, res) => {
+    try {
+      const checklist = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO checklists (id, data, createdAt) VALUES (?, ?, ?)');
+      stmt.run(checklist.id, JSON.stringify(checklist), checklist.createdAt || Date.now());
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving checklist:", error);
+      res.status(500).json({ error: "Failed to save checklist" });
+    }
+  });
+
+  app.delete("/api/checklists/:id", authenticateToken, (req, res) => {
+    try {
+      db.prepare('DELETE FROM checklists WHERE id = ?').run(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting checklist:", error);
+      res.status(500).json({ error: "Failed to delete checklist" });
     }
   });
 
