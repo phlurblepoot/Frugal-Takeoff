@@ -15,6 +15,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.4.1',
+    date: 'April 20, 2026',
+    changes: [
+      'Checklists: data (lists, items, photos) is now stored on the server — checklists are visible across all devices when logged in with the same account',
+      'Checklists: one-time automatic migration uploads any locally-stored checklist data and photos from the previous version to the server on first load',
+    ],
+  },
+  {
     version: '0.9.4',
     date: 'April 20, 2026',
     changes: [
