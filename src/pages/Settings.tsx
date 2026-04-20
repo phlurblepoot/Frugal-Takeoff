@@ -15,6 +15,23 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.4',
+    date: 'April 20, 2026',
+    changes: [
+      'Checklists: support multiple Before and After photos per item — upload via file picker, drag-and-drop onto the photo zone, or capture from camera; each photo stored independently with per-photo remove button',
+      'Checklists: photos are now EXIF-orientation-corrected on upload — phone photos no longer appear rotated in the UI or in generated PDFs',
+      'Checklists: PDF export renders all before/after photos in rows (up to 4 per row) per item, with box height calculated dynamically',
+      'Checklists: printouts are saved to the server and open in the PDF Editor (same flow as Estimate printouts) instead of about:blank',
+      'Checklists: share links — each printout card now has a Share button that generates a /share/<id> URL and copies it to the clipboard',
+      'Checklists: mobile-friendly layout — top bar collapses on small screens, list sidebar becomes a slide-over drawer, and photo grid stacks to a single column',
+      'Estimating: active measurement tool now makes existing drawn measurements non-interactive (click-through), preventing accidental selection while drawing',
+      'Estimating: bid due date removed from proposal PDF cover page',
+      'Estimating: total cost values on the Takeoffs tab and in generated PDFs are now rounded up to the nearest $100',
+      'Spreadsheet Editor: replaced jspreadsheet-ce with FortuneSheet for a more capable, reliable in-browser spreadsheet experience',
+      'Docker: hardened build for native module compilation; added GHA layer caching for faster CI builds',
+    ],
+  },
+  {
     version: '0.9.3',
     date: 'April 15, 2026',
     changes: [
