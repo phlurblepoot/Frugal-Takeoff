@@ -259,6 +259,7 @@ const CanvasViewInner: React.FC = () => {
   const [showPageJump, setShowPageJump] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
+  const [newMeasurementToken, setNewMeasurementToken] = useState(0);
   const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
   const [heightsModalMeasurementId, setHeightsModalMeasurementId] = useState<string | null>(null);
@@ -904,14 +905,18 @@ const CanvasViewInner: React.FC = () => {
           }
         }
 
-        const mDisplayPts = expandArcPoints(m.points, m.arcMidIndices);
+        const allMPts = [
+          expandArcPoints(m.points, m.arcMidIndices),
+          ...(m.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+        ];
         let pixelValue = 0;
         if (takeoff.type === 'length' && m.type === 'length') {
-          pixelValue = calculatePolylineLength(mDisplayPts);
+          pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         } else if (takeoff.type === 'area' && m.type === 'area') {
-          pixelValue = calculatePolygonArea(mDisplayPts);
+          pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
         } else if (takeoff.type === 'area' && m.type === 'length') {
-          pixelValue = calculateSurfaceAreaPx(mDisplayPts, m.heights || [], m.isTwoSided || false, currentScale);
+          pixelValue = allMPts.reduce((sum, pts) =>
+            sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
         } else if (takeoff.type === 'count' && m.type === 'count') {
           pixelValue = 1;
         }
@@ -1682,6 +1687,7 @@ const CanvasViewInner: React.FC = () => {
             onCopy={selectedMeasurementId ? handleCopy : undefined}
             onPaste={handlePaste}
             hasCopied={!!localStorage.getItem('copiedMeasurement')}
+            newMeasurementToken={newMeasurementToken}
           />
 
           {/* Tool Instructions Overlay */}
@@ -1903,10 +1909,10 @@ const CanvasViewInner: React.FC = () => {
                         p.measurements
                           .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
                           .map(m => (
-                            <MeasurementItem 
-                              key={m.id} 
-                              measurement={m} 
-                              scaleConfig={p.scaleConfig} 
+                            <MeasurementItem
+                              key={m.id}
+                              measurement={m}
+                              scaleConfig={p.scaleConfig}
                               takeoffType={takeoff.type}
                               onDelete={() => deleteMeasurement(m.id, p.id)}
                               selected={selectedMeasurementId === m.id}
@@ -1921,6 +1927,15 @@ const CanvasViewInner: React.FC = () => {
                               pageIds={project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id)}
                             />
                           ))
+                      )}
+                      {isActive && (currentTool === 'length' || currentTool === 'area') && (
+                        <button
+                          onClick={() => setNewMeasurementToken(t => t + 1)}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-t border-dashed border-slate-200 dark:border-slate-700 transition-colors"
+                        >
+                          <Plus size={14} />
+                          New Measurement
+                        </button>
                       )}
                     </div>
                   )}
@@ -2609,12 +2624,21 @@ function MeasurementItem({
             {measurement.type === 'count'
               ? formatMeasurement(1, 'count', scaleConfig, takeoff)
               : (() => {
-                  const dp = expandArcPoints(measurement.points, measurement.arcMidIndices);
+                  const allPts = [
+                    expandArcPoints(measurement.points, measurement.arcMidIndices),
+                    ...(measurement.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+                  ];
                   return measurement.type === 'length'
                     ? (takeoffType === 'area'
-                        ? formatMeasurement(calculateSurfaceAreaPx(dp, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 'area', scaleConfig, takeoff)
-                        : formatMeasurement(calculatePolylineLength(dp), 'length', scaleConfig, takeoff))
-                    : formatMeasurement(calculatePolygonArea(dp), 'area', scaleConfig, takeoff);
+                        ? formatMeasurement(
+                            allPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 0),
+                            'area', scaleConfig, takeoff)
+                        : formatMeasurement(
+                            allPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0),
+                            'length', scaleConfig, takeoff))
+                    : formatMeasurement(
+                        allPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0),
+                        'area', scaleConfig, takeoff);
                 })()
             }
           </span>

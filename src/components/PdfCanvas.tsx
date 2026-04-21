@@ -4,7 +4,7 @@ import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
-import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
+import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
 
@@ -52,6 +52,7 @@ interface PdfCanvasProps {
   onCopy?: () => void;
   onPaste?: () => void;
   hasCopied?: boolean;
+  newMeasurementToken?: number;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -98,6 +99,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onCopy,
   onPaste,
   hasCopied,
+  newMeasurementToken,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -132,10 +134,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; measurementId: string | null } | null>(null);
 
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
+  const [activeMultiSegmentId, setActiveMultiSegmentId] = useState<string | null>(null);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+  const newMeasurementTokenRef = useRef(newMeasurementToken ?? 0);
+  useEffect(() => {
+    if (newMeasurementToken !== undefined && newMeasurementToken !== newMeasurementTokenRef.current) {
+      newMeasurementTokenRef.current = newMeasurementToken;
+      setActiveMultiSegmentId(null);
+    }
+  }, [newMeasurementToken]);
 
   useEffect(() => {
     if (resumeMeasurement) {
@@ -475,46 +486,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         return;
       }
 
-      // If clicking very close to the last point, finish the drawing
+      // If clicking very close to the last point, finish the current segment
       if (activePoints.length > 0) {
         const lastPoint = activePoints[activePoints.length - 1];
         const dist = calculateDistance(lastPoint, pos);
-        // 5 pixels threshold (adjusted for scale)
         const threshold = (window.innerWidth < 768 ? 20 : 10) / stageScale;
         if (dist < threshold) {
-          if (activePoints.length > 1) {
-            let regionId: string | undefined = undefined;
-            if (isMultiRegion) {
-              const region = scaleRegions.find(r => isPointInPolygon(activePoints[0], r.points));
-              regionId = region?.id;
-            }
-
-            const newMeasurement: Measurement = {
-              id: resumeMeasurementId || uuidv4(),
-              type: currentTool,
-              points: [...activePoints],
-              color: currentTool === 'length' ? '#3b82f6' : '#10b981',
-              name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
-              regionId,
-              arcMidIndices: activeArcMidIndices.length > 0 ? [...activeArcMidIndices] : undefined,
-            };
-            if (resumeMeasurementId) {
-              const existing = measurements.find(m => m.id === resumeMeasurementId);
-              if (existing) {
-                newMeasurement.color = existing.color;
-                newMeasurement.name = existing.name;
-              }
-              onUpdateMeasurement(resumeMeasurementId, newMeasurement);
-              setResumeMeasurementId(null);
-            } else {
-              onAddMeasurement(newMeasurement);
-            }
-          }
-          setActivePoints([]);
-          setMousePos(null);
-          setArcMode('inactive');
-          setArcMidPoint(null);
-          setActiveArcMidIndices([]);
+          finalizeSegment();
           return;
         }
       }
@@ -660,38 +638,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onAddRegion?.(newRegion);
             }
           } else {
-            let regionId: string | undefined = undefined;
-            if (isMultiRegion) {
-              const region = scaleRegions.find(r => isPointInPolygon(activePoints[0], r.points));
-              regionId = region?.id;
-            }
-
-            const newMeasurement: Measurement = {
-              id: resumeMeasurementId || uuidv4(),
-              type: currentTool,
-              points: [...activePoints],
-              color: currentTool === 'length' ? '#3b82f6' : '#10b981',
-              name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
-              regionId,
-              arcMidIndices: activeArcMidIndices.length > 0 ? [...activeArcMidIndices] : undefined,
-            };
-            if (resumeMeasurementId) {
-              const existing = measurements.find(m => m.id === resumeMeasurementId);
-              if (existing) {
-                newMeasurement.color = existing.color;
-                newMeasurement.name = existing.name;
-              }
-              onUpdateMeasurement(resumeMeasurementId, newMeasurement);
-              setResumeMeasurementId(null);
-            } else {
-              onAddMeasurement(newMeasurement);
-            }
+            finalizeSegment();
           }
-          setActivePoints([]);
-          setMousePos(null);
-          setArcMode('inactive');
-          setArcMidPoint(null);
-          setActiveArcMidIndices([]);
         }
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         if (activePoints.length > 0) {
@@ -718,7 +666,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePoints, currentTool, measurements, onAddMeasurement, arcMode, onCancel]);
+  }, [activePoints, currentTool, measurements, onAddMeasurement, arcMode, onCancel, resumeMeasurementId, activeMultiSegmentId, activeArcMidIndices]);
 
   const cancelDrawing = () => {
     setActivePoints([]);
@@ -727,7 +675,70 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     setArcMidPoint(null);
     setActiveArcMidIndices([]);
     setResumeMeasurementId(null);
+    setActiveMultiSegmentId(null);
     onCancel?.();
+  };
+
+  // Finalize the current in-progress segment, save it to the measurement, and
+  // leave drawing active so the user can immediately start the next segment.
+  const finalizeSegment = () => {
+    if (activePoints.length <= 1) return;
+
+    let regionId: string | undefined = undefined;
+    if (isMultiRegion) {
+      const region = scaleRegions.find(r => isPointInPolygon(activePoints[0], r.points));
+      regionId = region?.id;
+    }
+
+    const segPoints = [...activePoints];
+    const segArcMids: MeasurementSegment['arcMidIndices'] = activeArcMidIndices.length > 0
+      ? [...activeArcMidIndices]
+      : undefined;
+
+    if (resumeMeasurementId) {
+      const existing = measurements.find(m => m.id === resumeMeasurementId);
+      const updated: Measurement = {
+        id: resumeMeasurementId,
+        type: currentTool as 'length' | 'area',
+        points: segPoints,
+        color: existing?.color ?? (currentTool === 'length' ? '#3b82f6' : '#10b981'),
+        name: existing?.name ?? `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
+        regionId,
+        arcMidIndices: segArcMids,
+      };
+      onUpdateMeasurement(resumeMeasurementId, updated);
+      setResumeMeasurementId(null);
+      // Resume mode replaces the measurement — don't continue multi-segment
+      setActiveMultiSegmentId(null);
+    } else if (activeMultiSegmentId) {
+      const existing = measurements.find(m => m.id === activeMultiSegmentId);
+      if (existing) {
+        const newSeg: MeasurementSegment = { points: segPoints, arcMidIndices: segArcMids };
+        onUpdateMeasurement(activeMultiSegmentId, {
+          segments: [...(existing.segments ?? []), newSeg],
+        });
+      }
+      // Keep activeMultiSegmentId — user continues adding segments
+    } else {
+      const newId = uuidv4();
+      const newMeasurement: Measurement = {
+        id: newId,
+        type: currentTool as 'length' | 'area',
+        points: segPoints,
+        color: currentTool === 'length' ? '#3b82f6' : '#10b981',
+        name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
+        regionId,
+        arcMidIndices: segArcMids,
+      };
+      onAddMeasurement(newMeasurement);
+      setActiveMultiSegmentId(newId);
+    }
+
+    setActivePoints([]);
+    setMousePos(null);
+    setArcMode('inactive');
+    setArcMidPoint(null);
+    setActiveArcMidIndices([]);
   };
 
   const renderActiveDrawing = () => {
@@ -848,6 +859,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         centerY /= displayPoints.length;
       }
 
+      // All expanded segment display points (primary + additional)
+      const allSegDisplayPoints = [
+        displayPoints,
+        ...(m.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+      ];
+
       let text = '';
       const takeoff = takeoffs.find(t => t.id === m.takeoffId);
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
@@ -855,16 +872,17 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (m.type === 'count') {
         text = '1';
       } else if (isSurfaceArea) {
-        const pxArea = calculateSurfaceAreaPx(displayPoints, m.heights || [], m.isTwoSided || false, currentScale);
-        const pxLen = calculatePolylineLength(displayPoints);
+        const pxArea = allSegDisplayPoints.reduce((sum, pts) =>
+          sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
+        const pxLen = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         const areaText = formatMeasurement(pxArea, 'area', currentScale, takeoff);
         const lenText = formatMeasurement(pxLen, 'length', currentScale, takeoff);
         text = `${areaText}\nLength: ${lenText}`;
       } else if (m.type === 'length') {
-        const pxLen = calculatePolylineLength(displayPoints);
+        const pxLen = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         text = formatMeasurement(pxLen, 'length', currentScale, takeoff);
       } else {
-        const pxArea = calculatePolygonArea(displayPoints);
+        const pxArea = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
         text = formatMeasurement(pxArea, 'area', currentScale, takeoff);
       }
 
@@ -1016,6 +1034,37 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               ))}
             </>
           )}
+          {(m.segments ?? []).map((seg, segIdx) => {
+            const segDisplayPts = expandArcPoints(seg.points, seg.arcMidIndices);
+            const segFlat = segDisplayPts.flatMap(p => [p.x, p.y]);
+            return (
+              <React.Fragment key={`extra-seg-${segIdx}`}>
+                <Line
+                  points={segFlat}
+                  stroke={m.color}
+                  strokeWidth={isSelected ? 8 / stageScale : 5 / stageScale}
+                  lineJoin="round"
+                  lineCap="round"
+                  closed={m.type === 'area'}
+                  fill={m.type === 'area' ? `${m.color}${isSelected ? '60' : '40'}` : undefined}
+                  shadowColor={isSelected ? m.color : undefined}
+                  shadowBlur={isSelected ? 10 / stageScale : 0}
+                  shadowOpacity={isSelected ? 0.5 : 0}
+                />
+                {seg.points.map((p, pi) => (
+                  <Circle
+                    key={pi}
+                    x={p.x}
+                    y={p.y}
+                    radius={isSelected ? 8 / stageScale : 6 / stageScale}
+                    fill={m.color}
+                    stroke={isSelected ? '#fff' : undefined}
+                    strokeWidth={isSelected ? 2 / stageScale : 0}
+                  />
+                ))}
+              </React.Fragment>
+            );
+          })}
           {text && m.type !== 'count' && (
             <Group x={centerX} y={centerY}>
               <Text
@@ -1137,14 +1186,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           }
         }
 
-        const mDispPts = expandArcPoints(m.points, m.arcMidIndices);
+        const allMSegPts = [
+          expandArcPoints(m.points, m.arcMidIndices),
+          ...(m.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+        ];
         let pixelValue = 0;
         if (takeoff.type === 'length' && m.type === 'length') {
-          pixelValue = calculatePolylineLength(mDispPts);
+          pixelValue = allMSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         } else if (takeoff.type === 'area' && m.type === 'area') {
-          pixelValue = calculatePolygonArea(mDispPts);
+          pixelValue = allMSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
         } else if (takeoff.type === 'area' && m.type === 'length') {
-          pixelValue = calculateSurfaceAreaPx(mDispPts, m.heights || [], m.isTwoSided || false, currentScale);
+          pixelValue = allMSegPts.reduce((sum, pts) =>
+            sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
         } else if (takeoff.type === 'count' && m.type === 'count') {
           pixelValue = 1;
         }

@@ -238,10 +238,11 @@ async function renderPageToDataUrl(
         centerY /= m.points.length;
       }
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
+      const allSegPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
       let text = '';
-      if (isSurfaceArea) text = formatMeasurement(calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, page.scaleConfig), 'area', page.scaleConfig, takeoff);
-      else if (m.type === 'length') text = formatMeasurement(calculatePolylineLength(m.points), 'length', page.scaleConfig, takeoff);
-      else text = formatMeasurement(calculatePolygonArea(m.points), 'area', page.scaleConfig, takeoff);
+      if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
+      else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
+      else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
       if (text) {
         ctx.font = '14px sans-serif';
         const textWidth = ctx.measureText(text).width;
@@ -268,10 +269,11 @@ async function renderPageToDataUrl(
           const region = page.scaleRegions?.find(r => r.id === m.regionId);
           if (region?.scaleConfig) currentScale = region.scaleConfig;
         }
+        const allMPtsLegend = [m.points, ...(m.segments ?? []).map(s => s.points)];
         let pixelValue = 0;
-        if (takeoff.type === 'length' && m.type === 'length') pixelValue = calculatePolylineLength(m.points);
-        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = calculatePolygonArea(m.points);
-        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+        if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
+        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
         else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
         if (pixelValue > 0) {
           const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
@@ -1836,13 +1838,14 @@ export const ProjectView: React.FC = () => {
               pageRealValue += 1;
               pageUnit = 'each';
             } else if (currentScale) {
+              const allMPtsTotals = [m.points, ...(m.segments ?? []).map(s => s.points)];
               let pixelValue = 0;
               if (takeoff.type === 'length' && m.type === 'length') {
-                pixelValue = calculatePolylineLength(m.points);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
               } else if (takeoff.type === 'area' && m.type === 'area') {
-                pixelValue = calculatePolygonArea(m.points);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
               } else if (takeoff.type === 'area' && m.type === 'length') {
-                pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
               }
 
               if (pixelValue > 0) {

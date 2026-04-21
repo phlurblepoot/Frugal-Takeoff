@@ -2,6 +2,11 @@ export type Point = { x: number; y: number };
 
 export type MeasurementType = 'scale' | 'length' | 'area' | 'count';
 
+export interface MeasurementSegment {
+  points: Point[];
+  arcMidIndices?: number[];
+}
+
 export interface Measurement {
   id: string;
   type: MeasurementType;
@@ -14,6 +19,7 @@ export interface Measurement {
   regionId?: string;
   planSetId?: string; // The plan set version this measurement was made/updated on
   arcMidIndices?: number[]; // indices of arc mid-control points; triples (i-1, i, i+1) are arcs
+  segments?: MeasurementSegment[]; // additional segments (first segment lives in points/arcMidIndices)
 }
 
 export type CostType = 'flat' | 'yield' | 'unit' | 'amount_per_units';
