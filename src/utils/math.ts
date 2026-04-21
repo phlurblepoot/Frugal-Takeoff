@@ -124,6 +124,24 @@ export const generateArcPoints = (A: Point, B: Point, C: Point, segments: number
   return points;
 };
 
+export const expandArcPoints = (points: Point[], arcMidIndices: number[] = []): Point[] => {
+  if (!arcMidIndices || arcMidIndices.length === 0) return points;
+  const arcSet = new Set(arcMidIndices);
+  const result: Point[] = [];
+  let i = 0;
+  while (i < points.length) {
+    if (arcSet.has(i) && i > 0 && i < points.length - 1) {
+      const arcPts = generateArcPoints(points[i - 1], points[i], points[i + 1]);
+      result.push(...arcPts.slice(1)); // start already in result
+      i += 2; // skip mid + end (end is now last item in result)
+    } else {
+      result.push(points[i]);
+      i++;
+    }
+  }
+  return result;
+};
+
 export const calculateDistance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 };

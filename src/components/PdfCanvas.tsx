@@ -5,7 +5,7 @@ import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from '
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
-import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
+import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
 
 interface PdfCanvasProps {
@@ -47,6 +47,8 @@ interface PdfCanvasProps {
   legendWidth?: number;
   onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number, scaleX?: number, scaleY?: number, fontSize?: number, width?: number }) => void;
   searchTerm?: string;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -88,6 +90,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   legendWidth,
   onUpdateLegend,
   searchTerm,
+  onUndo,
+  onRedo,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -111,13 +115,16 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [activePoints, setActivePoints] = useState<Point[]>([]);
   const [mousePos, setMousePos] = useState<Point | null>(null);
   const [isMiddleMouseDown, setIsMiddleMouseDown] = useState(false);
+  const isMiddleMouseDownRef = useRef(false);
   const lastMousePosRef = useRef<{x: number, y: number} | null>(null);
 
   const [arcMode, setArcMode] = useState<'inactive' | 'waiting_mid' | 'waiting_end'>('inactive');
   const [arcMidPoint, setArcMidPoint] = useState<Point | null>(null);
+  const [activeArcMidIndices, setActiveArcMidIndices] = useState<number[]>([]);
   
   const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number } | null>(null);
-  
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; measurementId: string | null } | null>(null);
+
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -125,6 +132,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   useEffect(() => {
     if (resumeMeasurement) {
       setActivePoints(resumeMeasurement.points);
+      setActiveArcMidIndices(resumeMeasurement.arcMidIndices || []);
       setResumeMeasurementId(resumeMeasurement.id);
       setArcMode('inactive');
       setArcMidPoint(null);
@@ -164,12 +172,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const handleGlobalMouseUp = (e: MouseEvent) => {
       if (e.button === 1) {
         setIsMiddleMouseDown(false);
+        isMiddleMouseDownRef.current = false;
         lastMousePosRef.current = null;
       }
     };
     window.addEventListener('mouseup', handleGlobalMouseUp);
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
   }, []);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', close);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', close);
+    };
+  }, [contextMenu]);
 
   // Fit image to screen initially
   useEffect(() => {
@@ -354,6 +374,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     if (e.evt.button === 1) {
       e.evt.preventDefault();
       setIsMiddleMouseDown(true);
+      isMiddleMouseDownRef.current = true;
       lastMousePosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
@@ -443,13 +464,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         setArcMode('waiting_end');
         return;
       } else if (arcMode === 'waiting_end') {
-        const startPoint = activePoints[activePoints.length - 1];
         const midPoint = arcMidPoint!;
         const endPoint = pos;
-        
-        const arcPoints = generateArcPoints(startPoint, midPoint, endPoint);
-        
-        setActivePoints([...activePoints, ...arcPoints.slice(1)]);
+        // Store only 3 points (start is already last in activePoints), record mid index
+        const arcMidIdx = activePoints.length; // index of mid in the new array
+        const newPoints = [...activePoints, midPoint, endPoint];
+        setActivePoints(newPoints);
+        setActiveArcMidIndices(prev => [...prev, arcMidIdx]);
         setArcMode('inactive');
         setArcMidPoint(null);
         return;
@@ -476,6 +497,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               color: currentTool === 'length' ? '#3b82f6' : '#10b981',
               name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
               regionId,
+              arcMidIndices: activeArcMidIndices.length > 0 ? [...activeArcMidIndices] : undefined,
             };
             if (resumeMeasurementId) {
               const existing = measurements.find(m => m.id === resumeMeasurementId);
@@ -493,6 +515,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           setMousePos(null);
           setArcMode('inactive');
           setArcMidPoint(null);
+          setActiveArcMidIndices([]);
           return;
         }
       }
@@ -614,6 +637,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           setMousePos(null);
           setArcMode('inactive');
           setArcMidPoint(null);
+          setActiveArcMidIndices([]);
           setResumeMeasurementId(null);
         } else {
           onCancel?.();
@@ -645,6 +669,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               color: currentTool === 'length' ? '#3b82f6' : '#10b981',
               name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
               regionId,
+              arcMidIndices: activeArcMidIndices.length > 0 ? [...activeArcMidIndices] : undefined,
             };
             if (resumeMeasurementId) {
               const existing = measurements.find(m => m.id === resumeMeasurementId);
@@ -662,10 +687,20 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           setMousePos(null);
           setArcMode('inactive');
           setArcMidPoint(null);
+          setActiveArcMidIndices([]);
         }
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         if (activePoints.length > 0) {
-          setActivePoints(prev => prev.slice(0, -1));
+          const lastIdx = activePoints.length - 1;
+          const lastMidIdx = activeArcMidIndices[activeArcMidIndices.length - 1];
+          if (lastMidIdx === lastIdx - 1) {
+            // Last two points form an arc end + mid — remove both
+            setActivePoints(prev => prev.slice(0, -2));
+            setActiveArcMidIndices(prev => prev.slice(0, -1));
+          } else {
+            setActivePoints(prev => prev.slice(0, -1));
+            setActiveArcMidIndices(prev => prev.filter(i => i < lastIdx));
+          }
           if (arcMode !== 'inactive') {
             setArcMode('inactive');
             setArcMidPoint(null);
@@ -684,20 +719,26 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const renderActiveDrawing = () => {
     if (activePoints.length === 0) return null;
 
-    let points = [...activePoints];
-    
+    // Stored points (compact: arcs are 3 points)
+    let storedPoints = [...activePoints];
+    let previewArcMidIndices = [...activeArcMidIndices];
+
     if (mousePos) {
       if (arcMode === 'waiting_end' && arcMidPoint) {
-        const startPoint = activePoints[activePoints.length - 1];
-        const arcPoints = generateArcPoints(startPoint, arcMidPoint, mousePos);
-        points = [...activePoints, ...arcPoints.slice(1)];
+        // Preview arc from last active point through arcMidPoint to mousePos
+        const arcMidIdx = storedPoints.length; // where mid goes
+        storedPoints = [...storedPoints, arcMidPoint, mousePos];
+        previewArcMidIndices = [...previewArcMidIndices, arcMidIdx];
       } else {
-        points.push(mousePos);
+        storedPoints.push(mousePos);
       }
     }
 
-    const flatPoints = points.flatMap(p => [p.x, p.y]);
-    
+    // Expand arcs for display
+    const displayPoints = expandArcPoints(storedPoints, previewArcMidIndices);
+    const flatPoints = displayPoints.flatMap(p => [p.x, p.y]);
+    const arcMidSet = new Set(activeArcMidIndices);
+
     const color = currentTool === 'scale' ? '#ef4444' : currentTool === 'length' ? '#3b82f6' : currentTool === 'region' ? '#8b5cf6' : '#10b981';
 
     return (
@@ -709,16 +750,16 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           lineJoin="round"
           lineCap="round"
           dash={currentTool === 'scale' ? [5 / stageScale, 5 / stageScale] : undefined}
-          closed={(currentTool === 'area' || currentTool === 'region') && points.length > 2 && arcMode === 'inactive'}
+          closed={(currentTool === 'area' || currentTool === 'region') && activePoints.length > 2 && arcMode === 'inactive'}
           fill={(currentTool === 'area' || currentTool === 'region') ? `${color}40` : undefined}
         />
-        {points.map((p, i) => (
+        {activePoints.map((p, i) => (
           <Circle
             key={i}
             x={p.x}
             y={p.y}
-            radius={4 / stageScale}
-            fill={color}
+            radius={arcMidSet.has(i) ? 3 / stageScale : 4 / stageScale}
+            fill={arcMidSet.has(i) ? '#f97316' : color}
           />
         ))}
         {arcMidPoint && (
@@ -766,6 +807,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         }
       }
 
+      // Compact points (including arc control mid-points)
       const points = m.points.map((p, i) => {
         if (draggingPoint && draggingPoint.mId === m.id && draggingPoint.idx === i) {
           return { x: draggingPoint.x, y: draggingPoint.y };
@@ -773,23 +815,23 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         return { x: p.x, y: p.y };
       });
 
-      const flatPoints = points.flatMap(p => [p.x, p.y]);
-      
-      // Calculate center for text
+      // Expanded display points (arcs interpolated to smooth curves)
+      const displayPoints = expandArcPoints(points, m.arcMidIndices);
+      const flatPoints = displayPoints.flatMap(p => [p.x, p.y]);
+
+      // Calculate center for text (use display points for position)
       let centerX = 0, centerY = 0;
       if (m.type === 'count') {
         centerX = points[0].x;
         centerY = points[0].y;
       } else if (m.type === 'length') {
-        // Middle of the line
-        const midIdx = Math.floor((points.length - 1) / 2);
-        centerX = (points[midIdx].x + points[midIdx + 1].x) / 2;
-        centerY = (points[midIdx].y + points[midIdx + 1].y) / 2;
+        const midIdx = Math.floor((displayPoints.length - 1) / 2);
+        centerX = (displayPoints[midIdx].x + displayPoints[Math.min(midIdx + 1, displayPoints.length - 1)].x) / 2;
+        centerY = (displayPoints[midIdx].y + displayPoints[Math.min(midIdx + 1, displayPoints.length - 1)].y) / 2;
       } else {
-        // Centroid of polygon
-        points.forEach(p => { centerX += p.x; centerY += p.y; });
-        centerX /= points.length;
-        centerY /= points.length;
+        displayPoints.forEach(p => { centerX += p.x; centerY += p.y; });
+        centerX /= displayPoints.length;
+        centerY /= displayPoints.length;
       }
 
       let text = '';
@@ -797,18 +839,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
 
       if (m.type === 'count') {
-        text = '1'; // Or we could show the index, but usually count is just 1 per mark
+        text = '1';
       } else if (isSurfaceArea) {
-        const pxArea = calculateSurfaceAreaPx(points, m.heights || [], m.isTwoSided || false, currentScale);
-        const pxLen = calculatePolylineLength(points);
+        const pxArea = calculateSurfaceAreaPx(displayPoints, m.heights || [], m.isTwoSided || false, currentScale);
+        const pxLen = calculatePolylineLength(displayPoints);
         const areaText = formatMeasurement(pxArea, 'area', currentScale, takeoff);
         const lenText = formatMeasurement(pxLen, 'length', currentScale, takeoff);
         text = `${areaText}\nLength: ${lenText}`;
       } else if (m.type === 'length') {
-        const pxLen = calculatePolylineLength(points);
+        const pxLen = calculatePolylineLength(displayPoints);
         text = formatMeasurement(pxLen, 'length', currentScale, takeoff);
       } else {
-        const pxArea = calculatePolygonArea(points);
+        const pxArea = calculatePolygonArea(displayPoints);
         text = formatMeasurement(pxArea, 'area', currentScale, takeoff);
       }
 
@@ -819,7 +861,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         <Group
           key={m.id}
           listening={!isDrawingTool}
-          draggable={currentTool === 'pan'}
+          draggable={currentTool === 'pan' && !isMiddleMouseDown}
           onClick={(e) => {
             e.cancelBubble = true;
             if (activePoints.length === 0) {
@@ -832,8 +874,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onSelectMeasurement(m.id);
             }
           }}
+          onContextMenu={(e) => {
+            e.evt.preventDefault();
+            e.cancelBubble = true;
+            setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: m.id });
+          }}
           onDragStart={(e) => {
-            if (e.evt && e.evt.button !== 0) {
+            if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
               e.target.stopDrag();
               return;
             }
@@ -890,6 +937,31 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 shadowColor={isSelected ? m.color : undefined}
                 shadowBlur={isSelected ? 10 / stageScale : 0}
                 shadowOpacity={isSelected ? 0.5 : 0}
+                onDblClick={(e) => {
+                  e.cancelBubble = true;
+                  const stage = stageRef.current;
+                  const pos = getRelativePointerPosition(stage.getLayers()[0]);
+                  if (!pos) return;
+                  // Find which segment is closest to the click
+                  const segs = m.type === 'area'
+                    ? [...m.points.map((_, i) => i), 0].map((_, i, arr) => i < arr.length - 1 ? [m.points[arr[i]], m.points[arr[i+1]]] : null).filter(Boolean) as [Point, Point][]
+                    : m.points.slice(0, -1).map((p, i) => [p, m.points[i + 1]] as [Point, Point]);
+                  let bestIdx = 0;
+                  let bestDist = Infinity;
+                  segs.forEach(([a, b], i) => {
+                    const dx = b.x - a.x, dy = b.y - a.y;
+                    const lenSq = dx * dx + dy * dy;
+                    let t = lenSq > 0 ? ((pos.x - a.x) * dx + (pos.y - a.y) * dy) / lenSq : 0;
+                    t = Math.max(0, Math.min(1, t));
+                    const cx = a.x + t * dx, cy = a.y + t * dy;
+                    const d = Math.hypot(pos.x - cx, pos.y - cy);
+                    if (d < bestDist) { bestDist = d; bestIdx = i; }
+                  });
+                  const insertAfter = m.type === 'area' && bestIdx === segs.length - 1 ? m.points.length - 1 : bestIdx;
+                  const newPoints = [...m.points];
+                  newPoints.splice(insertAfter + 1, 0, pos);
+                  onUpdateMeasurement(m.id, { points: newPoints });
+                }}
               />
               {points.map((p, i) => (
                 <Circle
@@ -900,9 +972,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   fill={m.color}
                   stroke={isSelected ? '#fff' : undefined}
                   strokeWidth={isSelected ? 2 / stageScale : 0}
-                  draggable={currentTool === 'pan'}
+                  draggable={currentTool === 'pan' && !isMiddleMouseDown}
                   onDragStart={(e) => {
-                    if (e.evt && e.evt.button !== 0) {
+                    if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
                       e.target.stopDrag();
                       return;
                     }
@@ -1051,13 +1123,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           }
         }
 
+        const mDispPts = expandArcPoints(m.points, m.arcMidIndices);
         let pixelValue = 0;
         if (takeoff.type === 'length' && m.type === 'length') {
-          pixelValue = calculatePolylineLength(m.points);
+          pixelValue = calculatePolylineLength(mDispPts);
         } else if (takeoff.type === 'area' && m.type === 'area') {
-          pixelValue = calculatePolygonArea(m.points);
+          pixelValue = calculatePolygonArea(mDispPts);
         } else if (takeoff.type === 'area' && m.type === 'length') {
-          pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+          pixelValue = calculateSurfaceAreaPx(mDispPts, m.heights || [], m.isTwoSided || false, currentScale);
         } else if (takeoff.type === 'count' && m.type === 'count') {
           pixelValue = 1;
         }
@@ -1066,11 +1139,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
           const targetUnit = takeoff.unit || scaleConfig?.unit || 'ft';
           const sourceUnit = currentScale?.unit || 'ft';
-          
+
           if (takeoff.type === 'count') {
             totalRealValue += realValue;
           } else {
-            // Ensure we are converting to the correct target unit, stripping 'sq ' if necessary for the convertUnit function
             const cleanTargetUnit = targetUnit.replace('sq ', '');
             totalRealValue += convertUnit(realValue, sourceUnit, cleanTargetUnit, takeoff.type as 'length' | 'area' | 'count');
           }
@@ -1237,7 +1309,55 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative">
+    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative" onContextMenu={e => e.preventDefault()}>
+      {contextMenu && (
+        <div
+          className="fixed z-[200] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1 min-w-[160px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          {contextMenu.measurementId && (
+            <>
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                onClick={() => { onDeleteMeasurement(contextMenu.measurementId!); setContextMenu(null); }}
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+            </>
+          )}
+          {onUndo && (
+            <button
+              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              onClick={() => { onUndo(); setContextMenu(null); }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+              Undo
+            </button>
+          )}
+          {onRedo && (
+            <button
+              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              onClick={() => { onRedo(); setContextMenu(null); }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
+              Redo
+            </button>
+          )}
+          {activePoints.length > 0 && (
+            <>
+              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+              <button
+                className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                onClick={() => { onCancel?.(); setContextMenu(null); }}
+              >
+                Cancel Drawing
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {isSearching && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur border border-slate-200 rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
           <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
@@ -1290,6 +1410,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
+          onContextMenu={(e) => {
+            e.evt.preventDefault();
+            setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: null });
+          }}
           onDragEnd={(e) => {
             if (e.target === e.currentTarget) {
               setStagePos({ x: e.target.x(), y: e.target.y() });

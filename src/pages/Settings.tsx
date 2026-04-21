@@ -15,6 +15,20 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.5',
+    date: 'April 21, 2026',
+    changes: [
+      'Estimating: middle mouse button now exclusively pans the canvas and can no longer accidentally grab or move a measurement',
+      'Estimating: Ctrl-Z undo now covers moving, dragging, and renaming measurements (in addition to adding/deleting)',
+      'Estimating: linear area wall heights now default to a single global height; per-point heights are opt-in via a checkbox',
+      'Estimating: right-click anywhere on the canvas shows a context menu with Undo, Redo, and Delete (when over a measurement)',
+      'Estimating: double-click on an existing measurement line inserts a new point at that location',
+      'Estimating: arcs (A key) now store only 3 points — start, middle, and end — and render as a smooth curve; the 3 handles are draggable to reshape the arc',
+      'Projects: holding Ctrl and clicking page thumbnails multi-selects pages; a "Share (N)" button copies all share links at once',
+      'Projects: scroll position in the pages tab is remembered and restored when returning to the list',
+    ],
+  },
+  {
     version: '0.9.4.1',
     date: 'April 20, 2026',
     changes: [

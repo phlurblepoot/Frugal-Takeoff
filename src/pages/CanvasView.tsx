@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
@@ -689,7 +689,15 @@ const CanvasViewInner: React.FC = () => {
 
     const destinationPageId = page.id;
     const isMoving = sourcePageId !== destinationPageId;
-    
+
+    if (!isMoving) {
+      const before: Partial<Measurement> = {};
+      for (const key of Object.keys(updates) as (keyof Measurement)[]) {
+        (before as any)[key] = (existingMeasurement as any)[key];
+      }
+      pushToHistory({ type: 'update', measurementId: id, before, after: updates });
+    }
+
     const updatedMeasurement = { ...existingMeasurement, ...updates, planSetId: page.planSetId };
 
     const updatedProject = {
@@ -896,23 +904,24 @@ const CanvasViewInner: React.FC = () => {
           }
         }
 
+        const mDisplayPts = expandArcPoints(m.points, m.arcMidIndices);
         let pixelValue = 0;
         if (takeoff.type === 'length' && m.type === 'length') {
-          pixelValue = calculatePolylineLength(m.points);
+          pixelValue = calculatePolylineLength(mDisplayPts);
         } else if (takeoff.type === 'area' && m.type === 'area') {
-          pixelValue = calculatePolygonArea(m.points);
+          pixelValue = calculatePolygonArea(mDisplayPts);
         } else if (takeoff.type === 'area' && m.type === 'length') {
-          pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+          pixelValue = calculateSurfaceAreaPx(mDisplayPts, m.heights || [], m.isTwoSided || false, currentScale);
         } else if (takeoff.type === 'count' && m.type === 'count') {
           pixelValue = 1;
         }
-        
+
         if (pixelValue > 0) {
           const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
           // Convert to the current page's unit so we have a consistent base unit for formatRealValue
           const targetUnit = page.scaleConfig?.unit || 'ft';
           const sourceUnit = currentScale?.unit || 'ft';
-          
+
           if (takeoff.type === 'count') {
             totalRealValue += realValue;
           } else {
@@ -1668,6 +1677,8 @@ const CanvasViewInner: React.FC = () => {
             remoteUsers={users}
             onCursorMove={sendCursor}
             currentUserId={socket?.id}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
           />
 
           {/* Tool Instructions Overlay */}
@@ -2594,11 +2605,14 @@ function MeasurementItem({
           <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
             {measurement.type === 'count'
               ? formatMeasurement(1, 'count', scaleConfig, takeoff)
-              : measurement.type === 'length' 
-                ? (takeoffType === 'area' 
-                    ? formatMeasurement(calculateSurfaceAreaPx(measurement.points, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 'area', scaleConfig, takeoff)
-                    : formatMeasurement(calculatePolylineLength(measurement.points), 'length', scaleConfig, takeoff))
-                : formatMeasurement(calculatePolygonArea(measurement.points), 'area', scaleConfig, takeoff)
+              : (() => {
+                  const dp = expandArcPoints(measurement.points, measurement.arcMidIndices);
+                  return measurement.type === 'length'
+                    ? (takeoffType === 'area'
+                        ? formatMeasurement(calculateSurfaceAreaPx(dp, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 'area', scaleConfig, takeoff)
+                        : formatMeasurement(calculatePolylineLength(dp), 'length', scaleConfig, takeoff))
+                    : formatMeasurement(calculatePolygonArea(dp), 'area', scaleConfig, takeoff);
+                })()
             }
           </span>
           <div className="flex items-center gap-1">
@@ -2662,14 +2676,30 @@ function HeightsModal({
   onClose: () => void;
   onSave: (heights: number[], isTwoSided: boolean) => void;
 }) {
+  const hasExistingPerPoint = measurement.heights && measurement.heights.length > 1 &&
+    measurement.heights.some((h, i) => i > 0 && h !== measurement.heights![0]);
+  const [perPoint, setPerPoint] = useState(hasExistingPerPoint || false);
+  const [globalHeight, setGlobalHeight] = useState<string>(
+    measurement.heights ? (measurement.heights[0]?.toString() || '') : ''
+  );
   const [heights, setHeights] = useState<string[]>(
     measurement.heights?.map(h => h.toString()) || Array(measurement.points.length).fill('')
   );
   const [isTwoSided, setIsTwoSided] = useState(measurement.isTwoSided || false);
 
   const handleSave = () => {
-    const numHeights = heights.map(h => parseFloat(h) || 0);
+    const numHeights = perPoint
+      ? heights.map(h => parseFloat(h) || 0)
+      : Array(measurement.points.length).fill(parseFloat(globalHeight) || 0);
     onSave(numHeights, isTwoSided);
+  };
+
+  const handleTogglePerPoint = (enabled: boolean) => {
+    setPerPoint(enabled);
+    if (enabled) {
+      const val = globalHeight;
+      setHeights(Array(measurement.points.length).fill(val));
+    }
   };
 
   return (
@@ -2677,10 +2707,28 @@ function HeightsModal({
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
         <div className="p-6 border-b border-slate-100">
           <h3 className="text-lg font-semibold text-slate-900">Wall Heights</h3>
-          <p className="text-sm text-slate-500 mt-1">Enter the height at each point to calculate surface area.</p>
+          <p className="text-sm text-slate-500 mt-1">Enter the height to calculate surface area.</p>
         </div>
         <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-          {measurement.points.map((p, i) => (
+          {!perPoint && (
+            <div className="flex items-center gap-4">
+              <label className="text-sm font-medium text-slate-700 w-20">Height</label>
+              <div className="flex-1 relative">
+                <input
+                  type="number"
+                  value={globalHeight}
+                  onChange={e => setGlobalHeight(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 pr-8 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  placeholder="Height"
+                  autoFocus
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                  {scaleConfig?.unit || 'px'}
+                </span>
+              </div>
+            </div>
+          )}
+          {perPoint && measurement.points.map((_p, i) => (
             <div key={i} className="flex items-center gap-4">
               <label className="text-sm font-medium text-slate-700 w-20">Point {i + 1}</label>
               <div className="flex-1 relative">
@@ -2701,7 +2749,16 @@ function HeightsModal({
               </div>
             </div>
           ))}
-          <div className="pt-4 border-t border-slate-100">
+          <div className="pt-3 space-y-3 border-t border-slate-100">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={perPoint}
+                onChange={e => handleTogglePerPoint(e.target.checked)}
+                className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
+              />
+              <span className="text-sm font-medium text-slate-700">Different height at each point</span>
+            </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
