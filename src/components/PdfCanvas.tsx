@@ -150,6 +150,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);
+  const zoomRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -587,11 +588,30 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           x: (lastCenter.x - oldPos.x) / oldScale,
           y: (lastCenter.y - oldPos.y) / oldScale,
         };
-
-        setStageScale(newScale);
-        setStagePos({
+        const newPos = {
           x: center.x - mousePointTo.x * newScale,
           y: center.y - mousePointTo.y * newScale,
+        };
+
+        // Update refs synchronously so the next touchmove (which may fire
+        // before React commits) reads the correct baseline — otherwise the
+        // stale ref causes every other frame to snap backward, producing stutter.
+        stageScaleRef.current = newScale;
+        stagePosRef.current = newPos;
+
+        // Apply directly to the Konva stage for immediate visual feedback,
+        // bypassing React's render cycle on every touchmove event.
+        const stageNode = stage;
+        stageNode.scale({ x: newScale, y: newScale });
+        stageNode.position(newPos);
+        stageNode.batchDraw();
+
+        // Queue a state commit so non-Konva UI (zoom %) reflects the change.
+        if (zoomRafRef.current) cancelAnimationFrame(zoomRafRef.current);
+        zoomRafRef.current = requestAnimationFrame(() => {
+          setStageScale(newScale);
+          setStagePos(newPos);
+          zoomRafRef.current = null;
         });
       }
 
