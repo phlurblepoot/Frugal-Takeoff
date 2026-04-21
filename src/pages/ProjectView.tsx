@@ -942,20 +942,93 @@ export const ProjectView: React.FC = () => {
 
     try {
       const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
-      
-      const data = selectedTakeoffs.map(t => {
-        const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
 
-        return {
-          'Takeoff Name': t.name,
-          'Type': t.type,
-          'Total Quantity': t.totalRealValue,
-          'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Total Cost': roundUpTo100(totalCost)
-        };
-      });
+      // Build rows as array-of-arrays for full control over layout
+      const rows: any[][] = [];
+      rows.push(['Takeoff Name', 'Type', 'Qty', 'Unit Cost', 'Total Cost']);
 
-      const ws = XLSX.utils.json_to_sheet(data);
+      // Group by price package (mirrors the UI)
+      const packageOrder: string[] = [];
+      const packageMap: Record<string, typeof selectedTakeoffs> = {};
+      const ungrouped: typeof selectedTakeoffs = [];
+      for (const t of selectedTakeoffs) {
+        if (t.pricePackage) {
+          if (!packageMap[t.pricePackage]) {
+            packageMap[t.pricePackage] = [];
+            packageOrder.push(t.pricePackage);
+          }
+          packageMap[t.pricePackage].push(t);
+        } else {
+          ungrouped.push(t);
+        }
+      }
+
+      const addTakeoffRows = (takeoff: typeof selectedTakeoffs[0]) => {
+        const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+        const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
+
+        const qtyFormatted = takeoff.totalRealValue > 0
+          ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false)
+          : '-';
+
+        let unitCost: string;
+        if (takeoff.isAdvancedCost) {
+          unitCost = totalCost > 0 ? `$${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)} avg/unit` : '-';
+        } else {
+          unitCost = takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-';
+        }
+
+        const totalCostFormatted = totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-';
+
+        // Main takeoff row
+        rows.push([takeoff.name, takeoff.type, qtyFormatted, unitCost, totalCostFormatted]);
+
+        // Advanced pricing detail sub-rows
+        if (takeoff.isAdvancedCost && costDetails.length > 0) {
+          costDetails.forEach(d => {
+            if (d.quantity !== undefined && d.quantity > 0) {
+              const itemUnitCost = d.type === 'yield'
+                ? `$${(d.cost || 0).toFixed(2)}/unit`
+                : d.type === 'amount_per_units'
+                  ? `$${(d.amount || 0).toFixed(2)}/unit`
+                  : '';
+              rows.push([
+                `  └ ${d.name}`,
+                '',
+                `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'}`,
+                itemUnitCost,
+                `$${d.costValue.toFixed(2)}`
+              ]);
+            } else if (d.type === 'flat') {
+              rows.push([`  └ ${d.name}`, '', 'flat', '', `$${d.costValue.toFixed(2)}`]);
+            } else if (d.type === 'unit') {
+              rows.push([
+                `  └ ${d.name}`,
+                '',
+                qtyFormatted,
+                `$${(d.costPerUnit || 0).toFixed(2)}/unit`,
+                `$${d.costValue.toFixed(2)}`
+              ]);
+            }
+          });
+        }
+      };
+
+      for (const pkg of packageOrder) {
+        rows.push([`── ${pkg} ──`, '', '', '', '']);
+        packageMap[pkg].forEach(addTakeoffRows);
+      }
+      ungrouped.forEach(addTakeoffRows);
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 36 },
+        { wch: 10 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 16 },
+      ];
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Takeoffs");
       
