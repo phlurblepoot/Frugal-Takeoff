@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X, Mail, Upload, Send, ChevronDown, ChevronUp, RefreshCw, FileText, ExternalLink } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Project, Bid } from '../types';
-import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, deleteBid, saveProject } from '../utils/store';
+import { Project, Bid, BidStatus } from '../types';
+import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid, sendProposal } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -52,8 +52,19 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     } catch { return false; }
   });
 
-  // New Bid state
-  const [newBid, setNewBid] = useState({ name: '', contractor: '', address: '', decision: 'pending' as const });
+  // Bid pipeline state
+  const [bidFilter, setBidFilter] = useState<'all' | BidStatus>('all');
+  const [expandedBidIds, setExpandedBidIds] = useState<Set<string>>(new Set());
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importForm, setImportForm] = useState({ from: '', fromName: '', subject: '', body: '' });
+  const [importSaving, setImportSaving] = useState(false);
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [proposalBid, setProposalBid] = useState<Bid | null>(null);
+  const [proposalFileId, setProposalFileId] = useState('');
+  const [proposalMessage, setProposalMessage] = useState('');
+  const [proposalSending, setProposalSending] = useState(false);
+  const [showAddManual, setShowAddManual] = useState(false);
+  const [manualBid, setManualBid] = useState({ name: '', contractor: '', address: '' });
 
   useEffect(() => {
     loadData();
@@ -84,34 +95,43 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     setIsLoading(false);
   };
 
-  const handleAddBid = async () => {
-    if (!newBid.name) return;
-    const bid: Bid = {
-      id: uuidv4(),
-      ...newBid,
-      createdAt: Date.now()
-    };
+  const handleAddManualBid = async () => {
+    if (!manualBid.name) return;
+    const bid: Bid = { id: uuidv4(), ...manualBid, decision: 'new', createdAt: Date.now() };
     await saveBid(bid);
-    const updatedBids = await getBids();
-    setBids(updatedBids);
-    setNewBid({ name: '', contractor: '', address: '', decision: 'pending' });
+    setBids(await getBids());
+    setManualBid({ name: '', contractor: '', address: '' });
+    setShowAddManual(false);
   };
 
-  const handleUpdateBidDecision = async (id: string, decision: 'yes' | 'no' | 'pending') => {
+  const handleImportEmail = async () => {
+    if (!importForm.subject && !importForm.body) return;
+    setImportSaving(true);
+    try {
+      await importEmailAsBid(importForm);
+      setBids(await getBids());
+      setShowImportModal(false);
+      setImportForm({ from: '', fromName: '', subject: '', body: '' });
+    } catch (e: any) {
+      alert('Failed to import: ' + (e.message || 'Unknown error'));
+    } finally {
+      setImportSaving(false);
+    }
+  };
+
+  const handleUpdateBidStatus = async (id: string, decision: BidStatus) => {
     const bid = bids.find(b => b.id === id);
     if (bid) {
-      await saveBid({ ...bid, decision });
-      const updatedBids = await getBids();
-      setBids(updatedBids);
+      const updated = { ...bid, decision };
+      await updateBid(updated);
+      setBids(prev => prev.map(b => b.id === id ? updated : b));
     }
   };
 
   const handleDeleteBid = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this bid?')) {
-      await deleteBid(id);
-      const updatedBids = await getBids();
-      setBids(updatedBids);
-    }
+    if (!window.confirm('Delete this bid?')) return;
+    await deleteBid(id);
+    setBids(prev => prev.filter(b => b.id !== id));
   };
 
   const handleConvertBid = (bid: Bid) => {
@@ -123,6 +143,23 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
         fromBidId: bid.id
       }
     });
+  };
+
+  const handleSendProposal = async () => {
+    if (!proposalBid || !proposalFileId) return;
+    setProposalSending(true);
+    try {
+      const updated = await sendProposal(proposalBid.id, proposalFileId, proposalMessage || undefined);
+      setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
+      setShowProposalModal(false);
+      setProposalBid(null);
+      setProposalFileId('');
+      setProposalMessage('');
+    } catch (e: any) {
+      alert('Failed to send: ' + (e.message || 'Unknown error'));
+    } finally {
+      setProposalSending(false);
+    }
   };
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -647,193 +684,157 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
           >
-          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Add Potential Bid</h2>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
-                  <input
-                    type="text"
-                    value={newBid.name}
-                    onChange={e => setNewBid({ ...newBid, name: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
-                    placeholder="e.g. City Hall Renovation"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contractor</label>
-                  <input
-                    type="text"
-                    value={newBid.contractor}
-                    onChange={e => setNewBid({ ...newBid, contractor: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
-                    placeholder="e.g. ABC Construction"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Address</label>
-                  <input
-                    type="text"
-                    value={newBid.address}
-                    onChange={e => setNewBid({ ...newBid, address: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 outline-none"
-                    placeholder="e.g. 123 Main St"
-                  />
-                </div>
-                <button
-                  onClick={handleAddBid}
-                  disabled={!newBid.name}
-                  className="flex items-center justify-center gap-2 bg-accent-600 hover:bg-accent-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 h-[42px]"
-                >
-                  <Plus size={18} />
-                  Add Bid
-                </button>
-              </div>
+          {/* Bid Pipeline Header */}
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="flex flex-wrap gap-2">
+              {(['all', 'new', 'reviewing', 'proposal_sent', 'won', 'lost'] as const).map(f => {
+                const count = f === 'all' ? bids.length : bids.filter(b => b.decision === f || (f === 'new' && (b.decision === 'pending')) || (f === 'won' && b.decision === 'yes') || (f === 'lost' && b.decision === 'no')).length;
+                const labels: Record<string, string> = { all: 'All', new: 'New', reviewing: 'Reviewing', proposal_sent: 'Sent', won: 'Won', lost: 'Lost' };
+                return (
+                  <button key={f} onClick={() => setBidFilter(f)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${bidFilter === f ? 'bg-accent-600 text-white shadow-sm' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'}`}>
+                    {labels[f]} {count > 0 && <span className={`ml-1 text-xs ${bidFilter === f ? 'opacity-75' : 'text-slate-400'}`}>{count}</span>}
+                  </button>
+                );
+              })}
             </div>
-
-            {/* Desktop Table View */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Project Name</th>
-                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Contractor</th>
-                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Address</th>
-                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Decision</th>
-                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {bids.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
-                        No potential bids added yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    bids.map((bid) => (
-                      <tr key={bid.id} className="hover:bg-slate-50 transition-colors group">
-                        <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-100">{bid.name}</td>
-                        <td className="px-6 py-4 text-slate-600">{bid.contractor || '-'}</td>
-                        <td className="px-6 py-4">
-                          {bid.address ? (
-                            <div className="flex items-center gap-2 text-sm text-slate-600">
-                              <MapPin size={14} className="text-slate-400" />
-                              <a 
-                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bid.address)}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="line-clamp-1 hover:text-accent-600 hover:underline transition-colors"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {bid.address}
-                              </a>
-                            </div>
-                          ) : (
-                            <span className="text-sm text-slate-400 italic">-</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
-                          <select
-                            value={bid.decision}
-                            onChange={(e) => handleUpdateBidDecision(bid.id, e.target.value as any)}
-                            className={`text-sm font-medium rounded-full px-3 py-1 outline-none border-2 ${
-                              bid.decision === 'yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                              bid.decision === 'no' ? 'bg-red-50 text-red-700 border-red-200' :
-                              'bg-amber-50 text-amber-700 border-amber-200'
-                            }`}
-                          >
-                            <option value="pending">Pending</option>
-                            <option value="yes">Yes</option>
-                            <option value="no">No</option>
-                          </select>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => handleConvertBid(bid)}
-                              className="text-accent-600 hover:text-accent-700 hover:bg-accent-50 dark:hover:bg-accent-900/30 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors opacity-0 group-hover:opacity-100"
-                            >
-                              Convert to Project
-                            </button>
-                            <button
-                              onClick={() => handleDeleteBid(bid.id)}
-                              className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                              title="Delete Bid"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Mobile Card View for Bids */}
-            <div className="md:hidden divide-y divide-slate-100">
-              {bids.length === 0 ? (
-                <div className="p-8 text-center text-slate-500">
-                  No potential bids added yet.
-                </div>
-              ) : (
-                bids.map((bid) => (
-                  <div key={bid.id} className="p-4 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div className="font-bold text-slate-900 dark:text-white">{bid.name}</div>
-                      <button
-                        onClick={() => handleDeleteBid(bid.id)}
-                        className="text-slate-400 hover:text-red-500 p-1"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      {bid.contractor && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <Building2 size={14} className="text-slate-400 shrink-0" />
-                          <span>{bid.contractor}</span>
-                        </div>
-                      )}
-                      {bid.address && (
-                        <div className="flex items-center gap-2 text-sm text-slate-600">
-                          <MapPin size={14} className="text-slate-400 shrink-0" />
-                          <span className="line-clamp-1">{bid.address}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2">
-                      <select
-                        value={bid.decision}
-                        onChange={(e) => handleUpdateBidDecision(bid.id, e.target.value as any)}
-                        className={`text-xs font-bold uppercase tracking-wider rounded-full px-3 py-1 outline-none border-2 ${
-                          bid.decision === 'yes' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                          bid.decision === 'no' ? 'bg-red-50 text-red-700 border-red-200' :
-                          'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}
-                      >
-                        <option value="pending">Pending</option>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
-                      
-                      <button
-                        onClick={() => handleConvertBid(bid)}
-                        className="text-accent-600 hover:text-accent-700 text-sm font-bold uppercase tracking-wider"
-                      >
-                        Convert
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
+            <div className="flex gap-2">
+              <button onClick={() => setShowAddManual(p => !p)} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">
+                <Plus size={15} /> Add Manually
+              </button>
+              <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all shadow-sm">
+                <Mail size={15} /> Import Email
+              </button>
             </div>
           </div>
+
+          {/* Manual Add Form */}
+          {showAddManual && (
+            <div className="mb-4 p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 mb-3 uppercase tracking-wider">Add Bid Manually</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white outline-none focus:ring-2 focus:ring-accent-500 text-sm" value={manualBid.name} onChange={e => setManualBid(m => ({ ...m, name: e.target.value }))} placeholder="Project name *" />
+                <input className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white outline-none focus:ring-2 focus:ring-accent-500 text-sm" value={manualBid.contractor} onChange={e => setManualBid(m => ({ ...m, contractor: e.target.value }))} placeholder="Contractor / company" />
+                <input className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white outline-none focus:ring-2 focus:ring-accent-500 text-sm" value={manualBid.address} onChange={e => setManualBid(m => ({ ...m, address: e.target.value }))} placeholder="Address" />
+              </div>
+              <div className="flex gap-2 mt-3 justify-end">
+                <button onClick={() => setShowAddManual(false)} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
+                <button onClick={handleAddManualBid} disabled={!manualBid.name} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">Add Bid</button>
+              </div>
+            </div>
+          )}
+
+          {/* Bid Cards */}
+          {(() => {
+            const STATUS_LABEL: Record<string, string> = { new: 'New', reviewing: 'Reviewing', proposal_sent: 'Proposal Sent', won: 'Won', lost: 'Lost', pending: 'Pending', yes: 'Won', no: 'Lost' };
+            const STATUS_CLS: Record<string, string> = {
+              new: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700',
+              reviewing: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700',
+              proposal_sent: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700',
+              won: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700',
+              lost: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700',
+              pending: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700',
+              yes: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700',
+              no: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-700',
+            };
+            const visibleBids = bids.filter(b => {
+              if (bidFilter === 'all') return true;
+              if (bidFilter === 'won') return b.decision === 'won' || b.decision === 'yes';
+              if (bidFilter === 'lost') return b.decision === 'lost' || b.decision === 'no';
+              if (bidFilter === 'new') return b.decision === 'new' || b.decision === 'pending';
+              return b.decision === bidFilter;
+            });
+            if (visibleBids.length === 0) return (
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-12 text-center text-slate-400 dark:text-slate-500">
+                {bids.length === 0
+                  ? <><Mail size={36} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No bids yet</p><p className="text-sm mt-1">Import an email invitation or add a bid manually.</p></>
+                  : <p>No bids in this category.</p>
+                }
+              </div>
+            );
+            return (
+              <div className="space-y-3">
+                {visibleBids.map(bid => {
+                  const isExpanded = expandedBidIds.has(bid.id);
+                  const linkedProject = bid.projectId ? projects.find(p => p.id === bid.projectId) : null;
+                  return (
+                    <div key={bid.id} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                      {/* Card Header */}
+                      <div className="p-4 flex items-start gap-4">
+                        <div className={`mt-0.5 p-2 rounded-lg shrink-0 ${bid.email ? 'bg-accent-50 dark:bg-accent-900/30' : 'bg-slate-100 dark:bg-slate-700'}`}>
+                          <Mail size={18} className={bid.email ? 'text-accent-600 dark:text-accent-400' : 'text-slate-400'} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <p className="font-bold text-slate-900 dark:text-white leading-tight">{bid.email?.subject || bid.name}</p>
+                              {bid.email ? (
+                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                                  <span className="font-medium text-slate-700 dark:text-slate-300">{bid.email.fromName || bid.email.from}</span>
+                                  {bid.email.fromName && <span className="text-slate-400"> &lt;{bid.email.from}&gt;</span>}
+                                  <span className="ml-2">{new Date(bid.email.receivedAt).toLocaleDateString()}</span>
+                                </p>
+                              ) : (
+                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{bid.contractor || 'No contractor'}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <select value={bid.decision} onChange={e => handleUpdateBidStatus(bid.id, e.target.value as BidStatus)}
+                                className={`text-xs font-semibold rounded-full px-3 py-1 outline-none border cursor-pointer ${STATUS_CLS[bid.decision] || STATUS_CLS.new}`}>
+                                <option value="new">New</option>
+                                <option value="reviewing">Reviewing</option>
+                                <option value="proposal_sent">Proposal Sent</option>
+                                <option value="won">Won</option>
+                                <option value="lost">Lost</option>
+                              </select>
+                            </div>
+                          </div>
+                          {/* Body preview */}
+                          {bid.email?.body && (
+                            <p className={`text-sm text-slate-500 dark:text-slate-400 mt-2 ${isExpanded ? '' : 'line-clamp-2'} whitespace-pre-wrap`}>
+                              {bid.email.body}
+                            </p>
+                          )}
+                          {/* Actions row */}
+                          <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
+                            {bid.email?.body && (
+                              <button onClick={() => setExpandedBidIds(s => { const n = new Set(s); isExpanded ? n.delete(bid.id) : n.add(bid.id); return n; })}
+                                className="flex items-center gap-1 text-xs text-slate-500 hover:text-accent-600 transition-colors">
+                                {isExpanded ? <><ChevronUp size={13} /> Show less</> : <><ChevronDown size={13} /> Show full email</>}
+                              </button>
+                            )}
+                            <div className="ml-auto flex items-center gap-2">
+                              {bid.proposalSentAt && (
+                                <span className="text-xs text-slate-400">Proposal sent {new Date(bid.proposalSentAt).toLocaleDateString()}</span>
+                              )}
+                              {linkedProject ? (
+                                <Link to={`/project/${linkedProject.id}`} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent-300 dark:border-accent-700 text-xs font-medium text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-all">
+                                  <ExternalLink size={13} /> Open Project
+                                </Link>
+                              ) : (
+                                <button onClick={() => handleConvertBid(bid)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">
+                                  <FolderOpen size={13} /> Create Project
+                                </button>
+                              )}
+                              {bid.email && (
+                                <button onClick={() => { setProposalBid(bid); setShowProposalModal(true); }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all">
+                                  <Send size={13} /> Send Proposal
+                                </button>
+                              )}
+                              <button onClick={() => handleDeleteBid(bid.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-all">
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
           </motion.div>
         ) : (
           <motion.div key="templates"
@@ -845,6 +846,87 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
         )}
         </AnimatePresence>
       </div>
+
+      {/* Import Email Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Import Email</h3>
+              <button onClick={() => setShowImportModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-500 dark:text-slate-400">Paste the details from the invitation email. The subject line will become the bid name.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">From Name</label>
+                  <input className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500" value={importForm.fromName} onChange={e => setImportForm(f => ({ ...f, fromName: e.target.value }))} placeholder="John Smith" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">From Email</label>
+                  <input className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500" value={importForm.from} onChange={e => setImportForm(f => ({ ...f, from: e.target.value }))} placeholder="john@contractor.com" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Subject *</label>
+                <input className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500" value={importForm.subject} onChange={e => setImportForm(f => ({ ...f, subject: e.target.value }))} placeholder="ITB: City Hall Renovation - Due May 15" required />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Email Body</label>
+                <textarea rows={6} className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500 resize-none" value={importForm.body} onChange={e => setImportForm(f => ({ ...f, body: e.target.value }))} placeholder="Paste the email body here…" />
+              </div>
+            </div>
+            <div className="p-6 pt-0 flex justify-end gap-3">
+              <button onClick={() => setShowImportModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
+              <button onClick={handleImportEmail} disabled={importSaving || (!importForm.subject && !importForm.body)} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+                {importSaving ? <><RefreshCw size={15} className="animate-spin" /> Importing…</> : <><Upload size={15} /> Import</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send Proposal Modal */}
+      {showProposalModal && proposalBid && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Send size={20} className="text-accent-600" /> Send Proposal</h3>
+              <button onClick={() => setShowProposalModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3 text-sm">
+                <p className="text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider mb-1">Replying to</p>
+                <p className="font-semibold text-slate-800 dark:text-slate-200">{proposalBid.email?.fromName || proposalBid.email?.from}</p>
+                <p className="text-slate-500 dark:text-slate-400 text-xs">{proposalBid.email?.from} · Re: {proposalBid.email?.subject}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Attach Proposal</label>
+                <select className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500"
+                  value={proposalFileId} onChange={e => setProposalFileId(e.target.value)}>
+                  <option value="">— Select a printout —</option>
+                  {projects.flatMap(p => (p.printouts || []).filter(pr => pr.type === 'pdf').map(pr => (
+                    <option key={pr.fileId} value={pr.fileId}>{p.name} › {pr.name}</option>
+                  )))}
+                </select>
+                {projects.every(p => !(p.printouts || []).some(pr => pr.type === 'pdf')) && (
+                  <p className="mt-1.5 text-xs text-slate-400">No PDF printouts found. Generate one from a project first.</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Message <span className="font-normal text-slate-400 normal-case">(optional)</span></label>
+                <textarea rows={4} className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500 resize-none" value={proposalMessage} onChange={e => setProposalMessage(e.target.value)} placeholder="Please find our proposal attached. Don't hesitate to reach out with any questions." />
+              </div>
+            </div>
+            <div className="p-6 pt-0 flex justify-end gap-3">
+              <button onClick={() => setShowProposalModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
+              <button onClick={handleSendProposal} disabled={proposalSending || !proposalFileId} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+                {proposalSending ? <><RefreshCw size={15} className="animate-spin" /> Sending…</> : <><Send size={15} /> Send</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {projectToDelete && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">

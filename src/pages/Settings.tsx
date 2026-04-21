@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow } from '../utils/store';
+import { EmailAccount, SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 
@@ -363,6 +364,346 @@ const PreferencesTab: React.FC = () => {
   );
 };
 
+// ── Email tab ─────────────────────────────────────────────────────────────────
+
+const POLL_INTERVALS = [
+  { label: 'Disabled', value: '0' },
+  { label: 'Every 5 minutes', value: '5' },
+  { label: 'Every 15 minutes', value: '15' },
+  { label: 'Every 30 minutes', value: '30' },
+  { label: 'Every hour', value: '60' },
+];
+
+const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
+const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
+
+interface ImapAccountFormProps {
+  initial?: Partial<EmailAccount>;
+  onSave: (data: Omit<EmailAccount, 'id' | 'createdAt'>) => Promise<void>;
+  onCancel: () => void;
+}
+
+const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCancel }) => {
+  const [form, setForm] = useState({
+    label: initial?.label || '',
+    host: initial?.host || '',
+    port: initial?.port?.toString() || '993',
+    secure: initial?.secure !== false,
+    username: initial?.username || '',
+    password: initial?.password || '',
+    folder: initial?.folder || 'INBOX',
+  });
+  const [saving, setSaving] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+  const set = (k: string, v: string | boolean) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({ ...form, port: parseInt(form.port) || 993, secure: form.secure });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Account Label</label>
+          <input className={inputCls} value={form.label} onChange={e => set('label', e.target.value)} placeholder="e.g. Work Gmail" required />
+        </div>
+        <div>
+          <label className={labelCls}>Folder / Label to watch</label>
+          <input className={inputCls} value={form.folder} onChange={e => set('folder', e.target.value)} placeholder="e.g. Bid Invitations" required />
+          <p className="mt-1 text-xs text-slate-400">Create a filter in your email client to route bid emails to this folder, then enter its name here.</p>
+        </div>
+        <div>
+          <label className={labelCls}>IMAP Server</label>
+          <input className={inputCls} value={form.host} onChange={e => set('host', e.target.value)} placeholder="imap.gmail.com" required />
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className={labelCls}>Port</label>
+            <input className={inputCls} type="number" value={form.port} onChange={e => set('port', e.target.value)} placeholder="993" required />
+          </div>
+          <div className="flex flex-col justify-end pb-0.5">
+            <label className={labelCls}>SSL</label>
+            <button type="button" onClick={() => set('secure', !form.secure)}
+              className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${form.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
+              {form.secure ? 'SSL/TLS' : 'STARTTLS'}
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Username / Email</label>
+          <input className={inputCls} value={form.username} onChange={e => set('username', e.target.value)} placeholder="you@example.com" required />
+        </div>
+        <div>
+          <label className={labelCls}>Password / App Password</label>
+          <div className="relative">
+            <input className={inputCls + ' pr-12'} type={showPass ? 'text' : 'password'} value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" required={!initial} />
+            <button type="button" onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {initial && <p className="mt-1 text-xs text-slate-400">Leave blank to keep existing password.</p>}
+        </div>
+      </div>
+      <div className="flex gap-3 justify-end pt-2">
+        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">Cancel</button>
+        <button type="submit" disabled={saving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save Account'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+const EmailTab: React.FC = () => {
+  const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
+  const [smtpSaving, setSmtpSaving] = useState(false);
+  const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [smtpTestMsg, setSmtpTestMsg] = useState('');
+  const [showSmtpPass, setShowSmtpPass] = useState(false);
+
+  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null);
+  const [testingAccount, setTestingAccount] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, 'ok' | 'error'>>({});
+
+  const [pollInterval, setPollInterval] = useState('0');
+  const [polling, setPolling] = useState(false);
+  const [pollResult, setPollResult] = useState<string>('');
+
+  const [loading, setLoading] = useState(true);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [smtpData, accts, settings] = await Promise.all([getSmtpSettings(), getEmailAccounts(), fetch('/api/settings', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(r => r.json())]);
+      setSmtp(smtpData);
+      setAccounts(accts);
+      setPollInterval(settings['email.pollIntervalMinutes'] || '0');
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const handleSmtpSave = async () => {
+    setSmtpSaving(true);
+    try { await saveSmtpSettings(smtp as Record<string, string>); alert('SMTP settings saved.'); }
+    catch { alert('Failed to save SMTP settings.'); }
+    finally { setSmtpSaving(false); }
+  };
+
+  const handleSmtpTest = async () => {
+    setSmtpTestStatus('testing');
+    setSmtpTestMsg('');
+    try {
+      await saveSmtpSettings(smtp as Record<string, string>);
+      await testSmtpConnection();
+      setSmtpTestStatus('ok');
+      setSmtpTestMsg('Connection successful!');
+    } catch (e: any) {
+      setSmtpTestStatus('error');
+      setSmtpTestMsg(e.message || 'Connection failed');
+    }
+  };
+
+  const handleAddAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
+    const acct = await createEmailAccount(data);
+    setAccounts(a => [...a, acct]);
+    setShowAddAccount(false);
+  };
+
+  const handleUpdateAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
+    if (!editingAccount) return;
+    const updated = await updateEmailAccount({ ...editingAccount, ...data });
+    setAccounts(a => a.map(x => x.id === updated.id ? updated : x));
+    setEditingAccount(null);
+  };
+
+  const handleDeleteAccount = async (id: string) => {
+    if (!confirm('Remove this email account?')) return;
+    await deleteEmailAccount(id);
+    setAccounts(a => a.filter(x => x.id !== id));
+  };
+
+  const handleTestAccount = async (id: string) => {
+    setTestingAccount(id);
+    try {
+      await testImapAccount(id);
+      setTestResults(r => ({ ...r, [id]: 'ok' }));
+    } catch {
+      setTestResults(r => ({ ...r, [id]: 'error' }));
+    } finally {
+      setTestingAccount(null);
+    }
+  };
+
+  const handleSavePollInterval = async () => {
+    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ 'email.pollIntervalMinutes': pollInterval }) });
+    alert('Polling interval saved. Restart the server for changes to take effect.');
+  };
+
+  const handlePollNow = async () => {
+    setPolling(true);
+    setPollResult('');
+    try {
+      const r = await pollEmailNow();
+      setPollResult(r.imported > 0 ? `Imported ${r.imported} new bid(s).` : 'No new emails found.');
+    } catch (e: any) {
+      setPollResult(`Error: ${e.message}`);
+    } finally {
+      setPolling(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
+
+  return (
+    <div className="space-y-6">
+      {/* SMTP */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Used to send proposals as email replies. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2 grid grid-cols-3 gap-4">
+              <div className="col-span-2">
+                <label className={labelCls}>SMTP Server</label>
+                <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
+              </div>
+              <div>
+                <label className={labelCls}>Port</label>
+                <input className={inputCls} type="number" value={smtp.port || ''} onChange={e => setSmtp(s => ({ ...s, port: parseInt(e.target.value) || undefined }))} placeholder="587" />
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Username / Email</label>
+              <input className={inputCls} value={smtp.username || ''} onChange={e => setSmtp(s => ({ ...s, username: e.target.value }))} placeholder="you@example.com" />
+            </div>
+            <div>
+              <label className={labelCls}>Password / App Password</label>
+              <div className="relative">
+                <input className={inputCls + ' pr-12'} type={showSmtpPass ? 'text' : 'password'} value={smtp.password || ''} onChange={e => setSmtp(s => ({ ...s, password: e.target.value }))} placeholder="••••••••" />
+                <button type="button" onClick={() => setShowSmtpPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  {showSmtpPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>From Name</label>
+              <input className={inputCls} value={smtp.fromName || ''} onChange={e => setSmtp(s => ({ ...s, fromName: e.target.value }))} placeholder="Acme Estimating" />
+            </div>
+            <div>
+              <label className={labelCls}>From Address</label>
+              <input className={inputCls} value={smtp.fromAddress || ''} onChange={e => setSmtp(s => ({ ...s, fromAddress: e.target.value }))} placeholder="estimates@acme.com" />
+            </div>
+            <div className="flex items-end">
+              <button type="button" onClick={() => setSmtp(s => ({ ...s, secure: !s.secure }))}
+                className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${smtp.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
+                {smtp.secure ? 'SSL/TLS (port 465)' : 'STARTTLS (port 587)'}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-2">
+            <button onClick={handleSmtpSave} disabled={smtpSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+              <Save size={16} /> {smtpSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button onClick={handleSmtpTest} disabled={smtpTestStatus === 'testing'} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2">
+              {smtpTestStatus === 'testing' ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />} Test Connection
+            </button>
+            {smtpTestStatus === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"><CheckCircle size={15} /> {smtpTestMsg}</span>}
+            {smtpTestStatus === 'error' && <span className="flex items-center gap-1.5 text-sm text-red-600 dark:text-red-400"><XCircle size={15} /> {smtpTestMsg}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* IMAP accounts */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Inbound Email Monitoring (IMAP)</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Optional. Add email accounts to monitor — new emails in the watched folder automatically appear in the Bid Pipeline.</p>
+          </div>
+          <button onClick={() => { setShowAddAccount(true); setEditingAccount(null); }} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all">
+            <Plus size={16} /> Add Account
+          </button>
+        </div>
+        <div className="divide-y divide-slate-100 dark:divide-slate-700">
+          {accounts.length === 0 && !showAddAccount && (
+            <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-sm">No email accounts configured. Add one to enable automatic bid import.</div>
+          )}
+          {accounts.map(acct => (
+            <div key={acct.id}>
+              {editingAccount?.id === acct.id ? (
+                <div className="p-4">
+                  <ImapAccountForm initial={acct} onSave={handleUpdateAccount} onCancel={() => setEditingAccount(null)} />
+                </div>
+              ) : (
+                <div className="px-6 py-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{acct.label}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{acct.username} · {acct.host}:{acct.port} · watching <span className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">{acct.folder}</span></p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {testResults[acct.id] === 'ok' && <span className="text-green-500"><CheckCircle size={16} /></span>}
+                    {testResults[acct.id] === 'error' && <span className="text-red-500"><XCircle size={16} /></span>}
+                    <button onClick={() => handleTestAccount(acct.id)} disabled={testingAccount === acct.id} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5">
+                      {testingAccount === acct.id ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />} Test
+                    </button>
+                    <button onClick={() => setEditingAccount(acct)} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Edit</button>
+                    <button onClick={() => handleDeleteAccount(acct.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-all"><Trash2 size={15} /></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          {showAddAccount && (
+            <div className="p-4">
+              <ImapAccountForm onSave={handleAddAccount} onCancel={() => setShowAddAccount(false)} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Polling interval */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Automatic Polling</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">How often the server checks configured IMAP accounts for new emails. Changes take effect after a server restart.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex items-end gap-4">
+            <div className="flex-1">
+              <label className={labelCls}>Check interval</label>
+              <select className={inputCls} value={pollInterval} onChange={e => setPollInterval(e.target.value)}>
+                {POLL_INTERVALS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <button onClick={handleSavePollInterval} className="px-4 py-2.5 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all flex items-center gap-2">
+              <Save size={16} /> Save
+            </button>
+          </div>
+          <div className="flex items-center gap-4 pt-2 border-t border-slate-100 dark:border-slate-700">
+            <button onClick={handlePollNow} disabled={polling || accounts.length === 0} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2 disabled:opacity-50">
+              <RefreshCw size={16} className={polling ? 'animate-spin' : ''} /> Poll Now
+            </button>
+            {pollResult && <span className="text-sm text-slate-600 dark:text-slate-400">{pollResult}</span>}
+            {accounts.length === 0 && <span className="text-sm text-slate-400">Add an IMAP account first.</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Changelog tab ─────────────────────────────────────────────────────────────
 
 const ChangelogTab: React.FC = () => (
@@ -397,7 +738,7 @@ const ChangelogTab: React.FC = () => (
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'users' | 'changelog';
+type TabId = 'preferences' | 'general' | 'email' | 'users' | 'changelog';
 
 export const Settings: React.FC = () => {
   const [serverSettings, setServerSettings] = useState<Record<string, string>>({
@@ -462,6 +803,7 @@ export const Settings: React.FC = () => {
   const allTabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
+    { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
   ];
@@ -475,8 +817,6 @@ export const Settings: React.FC = () => {
     );
   }
 
-  const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
-  const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
@@ -624,6 +964,8 @@ export const Settings: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {activeTab === 'email' && isAdmin && <EmailTab />}
 
             {activeTab === 'users' && isAdmin && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">
