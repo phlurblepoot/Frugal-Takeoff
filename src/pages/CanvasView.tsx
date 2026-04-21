@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
-import { Measurement, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
+import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
@@ -260,6 +260,16 @@ const CanvasViewInner: React.FC = () => {
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
   const [newMeasurementToken, setNewMeasurementToken] = useState(0);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+
+  // Clear multi-select when switching to a drawing tool
+  useEffect(() => {
+    if (currentTool === 'length' || currentTool === 'area' || currentTool === 'count' || currentTool === 'scale') {
+      setMultiSelectedIds(new Set());
+      setIsMultiSelectMode(false);
+    }
+  }, [currentTool]);
   const [aggregatedMeasurements, setAggregatedMeasurements] = useState<Measurement[]>([]);
 
   const [heightsModalMeasurementId, setHeightsModalMeasurementId] = useState<string | null>(null);
@@ -366,6 +376,67 @@ const CanvasViewInner: React.FC = () => {
     setHistory(prev => [...prev, action]);
     applyAction(action, 'redo');
     toast('Redone', { type: 'info', duration: 1500 });
+  };
+
+  const handleMultiSelectToggle = (id: string, type: string) => {
+    setMultiSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
+      // Enforce same type — can't mix lengths and areas
+      const existing = [...next].map(eid => page?.measurements.find(m => m.id === eid));
+      const existingType = existing[0]?.type;
+      if (existingType && existingType !== type) return prev;
+      next.add(id);
+      return next;
+    });
+  };
+
+  const handleMergeSelected = () => {
+    if (!page || multiSelectedIds.size < 2) return;
+    const selectedMs = page.measurements.filter(m => multiSelectedIds.has(m.id));
+    if (selectedMs.length < 2) return;
+
+    const measurementType = selectedMs[0].type;
+
+    const sidebarM = selectedMeasurementId
+      ? page.measurements.find(m => m.id === selectedMeasurementId)
+      : null;
+
+    const target = sidebarM && sidebarM.type === measurementType ? sidebarM : selectedMs[0];
+    const createNew = !sidebarM || sidebarM.type !== measurementType;
+
+    // Measurements whose segments will be folded into target
+    const sources = createNew
+      ? selectedMs.filter(m => m.id !== target.id)
+      : selectedMs;
+
+    const mergedSegments: MeasurementSegment[] = [
+      ...(target.segments ?? []),
+      ...sources.flatMap(m => [
+        { points: m.points, arcMidIndices: m.arcMidIndices } as MeasurementSegment,
+        ...(m.segments ?? []),
+      ]),
+    ];
+
+    updateMeasurement(
+      target.id,
+      {
+        segments: mergedSegments.length > 0 ? mergedSegments : undefined,
+        ...(createNew ? { name: `Merged ${measurementType === 'length' ? 'Length' : 'Area'}` } : {}),
+      },
+    );
+
+    // Delete source measurements (keep target)
+    for (const m of sources.filter(m => m.id !== target.id)) {
+      deleteMeasurement(m.id);
+    }
+
+    setMultiSelectedIds(new Set());
+    setIsMultiSelectMode(false);
+    setSelectedMeasurementId(target.id);
   };
 
   useEffect(() => {
@@ -1582,6 +1653,14 @@ const CanvasViewInner: React.FC = () => {
               >
                 <HelpCircle size={20} />
               </button>
+              <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
+              <button
+                onClick={() => { setIsMultiSelectMode(m => !m); if (isMultiSelectMode) setMultiSelectedIds(new Set()); }}
+                className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${isMultiSelectMode ? 'bg-amber-500 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-amber-600'}`}
+                title="Multi-select (Ctrl+click on desktop)"
+              >
+                <BoxSelect size={20} />
+              </button>
             </div>
           </div>
 
@@ -1688,6 +1767,10 @@ const CanvasViewInner: React.FC = () => {
             onPaste={handlePaste}
             hasCopied={!!localStorage.getItem('copiedMeasurement')}
             newMeasurementToken={newMeasurementToken}
+            multiSelectedIds={multiSelectedIds}
+            onMultiSelectToggle={handleMultiSelectToggle}
+            onClearMultiSelect={() => setMultiSelectedIds(new Set())}
+            isMultiSelectMode={isMultiSelectMode}
           />
 
           {/* Tool Instructions Overlay */}
@@ -1766,6 +1849,44 @@ const CanvasViewInner: React.FC = () => {
             {!page.scaleConfig && (
               <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-lg text-sm text-amber-700 dark:text-amber-400">
                 Please set the scale on the left sidebar.
+              </div>
+            )}
+
+            {/* Multi-select merge banner */}
+            {multiSelectedIds.size > 0 && (
+              <div className="mb-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-xl p-3 flex-shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                      {multiSelectedIds.size} selected
+                    </p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                      {(() => {
+                        const types = [...multiSelectedIds].map(id => page.measurements.find(m => m.id === id)?.type).filter(Boolean);
+                        const allSame = types.every(t => t === types[0]);
+                        if (!allSame) return 'Mixed types — cannot merge';
+                        return selectedMeasurementId ? 'Will merge into selected measurement' : 'Will create a new measurement';
+                      })()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => { setMultiSelectedIds(new Set()); setIsMultiSelectMode(false); }}
+                      className="text-xs text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 px-2 py-1 rounded"
+                    >
+                      Clear
+                    </button>
+                    {multiSelectedIds.size >= 2 && (
+                      <button
+                        onClick={handleMergeSelected}
+                        className="text-sm font-semibold bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition-all"
+                      >
+                        <GitMerge size={14} />
+                        Merge
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 

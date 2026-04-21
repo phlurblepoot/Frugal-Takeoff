@@ -53,6 +53,10 @@ interface PdfCanvasProps {
   onPaste?: () => void;
   hasCopied?: boolean;
   newMeasurementToken?: number;
+  multiSelectedIds?: Set<string>;
+  onMultiSelectToggle?: (id: string, type: string) => void;
+  onClearMultiSelect?: () => void;
+  isMultiSelectMode?: boolean;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -100,6 +104,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onPaste,
   hasCopied,
   newMeasurementToken,
+  multiSelectedIds,
+  onMultiSelectToggle,
+  onClearMultiSelect,
+  isMultiSelectMode = false,
 }) => {
   const [image] = useImage(imageUrl);
   const stageRef = useRef<any>(null);
@@ -398,7 +406,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     } else {
       // Clicked on background, deselect if not drawing
       if (activePoints.length === 0) {
-        onSelectMeasurement(null);
+        if (!e.evt.ctrlKey && !e.evt.metaKey && !isMultiSelectMode) {
+          onSelectMeasurement(null);
+          onClearMultiSelect?.();
+        }
       }
     }
 
@@ -887,6 +898,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
 
       const isSelected = selectedMeasurementId === m.id;
+      const isMultiSelected = multiSelectedIds?.has(m.id) ?? false;
       const isDrawingTool = currentTool === 'length' || currentTool === 'area' || currentTool === 'count';
 
       return (
@@ -897,13 +909,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           onClick={(e) => {
             e.cancelBubble = true;
             if (activePoints.length === 0) {
-              onSelectMeasurement(m.id);
+              if (e.evt.ctrlKey || e.evt.metaKey || isMultiSelectMode) {
+                onMultiSelectToggle?.(m.id, m.type);
+              } else {
+                onClearMultiSelect?.();
+                onSelectMeasurement(m.id);
+              }
             }
           }}
           onTap={(e) => {
             e.cancelBubble = true;
             if (activePoints.length === 0) {
-              onSelectMeasurement(m.id);
+              if (isMultiSelectMode) {
+                onMultiSelectToggle?.(m.id, m.type);
+              } else {
+                onSelectMeasurement(m.id);
+              }
             }
           }}
           onContextMenu={(e) => {
@@ -959,16 +980,16 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             <>
               <Line
                 points={flatPoints}
-                stroke={m.color}
-                strokeWidth={isSelected ? 8 / stageScale : 5 / stageScale}
+                stroke={isMultiSelected ? '#f59e0b' : m.color}
+                strokeWidth={isSelected ? 8 / stageScale : isMultiSelected ? 7 / stageScale : 5 / stageScale}
                 hitStrokeWidth={20 / stageScale}
                 lineJoin="round"
                 lineCap="round"
                 closed={m.type === 'area'}
-                fill={m.type === 'area' ? `${m.color}${isSelected ? '60' : '40'}` : undefined}
-                shadowColor={isSelected ? m.color : undefined}
-                shadowBlur={isSelected ? 10 / stageScale : 0}
-                shadowOpacity={isSelected ? 0.5 : 0}
+                fill={m.type === 'area' ? `${isMultiSelected ? '#f59e0b' : m.color}${isSelected ? '60' : isMultiSelected ? '50' : '40'}` : undefined}
+                shadowColor={isMultiSelected ? '#f59e0b' : isSelected ? m.color : undefined}
+                shadowBlur={isMultiSelected ? 14 / stageScale : isSelected ? 10 / stageScale : 0}
+                shadowOpacity={isMultiSelected ? 0.7 : isSelected ? 0.5 : 0}
                 onDblClick={(e) => {
                   e.cancelBubble = true;
                   const stage = stageRef.current;
