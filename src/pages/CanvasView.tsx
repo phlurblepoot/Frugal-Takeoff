@@ -1450,7 +1450,7 @@ const CanvasViewInner: React.FC = () => {
 
         <div className="flex-1 relative min-h-0">
           {/* Floating Controls */}
-          <div className={`absolute top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
+          <div className={`absolute top-[58px] md:top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
             <div className="hidden md:flex pointer-events-auto items-center gap-2">
               {!isLeftSidebarOpen && (
                 <>

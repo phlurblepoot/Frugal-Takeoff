@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createBrowserRouter, RouterProvider, Outlet, useLocation } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, useLocation, matchPath } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectsList } from './pages/ProjectsList';
 import { NewProject } from './pages/NewProject';
@@ -30,12 +30,22 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
     return saved && ['expanded', 'collapsed', 'hidden'].includes(saved) ? saved : 'collapsed';
   });
 
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   const handleDockChange = (s: DockState) => {
     setDockState(s);
     localStorage.setItem(DOCK_STORAGE_KEY, s);
   };
 
-  const marginLeft = isLoginPage
+  const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
+
+  const marginLeft = (isLoginPage || (isMobile && isCanvasPage))
     ? 0
     : dockState === 'hidden'
     ? 0

@@ -1,5 +1,5 @@
-import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Settings, LogOut, PanelLeftClose } from 'lucide-react';
 
 export type DockState = 'expanded' | 'collapsed' | 'hidden';
@@ -52,7 +52,21 @@ export const SideDock: React.FC<SideDockProps> = ({ state, onChange }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
+
   if (location.pathname === '/login' || !localStorage.getItem('token')) {
+    return null;
+  }
+
+  if (isMobile && isCanvasPage) {
     return null;
   }
 
