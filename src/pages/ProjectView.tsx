@@ -436,13 +436,15 @@ export const ProjectView: React.FC = () => {
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
   const scrollKey = `projectView-scroll-${projectId}`;
+  // Wait for content to load before restoring — firing during isLoading=true
+  // restores onto an empty page which then gets reset when content appears.
   useEffect(() => {
-    if (activeTab !== 'pages') return;
+    if (activeTab !== 'pages' || isLoading) return;
     const saved = sessionStorage.getItem(scrollKey);
     if (saved) {
       requestAnimationFrame(() => window.scrollTo({ top: parseInt(saved, 10), behavior: 'instant' as ScrollBehavior }));
     }
-  }, [activeTab]);
+  }, [activeTab, isLoading]);
 
   useEffect(() => {
     if (activeTab !== 'pages') return;

@@ -305,6 +305,50 @@ const CanvasViewInner: React.FC = () => {
     }
   };
 
+  const handleCopy = () => {
+    if (!selectedMeasurementId) return;
+    const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
+    if (measurement) {
+      localStorage.setItem('copiedMeasurement', JSON.stringify(measurement));
+      toast(`Copied "${measurement.name}"`, { type: 'success', duration: 1500 });
+    }
+  };
+
+  const handlePaste = () => {
+    const copiedStr = localStorage.getItem('copiedMeasurement');
+    if (!copiedStr || !page) return;
+    try {
+      const copiedMeasurement = JSON.parse(copiedStr) as Measurement;
+      const isMultiRegionValid = page.isMultiRegion && page.scaleRegions && page.scaleRegions.length > 0;
+      if (!page.scaleConfig && !isMultiRegionValid) {
+        setToolDisabledMessage('Please set the scale before pasting.');
+        return;
+      }
+      const offset = 20;
+      const newPoints = copiedMeasurement.points.map(p => ({ x: p.x + offset, y: p.y + offset }));
+      let regionId: string | undefined = undefined;
+      if (page.isMultiRegion && page.scaleRegions) {
+        const region = page.scaleRegions.find(r => isPointInPolygon(newPoints[0], r.points));
+        if (region) regionId = region.id;
+      }
+      const newMeasurement: Measurement = {
+        ...copiedMeasurement,
+        id: uuidv4(),
+        name: `${copiedMeasurement.name} (Copy)`,
+        points: newPoints,
+        planSetId: page.planSetId,
+        regionId,
+      };
+      pushToHistory({ type: 'add', measurement: newMeasurement });
+      savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
+      sendMeasurementUpdate(page.id, 'add', newMeasurement);
+      setSelectedMeasurementId(newMeasurement.id);
+      toast('Measurement pasted', { type: 'success', duration: 1500 });
+    } catch (err) {
+      console.error('Failed to parse copied measurement', err);
+    }
+  };
+
   const handleUndo = () => {
     if (history.length === 0 || !page) return;
     const lastAction = history[history.length - 1];
@@ -433,55 +477,11 @@ const CanvasViewInner: React.FC = () => {
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedMeasurementId) {
-        const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
-        if (measurement) {
-          localStorage.setItem('copiedMeasurement', JSON.stringify(measurement));
-          toast(`Copied "${measurement.name}"`, { type: 'success', duration: 1500 });
-        }
+        handleCopy();
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        const copiedStr = localStorage.getItem('copiedMeasurement');
-        if (copiedStr && page) {
-          try {
-            const copiedMeasurement = JSON.parse(copiedStr) as Measurement;
-            const isMultiRegionValid = page.isMultiRegion && page.scaleRegions && page.scaleRegions.length > 0;
-            if (!page.scaleConfig && !isMultiRegionValid) {
-              setToolDisabledMessage('Please set the scale before pasting.');
-              return;
-            }
-
-            // Offset the pasted measurement slightly so it doesn't perfectly overlap
-            const offset = 20;
-            const newPoints = copiedMeasurement.points.map(p => ({
-              x: p.x + offset,
-              y: p.y + offset
-            }));
-
-            let regionId: string | undefined = undefined;
-            if (page.isMultiRegion && page.scaleRegions) {
-              const region = page.scaleRegions.find(r => isPointInPolygon(newPoints[0], r.points));
-              if (region) regionId = region.id;
-            }
-
-            const newMeasurement: Measurement = {
-              ...copiedMeasurement,
-              id: uuidv4(),
-              name: `${copiedMeasurement.name} (Copy)`,
-              points: newPoints,
-              planSetId: page.planSetId,
-              regionId,
-            };
-
-            pushToHistory({ type: 'add', measurement: newMeasurement });
-            savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-            sendMeasurementUpdate(page.id, 'add', newMeasurement);
-            setSelectedMeasurementId(newMeasurement.id);
-            toast('Measurement pasted', { type: 'success', duration: 1500 });
-          } catch (err) {
-            console.error('Failed to parse copied measurement', err);
-          }
-        }
+        handlePaste();
       }
 
       // Redo must be checked before Undo (Shift+Z vs Z)
@@ -1679,6 +1679,9 @@ const CanvasViewInner: React.FC = () => {
             currentUserId={socket?.id}
             onUndo={handleUndo}
             onRedo={handleRedo}
+            onCopy={selectedMeasurementId ? handleCopy : undefined}
+            onPaste={handlePaste}
+            hasCopied={!!localStorage.getItem('copiedMeasurement')}
           />
 
           {/* Tool Instructions Overlay */}
