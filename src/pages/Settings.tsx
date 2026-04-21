@@ -15,6 +15,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.5.5',
+    date: 'April 21, 2026',
+    changes: [
+      'Mobile: the app navigation sidebar is now hidden when viewing a canvas page on a phone or tablet, giving the full screen to the drawing area',
+      'Mobile: the canvas now fills the complete viewport width (previously shifted right by 64px due to the collapsed sidebar)',
+      'Mobile: tool toolbar repositioned below the page header on small screens so it is no longer hidden behind it',
+      'Mobile: one-finger touch now exclusively draws, selects, or places points — it never pans the canvas',
+      'Mobile: two-finger gesture simultaneously pans and pinch-zooms the canvas (drag both fingers to pan, spread/pinch to zoom, or both at once)',
+      'Mobile: zoom buttons repositioned higher from the bottom edge so they are not hidden behind iOS/Android browser chrome',
+      'Mobile: fixed stuttering during two-finger pan and zoom — Konva stage is now updated imperatively each frame with React state synced via requestAnimationFrame',
+    ],
+  },
+  {
     version: '0.9.5',
     date: 'April 21, 2026',
     changes: [

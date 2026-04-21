@@ -135,6 +135,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
   useEffect(() => {
     if (resumeMeasurement) {
       setActivePoints(resumeMeasurement.points);
@@ -148,6 +150,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);
+  const zoomRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -363,16 +366,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       return;
     }
 
-    // Single finger panning when tool is 'pan'
-    if (currentTool === 'pan' && e.evt.touches && e.evt.touches.length === 1 && lastMousePosRef.current) {
-      const touch = e.evt.touches[0];
-      const dx = touch.clientX - lastMousePosRef.current.x;
-      const dy = touch.clientY - lastMousePosRef.current.y;
-      setStagePos(prev => ({ x: prev.x + dx, y: prev.y + dy }));
-      lastMousePosRef.current = { x: touch.clientX, y: touch.clientY };
-      return;
-    }
-
     if (currentTool === 'pan' || activePoints.length === 0) return;
   };
 
@@ -559,12 +552,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         y: (touch1.clientY + touch2.clientY) / 2,
       };
     } else if (e.evt.touches.length === 1) {
-      if (currentTool === 'pan') {
-        const touch = e.evt.touches[0];
-        lastMousePosRef.current = { x: touch.clientX, y: touch.clientY };
-      } else {
-        handleMouseDown(e);
-      }
+      handleMouseDown(e);
     }
   };
 
@@ -588,23 +576,42 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         y: (touch1.clientY + touch2.clientY) / 2,
       };
 
-      if (lastDistRef.current > 0) {
+      if (lastDistRef.current > 0 && lastCenterRef.current) {
         const oldScale = stageScaleRef.current;
         const oldPos = stagePosRef.current;
         const scaleFactor = dist / lastDistRef.current;
         const newScale = Math.max(0.01, Math.min(oldScale * scaleFactor, 50));
 
-        // Zoom around the center point between fingers
-        const pointer = center;
+        // Pan + zoom: canvas point under lastCenter should appear at center
+        const lastCenter = lastCenterRef.current;
         const mousePointTo = {
-          x: (pointer.x - oldPos.x) / oldScale,
-          y: (pointer.y - oldPos.y) / oldScale,
+          x: (lastCenter.x - oldPos.x) / oldScale,
+          y: (lastCenter.y - oldPos.y) / oldScale,
+        };
+        const newPos = {
+          x: center.x - mousePointTo.x * newScale,
+          y: center.y - mousePointTo.y * newScale,
         };
 
-        setStageScale(newScale);
-        setStagePos({
-          x: pointer.x - mousePointTo.x * newScale,
-          y: pointer.y - mousePointTo.y * newScale,
+        // Update refs synchronously so the next touchmove (which may fire
+        // before React commits) reads the correct baseline — otherwise the
+        // stale ref causes every other frame to snap backward, producing stutter.
+        stageScaleRef.current = newScale;
+        stagePosRef.current = newPos;
+
+        // Apply directly to the Konva stage for immediate visual feedback,
+        // bypassing React's render cycle on every touchmove event.
+        const stageNode = stage;
+        stageNode.scale({ x: newScale, y: newScale });
+        stageNode.position(newPos);
+        stageNode.batchDraw();
+
+        // Queue a state commit so non-Konva UI (zoom %) reflects the change.
+        if (zoomRafRef.current) cancelAnimationFrame(zoomRafRef.current);
+        zoomRafRef.current = requestAnimationFrame(() => {
+          setStageScale(newScale);
+          setStagePos(newPos);
+          zoomRafRef.current = null;
         });
       }
 
@@ -1393,7 +1400,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
+          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
             <button
               onClick={handleZoomOut}
               className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
@@ -1445,7 +1452,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               setStagePos({ x: e.target.x(), y: e.target.y() });
             }
           }}
-          draggable={currentTool === 'pan'}
+          draggable={currentTool === 'pan' && !isTouchDevice}
           scaleX={stageScale}
           scaleY={stageScale}
           x={stagePos.x}
