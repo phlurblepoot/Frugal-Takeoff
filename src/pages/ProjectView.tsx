@@ -238,10 +238,11 @@ async function renderPageToDataUrl(
         centerY /= m.points.length;
       }
       const isSurfaceArea = takeoff?.type === 'area' && m.type === 'length';
+      const allSegPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
       let text = '';
-      if (isSurfaceArea) text = formatMeasurement(calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, page.scaleConfig), 'area', page.scaleConfig, takeoff);
-      else if (m.type === 'length') text = formatMeasurement(calculatePolylineLength(m.points), 'length', page.scaleConfig, takeoff);
-      else text = formatMeasurement(calculatePolygonArea(m.points), 'area', page.scaleConfig, takeoff);
+      if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
+      else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
+      else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
       if (text) {
         ctx.font = '14px sans-serif';
         const textWidth = ctx.measureText(text).width;
@@ -268,10 +269,11 @@ async function renderPageToDataUrl(
           const region = page.scaleRegions?.find(r => r.id === m.regionId);
           if (region?.scaleConfig) currentScale = region.scaleConfig;
         }
+        const allMPtsLegend = [m.points, ...(m.segments ?? []).map(s => s.points)];
         let pixelValue = 0;
-        if (takeoff.type === 'length' && m.type === 'length') pixelValue = calculatePolylineLength(m.points);
-        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = calculatePolygonArea(m.points);
-        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+        if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
+        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
         else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
         if (pixelValue > 0) {
           const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
@@ -940,20 +942,93 @@ export const ProjectView: React.FC = () => {
 
     try {
       const selectedTakeoffs = getTakeoffTotals().filter(t => selectedTakeoffIds.has(t.id));
-      
-      const data = selectedTakeoffs.map(t => {
-        const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
 
-        return {
-          'Takeoff Name': t.name,
-          'Type': t.type,
-          'Total Quantity': t.totalRealValue,
-          'Unit': UNIT_LABELS[t.unit || ''] || t.unit || (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea'),
-          'Total Cost': roundUpTo100(totalCost)
-        };
-      });
+      // Build rows as array-of-arrays for full control over layout
+      const rows: any[][] = [];
+      rows.push(['Takeoff Name', 'Type', 'Qty', 'Unit Cost', 'Total Cost']);
 
-      const ws = XLSX.utils.json_to_sheet(data);
+      // Group by price package (mirrors the UI)
+      const packageOrder: string[] = [];
+      const packageMap: Record<string, typeof selectedTakeoffs> = {};
+      const ungrouped: typeof selectedTakeoffs = [];
+      for (const t of selectedTakeoffs) {
+        if (t.pricePackage) {
+          if (!packageMap[t.pricePackage]) {
+            packageMap[t.pricePackage] = [];
+            packageOrder.push(t.pricePackage);
+          }
+          packageMap[t.pricePackage].push(t);
+        } else {
+          ungrouped.push(t);
+        }
+      }
+
+      const addTakeoffRows = (takeoff: typeof selectedTakeoffs[0]) => {
+        const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+        const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
+
+        const qtyFormatted = takeoff.totalRealValue > 0
+          ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false)
+          : '-';
+
+        let unitCost: string;
+        if (takeoff.isAdvancedCost) {
+          unitCost = totalCost > 0 ? `$${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)} avg/unit` : '-';
+        } else {
+          unitCost = takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-';
+        }
+
+        const totalCostFormatted = totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-';
+
+        // Main takeoff row
+        rows.push([takeoff.name, takeoff.type, qtyFormatted, unitCost, totalCostFormatted]);
+
+        // Advanced pricing detail sub-rows
+        if (takeoff.isAdvancedCost && costDetails.length > 0) {
+          costDetails.forEach(d => {
+            if (d.quantity !== undefined && d.quantity > 0) {
+              const itemUnitCost = d.type === 'yield'
+                ? `$${(d.cost || 0).toFixed(2)}/unit`
+                : d.type === 'amount_per_units'
+                  ? `$${(d.amount || 0).toFixed(2)}/unit`
+                  : '';
+              rows.push([
+                `  └ ${d.name}`,
+                '',
+                `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'}`,
+                itemUnitCost,
+                `$${d.costValue.toFixed(2)}`
+              ]);
+            } else if (d.type === 'flat') {
+              rows.push([`  └ ${d.name}`, '', 'flat', '', `$${d.costValue.toFixed(2)}`]);
+            } else if (d.type === 'unit') {
+              rows.push([
+                `  └ ${d.name}`,
+                '',
+                qtyFormatted,
+                `$${(d.costPerUnit || 0).toFixed(2)}/unit`,
+                `$${d.costValue.toFixed(2)}`
+              ]);
+            }
+          });
+        }
+      };
+
+      for (const pkg of packageOrder) {
+        rows.push([`── ${pkg} ──`, '', '', '', '']);
+        packageMap[pkg].forEach(addTakeoffRows);
+      }
+      ungrouped.forEach(addTakeoffRows);
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 36 },
+        { wch: 10 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 16 },
+      ];
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Takeoffs");
       
@@ -1836,13 +1911,14 @@ export const ProjectView: React.FC = () => {
               pageRealValue += 1;
               pageUnit = 'each';
             } else if (currentScale) {
+              const allMPtsTotals = [m.points, ...(m.segments ?? []).map(s => s.points)];
               let pixelValue = 0;
               if (takeoff.type === 'length' && m.type === 'length') {
-                pixelValue = calculatePolylineLength(m.points);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
               } else if (takeoff.type === 'area' && m.type === 'area') {
-                pixelValue = calculatePolygonArea(m.points);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
               } else if (takeoff.type === 'area' && m.type === 'length') {
-                pixelValue = calculateSurfaceAreaPx(m.points, m.heights || [], m.isTwoSided || false, currentScale);
+                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
               }
 
               if (pixelValue > 0) {

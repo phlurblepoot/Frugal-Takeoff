@@ -15,6 +15,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.6',
+    date: 'April 21, 2026',
+    changes: [
+      'Estimating: measurements can now have multiple segments — after closing an area or finalising a line, the next click continues adding segments within the same measurement; a "New Measurement" button in the sidebar starts a fresh measurement',
+      'Estimating: Ctrl+click (desktop) or the new multi-select toolbar button (mobile) selects multiple measurements of the same type; a Merge button folds all selected areas or lines into a single multi-segment measurement',
+      'Estimating: Excel export now matches the Takeoffs tab layout — columns are Name, Type, Qty (formatted), Unit Cost, and Total Cost',
+      'Estimating: Excel export includes advanced-pricing detail rows showing item quantities and units (e.g. "5.25 bags of Concrete Mix at $14.00/unit = $73.50") for each custom cost item',
+      'Estimating: Excel export groups takeoffs under price-package headers, matching the on-screen grouping',
+    ],
+  },
+  {
     version: '0.9.5.5',
     date: 'April 21, 2026',
     changes: [
