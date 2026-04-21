@@ -416,6 +416,8 @@ export const ProjectView: React.FC = () => {
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
 
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
+  const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(new Set());
+  const pagesScrollRef = useRef<HTMLDivElement>(null);
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
@@ -431,6 +433,25 @@ export const ProjectView: React.FC = () => {
   const [proposalTerms, setProposalTerms] = useState('');
   const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+
+  // ── Scroll position memory for pages tab ─────────────────────────────────
+  const scrollKey = `projectView-scroll-${projectId}`;
+  // Wait for content to load before restoring — firing during isLoading=true
+  // restores onto an empty page which then gets reset when content appears.
+  useEffect(() => {
+    if (activeTab !== 'pages' || isLoading) return;
+    const saved = sessionStorage.getItem(scrollKey);
+    if (saved) {
+      requestAnimationFrame(() => window.scrollTo({ top: parseInt(saved, 10), behavior: 'instant' as ScrollBehavior }));
+    }
+  }, [activeTab, isLoading]);
+
+  useEffect(() => {
+    if (activeTab !== 'pages') return;
+    const onScroll = () => sessionStorage.setItem(scrollKey, String(Math.round(window.scrollY)));
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [activeTab, scrollKey]);
 
   // ── Proposal preference persistence ──────────────────────────────────────
   // Update collaboration page name when project loads
@@ -1593,6 +1614,25 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  const handleShareSelectedPages = async () => {
+    if (!project || selectedPageIds.size === 0) return;
+    try {
+      const settings = await getSettings();
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      const urls: string[] = [];
+      for (const pid of selectedPageIds) {
+        const pg = project.pages.find(p => p.id === pid);
+        if (!pg) continue;
+        const id = await createShare('page', pg.imageId, pg.name || 'Page');
+        urls.push(`${host}/share/${id}`);
+      }
+      await navigator.clipboard.writeText(urls.join('\n'));
+      alert(`${urls.length} share link${urls.length > 1 ? 's' : ''} copied to clipboard`);
+    } catch {
+      alert('Failed to create share links');
+    }
+  };
+
   const handleOpenNamePages = () => {
     if (!project) return;
     
@@ -2326,6 +2366,24 @@ export const ProjectView: React.FC = () => {
                 />
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+                {selectedPageIds.size > 0 && (
+                  <>
+                    <button
+                      onClick={handleShareSelectedPages}
+                      className="flex-1 lg:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <LinkIcon size={16} />
+                      Share ({selectedPageIds.size})
+                    </button>
+                    <button
+                      onClick={() => setSelectedPageIds(new Set())}
+                      className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <X size={16} />
+                      Deselect All
+                    </button>
+                  </>
+                )}
                 {project.pages.some(p => !p.thumbnailId) && (
                   <button
                     onClick={handleOptimizeThumbnails}
@@ -2376,20 +2434,46 @@ export const ProjectView: React.FC = () => {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {filteredPages.map((page) => (
+                {filteredPages.map((page) => {
+                  const isPageSelected = selectedPageIds.has(page.id);
+                  return (
                   <Link
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
-                    className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all hover:border-accent-300 dark:hover:border-accent-500 flex flex-col group"
+                    className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
+                      isPageSelected
+                        ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
+                        : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
+                    }`}
                   >
                     <div className="h-40 bg-slate-100 dark:bg-slate-700 relative overflow-hidden border-b border-slate-200 dark:border-slate-600">
-                      <img 
-                        src={getImageUrl(page.thumbnailId || page.imageId)} 
-                        alt={page.name} 
+                      <img
+                        src={getImageUrl(page.thumbnailId || page.imageId)}
+                        alt={page.name}
                         className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity"
                         referrerPolicy="no-referrer"
                       />
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedPageIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(page.id)) next.delete(page.id);
+                            else next.add(page.id);
+                            return next;
+                          });
+                        }}
+                        className={`absolute top-2 left-2 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                          isPageSelected
+                            ? 'bg-accent-600 border-accent-600 opacity-100'
+                            : 'bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100'
+                        }`}
+                        title={isPageSelected ? 'Deselect' : 'Select'}
+                      >
+                        {isPageSelected && <Check size={14} className="text-white" />}
+                      </button>
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
                       <div>
@@ -2462,7 +2546,8 @@ export const ProjectView: React.FC = () => {
                       </div>
                     </div>
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

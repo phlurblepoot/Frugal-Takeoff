@@ -13,6 +13,7 @@ export interface Measurement {
   isTwoSided?: boolean;
   regionId?: string;
   planSetId?: string; // The plan set version this measurement was made/updated on
+  arcMidIndices?: number[]; // indices of arc mid-control points; triples (i-1, i, i+1) are arcs
 }
 
 export type CostType = 'flat' | 'yield' | 'unit' | 'amount_per_units';
