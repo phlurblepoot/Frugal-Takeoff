@@ -226,10 +226,21 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production';
-  if (!process.env.JWT_SECRET) {
-    console.warn('\n⚠️  WARNING: JWT_SECRET environment variable is not set. Using an insecure default secret.');
-    console.warn('   Set JWT_SECRET in your .env file or environment before deploying to production.\n');
+  // JWT secret resolution order:
+  //   1. JWT_SECRET environment variable (admin override)
+  //   2. Persisted secret in the settings table
+  //   3. Generate a fresh 64-byte random secret and persist it
+  // This means fresh installs work out of the box — no manual setup required.
+  let JWT_SECRET = process.env.JWT_SECRET || '';
+  if (!JWT_SECRET) {
+    const existing = db.prepare("SELECT value FROM settings WHERE key = 'jwt.secret'").get() as { value: string } | undefined;
+    if (existing?.value) {
+      JWT_SECRET = existing.value;
+    } else {
+      JWT_SECRET = crypto.randomBytes(64).toString('hex');
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('jwt.secret', JWT_SECRET);
+      console.log('Generated a new JWT signing secret and saved it to the database.');
+    }
   }
 
   // Health check
@@ -638,14 +649,16 @@ async function startServer() {
     }
   });
 
-  // Settings API
+  // Settings API — public endpoint, excludes any key that could contain secrets
+  // (jwt.secret, smtp.*, email.* credentials). Those are fetched via their own
+  // authenticated endpoints.
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.'];
+  const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
       const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string, value: string }[];
       const settings: Record<string, string> = {};
-      rows.forEach(row => {
-        settings[row.key] = row.value;
-      });
+      rows.forEach(row => { if (!isPrivateSettingKey(row.key)) settings[row.key] = row.value; });
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
