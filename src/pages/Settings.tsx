@@ -16,6 +16,23 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.7',
+    date: 'April 22, 2026',
+    changes: [
+      'Bid Pipeline: full email integration — bid invitations received by email are automatically imported into the pipeline via IMAP monitoring, or pasted in manually',
+      'Bid Pipeline: send proposals as email replies directly from the pipeline using SMTP, with proper reply-threading headers so the response lands in the original conversation',
+      'Bid Pipeline: emails in the same conversation are grouped into a single pipeline entry by subject (Re:/Fwd: prefixes stripped for matching); new replies on an existing thread are appended automatically on the next poll',
+      'Bid Pipeline: threaded view — click "Show thread (N)" to expand the full conversation newest-first; latest message is auto-expanded, older messages are individually collapsible',
+      'Bid Pipeline: HTML emails render with full formatting in a sandboxed iframe instead of plain text',
+      'Settings → Email: new tab for configuring outbound SMTP and inbound IMAP accounts (multiple accounts supported)',
+      'Settings → Email: provider preset dropdown in the IMAP account form auto-fills server settings for Gmail, Outlook, Yahoo, and iCloud',
+      'Settings → Email: Email Provider Setup Guide with step-by-step instructions, direct links to app-password pages, and server settings for Gmail, Outlook, Yahoo, and Apple iCloud',
+      'Settings → Email: configurable automatic polling interval (5 min – 1 hr) with a manual Poll Now button',
+      'Auth: JWT signing secret is now auto-generated on first boot and persisted in the database — no environment variable setup required for new installs',
+      'Security: the public /api/settings endpoint no longer leaks smtp.* or jwt.* keys to unauthenticated callers',
+    ],
+  },
+  {
     version: '0.9.6',
     date: 'April 21, 2026',
     changes: [
