@@ -409,6 +409,24 @@ const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCa
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700">
+      <div>
+        <label className={labelCls}>Provider</label>
+        <select
+          className={inputCls}
+          defaultValue=""
+          onChange={e => {
+            const preset = IMAP_PRESETS[e.target.value];
+            if (preset) { set('host', preset.host); set('port', preset.port.toString()); set('secure', preset.secure); }
+          }}
+        >
+          <option value="">Custom / Other</option>
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook / Hotmail / Microsoft 365</option>
+          <option value="yahoo">Yahoo Mail</option>
+          <option value="icloud">Apple iCloud Mail</option>
+        </select>
+        <p className="mt-1 text-xs text-slate-400">Selecting a provider fills in the server settings automatically. Refer to the Setup Guide below for credentials help.</p>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>Account Label</label>
@@ -417,7 +435,7 @@ const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCa
         <div>
           <label className={labelCls}>Folder / Label to watch</label>
           <input className={inputCls} value={form.folder} onChange={e => set('folder', e.target.value)} placeholder="e.g. Bid Invitations" required />
-          <p className="mt-1 text-xs text-slate-400">Create a filter in your email client to route bid emails to this folder, then enter its name here.</p>
+          <p className="mt-1 text-xs text-slate-400">Gmail: enter the exact label name. Outlook/Yahoo: enter the folder name. Create a filter to route bid emails there first.</p>
         </div>
         <div>
           <label className={labelCls}>IMAP Server</label>
@@ -459,6 +477,13 @@ const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCa
       </div>
     </form>
   );
+};
+
+const IMAP_PRESETS: Record<string, { host: string; port: number; secure: boolean }> = {
+  gmail:   { host: 'imap.gmail.com',        port: 993, secure: true },
+  outlook: { host: 'outlook.office365.com', port: 993, secure: true },
+  yahoo:   { host: 'imap.mail.yahoo.com',   port: 993, secure: true },
+  icloud:  { host: 'imap.mail.me.com',      port: 993, secure: true },
 };
 
 interface ProviderStep { text: string; link?: string; linkText?: string; }

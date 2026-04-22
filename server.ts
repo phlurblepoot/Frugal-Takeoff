@@ -908,7 +908,6 @@ async function startServer() {
       const lock = await client.getMailboxLock(acct.folder || 'INBOX');
       try {
         for await (const msg of client.fetch('1:*', { envelope: true, source: true, flags: true })) {
-          if (msg.flags.has('\\Seen')) continue;
           const parsed = await simpleParser(msg.source);
           const from = parsed.from?.value?.[0];
           const messageId = parsed.messageId || undefined;
