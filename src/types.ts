@@ -115,13 +115,54 @@ export interface ProjectPage {
   legendWidth?: number;
 }
 
+export interface BidEmail {
+  messageId?: string;       // Original Message-ID header for reply threading
+  from: string;             // Sender email address
+  fromName?: string;        // Sender display name
+  subject: string;
+  body: string;             // Plain text body
+  htmlBody?: string;        // HTML body
+  receivedAt: number;       // Timestamp
+  attachmentIds?: string[]; // File IDs stored in images table
+  accountId?: string;       // Which IMAP account this came from
+}
+
+export type BidStatus = 'new' | 'reviewing' | 'proposal_sent' | 'won' | 'lost' | 'yes' | 'no' | 'pending';
+
 export interface Bid {
   id: string;
   name: string;
   contractor: string;
-  address: string;
-  decision: 'yes' | 'no' | 'pending';
+  address?: string;
+  decision: BidStatus;
   createdAt: number;
+  email?: BidEmail;           // Latest email in thread (primary display)
+  emails?: BidEmail[];        // Full thread, oldest first; email mirrors the last entry
+  proposalFileId?: string;    // Printout file ID that was sent
+  proposalSentAt?: number;    // When the proposal was emailed
+  projectId?: string;         // Linked project ID (if converted)
+}
+
+export interface EmailAccount {
+  id: string;
+  label: string;            // User-friendly name e.g. "Work Gmail"
+  host: string;
+  port: number;
+  secure: boolean;          // true = SSL/TLS, false = STARTTLS
+  username: string;
+  password: string;
+  folder: string;           // IMAP folder/label to watch e.g. "Bid Invitations"
+  createdAt: number;
+}
+
+export interface SmtpSettings {
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password: string;
+  fromName: string;
+  fromAddress: string;
 }
 
 export interface Project {

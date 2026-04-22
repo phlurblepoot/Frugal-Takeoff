@@ -1,4 +1,4 @@
-import { Project, TakeoffTemplate, Bid, ProjectNote } from '../types';
+import { Project, TakeoffTemplate, Bid, EmailAccount, SmtpSettings, ProjectNote } from '../types';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -167,9 +167,101 @@ export const saveBid = async (bid: Bid): Promise<void> => {
   await handleResponse(res);
 };
 
+export const updateBid = async (bid: Bid): Promise<void> => {
+  const res = await fetch('/api/bids/' + bid.id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(bid),
+  });
+  await handleResponse(res);
+};
+
 export const deleteBid = async (id: string): Promise<void> => {
   const res = await fetch('/api/bids/' + id, { method: 'DELETE', headers: getAuthHeaders() });
   await handleResponse(res);
+};
+
+// Email / SMTP functions
+export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
+  const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const saveSmtpSettings = async (cfg: Partial<SmtpSettings>): Promise<void> => {
+  const res = await fetch('/api/email/smtp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  await handleResponse(res);
+};
+
+export const testSmtpConnection = async (): Promise<void> => {
+  const res = await fetch('/api/email/test-smtp', { method: 'POST', headers: getAuthHeaders() });
+  await handleResponse(res);
+};
+
+export const getEmailAccounts = async (): Promise<EmailAccount[]> => {
+  const res = await fetch('/api/email/accounts', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const createEmailAccount = async (account: Omit<EmailAccount, 'id' | 'createdAt'>): Promise<EmailAccount> => {
+  const res = await fetch('/api/email/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(account),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const updateEmailAccount = async (account: EmailAccount): Promise<EmailAccount> => {
+  const res = await fetch('/api/email/accounts/' + account.id, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(account),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const deleteEmailAccount = async (id: string): Promise<void> => {
+  const res = await fetch('/api/email/accounts/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  await handleResponse(res);
+};
+
+export const testImapAccount = async (id: string): Promise<void> => {
+  const res = await fetch('/api/email/test-imap/' + id, { method: 'POST', headers: getAuthHeaders() });
+  await handleResponse(res);
+};
+
+export const pollEmailNow = async (): Promise<{ imported: number }> => {
+  const res = await fetch('/api/email/poll', { method: 'POST', headers: getAuthHeaders() });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const importEmailAsBid = async (data: { from: string; fromName?: string; subject: string; body: string; htmlBody?: string }): Promise<Bid> => {
+  const res = await fetch('/api/bids/import-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(data),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const sendProposal = async (bidId: string, fileId: string, message?: string): Promise<Bid> => {
+  const res = await fetch(`/api/bids/${bidId}/send-proposal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ fileId, message }),
+  });
+  await handleResponse(res);
+  return await res.json();
 };
 
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {

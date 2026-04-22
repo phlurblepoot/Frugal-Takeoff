@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow } from '../utils/store';
+import { EmailAccount, SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 
@@ -14,6 +15,23 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '0.9.7',
+    date: 'April 22, 2026',
+    changes: [
+      'Bid Pipeline: full email integration — bid invitations received by email are automatically imported into the pipeline via IMAP monitoring, or pasted in manually',
+      'Bid Pipeline: send proposals as email replies directly from the pipeline using SMTP, with proper reply-threading headers so the response lands in the original conversation',
+      'Bid Pipeline: emails in the same conversation are grouped into a single pipeline entry by subject (Re:/Fwd: prefixes stripped for matching); new replies on an existing thread are appended automatically on the next poll',
+      'Bid Pipeline: threaded view — click "Show thread (N)" to expand the full conversation newest-first; latest message is auto-expanded, older messages are individually collapsible',
+      'Bid Pipeline: HTML emails render with full formatting in a sandboxed iframe instead of plain text',
+      'Settings → Email: new tab for configuring outbound SMTP and inbound IMAP accounts (multiple accounts supported)',
+      'Settings → Email: provider preset dropdown in the IMAP account form auto-fills server settings for Gmail, Outlook, Yahoo, and iCloud',
+      'Settings → Email: Email Provider Setup Guide with step-by-step instructions, direct links to app-password pages, and server settings for Gmail, Outlook, Yahoo, and Apple iCloud',
+      'Settings → Email: configurable automatic polling interval (5 min – 1 hr) with a manual Poll Now button',
+      'Auth: JWT signing secret is now auto-generated on first boot and persisted in the database — no environment variable setup required for new installs',
+      'Security: the public /api/settings endpoint no longer leaks smtp.* or jwt.* keys to unauthenticated callers',
+    ],
+  },
   {
     version: '0.9.6',
     date: 'April 21, 2026',
@@ -363,6 +381,501 @@ const PreferencesTab: React.FC = () => {
   );
 };
 
+// ── Email tab ─────────────────────────────────────────────────────────────────
+
+const POLL_INTERVALS = [
+  { label: 'Disabled', value: '0' },
+  { label: 'Every 5 minutes', value: '5' },
+  { label: 'Every 15 minutes', value: '15' },
+  { label: 'Every 30 minutes', value: '30' },
+  { label: 'Every hour', value: '60' },
+];
+
+const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
+const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
+
+interface ImapAccountFormProps {
+  initial?: Partial<EmailAccount>;
+  onSave: (data: Omit<EmailAccount, 'id' | 'createdAt'>) => Promise<void>;
+  onCancel: () => void;
+}
+
+const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCancel }) => {
+  const [form, setForm] = useState({
+    label: initial?.label || '',
+    host: initial?.host || '',
+    port: initial?.port?.toString() || '993',
+    secure: initial?.secure !== false,
+    username: initial?.username || '',
+    password: initial?.password || '',
+    folder: initial?.folder || 'INBOX',
+  });
+  const [saving, setSaving] = useState(false);
+  const [showPass, setShowPass] = useState(false);
+  const set = (k: string, v: string | boolean) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({ ...form, port: parseInt(form.port) || 993, secure: form.secure });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700">
+      <div>
+        <label className={labelCls}>Provider</label>
+        <select
+          className={inputCls}
+          defaultValue=""
+          onChange={e => {
+            const preset = IMAP_PRESETS[e.target.value];
+            if (preset) { set('host', preset.host); set('port', preset.port.toString()); set('secure', preset.secure); }
+          }}
+        >
+          <option value="">Custom / Other</option>
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook / Hotmail / Microsoft 365</option>
+          <option value="yahoo">Yahoo Mail</option>
+          <option value="icloud">Apple iCloud Mail</option>
+        </select>
+        <p className="mt-1 text-xs text-slate-400">Selecting a provider fills in the server settings automatically. Refer to the Setup Guide below for credentials help.</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className={labelCls}>Account Label</label>
+          <input className={inputCls} value={form.label} onChange={e => set('label', e.target.value)} placeholder="e.g. Work Gmail" required />
+        </div>
+        <div>
+          <label className={labelCls}>Folder / Label to watch</label>
+          <input className={inputCls} value={form.folder} onChange={e => set('folder', e.target.value)} placeholder="e.g. Bid Invitations" required />
+          <p className="mt-1 text-xs text-slate-400">Gmail: enter the exact label name. Outlook/Yahoo: enter the folder name. Create a filter to route bid emails there first.</p>
+        </div>
+        <div>
+          <label className={labelCls}>IMAP Server</label>
+          <input className={inputCls} value={form.host} onChange={e => set('host', e.target.value)} placeholder="imap.gmail.com" required />
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className={labelCls}>Port</label>
+            <input className={inputCls} type="number" value={form.port} onChange={e => set('port', e.target.value)} placeholder="993" required />
+          </div>
+          <div className="flex flex-col justify-end pb-0.5">
+            <label className={labelCls}>SSL</label>
+            <button type="button" onClick={() => set('secure', !form.secure)}
+              className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${form.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
+              {form.secure ? 'SSL/TLS' : 'STARTTLS'}
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Username / Email</label>
+          <input className={inputCls} value={form.username} onChange={e => set('username', e.target.value)} placeholder="you@example.com" required />
+        </div>
+        <div>
+          <label className={labelCls}>Password / App Password</label>
+          <div className="relative">
+            <input className={inputCls + ' pr-12'} type={showPass ? 'text' : 'password'} value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" required={!initial} />
+            <button type="button" onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {initial && <p className="mt-1 text-xs text-slate-400">Leave blank to keep existing password.</p>}
+        </div>
+      </div>
+      <div className="flex gap-3 justify-end pt-2">
+        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">Cancel</button>
+        <button type="submit" disabled={saving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save Account'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+const IMAP_PRESETS: Record<string, { host: string; port: number; secure: boolean }> = {
+  gmail:   { host: 'imap.gmail.com',        port: 993, secure: true },
+  outlook: { host: 'outlook.office365.com', port: 993, secure: true },
+  yahoo:   { host: 'imap.mail.yahoo.com',   port: 993, secure: true },
+  icloud:  { host: 'imap.mail.me.com',      port: 993, secure: true },
+};
+
+interface ProviderStep { text: string; link?: string; linkText?: string; }
+interface ProviderInfo {
+  id: string;
+  name: string;
+  steps: ProviderStep[];
+  imap: { host: string; port: number; ssl: string };
+  smtp: { host: string; port: number; ssl: string };
+  note?: string;
+}
+
+const PROVIDER_GUIDE: ProviderInfo[] = [
+  {
+    id: 'gmail',
+    name: 'Gmail',
+    note: 'Google no longer allows regular passwords for IMAP — an App Password is required.',
+    steps: [
+      { text: 'Enable 2-Step Verification', link: 'https://myaccount.google.com/security', linkText: 'myaccount.google.com/security' },
+      { text: 'Create an App Password', link: 'https://myaccount.google.com/apppasswords', linkText: 'myaccount.google.com/apppasswords' },
+      { text: 'Select "Mail" as the app type and generate — copy the 16-character code shown' },
+      { text: 'Enter your Gmail address as the username and the App Password (not your regular password) in the account form above' },
+    ],
+    imap: { host: 'imap.gmail.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.gmail.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'outlook',
+    name: 'Outlook / Hotmail / Microsoft 365',
+    steps: [
+      { text: 'For personal @outlook.com or @hotmail.com accounts: use your normal password. If 2-Step Verification is on, create an App Password', link: 'https://account.live.com/proofs/AppPassword', linkText: 'account.live.com/proofs/AppPassword' },
+      { text: 'For work or school Microsoft 365 accounts: your IT administrator may need to enable IMAP access in the Microsoft 365 admin portal' },
+    ],
+    imap: { host: 'outlook.office365.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.office365.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'yahoo',
+    name: 'Yahoo Mail',
+    steps: [
+      { text: 'Enable IMAP access: in Yahoo Mail go to Settings → More Settings → Mailboxes → enable IMAP access' },
+      { text: 'Generate an App Password', link: 'https://login.yahoo.com/account/security', linkText: 'login.yahoo.com/account/security' },
+      { text: 'Use your full Yahoo address as the username and the generated App Password in the account form above' },
+    ],
+    imap: { host: 'imap.mail.yahoo.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.mail.yahoo.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'icloud',
+    name: 'Apple iCloud Mail',
+    steps: [
+      { text: 'Two-factor authentication must be enabled on your Apple ID' },
+      { text: 'Sign in and generate an app-specific password', link: 'https://appleid.apple.com', linkText: 'appleid.apple.com' },
+      { text: 'Navigate to Sign-In and Security → App-Specific Passwords → Generate an App-Specific Password' },
+      { text: 'Use your iCloud address (@icloud.com or @me.com) as the username and the generated password in the account form above' },
+    ],
+    imap: { host: 'imap.mail.me.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.mail.me.com', port: 587, ssl: 'STARTTLS' },
+  },
+];
+
+const EmailTab: React.FC = () => {
+  const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
+  const [smtpSaving, setSmtpSaving] = useState(false);
+  const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [smtpTestMsg, setSmtpTestMsg] = useState('');
+  const [showSmtpPass, setShowSmtpPass] = useState(false);
+
+  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null);
+  const [testingAccount, setTestingAccount] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, 'ok' | 'error'>>({});
+
+  const [pollInterval, setPollInterval] = useState('0');
+  const [polling, setPolling] = useState(false);
+  const [pollResult, setPollResult] = useState<string>('');
+
+  const [loading, setLoading] = useState(true);
+  const [showGuide, setShowGuide] = useState(false);
+  const [guideOpenProvider, setGuideOpenProvider] = useState<string | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [smtpData, accts, settings] = await Promise.all([getSmtpSettings(), getEmailAccounts(), fetch('/api/settings', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(r => r.json())]);
+      setSmtp(smtpData);
+      setAccounts(accts);
+      setPollInterval(settings['email.pollIntervalMinutes'] || '0');
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const handleSmtpSave = async () => {
+    setSmtpSaving(true);
+    try { await saveSmtpSettings(smtp as Record<string, string>); alert('SMTP settings saved.'); }
+    catch { alert('Failed to save SMTP settings.'); }
+    finally { setSmtpSaving(false); }
+  };
+
+  const handleSmtpTest = async () => {
+    setSmtpTestStatus('testing');
+    setSmtpTestMsg('');
+    try {
+      await saveSmtpSettings(smtp as Record<string, string>);
+      await testSmtpConnection();
+      setSmtpTestStatus('ok');
+      setSmtpTestMsg('Connection successful!');
+    } catch (e: any) {
+      setSmtpTestStatus('error');
+      setSmtpTestMsg(e.message || 'Connection failed');
+    }
+  };
+
+  const handleAddAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
+    const acct = await createEmailAccount(data);
+    setAccounts(a => [...a, acct]);
+    setShowAddAccount(false);
+  };
+
+  const handleUpdateAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
+    if (!editingAccount) return;
+    const updated = await updateEmailAccount({ ...editingAccount, ...data });
+    setAccounts(a => a.map(x => x.id === updated.id ? updated : x));
+    setEditingAccount(null);
+  };
+
+  const handleDeleteAccount = async (id: string) => {
+    if (!confirm('Remove this email account?')) return;
+    await deleteEmailAccount(id);
+    setAccounts(a => a.filter(x => x.id !== id));
+  };
+
+  const handleTestAccount = async (id: string) => {
+    setTestingAccount(id);
+    try {
+      await testImapAccount(id);
+      setTestResults(r => ({ ...r, [id]: 'ok' }));
+    } catch {
+      setTestResults(r => ({ ...r, [id]: 'error' }));
+    } finally {
+      setTestingAccount(null);
+    }
+  };
+
+  const handleSavePollInterval = async () => {
+    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ 'email.pollIntervalMinutes': pollInterval }) });
+    alert('Polling interval saved. Restart the server for changes to take effect.');
+  };
+
+  const handlePollNow = async () => {
+    setPolling(true);
+    setPollResult('');
+    try {
+      const r = await pollEmailNow();
+      setPollResult(r.imported > 0 ? `Imported ${r.imported} new bid(s).` : 'No new emails found.');
+    } catch (e: any) {
+      setPollResult(`Error: ${e.message}`);
+    } finally {
+      setPolling(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
+
+  return (
+    <div className="space-y-6">
+      {/* SMTP */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Used to send proposals as email replies. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2 grid grid-cols-3 gap-4">
+              <div className="col-span-2">
+                <label className={labelCls}>SMTP Server</label>
+                <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
+              </div>
+              <div>
+                <label className={labelCls}>Port</label>
+                <input className={inputCls} type="number" value={smtp.port || ''} onChange={e => setSmtp(s => ({ ...s, port: parseInt(e.target.value) || undefined }))} placeholder="587" />
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>Username / Email</label>
+              <input className={inputCls} value={smtp.username || ''} onChange={e => setSmtp(s => ({ ...s, username: e.target.value }))} placeholder="you@example.com" />
+            </div>
+            <div>
+              <label className={labelCls}>Password / App Password</label>
+              <div className="relative">
+                <input className={inputCls + ' pr-12'} type={showSmtpPass ? 'text' : 'password'} value={smtp.password || ''} onChange={e => setSmtp(s => ({ ...s, password: e.target.value }))} placeholder="••••••••" />
+                <button type="button" onClick={() => setShowSmtpPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  {showSmtpPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>From Name</label>
+              <input className={inputCls} value={smtp.fromName || ''} onChange={e => setSmtp(s => ({ ...s, fromName: e.target.value }))} placeholder="Acme Estimating" />
+            </div>
+            <div>
+              <label className={labelCls}>From Address</label>
+              <input className={inputCls} value={smtp.fromAddress || ''} onChange={e => setSmtp(s => ({ ...s, fromAddress: e.target.value }))} placeholder="estimates@acme.com" />
+            </div>
+            <div className="flex items-end">
+              <button type="button" onClick={() => setSmtp(s => ({ ...s, secure: !s.secure }))}
+                className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${smtp.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
+                {smtp.secure ? 'SSL/TLS (port 465)' : 'STARTTLS (port 587)'}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-2">
+            <button onClick={handleSmtpSave} disabled={smtpSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+              <Save size={16} /> {smtpSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button onClick={handleSmtpTest} disabled={smtpTestStatus === 'testing'} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2">
+              {smtpTestStatus === 'testing' ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />} Test Connection
+            </button>
+            {smtpTestStatus === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"><CheckCircle size={15} /> {smtpTestMsg}</span>}
+            {smtpTestStatus === 'error' && <span className="flex items-center gap-1.5 text-sm text-red-600 dark:text-red-400"><XCircle size={15} /> {smtpTestMsg}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* IMAP accounts */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Inbound Email Monitoring (IMAP)</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Optional. Add email accounts to monitor — new emails in the watched folder automatically appear in the Bid Pipeline.</p>
+          </div>
+          <button onClick={() => { setShowAddAccount(true); setEditingAccount(null); }} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all">
+            <Plus size={16} /> Add Account
+          </button>
+        </div>
+        <div className="divide-y divide-slate-100 dark:divide-slate-700">
+          {accounts.length === 0 && !showAddAccount && (
+            <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-sm">No email accounts configured. Add one to enable automatic bid import.</div>
+          )}
+          {accounts.map(acct => (
+            <div key={acct.id}>
+              {editingAccount?.id === acct.id ? (
+                <div className="p-4">
+                  <ImapAccountForm initial={acct} onSave={handleUpdateAccount} onCancel={() => setEditingAccount(null)} />
+                </div>
+              ) : (
+                <div className="px-6 py-4 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900 dark:text-slate-100">{acct.label}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{acct.username} · {acct.host}:{acct.port} · watching <span className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">{acct.folder}</span></p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {testResults[acct.id] === 'ok' && <span className="text-green-500"><CheckCircle size={16} /></span>}
+                    {testResults[acct.id] === 'error' && <span className="text-red-500"><XCircle size={16} /></span>}
+                    <button onClick={() => handleTestAccount(acct.id)} disabled={testingAccount === acct.id} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5">
+                      {testingAccount === acct.id ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />} Test
+                    </button>
+                    <button onClick={() => setEditingAccount(acct)} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Edit</button>
+                    <button onClick={() => handleDeleteAccount(acct.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-all"><Trash2 size={15} /></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          {showAddAccount && (
+            <div className="p-4">
+              <ImapAccountForm onSave={handleAddAccount} onCancel={() => setShowAddAccount(false)} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Provider Setup Guide */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <button onClick={() => setShowGuide(g => !g)} className="w-full p-6 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Email Provider Setup Guide</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Server settings and setup instructions for Gmail, Outlook, Yahoo, and iCloud.</p>
+          </div>
+          {showGuide ? <ChevronUp size={20} className="text-slate-400 shrink-0" /> : <ChevronDown size={20} className="text-slate-400 shrink-0" />}
+        </button>
+        {showGuide && (
+          <div className="border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+            {PROVIDER_GUIDE.map(provider => (
+              <div key={provider.id}>
+                <button
+                  onClick={() => setGuideOpenProvider(p => p === provider.id ? null : provider.id)}
+                  className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all"
+                >
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{provider.name}</span>
+                  {guideOpenProvider === provider.id
+                    ? <ChevronUp size={16} className="text-slate-400 shrink-0" />
+                    : <ChevronDown size={16} className="text-slate-400 shrink-0" />}
+                </button>
+                {guideOpenProvider === provider.id && (
+                  <div className="px-6 pb-6 space-y-4">
+                    <div>
+                      <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Setup Steps</p>
+                      <ol className="space-y-2">
+                        {provider.steps.map((step, i) => (
+                          <li key={i} className="flex gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <span className="shrink-0 w-5 h-5 rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                            <span>
+                              {step.text}
+                              {step.link && (
+                                <> — <a href={step.link} target="_blank" rel="noopener noreferrer" className="text-accent-600 dark:text-accent-400 hover:underline font-mono text-xs">{step.linkText}</a></>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">IMAP (Incoming Mail)</p>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.imap.host}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.port}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.ssl}</span></div>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">SMTP (Outgoing Mail)</p>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.smtp.host}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.port}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.ssl}</span></div>
+                        </div>
+                      </div>
+                    </div>
+                    {provider.note && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2.5">{provider.note}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Polling interval */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Automatic Polling</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">How often the server checks configured IMAP accounts for new emails. Changes take effect after a server restart.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex items-end gap-4">
+            <div className="flex-1">
+              <label className={labelCls}>Check interval</label>
+              <select className={inputCls} value={pollInterval} onChange={e => setPollInterval(e.target.value)}>
+                {POLL_INTERVALS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <button onClick={handleSavePollInterval} className="px-4 py-2.5 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all flex items-center gap-2">
+              <Save size={16} /> Save
+            </button>
+          </div>
+          <div className="flex items-center gap-4 pt-2 border-t border-slate-100 dark:border-slate-700">
+            <button onClick={handlePollNow} disabled={polling || accounts.length === 0} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2 disabled:opacity-50">
+              <RefreshCw size={16} className={polling ? 'animate-spin' : ''} /> Poll Now
+            </button>
+            {pollResult && <span className="text-sm text-slate-600 dark:text-slate-400">{pollResult}</span>}
+            {accounts.length === 0 && <span className="text-sm text-slate-400">Add an IMAP account first.</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Changelog tab ─────────────────────────────────────────────────────────────
 
 const ChangelogTab: React.FC = () => (
@@ -397,7 +910,7 @@ const ChangelogTab: React.FC = () => (
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'users' | 'changelog';
+type TabId = 'preferences' | 'general' | 'email' | 'users' | 'changelog';
 
 export const Settings: React.FC = () => {
   const [serverSettings, setServerSettings] = useState<Record<string, string>>({
@@ -462,6 +975,7 @@ export const Settings: React.FC = () => {
   const allTabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
+    { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
   ];
@@ -475,8 +989,6 @@ export const Settings: React.FC = () => {
     );
   }
 
-  const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
-  const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
@@ -624,6 +1136,8 @@ export const Settings: React.FC = () => {
                 </div>
               </div>
             )}
+
+            {activeTab === 'email' && isAdmin && <EmailTab />}
 
             {activeTab === 'users' && isAdmin && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">

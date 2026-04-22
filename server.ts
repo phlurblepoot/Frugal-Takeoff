@@ -11,6 +11,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
+import nodemailer from "nodemailer";
+import { ImapFlow } from "imapflow";
+import { simpleParser } from "mailparser";
 
 dotenv.config();
 
@@ -115,6 +118,11 @@ function initDb() {
         data TEXT,
         createdAt INTEGER
       );
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        createdAt INTEGER NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
       CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
       CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
@@ -218,10 +226,21 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-production';
-  if (!process.env.JWT_SECRET) {
-    console.warn('\n⚠️  WARNING: JWT_SECRET environment variable is not set. Using an insecure default secret.');
-    console.warn('   Set JWT_SECRET in your .env file or environment before deploying to production.\n');
+  // JWT secret resolution order:
+  //   1. JWT_SECRET environment variable (admin override)
+  //   2. Persisted secret in the settings table
+  //   3. Generate a fresh 64-byte random secret and persist it
+  // This means fresh installs work out of the box — no manual setup required.
+  let JWT_SECRET = process.env.JWT_SECRET || '';
+  if (!JWT_SECRET) {
+    const existing = db.prepare("SELECT value FROM settings WHERE key = 'jwt.secret'").get() as { value: string } | undefined;
+    if (existing?.value) {
+      JWT_SECRET = existing.value;
+    } else {
+      JWT_SECRET = crypto.randomBytes(64).toString('hex');
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('jwt.secret', JWT_SECRET);
+      console.log('Generated a new JWT signing secret and saved it to the database.');
+    }
   }
 
   // Health check
@@ -568,6 +587,18 @@ async function startServer() {
     }
   });
 
+  app.put("/api/bids/:id", authenticateToken, (req, res) => {
+    try {
+      const bid = req.body;
+      const stmt = db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)');
+      stmt.run(bid.id, JSON.stringify(bid), bid.createdAt || Date.now());
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating bid:", error);
+      res.status(500).json({ error: "Failed to update bid" });
+    }
+  });
+
   app.delete("/api/bids/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('DELETE FROM bids WHERE id = ?');
@@ -618,14 +649,16 @@ async function startServer() {
     }
   });
 
-  // Settings API
+  // Settings API — public endpoint, excludes any key that could contain secrets
+  // (jwt.secret, smtp.*, email.* credentials). Those are fetched via their own
+  // authenticated endpoints.
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.'];
+  const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
       const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string, value: string }[];
       const settings: Record<string, string> = {};
-      rows.forEach(row => {
-        settings[row.key] = row.value;
-      });
+      rows.forEach(row => { if (!isPrivateSettingKey(row.key)) settings[row.key] = row.value; });
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
@@ -763,6 +796,351 @@ async function startServer() {
     }
   });
 
+  // ── Email API ──────────────────────────────────────────────────────────────
+
+  // Helper: build SMTP transporter from settings
+  function buildTransporter() {
+    const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+    const cfg: Record<string, string> = {};
+    rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
+    if (!cfg.host || !cfg.username) return null;
+    return nodemailer.createTransport({
+      host: cfg.host,
+      port: parseInt(cfg.port || '587'),
+      secure: cfg.secure === 'true',
+      auth: { user: cfg.username, pass: cfg.password },
+    });
+  }
+
+  // SMTP settings (stored in settings table under smtp.* keys)
+  app.get("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+      const cfg: Record<string, string> = {};
+      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
+      res.json(cfg);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch SMTP settings" });
+    }
+  });
+
+  app.post("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const cfg = req.body as Record<string, string>;
+      const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save SMTP settings" });
+    }
+  });
+
+  app.post("/api/email/test-smtp", authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const transport = buildTransporter();
+      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
+      await transport.verify();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "SMTP connection failed" });
+    }
+  });
+
+  // IMAP account management
+  app.get("/api/email/accounts", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const rows = db.prepare('SELECT data FROM email_accounts ORDER BY createdAt ASC').all() as { data: string }[];
+      // Mask passwords before sending to client
+      const accounts = rows.map(r => {
+        const a = JSON.parse(r.data);
+        return { ...a, password: a.password ? '••••••••' : '' };
+      });
+      res.json(accounts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch email accounts" });
+    }
+  });
+
+  app.post("/api/email/accounts", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const account = { ...req.body, id: crypto.randomUUID(), createdAt: Date.now() };
+      db.prepare('INSERT INTO email_accounts (id, data, createdAt) VALUES (?, ?, ?)').run(account.id, JSON.stringify(account), account.createdAt);
+      res.json({ ...account, password: '••••••••' });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save email account" });
+    }
+  });
+
+  app.put("/api/email/accounts/:id", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const existing = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!existing) return res.status(404).json({ error: "Account not found" });
+      const old = JSON.parse(existing.data);
+      // If password field is the masked value, keep the real one
+      const updated = { ...old, ...req.body, id: req.params.id };
+      if (req.body.password === '••••••••') updated.password = old.password;
+      db.prepare('INSERT OR REPLACE INTO email_accounts (id, data, createdAt) VALUES (?, ?, ?)').run(updated.id, JSON.stringify(updated), updated.createdAt);
+      res.json({ ...updated, password: '••••••••' });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update email account" });
+    }
+  });
+
+  app.delete("/api/email/accounts/:id", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      db.prepare('DELETE FROM email_accounts WHERE id = ?').run(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete email account" });
+    }
+  });
+
+  app.post("/api/email/test-imap/:id", authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const row = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!row) return res.status(404).json({ error: "Account not found" });
+      const acct = JSON.parse(row.data);
+      const client = new ImapFlow({ host: acct.host, port: acct.port, secure: acct.secure, auth: { user: acct.username, pass: acct.password }, logger: false });
+      await client.connect();
+      await client.logout();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "IMAP connection failed" });
+    }
+  });
+
+  // Strip Re:/Fwd:/AW: etc. to get the base subject for thread matching
+  function normalizeSubject(subject: string): string {
+    return subject
+      .replace(/^(\s*(re|fw|fwd|aw|antw|sv|vs|ref)(\[\d+\])?[:\s]+)+/gi, '')
+      .trim()
+      .toLowerCase();
+  }
+
+  // Poll a single IMAP account and create/update bid thread entries for new messages
+  async function pollImapAccount(accountId: string): Promise<number> {
+    const row = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(accountId) as { data: string } | undefined;
+    if (!row) return 0;
+    const acct = JSON.parse(row.data);
+    let created = 0;
+    const client = new ImapFlow({ host: acct.host, port: acct.port, secure: acct.secure, auth: { user: acct.username, pass: acct.password }, logger: false });
+    try {
+      await client.connect();
+      const lock = await client.getMailboxLock(acct.folder || 'INBOX');
+      try {
+        // Build dedup set from ALL messageIds across all bids (including thread emails)
+        const allBidRows = db.prepare('SELECT id, data FROM bids').all() as { id: string; data: string }[];
+        const knownIds = new Set<string>();
+        for (const row of allBidRows) {
+          try {
+            const b = JSON.parse(row.data);
+            if (b.email?.messageId) knownIds.add(b.email.messageId);
+            if (Array.isArray(b.emails)) {
+              for (const e of b.emails) { if (e.messageId) knownIds.add(e.messageId); }
+            }
+          } catch {}
+        }
+
+        // Pass 1: fetch envelopes only to identify new messages (no body download)
+        const newUids: number[] = [];
+        for await (const msg of client.fetch('1:*', { envelope: true })) {
+          const mid = (msg.envelope as any)?.messageId as string | undefined;
+          if (!mid || !knownIds.has(mid)) newUids.push(msg.uid);
+        }
+
+        // Pass 2: fetch full source only for new messages; thread by normalized subject
+        for (const uid of newUids) {
+          try {
+            const msg = await client.fetchOne(String(uid), { envelope: true, source: true }, { uid: true });
+            if (!msg) continue;
+            const parsed = await simpleParser(msg.source);
+            const from = parsed.from?.value?.[0];
+            const messageId = parsed.messageId || undefined;
+            if (messageId && knownIds.has(messageId)) continue;
+
+            const attachmentIds: string[] = [];
+            for (const att of parsed.attachments) {
+              const fileId = crypto.randomUUID();
+              const mimePrefix = `data:${att.contentType};base64,`;
+              const b64 = att.content.toString('base64');
+              db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)').run(fileId, mimePrefix + b64);
+              attachmentIds.push(fileId);
+            }
+
+            const newEmail = {
+              messageId,
+              from: from?.address || '',
+              fromName: from?.name || '',
+              subject: parsed.subject || '(no subject)',
+              body: parsed.text || '',
+              htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
+              receivedAt: parsed.date?.getTime() || Date.now(),
+              attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+              accountId,
+            };
+
+            // Find an existing bid thread with the same normalized subject
+            const normSubject = normalizeSubject(parsed.subject || '');
+            const matchingRow = normSubject
+              ? allBidRows.find(r => {
+                  try { return normalizeSubject(JSON.parse(r.data).name || '') === normSubject; } catch { return false; }
+                })
+              : undefined;
+
+            if (matchingRow) {
+              // Append to existing thread
+              const existingBid = JSON.parse(matchingRow.data);
+              const threadEmails: typeof newEmail[] = Array.isArray(existingBid.emails)
+                ? existingBid.emails
+                : (existingBid.email ? [existingBid.email] : []);
+              threadEmails.push(newEmail);
+              threadEmails.sort((a, b) => (a.receivedAt || 0) - (b.receivedAt || 0));
+              existingBid.emails = threadEmails;
+              existingBid.email = threadEmails[threadEmails.length - 1]; // latest is primary
+              db.prepare('UPDATE bids SET data = ? WHERE id = ?').run(JSON.stringify(existingBid), matchingRow.id);
+              // Update allBidRows cache so subsequent messages in same poll find the updated data
+              matchingRow.data = JSON.stringify(existingBid);
+            } else {
+              // Create a new bid entry
+              const bid = {
+                id: crypto.randomUUID(),
+                name: parsed.subject || '(no subject)',
+                contractor: from?.name || from?.address || 'Unknown',
+                address: '',
+                decision: 'new',
+                createdAt: Date.now(),
+                email: newEmail,
+                emails: [newEmail],
+              };
+              db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
+              allBidRows.push({ id: bid.id, data: JSON.stringify(bid) });
+              created++;
+            }
+
+            await client.messageFlagsAdd({ uid }, ['\\Seen'], { uid: true });
+            if (messageId) knownIds.add(messageId);
+          } catch (msgErr) {
+            console.error(`Failed to process message UID ${uid} for account ${accountId}:`, msgErr);
+          }
+        }
+      } finally {
+        lock.release();
+      }
+      await client.logout();
+    } catch (err) {
+      console.error(`IMAP poll error for account ${accountId}:`, err);
+      try { await client.logout(); } catch {}
+    }
+    return created;
+  }
+
+  app.post("/api/email/poll", authenticateToken, async (req, res) => {
+    const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
+    let total = 0;
+    for (const a of accounts) {
+      try { total += await pollImapAccount(a.id); } catch { /* already logged inside pollImapAccount */ }
+    }
+    res.json({ success: true, imported: total });
+  });
+
+  // Manual email import (paste/upload)
+  app.post("/api/bids/import-email", authenticateToken, (req, res) => {
+    try {
+      const { from, fromName, subject, body, htmlBody } = req.body;
+      const bid = {
+        id: crypto.randomUUID(),
+        name: subject || '(no subject)',
+        contractor: fromName || from || 'Unknown',
+        address: '',
+        decision: 'new',
+        createdAt: Date.now(),
+        email: {
+          from: from || '',
+          fromName: fromName || '',
+          subject: subject || '(no subject)',
+          body: body || '',
+          htmlBody: htmlBody || undefined,
+          receivedAt: Date.now(),
+        },
+      };
+      db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
+      res.json(bid);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to import email" });
+    }
+  });
+
+  // Send proposal via email (reply to original invitation)
+  app.post("/api/bids/:id/send-proposal", authenticateToken, async (req, res) => {
+    try {
+      const row = db.prepare('SELECT data FROM bids WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!row) return res.status(404).json({ error: "Bid not found" });
+      const bid = JSON.parse(row.data);
+
+      const { fileId, message } = req.body as { fileId: string; message?: string };
+      const fileRow = db.prepare('SELECT data FROM images WHERE id = ?').get(fileId) as { data: string } | undefined;
+      if (!fileRow) return res.status(404).json({ error: "File not found" });
+
+      const transport = buildTransporter();
+      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
+
+      const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+      const smtpCfg: Record<string, string> = {};
+      smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
+
+      // Decode base64 file
+      const dataUrl = fileRow.data;
+      const base64Data = dataUrl.split(',')[1];
+      const mimeType = dataUrl.split(';')[0].replace('data:', '');
+      const fileBuffer = Buffer.from(base64Data, 'base64');
+
+      const subject = bid.email?.subject ? `Re: ${bid.email.subject}` : 'Proposal';
+      const toAddress = bid.email?.from || '';
+      if (!toAddress) return res.status(400).json({ error: "No recipient address on this bid" });
+
+      const mailOptions: nodemailer.SendMailOptions = {
+        from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+        to: toAddress,
+        subject,
+        text: message || 'Please find the attached proposal.',
+        attachments: [{ filename: 'proposal.pdf', content: fileBuffer, contentType: mimeType }],
+      };
+      // Thread the reply using In-Reply-To and References headers
+      if (bid.email?.messageId) {
+        mailOptions.inReplyTo = bid.email.messageId;
+        mailOptions.references = bid.email.messageId;
+      }
+
+      await transport.sendMail(mailOptions);
+
+      // Update bid: mark proposal sent
+      const updatedBid = { ...bid, decision: 'proposal_sent', proposalFileId: fileId, proposalSentAt: Date.now() };
+      db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(updatedBid.id, JSON.stringify(updatedBid), updatedBid.createdAt);
+      res.json(updatedBid);
+    } catch (error: any) {
+      console.error("Error sending proposal:", error);
+      res.status(500).json({ error: error.message || "Failed to send proposal" });
+    }
+  });
+
+  // ── IMAP background poller ──────────────────────────────────────────────────
+
+  function startImapPoller() {
+    const INTERVAL_SETTING_KEY = 'email.pollIntervalMinutes';
+    const intervalRow = db.prepare('SELECT value FROM settings WHERE key = ?').get(INTERVAL_SETTING_KEY) as { value: string } | undefined;
+    const minutes = parseInt(intervalRow?.value || '0');
+    if (!minutes || minutes < 1) return;
+    const ms = minutes * 60 * 1000;
+    console.log(`IMAP poller: checking every ${minutes} min`);
+    setInterval(async () => {
+      const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
+      for (const a of accounts) {
+        const n = await pollImapAccount(a.id);
+        if (n > 0) console.log(`IMAP: imported ${n} new bid(s) from account ${a.id}`);
+      }
+    }, ms);
+  }
+
   // WebSocket Logic
 
   io.on("connection", (socket) => {
@@ -840,6 +1218,7 @@ async function startServer() {
   const PORT = 3000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    startImapPoller();
   });
 }
 
