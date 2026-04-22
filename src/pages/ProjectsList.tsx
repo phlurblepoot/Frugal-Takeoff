@@ -789,15 +789,36 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                               </select>
                             </div>
                           </div>
-                          {/* Body preview */}
-                          {bid.email?.body && (
-                            <p className={`text-sm text-slate-500 dark:text-slate-400 mt-2 ${isExpanded ? '' : 'line-clamp-2'} whitespace-pre-wrap`}>
-                              {bid.email.body}
-                            </p>
+                          {/* Body preview / full view */}
+                          {(bid.email?.body || bid.email?.htmlBody) && (
+                            !isExpanded ? (
+                              <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 whitespace-pre-wrap">
+                                {bid.email.body || '(HTML email)'}
+                              </p>
+                            ) : bid.email?.htmlBody ? (
+                              <iframe
+                                srcDoc={bid.email.htmlBody}
+                                sandbox="allow-same-origin"
+                                title="Email content"
+                                className="w-full mt-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white"
+                                style={{ minHeight: 160 }}
+                                onLoad={e => {
+                                  const frame = e.currentTarget;
+                                  try {
+                                    const h = frame.contentDocument?.documentElement?.scrollHeight;
+                                    if (h && h > 0) frame.style.height = h + 16 + 'px';
+                                  } catch {}
+                                }}
+                              />
+                            ) : (
+                              <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 whitespace-pre-wrap">
+                                {bid.email.body}
+                              </p>
+                            )
                           )}
                           {/* Actions row */}
                           <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
-                            {bid.email?.body && (
+                            {(bid.email?.body || bid.email?.htmlBody) && (
                               <button onClick={() => setExpandedBidIds(s => { const n = new Set(s); isExpanded ? n.delete(bid.id) : n.add(bid.id); return n; })}
                                 className="flex items-center gap-1 text-xs text-slate-500 hover:text-accent-600 transition-colors">
                                 {isExpanded ? <><ChevronUp size={13} /> Show less</> : <><ChevronDown size={13} /> Show full email</>}

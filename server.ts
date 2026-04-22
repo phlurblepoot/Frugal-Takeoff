@@ -907,51 +907,63 @@ async function startServer() {
       await client.connect();
       const lock = await client.getMailboxLock(acct.folder || 'INBOX');
       try {
-        for await (const msg of client.fetch('1:*', { envelope: true, source: true, flags: true })) {
-          const parsed = await simpleParser(msg.source);
-          const from = parsed.from?.value?.[0];
-          const messageId = parsed.messageId || undefined;
-          // Skip if a bid with this messageId already exists
-          if (messageId) {
-            const rows = db.prepare('SELECT data FROM bids').all() as { data: string }[];
-            const exists = rows.some(r => {
-              const b = JSON.parse(r.data);
-              return b.email?.messageId === messageId;
-            });
-            if (exists) continue;
+        // Build set of already-imported messageIds for deduplication
+        const knownIds = new Set(
+          (db.prepare('SELECT data FROM bids').all() as { data: string }[])
+            .map(r => { try { return JSON.parse(r.data).email?.messageId; } catch { return null; } })
+            .filter(Boolean)
+        );
+
+        // Pass 1: fetch envelopes only (no body download) — identify genuinely new messages
+        const newUids: number[] = [];
+        for await (const msg of client.fetch('1:*', { envelope: true })) {
+          const mid = (msg.envelope as any)?.messageId as string | undefined;
+          if (!mid || !knownIds.has(mid)) newUids.push(msg.uid);
+        }
+
+        // Pass 2: fetch full source only for new messages
+        for (const uid of newUids) {
+          try {
+            const msg = await client.fetchOne(String(uid), { envelope: true, source: true }, { uid: true });
+            if (!msg) continue;
+            const parsed = await simpleParser(msg.source);
+            const from = parsed.from?.value?.[0];
+            const messageId = parsed.messageId || undefined;
+            if (messageId && knownIds.has(messageId)) continue;
+            const attachmentIds: string[] = [];
+            for (const att of parsed.attachments) {
+              const fileId = crypto.randomUUID();
+              const mimePrefix = `data:${att.contentType};base64,`;
+              const b64 = att.content.toString('base64');
+              db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)').run(fileId, mimePrefix + b64);
+              attachmentIds.push(fileId);
+            }
+            const bid = {
+              id: crypto.randomUUID(),
+              name: parsed.subject || '(no subject)',
+              contractor: from?.name || from?.address || 'Unknown',
+              address: '',
+              decision: 'new',
+              createdAt: Date.now(),
+              email: {
+                messageId,
+                from: from?.address || '',
+                fromName: from?.name || '',
+                subject: parsed.subject || '(no subject)',
+                body: parsed.text || '',
+                htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
+                receivedAt: parsed.date?.getTime() || Date.now(),
+                attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+                accountId,
+              },
+            };
+            db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
+            await client.messageFlagsAdd({ uid }, ['\\Seen'], { uid: true });
+            if (messageId) knownIds.add(messageId);
+            created++;
+          } catch (msgErr) {
+            console.error(`Failed to process message UID ${uid} for account ${accountId}:`, msgErr);
           }
-          // Store any attachments
-          const attachmentIds: string[] = [];
-          for (const att of parsed.attachments) {
-            const fileId = crypto.randomUUID();
-            const mimePrefix = `data:${att.contentType};base64,`;
-            const b64 = att.content.toString('base64');
-            db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)').run(fileId, mimePrefix + b64);
-            attachmentIds.push(fileId);
-          }
-          const bid = {
-            id: crypto.randomUUID(),
-            name: parsed.subject || '(no subject)',
-            contractor: from?.name || from?.address || 'Unknown',
-            address: '',
-            decision: 'new',
-            createdAt: Date.now(),
-            email: {
-              messageId,
-              from: from?.address || '',
-              fromName: from?.name || '',
-              subject: parsed.subject || '(no subject)',
-              body: parsed.text || '',
-              htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
-              receivedAt: parsed.date?.getTime() || Date.now(),
-              attachmentIds: attachmentIds.length ? attachmentIds : undefined,
-              accountId,
-            },
-          };
-          db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
-          // Mark as read
-          await client.messageFlagsAdd({ uid: msg.uid }, ['\\Seen'], { uid: true });
-          created++;
         }
       } finally {
         lock.release();
@@ -965,14 +977,12 @@ async function startServer() {
   }
 
   app.post("/api/email/poll", authenticateToken, async (req, res) => {
-    try {
-      const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
-      let total = 0;
-      for (const a of accounts) total += await pollImapAccount(a.id);
-      res.json({ success: true, imported: total });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message || "Poll failed" });
+    const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
+    let total = 0;
+    for (const a of accounts) {
+      try { total += await pollImapAccount(a.id); } catch { /* already logged inside pollImapAccount */ }
     }
+    res.json({ success: true, imported: total });
   });
 
   // Manual email import (paste/upload)
