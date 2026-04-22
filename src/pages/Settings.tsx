@@ -461,6 +461,65 @@ const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCa
   );
 };
 
+interface ProviderStep { text: string; link?: string; linkText?: string; }
+interface ProviderInfo {
+  id: string;
+  name: string;
+  steps: ProviderStep[];
+  imap: { host: string; port: number; ssl: string };
+  smtp: { host: string; port: number; ssl: string };
+  note?: string;
+}
+
+const PROVIDER_GUIDE: ProviderInfo[] = [
+  {
+    id: 'gmail',
+    name: 'Gmail',
+    note: 'Google no longer allows regular passwords for IMAP — an App Password is required.',
+    steps: [
+      { text: 'Enable 2-Step Verification', link: 'https://myaccount.google.com/security', linkText: 'myaccount.google.com/security' },
+      { text: 'Create an App Password', link: 'https://myaccount.google.com/apppasswords', linkText: 'myaccount.google.com/apppasswords' },
+      { text: 'Select "Mail" as the app type and generate — copy the 16-character code shown' },
+      { text: 'Enter your Gmail address as the username and the App Password (not your regular password) in the account form above' },
+    ],
+    imap: { host: 'imap.gmail.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.gmail.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'outlook',
+    name: 'Outlook / Hotmail / Microsoft 365',
+    steps: [
+      { text: 'For personal @outlook.com or @hotmail.com accounts: use your normal password. If 2-Step Verification is on, create an App Password', link: 'https://account.live.com/proofs/AppPassword', linkText: 'account.live.com/proofs/AppPassword' },
+      { text: 'For work or school Microsoft 365 accounts: your IT administrator may need to enable IMAP access in the Microsoft 365 admin portal' },
+    ],
+    imap: { host: 'outlook.office365.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.office365.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'yahoo',
+    name: 'Yahoo Mail',
+    steps: [
+      { text: 'Enable IMAP access: in Yahoo Mail go to Settings → More Settings → Mailboxes → enable IMAP access' },
+      { text: 'Generate an App Password', link: 'https://login.yahoo.com/account/security', linkText: 'login.yahoo.com/account/security' },
+      { text: 'Use your full Yahoo address as the username and the generated App Password in the account form above' },
+    ],
+    imap: { host: 'imap.mail.yahoo.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.mail.yahoo.com', port: 587, ssl: 'STARTTLS' },
+  },
+  {
+    id: 'icloud',
+    name: 'Apple iCloud Mail',
+    steps: [
+      { text: 'Two-factor authentication must be enabled on your Apple ID' },
+      { text: 'Sign in and generate an app-specific password', link: 'https://appleid.apple.com', linkText: 'appleid.apple.com' },
+      { text: 'Navigate to Sign-In and Security → App-Specific Passwords → Generate an App-Specific Password' },
+      { text: 'Use your iCloud address (@icloud.com or @me.com) as the username and the generated password in the account form above' },
+    ],
+    imap: { host: 'imap.mail.me.com', port: 993, ssl: 'SSL/TLS' },
+    smtp: { host: 'smtp.mail.me.com', port: 587, ssl: 'STARTTLS' },
+  },
+];
+
 const EmailTab: React.FC = () => {
   const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
   const [smtpSaving, setSmtpSaving] = useState(false);
@@ -479,6 +538,8 @@ const EmailTab: React.FC = () => {
   const [pollResult, setPollResult] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
+  const [showGuide, setShowGuide] = useState(false);
+  const [guideOpenProvider, setGuideOpenProvider] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -671,6 +732,75 @@ const EmailTab: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Provider Setup Guide */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <button onClick={() => setShowGuide(g => !g)} className="w-full p-6 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Email Provider Setup Guide</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Server settings and setup instructions for Gmail, Outlook, Yahoo, and iCloud.</p>
+          </div>
+          {showGuide ? <ChevronUp size={20} className="text-slate-400 shrink-0" /> : <ChevronDown size={20} className="text-slate-400 shrink-0" />}
+        </button>
+        {showGuide && (
+          <div className="border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+            {PROVIDER_GUIDE.map(provider => (
+              <div key={provider.id}>
+                <button
+                  onClick={() => setGuideOpenProvider(p => p === provider.id ? null : provider.id)}
+                  className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all"
+                >
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">{provider.name}</span>
+                  {guideOpenProvider === provider.id
+                    ? <ChevronUp size={16} className="text-slate-400 shrink-0" />
+                    : <ChevronDown size={16} className="text-slate-400 shrink-0" />}
+                </button>
+                {guideOpenProvider === provider.id && (
+                  <div className="px-6 pb-6 space-y-4">
+                    <div>
+                      <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Setup Steps</p>
+                      <ol className="space-y-2">
+                        {provider.steps.map((step, i) => (
+                          <li key={i} className="flex gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <span className="shrink-0 w-5 h-5 rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                            <span>
+                              {step.text}
+                              {step.link && (
+                                <> — <a href={step.link} target="_blank" rel="noopener noreferrer" className="text-accent-600 dark:text-accent-400 hover:underline font-mono text-xs">{step.linkText}</a></>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">IMAP (Incoming Mail)</p>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.imap.host}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.port}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.ssl}</span></div>
+                        </div>
+                      </div>
+                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">SMTP (Outgoing Mail)</p>
+                        <div className="space-y-1.5 text-sm">
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.smtp.host}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.port}</span></div>
+                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.ssl}</span></div>
+                        </div>
+                      </div>
+                    </div>
+                    {provider.note && (
+                      <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2.5">{provider.note}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Polling interval */}
