@@ -909,7 +909,15 @@ async function startServer() {
     }
   });
 
-  // Poll a single IMAP account and create bid entries for new messages
+  // Strip Re:/Fwd:/AW: etc. to get the base subject for thread matching
+  function normalizeSubject(subject: string): string {
+    return subject
+      .replace(/^(\s*(re|fw|fwd|aw|antw|sv|vs|ref)(\[\d+\])?[:\s]+)+/gi, '')
+      .trim()
+      .toLowerCase();
+  }
+
+  // Poll a single IMAP account and create/update bid thread entries for new messages
   async function pollImapAccount(accountId: string): Promise<number> {
     const row = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(accountId) as { data: string } | undefined;
     if (!row) return 0;
@@ -920,21 +928,27 @@ async function startServer() {
       await client.connect();
       const lock = await client.getMailboxLock(acct.folder || 'INBOX');
       try {
-        // Build set of already-imported messageIds for deduplication
-        const knownIds = new Set(
-          (db.prepare('SELECT data FROM bids').all() as { data: string }[])
-            .map(r => { try { return JSON.parse(r.data).email?.messageId; } catch { return null; } })
-            .filter(Boolean)
-        );
+        // Build dedup set from ALL messageIds across all bids (including thread emails)
+        const allBidRows = db.prepare('SELECT id, data FROM bids').all() as { id: string; data: string }[];
+        const knownIds = new Set<string>();
+        for (const row of allBidRows) {
+          try {
+            const b = JSON.parse(row.data);
+            if (b.email?.messageId) knownIds.add(b.email.messageId);
+            if (Array.isArray(b.emails)) {
+              for (const e of b.emails) { if (e.messageId) knownIds.add(e.messageId); }
+            }
+          } catch {}
+        }
 
-        // Pass 1: fetch envelopes only (no body download) — identify genuinely new messages
+        // Pass 1: fetch envelopes only to identify new messages (no body download)
         const newUids: number[] = [];
         for await (const msg of client.fetch('1:*', { envelope: true })) {
           const mid = (msg.envelope as any)?.messageId as string | undefined;
           if (!mid || !knownIds.has(mid)) newUids.push(msg.uid);
         }
 
-        // Pass 2: fetch full source only for new messages
+        // Pass 2: fetch full source only for new messages; thread by normalized subject
         for (const uid of newUids) {
           try {
             const msg = await client.fetchOne(String(uid), { envelope: true, source: true }, { uid: true });
@@ -943,6 +957,7 @@ async function startServer() {
             const from = parsed.from?.value?.[0];
             const messageId = parsed.messageId || undefined;
             if (messageId && knownIds.has(messageId)) continue;
+
             const attachmentIds: string[] = [];
             for (const att of parsed.attachments) {
               const fileId = crypto.randomUUID();
@@ -951,29 +966,59 @@ async function startServer() {
               db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)').run(fileId, mimePrefix + b64);
               attachmentIds.push(fileId);
             }
-            const bid = {
-              id: crypto.randomUUID(),
-              name: parsed.subject || '(no subject)',
-              contractor: from?.name || from?.address || 'Unknown',
-              address: '',
-              decision: 'new',
-              createdAt: Date.now(),
-              email: {
-                messageId,
-                from: from?.address || '',
-                fromName: from?.name || '',
-                subject: parsed.subject || '(no subject)',
-                body: parsed.text || '',
-                htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
-                receivedAt: parsed.date?.getTime() || Date.now(),
-                attachmentIds: attachmentIds.length ? attachmentIds : undefined,
-                accountId,
-              },
+
+            const newEmail = {
+              messageId,
+              from: from?.address || '',
+              fromName: from?.name || '',
+              subject: parsed.subject || '(no subject)',
+              body: parsed.text || '',
+              htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
+              receivedAt: parsed.date?.getTime() || Date.now(),
+              attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+              accountId,
             };
-            db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
+
+            // Find an existing bid thread with the same normalized subject
+            const normSubject = normalizeSubject(parsed.subject || '');
+            const matchingRow = normSubject
+              ? allBidRows.find(r => {
+                  try { return normalizeSubject(JSON.parse(r.data).name || '') === normSubject; } catch { return false; }
+                })
+              : undefined;
+
+            if (matchingRow) {
+              // Append to existing thread
+              const existingBid = JSON.parse(matchingRow.data);
+              const threadEmails: typeof newEmail[] = Array.isArray(existingBid.emails)
+                ? existingBid.emails
+                : (existingBid.email ? [existingBid.email] : []);
+              threadEmails.push(newEmail);
+              threadEmails.sort((a, b) => (a.receivedAt || 0) - (b.receivedAt || 0));
+              existingBid.emails = threadEmails;
+              existingBid.email = threadEmails[threadEmails.length - 1]; // latest is primary
+              db.prepare('UPDATE bids SET data = ? WHERE id = ?').run(JSON.stringify(existingBid), matchingRow.id);
+              // Update allBidRows cache so subsequent messages in same poll find the updated data
+              matchingRow.data = JSON.stringify(existingBid);
+            } else {
+              // Create a new bid entry
+              const bid = {
+                id: crypto.randomUUID(),
+                name: parsed.subject || '(no subject)',
+                contractor: from?.name || from?.address || 'Unknown',
+                address: '',
+                decision: 'new',
+                createdAt: Date.now(),
+                email: newEmail,
+                emails: [newEmail],
+              };
+              db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
+              allBidRows.push({ id: bid.id, data: JSON.stringify(bid) });
+              created++;
+            }
+
             await client.messageFlagsAdd({ uid }, ['\\Seen'], { uid: true });
             if (messageId) knownIds.add(messageId);
-            created++;
           } catch (msgErr) {
             console.error(`Failed to process message UID ${uid} for account ${accountId}:`, msgErr);
           }

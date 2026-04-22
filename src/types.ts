@@ -136,7 +136,8 @@ export interface Bid {
   address?: string;
   decision: BidStatus;
   createdAt: number;
-  email?: BidEmail;           // Original invitation email (if available)
+  email?: BidEmail;           // Latest email in thread (primary display)
+  emails?: BidEmail[];        // Full thread, oldest first; email mirrors the last entry
   proposalFileId?: string;    // Printout file ID that was sent
   proposalSentAt?: number;    // When the proposal was emailed
   projectId?: string;         // Linked project ID (if converted)

@@ -55,6 +55,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   // Bid pipeline state
   const [bidFilter, setBidFilter] = useState<'all' | BidStatus>('all');
   const [expandedBidIds, setExpandedBidIds] = useState<Set<string>>(new Set());
+  const [expandedThreadKeys, setExpandedThreadKeys] = useState<Set<string>>(new Set());
   const [showImportModal, setShowImportModal] = useState(false);
   const [importForm, setImportForm] = useState({ from: '', fromName: '', subject: '', body: '' });
   const [importSaving, setImportSaving] = useState(false);
@@ -766,8 +767,15 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div>
-                              <p className="font-bold text-slate-900 dark:text-white leading-tight">{bid.email?.subject || bid.name}</p>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-bold text-slate-900 dark:text-white leading-tight">{bid.email?.subject || bid.name}</p>
+                                {bid.emails && bid.emails.length > 1 && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-semibold bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300">
+                                    {bid.emails.length}
+                                  </span>
+                                )}
+                              </div>
                               {bid.email ? (
                                 <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
                                   <span className="font-medium text-slate-700 dark:text-slate-300">{bid.email.fromName || bid.email.from}</span>
@@ -789,39 +797,79 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                               </select>
                             </div>
                           </div>
-                          {/* Body preview / full view */}
-                          {(bid.email?.body || bid.email?.htmlBody) && (
-                            !isExpanded ? (
-                              <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 whitespace-pre-wrap">
-                                {bid.email.body || '(HTML email)'}
-                              </p>
-                            ) : bid.email?.htmlBody ? (
-                              <iframe
-                                srcDoc={bid.email.htmlBody}
-                                sandbox="allow-same-origin"
-                                title="Email content"
-                                className="w-full mt-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white"
-                                style={{ minHeight: 160 }}
-                                onLoad={e => {
-                                  const frame = e.currentTarget;
-                                  try {
-                                    const h = frame.contentDocument?.documentElement?.scrollHeight;
-                                    if (h && h > 0) frame.style.height = h + 16 + 'px';
-                                  } catch {}
-                                }}
-                              />
-                            ) : (
-                              <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 whitespace-pre-wrap">
-                                {bid.email.body}
-                              </p>
-                            )
+
+                          {/* Collapsed: plain-text preview of latest email */}
+                          {!isExpanded && (bid.email?.body || bid.email?.htmlBody) && (
+                            <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 line-clamp-2 whitespace-pre-wrap">
+                              {bid.email.body || '(HTML email)'}
+                            </p>
                           )}
+
+                          {/* Expanded: full thread view */}
+                          {isExpanded && (() => {
+                            const thread = bid.emails && bid.emails.length > 0
+                              ? [...bid.emails].reverse()   // newest first
+                              : bid.email ? [bid.email] : [];
+                            return (
+                              <div className="mt-3 space-y-2">
+                                {thread.map((em, idx) => {
+                                  const isLatest = idx === 0;
+                                  const threadKey = `${bid.id}:${idx}`;
+                                  const isOpen = isLatest || expandedThreadKeys.has(threadKey);
+                                  const toggle = () => setExpandedThreadKeys(s => {
+                                    const n = new Set(s); isOpen ? n.delete(threadKey) : n.add(threadKey); return n;
+                                  });
+                                  return (
+                                    <div key={idx} className="rounded-xl border border-slate-200 dark:border-slate-600 overflow-hidden">
+                                      <button onClick={toggle} className={`w-full flex items-center justify-between px-4 py-2.5 text-left transition-colors ${isLatest ? 'bg-accent-50 dark:bg-accent-900/20' : 'bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-700/60'}`}>
+                                        <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+                                          {em.fromName || em.from}
+                                          {em.fromName && <span className="ml-1 text-slate-400 font-normal text-xs">&lt;{em.from}&gt;</span>}
+                                        </span>
+                                        <span className="flex items-center gap-2 shrink-0 ml-3">
+                                          <span className="text-xs text-slate-400">{new Date(em.receivedAt).toLocaleDateString()}</span>
+                                          {isOpen ? <ChevronUp size={13} className="text-slate-400" /> : <ChevronDown size={13} className="text-slate-400" />}
+                                        </span>
+                                      </button>
+                                      {isOpen && (
+                                        <div className="border-t border-slate-100 dark:border-slate-700">
+                                          {em.htmlBody ? (
+                                            <iframe
+                                              srcDoc={em.htmlBody}
+                                              sandbox="allow-same-origin"
+                                              title="Email content"
+                                              className="w-full bg-white"
+                                              style={{ minHeight: 120 }}
+                                              onLoad={e => {
+                                                const frame = e.currentTarget;
+                                                try {
+                                                  const h = frame.contentDocument?.documentElement?.scrollHeight;
+                                                  if (h && h > 0) frame.style.height = h + 16 + 'px';
+                                                } catch {}
+                                              }}
+                                            />
+                                          ) : (
+                                            <p className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{em.body}</p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+
                           {/* Actions row */}
                           <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
-                            {(bid.email?.body || bid.email?.htmlBody) && (
+                            {(bid.email?.body || bid.email?.htmlBody || (bid.emails && bid.emails.length > 0)) && (
                               <button onClick={() => setExpandedBidIds(s => { const n = new Set(s); isExpanded ? n.delete(bid.id) : n.add(bid.id); return n; })}
                                 className="flex items-center gap-1 text-xs text-slate-500 hover:text-accent-600 transition-colors">
-                                {isExpanded ? <><ChevronUp size={13} /> Show less</> : <><ChevronDown size={13} /> Show full email</>}
+                                {isExpanded
+                                  ? <><ChevronUp size={13} /> Show less</>
+                                  : bid.emails && bid.emails.length > 1
+                                    ? <><ChevronDown size={13} /> Show thread ({bid.emails.length})</>
+                                    : <><ChevronDown size={13} /> Show full email</>}
                               </button>
                             )}
                             <div className="ml-auto flex items-center gap-2">
