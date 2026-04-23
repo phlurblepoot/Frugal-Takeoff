@@ -688,11 +688,52 @@ async function startServer() {
   // Public: get share info (does not expose internal resourceId)
   app.get('/api/share/:shareId/info', (req, res) => {
     try {
-      const row = db.prepare('SELECT type, name FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; name: string } | undefined;
+      const row = db.prepare('SELECT type, name, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; name: string; resourceId: string } | undefined;
       if (!row) return res.status(404).json({ error: 'Share not found' });
+      if (row.type === 'pages') {
+        try {
+          const pages = JSON.parse(row.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
+          return res.json({ type: row.type, name: row.name, count: pages.length });
+        } catch { /* fall through */ }
+      }
       res.json({ type: row.type, name: row.name });
     } catch {
       res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Public: return name/pageNumber metadata for one page in a 'pages' share
+  app.get('/api/share/:shareId/page-info/:index', (req, res) => {
+    try {
+      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
+      if (!share || share.type !== 'pages') return res.status(404).json({ error: 'Share not found' });
+      const pages = JSON.parse(share.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
+      const idx = parseInt(req.params.index, 10);
+      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).json({ error: 'Page not found' });
+      const { name, pageNumber } = pages[idx];
+      res.json({ name, pageNumber });
+    } catch {
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Public: serve image at a specific index for a 'pages' share
+  app.get('/api/share/:shareId/image/:index', (req, res) => {
+    try {
+      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
+      if (!share || share.type !== 'pages') return res.status(404).send('Share not found');
+      const pages = JSON.parse(share.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
+      const idx = parseInt(req.params.index, 10);
+      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).send('Page not found');
+      const img = db.prepare('SELECT data FROM images WHERE id = ?').get(pages[idx].imageId) as { data: string } | undefined;
+      if (!img || !img.data) return res.status(404).send('File not found');
+      const matches = img.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches) return res.status(400).send('Invalid data');
+      res.set('Content-Type', matches[1]);
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.send(Buffer.from(matches[2], 'base64'));
+    } catch {
+      res.status(500).send('Server error');
     }
   });
 

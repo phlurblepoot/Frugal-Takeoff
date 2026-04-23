@@ -1732,17 +1732,30 @@ export const ProjectView: React.FC = () => {
     try {
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      const urls: string[] = [];
-      for (const pid of selectedPageIds) {
+
+      if (selectedPageIds.size === 1) {
+        // Single page — use the simple per-image share
+        const pid = [...selectedPageIds][0];
         const pg = project.pages.find(p => p.id === pid);
-        if (!pg) continue;
+        if (!pg) return;
         const id = await createShare('page', pg.imageId, pg.name || 'Page');
-        urls.push(`${host}/share/${id}`);
+        await copyShareUrl(`${host}/share/${id}`);
+        return;
       }
-      await navigator.clipboard.writeText(urls.join('\n'));
-      alert(`${urls.length} share link${urls.length > 1 ? 's' : ''} copied to clipboard`);
+
+      // Multiple pages — create one combined share
+      const orderedPages = project.pages.filter(p => selectedPageIds.has(p.id));
+      const payload = orderedPages.map(p => ({
+        imageId: p.imageId,
+        name: p.name || 'Page',
+        pageNumber: p.pageNumber,
+      }));
+      // Deduplicate by sorted imageId list so the same selection reuses the existing share
+      const resourceId = JSON.stringify(payload);
+      const id = await createShare('pages', resourceId, project.name);
+      await copyShareUrl(`${host}/share/${id}`);
     } catch {
-      alert('Failed to create share links');
+      alert('Failed to create share link');
     }
   };
 
