@@ -217,6 +217,10 @@ async function startServer() {
   initDb();
 
   const app = express();
+  // Trust the first reverse proxy hop (e.g. Cloudflare) so req.ip reflects the
+  // real client IP from X-Forwarded-For. Without this, rate limiting buckets
+  // all traffic under the proxy's IP and becomes effectively shared across users.
+  app.set('trust proxy', 1);
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
