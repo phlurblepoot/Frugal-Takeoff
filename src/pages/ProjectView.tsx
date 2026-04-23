@@ -256,7 +256,7 @@ async function renderPageToDataUrl(
   });
 
   // Legend
-  if (page.showLegend && project.takeoffs.length > 0) {
+  if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
     const legendItems: { color: string; name: string; total: string }[] = [];
     project.takeoffs.forEach(takeoff => {
       let totalRealValue = 0;
@@ -291,44 +291,56 @@ async function renderPageToDataUrl(
       }
     });
     if (legendItems.length > 0) {
-      const fontSize = page.legendFontSize || 14;
-      const padding = fontSize * 0.8;
-      const itemHeight = fontSize * 1.6;
+      const fontSize = page.legendFontSize || 24;
+      const padding = fontSize * 0.9;
+      const itemHeight = fontSize * 1.7;
       const colorBoxSize = fontSize;
-      const textOffsetX = colorBoxSize + 10;
-      const width = page.legendWidth || 350;
-      const height = padding * 2 + legendItems.length * itemHeight + fontSize * 2;
+      const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
+      const width = page.legendWidth || 500;
+      const headerH = padding * 2 + fontSize * 1.4;
+      const height = headerH + legendItems.length * itemHeight + padding;
       const pos = page.legendPosition || { x: 20, y: 20 };
       ctx.save();
       ctx.translate(pos.x, pos.y);
+      // Outer card with shadow
+      ctx.shadowColor = 'rgba(0,0,0,0.12)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 4;
       ctx.fillStyle = 'white';
-      ctx.shadowColor = 'rgba(0,0,0,0.1)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
-      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 6); ctx.fill();
-      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 8); ctx.fill();
       ctx.shadowColor = 'transparent';
-      ctx.fillStyle = '#334155';
+      ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.stroke();
+      // Header background
+      ctx.fillStyle = '#f1f5f9';
+      ctx.beginPath(); ctx.roundRect(0, 0, width, headerH, [8, 8, 0, 0]); ctx.fill();
+      // Title
+      ctx.fillStyle = '#1e293b';
       ctx.font = `bold ${fontSize + 2}px sans-serif`;
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('Legend', padding, padding);
+      ctx.fillText('Legend', padding, padding * 0.8);
+      // Separator
+      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, headerH); ctx.lineTo(width, headerH); ctx.stroke();
+      // Items
       legendItems.forEach((item, index) => {
-        const y = padding + fontSize * 2 + index * itemHeight;
+        const rowY = headerH + padding * 0.5 + index * itemHeight;
+        const boxY = rowY + Math.round((itemHeight - colorBoxSize) / 2);
+        const textY = rowY + Math.round((itemHeight - fontSize) / 2);
         ctx.fillStyle = item.color;
-        ctx.beginPath(); ctx.roundRect(padding, y + 2, colorBoxSize, colorBoxSize, 3); ctx.fill();
-        ctx.fillStyle = '#475569';
+        ctx.beginPath(); ctx.roundRect(padding, boxY, colorBoxSize, colorBoxSize, 4); ctx.fill();
+        ctx.fillStyle = '#334155';
         ctx.font = `${fontSize}px sans-serif`;
         ctx.textAlign = 'left'; ctx.textBaseline = 'top';
         let nameText = item.name;
-        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 10 : 0);
+        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
         if (ctx.measureText(nameText).width > maxNameWidth) {
           while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) nameText = nameText.slice(0, -1);
           nameText += '...';
         }
-        ctx.fillText(nameText, padding + textOffsetX, y + 2);
+        ctx.fillText(nameText, padding + textOffsetX, textY);
         if (page.showLegendTotals !== false) {
           ctx.fillStyle = '#0f172a';
           ctx.font = `bold ${fontSize}px sans-serif`;
           ctx.textAlign = 'right';
-          ctx.fillText(item.total, width - padding, y + 2);
+          ctx.fillText(item.total, width - padding, textY);
         }
       });
       ctx.restore();

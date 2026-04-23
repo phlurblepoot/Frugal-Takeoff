@@ -179,6 +179,7 @@ export interface Project {
   submitted?: boolean;
   responded?: boolean;
   accepted?: boolean;
+  legendOnAllPages?: boolean;
 }
 
 export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';

@@ -94,7 +94,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   legendScale = 2,
   legendScaleX,
   legendScaleY,
-  legendFontSize = 14,
+  legendFontSize = 24,
   legendWidth,
   onUpdateLegend,
   searchTerm,
@@ -1254,12 +1254,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
     if (legendItems.length === 0) return null;
 
-    const padding = legendFontSize * 0.8;
-    const itemHeight = legendFontSize * 1.6;
+    const padding = legendFontSize * 0.9;
+    const itemHeight = legendFontSize * 1.7;
     const colorBoxSize = legendFontSize;
-    const textOffsetX = colorBoxSize + 10;
-    const width = legendWidth || 350;
-    const height = padding * 2 + legendItems.length * itemHeight + legendFontSize * 2;
+    const textOffsetX = colorBoxSize + Math.round(legendFontSize * 0.5);
+    const width = legendWidth || 500;
+    const headerH = padding * 2 + legendFontSize * 1.4;
+    const height = headerH + legendItems.length * itemHeight + padding;
+    const handleSize = Math.max(12, legendFontSize * 0.6);
 
     return (
       <Group
@@ -1271,6 +1273,16 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             onUpdateLegend({ position: { x: e.target.x(), y: e.target.y() } });
           }
         }}
+        onMouseEnter={(e) => {
+          if (currentTool === 'pan') {
+            const container = e.target.getStage()?.container();
+            if (container) container.style.cursor = 'grab';
+          }
+        }}
+        onMouseLeave={(e) => {
+          const container = e.target.getStage()?.container();
+          if (container) container.style.cursor = 'crosshair';
+        }}
         onWheel={(e) => {
           if (currentTool === 'pan') {
             e.cancelBubble = true;
@@ -1279,61 +1291,76 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             const oldFontSize = legendFontSize;
             const newFontSize = e.evt.deltaY < 0 ? oldFontSize * scaleBy : oldFontSize / scaleBy;
             if (onUpdateLegend) {
-              onUpdateLegend({ 
-                fontSize: Math.max(8, Math.min(newFontSize, 100))
+              onUpdateLegend({
+                fontSize: Math.max(8, Math.min(newFontSize, 120))
               });
             }
           }
         }}
       >
+        {/* Shadow / outer card */}
         <Rect
           width={width}
           height={height}
           fill="white"
-          stroke="#e2e8f0"
+          stroke="#cbd5e1"
           strokeWidth={1}
-          cornerRadius={6}
+          cornerRadius={8}
           shadowColor="black"
-          shadowBlur={10}
-          shadowOpacity={0.1}
+          shadowBlur={16}
+          shadowOpacity={0.12}
           shadowOffset={{ x: 0, y: 4 }}
         />
+        {/* Header background */}
+        <Rect
+          width={width}
+          height={headerH}
+          fill="#f1f5f9"
+          cornerRadius={[8, 8, 0, 0]}
+        />
+        {/* Title */}
         <Text
           x={padding}
-          y={padding}
+          y={padding * 0.8}
           text="Legend"
           fontSize={legendFontSize + 2}
           fontStyle="bold"
-          fill="#334155"
+          fill="#1e293b"
+        />
+        {/* Separator */}
+        <Line
+          points={[0, headerH, width, headerH]}
+          stroke="#e2e8f0"
+          strokeWidth={1}
         />
         {legendItems.map((item, index) => (
-          <Group key={index} y={padding + legendFontSize * 2 + index * itemHeight}>
+          <Group key={index} y={headerH + padding * 0.5 + index * itemHeight}>
             <Rect
               x={padding}
-              y={2}
+              y={Math.round((itemHeight - colorBoxSize) / 2)}
               width={colorBoxSize}
               height={colorBoxSize}
               fill={item.color}
-              cornerRadius={3}
+              cornerRadius={4}
             />
             <Text
               x={padding + textOffsetX}
-              y={2}
+              y={Math.round((itemHeight - legendFontSize) / 2)}
               text={item.name}
               fontSize={legendFontSize}
-              fill="#475569"
-              width={width - padding * 2 - textOffsetX - (showLegendTotals ? legendFontSize * 10 : 0)}
+              fill="#334155"
+              width={width - padding * 2 - textOffsetX - (showLegendTotals ? legendFontSize * 8 : 0)}
               ellipsis={true}
               wrap="none"
             />
             {showLegendTotals && (
               <Text
-                x={width - padding - legendFontSize * 10}
-                y={2}
+                x={width - padding - legendFontSize * 8}
+                y={Math.round((itemHeight - legendFontSize) / 2)}
                 text={item.total}
                 fontSize={legendFontSize}
                 fill="#0f172a"
-                width={legendFontSize * 10}
+                width={legendFontSize * 8}
                 align="right"
                 fontStyle="bold"
                 wrap="none"
@@ -1344,12 +1371,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         {/* Resize handle */}
         {currentTool === 'pan' && (
           <Rect
-            x={width - 10}
-            y={height - 10}
-            width={10}
-            height={10}
+            x={width - handleSize}
+            y={height - handleSize}
+            width={handleSize}
+            height={handleSize}
             fill="#3b82f6"
-            cornerRadius={2}
+            cornerRadius={[0, 0, 8, 0]}
             draggable
             onDragMove={(e) => {
               e.cancelBubble = true;
@@ -1357,30 +1384,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               if (!stage) return;
               const pointerPos = stage.getPointerPosition();
               if (!pointerPos) return;
-              
-              // Calculate new width and font size based on pointer position relative to legend origin
               const newWidth = (pointerPos.x - stagePos.x) / stageScale - legendPosition.x;
               const newHeight = (pointerPos.y - stagePos.y) / stageScale - legendPosition.y;
-              
-              // height = fontSize * (1.6 + items * 1.6 + 2) = fontSize * (3.6 + items * 1.6)
-              const newFontSize = newHeight / (3.6 + legendItems.length * 1.6);
-              
+              // height = headerH + items * itemHeight + padding
+              // headerH = padding*2 + fontSize*1.4,  itemHeight = fontSize*1.7,  padding = fontSize*0.9
+              // height = fontSize*(0.9*2 + 1.4) + items*fontSize*1.7 + fontSize*0.9 = fontSize*(4.1 + items*1.7)
+              const newFontSize = newHeight / (4.1 + legendItems.length * 1.7);
               if (onUpdateLegend) {
-                onUpdateLegend({ 
-                  width: Math.max(100, newWidth),
+                onUpdateLegend({
+                  width: Math.max(150, newWidth),
                   fontSize: Math.max(8, newFontSize)
                 });
               }
-              
-              // Reset handle position relative to group so it stays at the corner
-              e.target.x(width - 10);
-              e.target.y(height - 10);
+              e.target.x(width - handleSize);
+              e.target.y(height - handleSize);
             }}
             onDragEnd={(e) => {
               e.cancelBubble = true;
-              // Ensure handle stays at the corner
-              e.target.x(width - 10);
-              e.target.y(height - 10);
+              e.target.x(width - handleSize);
+              e.target.y(height - handleSize);
             }}
             onMouseEnter={(e) => {
               const container = e.target.getStage()?.container();
@@ -1388,7 +1410,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             }}
             onMouseLeave={(e) => {
               const container = e.target.getStage()?.container();
-              if (container) container.style.cursor = 'crosshair';
+              if (container) container.style.cursor = currentTool === 'pan' ? 'grab' : 'crosshair';
             }}
           />
         )}
