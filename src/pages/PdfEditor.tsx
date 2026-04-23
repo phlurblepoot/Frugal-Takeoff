@@ -15,7 +15,7 @@ import {
   ChevronDown, ChevronLeft, ChevronRight,
   Undo2, Redo2, Trash2, Plus, X,
   ZoomIn, ZoomOut, Layers, BookOpen,
-  PanelLeft, PanelLeftClose,
+  PanelLeft, PanelLeftClose, GripVertical,
 } from 'lucide-react';
 import { saveFile } from '../utils/store';
 import { useToast } from '../components/Toast';
@@ -272,6 +272,8 @@ export const PdfEditor: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingText, setEditingText] = useState<{ pageIndex: number; x: number; y: number; text: string } | null>(null);
   const [currentSource, setCurrentSource] = useState<PrintoutSource | null>(null);
+  const [draggingPageIdx, setDraggingPageIdx] = useState<number | null>(null);
+  const [dragOverPageIdx, setDragOverPageIdx] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const idbRef = useRef<IDBDatabase | null>(null);
@@ -391,10 +393,15 @@ export const PdfEditor: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const sigInputRef = useRef<HTMLInputElement>(null);
+  const importPageInputRef = useRef<HTMLInputElement>(null);
   const sigMenuRef = useRef<HTMLDivElement>(null);
   const zoomMenuRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const sidebarListRef = useRef<HTMLDivElement>(null);
+  const sidebarThumbRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const draggingPageIdxRef = useRef<number | null>(null);
+  const dragOverPageRef = useRef<number | null>(null);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -1009,7 +1016,8 @@ export const PdfEditor: React.FC = () => {
     }
   };
 
-  // Save As: always download a local copy with an _annotated suffix
+  // Save As: use File System Access API when available (gives the user a save dialog),
+  // then fall back to <a download> for browsers that don't support it (e.g. Android Chrome).
   const saveAsPdf = async () => {
     if (!pdfBytes) return;
     setSaving(true);
@@ -1017,13 +1025,183 @@ export const PdfEditor: React.FC = () => {
       const bytes = await buildAnnotatedPdf();
       if (!bytes) return;
       const base = (fileName || 'document').replace(/\.pdf$/i, '');
-      downloadBytes(bytes, `${base}_annotated.pdf`);
+      const suggestedName = `${base}_annotated.pdf`;
+
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await (window as any).showSaveFilePicker({
+            suggestedName,
+            types: [{ description: 'PDF Document', accept: { 'application/pdf': ['.pdf'] } }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(new Blob([bytes], { type: 'application/pdf' }));
+          await writable.close();
+          return;
+        } catch (err: any) {
+          if (err.name === 'AbortError') return; // user cancelled picker
+          // fall through to <a download>
+        }
+      }
+      downloadBytes(bytes, suggestedName);
     } catch (err) {
       console.error('Save As failed', err);
       toast('Save As failed', { type: 'error' });
     } finally {
       setSaving(false);
     }
+  };
+
+  // ── Page Management ───────────────────────────────────────────────────────────
+
+  const deletePage = async (idx: number) => {
+    const pages = renderedPagesRef.current;
+    if (pages.length <= 1) { toast('Cannot delete the only page', { type: 'error' }); return; }
+    if (pdfBytes) {
+      try {
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        pdfDoc.removePage(idx);
+        const saved = await pdfDoc.save();
+        const newBuf = saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer;
+        setPdfBytes(newBuf);
+      } catch { /* non-fatal — annotations still exported correctly */ }
+    }
+    const newPages = pages.filter((_, i) => i !== idx);
+    const newAnnotations = annotationsRef.current
+      .filter((a) => a.pageIndex !== idx)
+      .map((a) => a.pageIndex > idx ? { ...a, pageIndex: a.pageIndex - 1 } : a);
+    renderedPagesRef.current = newPages;
+    setRenderedPages(newPages);
+    pushHistory(newAnnotations);
+    setCurrentPage((p) => Math.min(p, Math.max(0, newPages.length - 1)));
+  };
+
+  const reorderPages = async (fromIdx: number, toIdx: number) => {
+    if (fromIdx === toIdx) return;
+    if (pdfBytes) {
+      try {
+        const srcDoc = await PDFDocument.load(pdfBytes);
+        const count = srcDoc.getPageCount();
+        const order = Array.from({ length: count }, (_, i) => i);
+        order.splice(fromIdx, 1);
+        order.splice(toIdx, 0, fromIdx);
+        const newDoc = await PDFDocument.create();
+        const copied = await newDoc.copyPages(srcDoc, order);
+        copied.forEach((p) => newDoc.addPage(p));
+        const saved = await newDoc.save();
+        const newBuf = saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer;
+        setPdfBytes(newBuf);
+      } catch { /* non-fatal */ }
+    }
+    const pages = [...renderedPagesRef.current];
+    const [removed] = pages.splice(fromIdx, 1);
+    pages.splice(toIdx, 0, removed);
+    const newAnnotations = annotationsRef.current.map((a) => {
+      const pi = a.pageIndex;
+      if (pi === fromIdx) return { ...a, pageIndex: toIdx };
+      if (fromIdx < toIdx && pi > fromIdx && pi <= toIdx) return { ...a, pageIndex: pi - 1 };
+      if (fromIdx > toIdx && pi >= toIdx && pi < fromIdx) return { ...a, pageIndex: pi + 1 };
+      return a;
+    });
+    renderedPagesRef.current = pages;
+    setRenderedPages(pages);
+    pushHistory(newAnnotations);
+    setCurrentPage((p) => {
+      if (p === fromIdx) return toIdx;
+      if (fromIdx < toIdx && p > fromIdx && p <= toIdx) return p - 1;
+      if (fromIdx > toIdx && p >= toIdx && p < fromIdx) return p + 1;
+      return p;
+    });
+  };
+
+  const importPages = async (file: File) => {
+    setLoading(true);
+    const renderCanvas = document.createElement('canvas');
+    const thumbCanvas = document.createElement('canvas');
+    const THUMB_W = 148;
+    const newPages: RenderedPage[] = [];
+    try {
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        const buf = await file.arrayBuffer();
+        const objectUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+        const pdf = await pdfjsLib.getDocument({ url: objectUrl }).promise;
+        const ctx = renderCanvas.getContext('2d')!;
+        const thumbCtx = thumbCanvas.getContext('2d')!;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          setLoadMsg(`Rendering imported page ${i} of ${pdf.numPages}…`);
+          const page = await pdf.getPage(i);
+          const vp = page.getViewport({ scale: 2.0 });
+          renderCanvas.width = vp.width; renderCanvas.height = vp.height;
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
+          await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
+          const thumbH = Math.round(THUMB_W * vp.height / vp.width);
+          thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
+          thumbCtx.drawImage(renderCanvas, 0, 0, THUMB_W, thumbH);
+          newPages.push({
+            dataUrl: renderCanvas.toDataURL('image/jpeg', 0.92),
+            thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
+            width: vp.width, height: vp.height, rotation: vp.rotation,
+          });
+          page.cleanup();
+        }
+        await pdf.destroy();
+        URL.revokeObjectURL(objectUrl);
+        if (pdfBytes) {
+          const existingDoc = await PDFDocument.load(pdfBytes);
+          const newDoc = await PDFDocument.load(buf);
+          const indices = Array.from({ length: newDoc.getPageCount() }, (_, i) => i);
+          const copied = await existingDoc.copyPages(newDoc, indices);
+          copied.forEach((p) => existingDoc.addPage(p));
+          const saved = await existingDoc.save();
+          const newBuf = saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer;
+          setPdfBytes(newBuf);
+        }
+      } else {
+        setLoadMsg('Loading image…');
+        const dataUrl = await new Promise<string>((res) => {
+          const reader = new FileReader();
+          reader.onloadend = () => res(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        const img = await loadImgEl(dataUrl);
+        const scale = 2.0;
+        const w = img.naturalWidth * scale;
+        const h = img.naturalHeight * scale;
+        renderCanvas.width = w; renderCanvas.height = h;
+        const ctx = renderCanvas.getContext('2d')!;
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const thumbH = Math.round(THUMB_W * h / w);
+        thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
+        thumbCanvas.getContext('2d')!.drawImage(renderCanvas, 0, 0, THUMB_W, thumbH);
+        newPages.push({
+          dataUrl: renderCanvas.toDataURL('image/jpeg', 0.92),
+          thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
+          width: w, height: h, rotation: 0,
+        });
+        if (pdfBytes) {
+          const pdfDoc = await PDFDocument.load(pdfBytes);
+          const imgBytes = dataUrlToBytes(dataUrl);
+          const embedded = dataUrl.includes('image/png')
+            ? await pdfDoc.embedPng(imgBytes)
+            : await pdfDoc.embedJpg(imgBytes);
+          const page = pdfDoc.addPage([img.naturalWidth, img.naturalHeight]);
+          page.drawImage(embedded, { x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight });
+          const saved = await pdfDoc.save();
+          const newBuf = saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer;
+          setPdfBytes(newBuf);
+        }
+      }
+    } catch (err) {
+      console.error('Import failed', err);
+      toast('Import failed', { type: 'error' });
+    } finally {
+      renderCanvas.width = 0; renderCanvas.height = 0;
+      thumbCanvas.width = 0; thumbCanvas.height = 0;
+    }
+    const combined = [...renderedPagesRef.current, ...newPages];
+    renderedPagesRef.current = combined;
+    setRenderedPages(combined);
+    setLoading(false);
   };
 
   // ── Render Annotation ─────────────────────────────────────────────────────────
@@ -1180,7 +1358,7 @@ export const PdfEditor: React.FC = () => {
   // ── JSX ───────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden">
+    <div className="flex flex-col bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden" style={{ height: '100dvh' }}>
       {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) openPdf(f, activeTabId, tabs); e.target.value = ''; }} />
@@ -1216,6 +1394,8 @@ export const PdfEditor: React.FC = () => {
         onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImageFile(f); e.target.value = ''; }} />
       <input ref={sigInputRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) addSignature(f); e.target.value = ''; }} />
+      <input ref={importPageInputRef} type="file" accept=".pdf,image/*" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) importPages(f); e.target.value = ''; }} />
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-1 px-3 py-2 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm flex-shrink-0 flex-wrap">
@@ -1457,44 +1637,130 @@ export const PdfEditor: React.FC = () => {
         {/* ── Page Thumbnail Sidebar ── */}
         {sidebarOpen && (
           <div className="w-44 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0">
+            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pages</span>
+              <button
+                title="Import pages from PDF or image"
+                onClick={() => importPageInputRef.current?.click()}
+                className="p-1 rounded-lg text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              >
+                <Plus size={14} />
+              </button>
             </div>
-            <div className="flex-1 overflow-y-auto py-2 px-2 space-y-2">
+            <div
+              ref={sidebarListRef}
+              className="flex-1 overflow-y-auto py-2 px-2 space-y-2"
+              style={{ touchAction: draggingPageIdx !== null ? 'none' : undefined }}
+              onPointerDown={(e) => {
+                const el = e.target as HTMLElement;
+                if (!el.closest('[data-drag-handle]')) return;
+                for (let i = 0; i < renderedPages.length; i++) {
+                  if (sidebarThumbRefs.current[i]?.contains(el)) {
+                    e.preventDefault();
+                    draggingPageIdxRef.current = i;
+                    dragOverPageRef.current = i;
+                    setDraggingPageIdx(i);
+                    setDragOverPageIdx(i);
+                    sidebarListRef.current?.setPointerCapture(e.pointerId);
+                    break;
+                  }
+                }
+              }}
+              onPointerMove={(e) => {
+                if (draggingPageIdxRef.current === null) return;
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                for (let i = 0; i < renderedPages.length; i++) {
+                  const ref = sidebarThumbRefs.current[i];
+                  if (ref && ref.contains(el as Node)) {
+                    if (dragOverPageRef.current !== i) {
+                      dragOverPageRef.current = i;
+                      setDragOverPageIdx(i);
+                    }
+                    break;
+                  }
+                }
+              }}
+              onPointerUp={(e) => {
+                const from = draggingPageIdxRef.current;
+                const to = dragOverPageRef.current;
+                draggingPageIdxRef.current = null;
+                dragOverPageRef.current = null;
+                setDraggingPageIdx(null);
+                setDragOverPageIdx(null);
+                sidebarListRef.current?.releasePointerCapture(e.pointerId);
+                if (from !== null && to !== null && from !== to) reorderPages(from, to);
+              }}
+              onPointerCancel={() => {
+                draggingPageIdxRef.current = null;
+                dragOverPageRef.current = null;
+                setDraggingPageIdx(null);
+                setDragOverPageIdx(null);
+              }}
+            >
               {renderedPages.map((page, idx) => {
-                const isActive = viewMode === 'single'
-                  ? idx === currentPage
-                  : false; // scroll mode — no single "active" page
+                const isActive = viewMode === 'single' ? idx === currentPage : false;
+                const isDragging = draggingPageIdx === idx;
+                const isDragOver = dragOverPageIdx === idx && draggingPageIdx !== null && draggingPageIdx !== idx;
                 return (
-                  <button
+                  <div
                     key={idx}
-                    onClick={() => {
-                      if (viewMode === 'single') {
-                        setCurrentPage(idx);
-                      } else {
-                        pageRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }
-                    }}
-                    className={`w-full rounded-lg overflow-hidden border-2 transition-colors ${
-                      isActive
+                    ref={(el) => { sidebarThumbRefs.current[idx] = el; }}
+                    className={`relative rounded-lg overflow-hidden border-2 transition-all group ${
+                      isDragOver
+                        ? 'border-accent-500 ring-2 ring-accent-400/40'
+                        : isActive
                         ? 'border-accent-500'
+                        : isDragging
+                        ? 'border-accent-300 opacity-40'
                         : 'border-transparent hover:border-slate-300 dark:hover:border-slate-600'
                     }`}
                   >
-                    <img
-                      src={page.thumbUrl}
-                      alt={`Page ${idx + 1}`}
-                      className="w-full block"
-                      draggable={false}
-                    />
-                    <div className={`text-center text-xs py-0.5 ${
-                      isActive
-                        ? 'text-accent-600 dark:text-accent-400 font-semibold'
-                        : 'text-slate-400 dark:text-slate-500'
-                    }`}>
-                      {idx + 1}
+                    {/* Drag handle */}
+                    <div
+                      data-drag-handle="true"
+                      title="Drag to reorder"
+                      className="absolute top-1 left-1 z-10 p-0.5 bg-white/80 dark:bg-slate-700/80 rounded cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ touchAction: 'none' }}
+                    >
+                      <GripVertical size={10} className="text-slate-500 dark:text-slate-300" />
                     </div>
-                  </button>
+
+                    {/* Thumbnail (click to navigate) */}
+                    <button
+                      className="w-full"
+                      onClick={() => {
+                        if (draggingPageIdxRef.current !== null) return;
+                        if (viewMode === 'single') {
+                          setCurrentPage(idx);
+                        } else {
+                          pageRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      }}
+                    >
+                      <img
+                        src={page.thumbUrl}
+                        alt={`Page ${idx + 1}`}
+                        className="w-full block"
+                        draggable={false}
+                      />
+                      <div className={`text-center text-xs py-0.5 ${
+                        isActive
+                          ? 'text-accent-600 dark:text-accent-400 font-semibold'
+                          : 'text-slate-400 dark:text-slate-500'
+                      }`}>
+                        {idx + 1}
+                      </div>
+                    </button>
+
+                    {/* Delete button */}
+                    <button
+                      title={`Delete page ${idx + 1}`}
+                      onClick={(e) => { e.stopPropagation(); deletePage(idx); }}
+                      className="absolute top-1 right-1 z-10 p-0.5 bg-white/80 dark:bg-slate-700/80 rounded text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
                 );
               })}
             </div>
