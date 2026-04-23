@@ -4,7 +4,7 @@ import {
   CheckSquare, Plus, Trash2, Camera, MapPin,
   FileText, Printer, Download, Eye, ClipboardList,
   ChevronDown, ChevronUp, X, Edit2, Check, Share2,
-  GripVertical, MessageSquare,
+  GripVertical, MessageSquare, Loader2,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { saveFile, getFile, createShare, getSettings, getChecklists, saveChecklist, deleteChecklist } from '../utils/store';
@@ -513,6 +513,7 @@ export const ChecklistEditor: React.FC = () => {
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [generateMsg, setGenerateMsg] = useState('');
   const [loading, setLoading] = useState(true);
 
   const pdfDbRef = useRef<IDBDatabase | null>(null);
@@ -764,6 +765,7 @@ export const ChecklistEditor: React.FC = () => {
   const handlePrint = async () => {
     if (!active || generating) return;
     setGenerating(true);
+    setGenerateMsg('Building checklist PDF…');
     try {
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
       const W = pdf.internal.pageSize.getWidth();
@@ -963,13 +965,19 @@ export const ChecklistEditor: React.FC = () => {
 
       if (undone.length > 0) {
         drawSection('Pending', undone.length);
-        undone.forEach((item, i) => drawItem(item, i, false));
+        undone.forEach((item, i) => {
+          setGenerateMsg(`Drawing item ${i + 1} of ${totalCount}…`);
+          drawItem(item, i, false);
+        });
       }
 
       if (done.length > 0) {
         if (undone.length > 0) y += 8;
         drawSection('Completed', done.length);
-        done.forEach((item, i) => drawItem(item, i, true));
+        done.forEach((item, i) => {
+          setGenerateMsg(`Drawing item ${undone.length + i + 1} of ${totalCount}…`);
+          drawItem(item, i, true);
+        });
       }
 
       if (totalCount === 0) {
@@ -978,6 +986,7 @@ export const ChecklistEditor: React.FC = () => {
         pdf.text('No items in this checklist.', W / 2, y + 40, { align: 'center' });
       }
 
+      setGenerateMsg('Saving…');
       const pdfDataUrl = pdf.output('datauristring');
       const printoutId = nanoid();
       const printoutName = `${active.name} — ${new Date().toLocaleString()}`;
@@ -997,6 +1006,7 @@ export const ChecklistEditor: React.FC = () => {
       setActiveTab('printouts');
     } finally {
       setGenerating(false);
+      setGenerateMsg('');
     }
   };
 
@@ -1082,6 +1092,22 @@ export const ChecklistEditor: React.FC = () => {
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-950">
+
+      {/* ── PDF generation progress overlay ── */}
+      {generating && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-xs mx-4 flex flex-col items-center gap-5">
+            <Loader2 size={44} className="text-accent-600 animate-spin" />
+            <div className="text-center space-y-2">
+              <p className="font-semibold text-slate-800 dark:text-slate-100 text-base">Generating PDF…</p>
+              {generateMsg && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">{generateMsg}</p>
+              )}
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">This may take a moment for large checklists</p>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Top bar */}
       <div className="shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-3 flex flex-wrap items-center gap-x-3 gap-y-2 sm:gap-4">
         {/* Mobile sidebar toggle */}

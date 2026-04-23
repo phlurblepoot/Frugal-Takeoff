@@ -357,6 +357,7 @@ async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
   quality: HighlightQuality = 'standard',
+  onProgress?: (msg: string) => void,
 ): Promise<ArrayBuffer | null> {
   const preset = HIGHLIGHT_QUALITY_PRESETS[quality];
   const pagesToPrint = project.pages.filter(page =>
@@ -378,6 +379,7 @@ async function buildHighlightsPdf(
   });
 
   for (let i = 0; i < pagesToPrint.length; i++) {
+    onProgress?.(`Rendering page ${i + 1} of ${pagesToPrint.length}…`);
     const page = pagesToPrint[i];
     const sc = getPageScale(page.imageWidth, page.imageHeight);
     const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds, sc, preset.jpegQuality);
@@ -436,6 +438,7 @@ export const ProjectView: React.FC = () => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
+  const [progressMessage, setProgressMessage] = useState('');
   const [showProposalModal, setShowProposalModal] = useState(false);
   const [proposalIncludeCostDetail, setProposalIncludeCostDetail] = useState(false);
   const [proposalIncludeHighlights, setProposalIncludeHighlights] = useState(false);
@@ -926,16 +929,24 @@ export const ProjectView: React.FC = () => {
   const handlePrint = async () => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setIsPrinting(true);
+    setProgressMessage('Preparing pages…');
 
     try {
-      const pdfBuffer = await buildHighlightsPdf(project, selectedTakeoffIds, highlightQuality);
+      const pdfBuffer = await buildHighlightsPdf(
+        project,
+        selectedTakeoffIds,
+        highlightQuality,
+        (msg) => setProgressMessage(msg),
+      );
 
       if (!pdfBuffer) {
         alert('No pages found with the selected takeoffs.');
         setIsPrinting(false);
+        setProgressMessage('');
         return;
       }
 
+      setProgressMessage('Saving…');
       const pdfBlob = new Blob([pdfBuffer], { type: 'application/pdf' });
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
@@ -943,7 +954,7 @@ export const ProjectView: React.FC = () => {
         const base64data = reader.result as string;
         const fileId = uuidv4();
         await saveFile(fileId, base64data);
-        
+
         const newPrintout: Printout = {
           id: uuidv4(),
           name: `Printout - ${new Date().toLocaleString()}`,
@@ -951,15 +962,16 @@ export const ProjectView: React.FC = () => {
           createdAt: Date.now(),
           type: 'pdf',
         };
-        
+
         const updatedProject = {
           ...project,
           printouts: [...(project.printouts || []), newPrintout],
         };
-        
+
         await saveProject(updatedProject);
         setProject(updatedProject);
         setIsPrinting(false);
+        setProgressMessage('');
         setSelectedTakeoffIds(new Set());
         setActiveTab('printouts');
       };
@@ -967,6 +979,7 @@ export const ProjectView: React.FC = () => {
       console.error('Error generating PDF:', error);
       alert('Failed to generate PDF.');
       setIsPrinting(false);
+      setProgressMessage('');
     }
   };
 
@@ -1119,6 +1132,7 @@ export const ProjectView: React.FC = () => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setShowProposalModal(false);
     setIsGeneratingProposal(true);
+    setProgressMessage('Building cover page…');
 
     try {
       const settings = await getSettings();
@@ -1296,6 +1310,7 @@ export const ProjectView: React.FC = () => {
 
       // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
       if (includeTakeoffList) {
+      setProgressMessage('Adding scope details…');
       pdf.addPage();
 
       pdf.setFillColor(hR, hG, hB);
@@ -1519,6 +1534,7 @@ export const ProjectView: React.FC = () => {
 
       // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
       if (terms.trim()) {
+        setProgressMessage('Adding terms…');
         pdf.addPage();
         pdf.setFillColor(hR, hG, hB);
         pdf.rect(0, 0, W, 50, 'F');
@@ -1571,7 +1587,12 @@ export const ProjectView: React.FC = () => {
         // Generate the highlights PDF using the exact same path as the Print button,
         // then merge it with the proposal using pdf-lib.
         const { PDFDocument } = await import('pdf-lib');
-        const highlightsBuffer = await buildHighlightsPdf(project, selectedTakeoffIds, highlightQuality);
+        const highlightsBuffer = await buildHighlightsPdf(
+          project,
+          selectedTakeoffIds,
+          highlightQuality,
+          (msg) => setProgressMessage(msg),
+        );
         const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
 
         const mergedDoc = await PDFDocument.create();
@@ -1592,6 +1613,7 @@ export const ProjectView: React.FC = () => {
         finalBlob = pdf.output('blob');
       }
 
+      setProgressMessage('Saving…');
       const pdfBlob = finalBlob;
       const reader = new FileReader();
       reader.readAsDataURL(pdfBlob);
@@ -1616,6 +1638,7 @@ export const ProjectView: React.FC = () => {
         await saveProject(updatedProject);
         setProject(updatedProject);
         setIsGeneratingProposal(false);
+        setProgressMessage('');
         setSelectedTakeoffIds(new Set());
         setActiveTab('printouts');
       };
@@ -1623,6 +1646,7 @@ export const ProjectView: React.FC = () => {
       console.error('Error generating proposal:', error);
       alert('Failed to generate proposal PDF.');
       setIsGeneratingProposal(false);
+      setProgressMessage('');
     }
   };
 
@@ -2214,6 +2238,29 @@ export const ProjectView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
+
+      {/* ── PDF generation progress overlay ── */}
+      {(isPrinting || isGeneratingProposal || isExportingExcel) && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-xs mx-4 flex flex-col items-center gap-5">
+            <Loader2 size={44} className="text-accent-600 animate-spin" />
+            <div className="text-center space-y-2">
+              <p className="font-semibold text-slate-800 dark:text-slate-100 text-base">
+                {isPrinting
+                  ? 'Generating PDF…'
+                  : isGeneratingProposal
+                  ? 'Generating Proposal…'
+                  : 'Exporting to Excel…'}
+              </p>
+              {progressMessage && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">{progressMessage}</p>
+              )}
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">This may take a moment for large documents</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-5xl mx-auto">
         <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
           <ArrowLeft size={18} />
