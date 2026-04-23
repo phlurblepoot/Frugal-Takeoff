@@ -16,6 +16,27 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.8',
+    date: 'April 23, 2026',
+    changes: [
+      'Proposals: "Include takeoff list" is now an optional checkbox on the proposal modal — when off, the takeoff summary page is omitted and the cost-detail option is disabled',
+      'Proposals: the proposal modal now scrolls instead of overflowing on shorter desktop screens; header and footer stay visible',
+      'Legend: default font size raised from 14 to 24px and width from 350 to 500px so the legend is legible out of the box on both the canvas and exported PDFs',
+      'Legend: styled header bar, separator line, larger corner radius, and a more visible proportional resize handle in the bottom-right corner',
+      'Legend: snap-to-corner preset buttons (top-left / top-right / bottom-left / bottom-right) and a text-size slider extended to 72px in the page settings panel',
+      'Legend: "Apply legend settings to all pages" batch button copies font size, width, and totals toggle across every page in the project',
+      'Legend: project-level "Enable on all pages by default" toggle — pages without an explicit legend setting inherit the project default in both the canvas view and exported PDFs',
+      'Pages: selecting multiple pages and sharing now produces one combined link that opens a read-only vertical scroll gallery of all selected pages — no more one link per page',
+      'Page naming: when adding pages whose sheet number matches an existing page, the new page is flagged as a "REVISION" with an amber badge and helper text in the naming step',
+      'Page naming: sheet number and description are auto-detected from PDF page labels, the filename, or repeated tokens in the extracted text — no more manual entry for cleanly labelled drawings',
+      'Page naming: the region-selection preview in the New Project flow now uses the full-resolution image instead of the small thumbnail',
+      'Checklists: drag-handle on each item lets you reorder items by drag-and-drop, including across the Pending / Completed divider',
+      'Checklists: new "In Progress" photo section between Before and After, including in the printed PDF',
+      'Checklists: per-item Comments field for notes, blockers, or reasons an item can\'t be completed yet — printed as a NOTES block on the PDF',
+      'Security: app now trusts the first reverse-proxy hop (e.g. Cloudflare) so login rate-limiting buckets per real client IP from X-Forwarded-For instead of all traffic under the proxy address',
+    ],
+  },
+  {
     version: '0.9.7',
     date: 'April 22, 2026',
     changes: [
