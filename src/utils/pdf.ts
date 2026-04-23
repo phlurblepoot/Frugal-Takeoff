@@ -76,6 +76,74 @@ export interface PdfPageImage {
   extractedText?: string;
 }
 
+// Typical architectural/engineering sheet number: 1–3 letters, optional separator, 1–4 digits, optional decimal
+const SHEET_RE = /\b([A-Z]{1,3}[-.]?\d{1,4}(?:[.]\d{1,2})?)\b/g;
+
+function findBestSheetNumber(text: string): string | null {
+  const matches: string[] = [];
+  const re = new RegExp(SHEET_RE.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) matches.push(m[1]);
+  if (matches.length === 0) return null;
+  const freq = new Map<string, number>();
+  for (const s of matches) freq.set(s, (freq.get(s) || 0) + 1);
+  return [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+const isDefaultName = (s: string) => /^page\s*\d+$/i.test(s.trim());
+const stripNum = (text: string, num: string) =>
+  text.replace(num, '').replace(/^[\s\-–.:|/]+|[\s\-–.:|/]+$/g, '').trim();
+
+/**
+ * Attempt to auto-detect a sheet number and description from available metadata.
+ * Priority: PDF page labels → filename → repeated tokens in extracted text.
+ * Returns empty strings when nothing reliable is found.
+ */
+export function detectPageInfo(
+  suggestedName: string | undefined,
+  filename: string,
+  extractedText: string | undefined
+): { pageNumber: string; description: string } {
+  // 1. PDF labels / outline (from getPageLabels)
+  if (suggestedName && !isDefaultName(suggestedName)) {
+    const num = findBestSheetNumber(suggestedName);
+    if (num) return { pageNumber: num, description: stripNum(suggestedName, num) };
+    // Non-trivial name but no number pattern — use as description only
+  }
+
+  // 2. Filename (underscores → spaces, strip extension)
+  const basename = filename.replace(/\.[^.]+$/, '').replace(/_+/g, ' ');
+  if (basename && !isDefaultName(basename)) {
+    const num = findBestSheetNumber(basename);
+    if (num) return { pageNumber: num, description: stripNum(basename, num) };
+  }
+
+  // 3. Extracted text — only trust matches that appear more than once,
+  //    as repeated codes are far more likely to be sheet numbers than
+  //    random drawing content (dimensions, model numbers, etc.)
+  if (extractedText && extractedText.trim().length > 4) {
+    const matches: string[] = [];
+    const re = new RegExp(SHEET_RE.source, 'g');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(extractedText)) !== null) matches.push(m[1]);
+    const freq = new Map<string, number>();
+    for (const s of matches) freq.set(s, (freq.get(s) || 0) + 1);
+    const repeated = [...freq.entries()].filter(([, c]) => c > 1).sort((a, b) => b[1] - a[1]);
+    if (repeated.length > 0) {
+      return {
+        pageNumber: repeated[0][0],
+        description: suggestedName && !isDefaultName(suggestedName) ? suggestedName : '',
+      };
+    }
+  }
+
+  // 4. Nothing detected
+  return {
+    pageNumber: '',
+    description: suggestedName && !isDefaultName(suggestedName) ? suggestedName : '',
+  };
+}
+
 export const loadPdfPagesGenerator = async function*(
   file: File, 
   onProgress?: (status: string, pageNum: number, totalPages: number) => void

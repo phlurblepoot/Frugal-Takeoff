@@ -4,7 +4,7 @@ import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, S
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
 import { createProject, saveProject, getProject, saveImage, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
-import { loadPdfPagesGenerator } from '../utils/pdf';
+import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 
@@ -172,11 +172,14 @@ export const NewProject: React.FC = () => {
           await saveImage(thumbnailId, pageData.thumbnailDataUrl);
           thumbnails[imageId] = pageData.thumbnailDataUrl;
           
+          const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
           const newPage: PendingPage = {
             id: uuidv4(),
-            name: pageData.suggestedName || `Page ${globalPageNum}`,
-            pageNumber: '',
-            description: pageData.suggestedName || '',
+            name: detected.pageNumber && detected.description
+              ? `${detected.pageNumber} - ${detected.description}`
+              : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${globalPageNum}`,
+            pageNumber: detected.pageNumber,
+            description: detected.description,
             imageId,
             thumbnailId,
             imageWidth: pageData.width,
@@ -658,8 +661,8 @@ export const NewProject: React.FC = () => {
                     setExtractionRect({ x, y, width: 0, height: 0 });
                   }}
                 >
-                  <img 
-                    src={pageThumbnails[pendingPages.find(p => p.id === previewPageId)?.imageId || '']} 
+                  <img
+                    src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')}
                     alt="Preview"
                     className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
                     draggable={false}

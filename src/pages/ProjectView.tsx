@@ -4,7 +4,7 @@ import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
-import { loadPdfPagesGenerator } from '../utils/pdf';
+import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -800,13 +800,21 @@ export const ProjectView: React.FC = () => {
 
       const extractedPages: any[] = [];
       const thumbnails: Record<string, string> = {};
-      
+
+      // Build map of existing page numbers for revision detection
+      const existingPageNums = new Map<string, string>(); // normalised → display
+      for (const pg of project.pages) {
+        if (pg.pageNumber?.trim()) {
+          existingPageNums.set(pg.pageNumber.trim().toLowerCase(), pg.pageNumber.trim());
+        }
+      }
+
       let startingPageNum = updatedProject.pages.length + 1;
 
       for (let i = 0; i < newPlanSetFiles.length; i++) {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
-        
+
         const generator = loadPdfPagesGenerator(file, (status, current, total) => {
           setAddProgress(prev => ({ ...prev, status, current, total }));
         });
@@ -818,17 +826,26 @@ export const ProjectView: React.FC = () => {
           await saveImage(imageId, pageData.dataUrl);
           await saveImage(thumbnailId, pageData.thumbnailDataUrl);
           thumbnails[imageId] = pageData.thumbnailDataUrl;
-          
+
+          const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+          const normNum = detected.pageNumber.trim().toLowerCase();
+          const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
+            ? existingPageNums.get(normNum)!
+            : undefined;
+
           const newPage = {
             id: uuidv4(),
-            name: pageData.suggestedName || `Page ${startingPageNum}`,
-            pageNumber: '',
-            description: pageData.suggestedName || `Page ${startingPageNum}`,
+            name: detected.pageNumber && detected.description
+              ? `${detected.pageNumber} - ${detected.description}`
+              : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${startingPageNum}`,
+            pageNumber: detected.pageNumber,
+            description: detected.description,
             imageId,
             thumbnailId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
             extractedText: pageData.extractedText,
+            revisionOf,
           };
           
           extractedPages.push(newPage);
@@ -3560,6 +3577,12 @@ export const ProjectView: React.FC = () => {
                           <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                             PAGE {index + 1}
                           </div>
+                          {/* Revision badge */}
+                          {page.revisionOf && (
+                            <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[9px] font-black px-2 py-1.5 rounded-lg shadow-sm">
+                              REVISION
+                            </div>
+                          )}
                         </div>
 
                         {/* Input Section */}
@@ -3581,6 +3604,11 @@ export const ProjectView: React.FC = () => {
                                 placeholder="e.g. A-101"
                               />
                             </div>
+                            {page.revisionOf && (
+                              <p className="text-[10px] text-amber-600 font-medium px-1">
+                                Replaces existing page {page.revisionOf} — measurements on the previous version will be hidden when this set is active
+                              </p>
+                            )}
                           </div>
 
                           <div className="space-y-2">
