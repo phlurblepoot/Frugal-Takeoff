@@ -4,6 +4,7 @@ import {
   CheckSquare, Plus, Trash2, Camera, MapPin,
   FileText, Printer, Download, Eye, ClipboardList,
   ChevronDown, ChevronUp, X, Edit2, Check, Share2,
+  GripVertical, MessageSquare,
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { saveFile, getFile, createShare, getSettings, getChecklists, saveChecklist, deleteChecklist } from '../utils/store';
@@ -193,9 +194,19 @@ interface ChecklistItem {
   done: boolean;
   order: number;
   beforePhotoIds?: string[];
+  inProgressPhotoIds?: string[];
   afterPhotoIds?: string[];
+  comments?: string;
   createdAt: number;
 }
+
+type PhotoStage = 'before' | 'in_progress' | 'after';
+
+const PHOTO_STAGE_LABEL: Record<PhotoStage, string> = {
+  before: 'Before',
+  in_progress: 'In Progress',
+  after: 'After',
+};
 
 interface ChecklistPrintout {
   id: string;
@@ -215,12 +226,12 @@ interface Checklist {
 // ─── Photo Section (shared by Before/After) ──────────────────────────────────
 
 interface PhotoSectionProps {
-  type: 'before' | 'after';
+  type: PhotoStage;
   label: string;
   photos: string[];
   inputRef: React.RefObject<HTMLInputElement>;
-  onPhotoUpload: (type: 'before' | 'after', file: File) => void;
-  onRemovePhoto: (type: 'before' | 'after', index: number) => void;
+  onPhotoUpload: (type: PhotoStage, file: File) => void;
+  onRemovePhoto: (type: PhotoStage, index: number) => void;
 }
 
 const PhotoSection: React.FC<PhotoSectionProps> = ({
@@ -271,7 +282,7 @@ const PhotoSection: React.FC<PhotoSectionProps> = ({
         }`}
       >
         <Camera size={14} />
-        {dragOver ? 'Drop to upload' : `Add ${type === 'before' ? 'Before' : 'After'} Photo`}
+        {dragOver ? 'Drop to upload' : `Add ${PHOTO_STAGE_LABEL[type]} Photo`}
       </button>
       <input ref={inputRef} type="file" accept="image/*" multiple className="hidden"
         onChange={e => {
@@ -288,31 +299,58 @@ interface ItemCardProps {
   item: ChecklistItem;
   expanded: boolean;
   beforePhotos?: string[];
+  inProgressPhotos?: string[];
   afterPhotos?: string[];
   onToggle: () => void;
   onExpand: () => void;
   onUpdate: (patch: Partial<ChecklistItem>) => void;
   onDelete: () => void;
-  onPhotoUpload: (type: 'before' | 'after', file: File) => void;
-  onRemovePhoto: (type: 'before' | 'after', index: number) => void;
+  onPhotoUpload: (type: PhotoStage, file: File) => void;
+  onRemovePhoto: (type: PhotoStage, index: number) => void;
+  // Drag/drop reorder
+  onDragHandleStart: (e: React.DragEvent) => void;
+  onDragOverItem: (e: React.DragEvent) => void;
+  onDropOnItem: (e: React.DragEvent) => void;
+  onDragEndItem: () => void;
+  isDraggedOver: boolean;
 }
 
 const ItemCard: React.FC<ItemCardProps> = ({
-  item, expanded, beforePhotos, afterPhotos,
+  item, expanded, beforePhotos, inProgressPhotos, afterPhotos,
   onToggle, onExpand, onUpdate, onDelete, onPhotoUpload, onRemovePhoto,
+  onDragHandleStart, onDragOverItem, onDropOnItem, onDragEndItem, isDraggedOver,
 }) => {
   const beforeRef = useRef<HTMLInputElement>(null);
+  const inProgressRef = useRef<HTMLInputElement>(null);
   const afterRef = useRef<HTMLInputElement>(null);
   const bPhotos = beforePhotos ?? [];
+  const iPhotos = inProgressPhotos ?? [];
   const aPhotos = afterPhotos ?? [];
-  const totalThumbs = bPhotos.length + aPhotos.length;
+  const totalThumbs = bPhotos.length + iPhotos.length + aPhotos.length;
 
   return (
-    <div className={`bg-white dark:bg-slate-900 rounded-xl border transition-all ${
-      item.done ? 'border-green-200 dark:border-green-800/40' : 'border-slate-200 dark:border-slate-700'
-    }`}>
+    <div
+      onDragOver={onDragOverItem}
+      onDrop={onDropOnItem}
+      onDragEnd={onDragEndItem}
+      className={`bg-white dark:bg-slate-900 rounded-xl border transition-all ${
+        isDraggedOver ? 'border-accent-500 ring-2 ring-accent-200 dark:ring-accent-900/40' :
+        item.done ? 'border-green-200 dark:border-green-800/40' : 'border-slate-200 dark:border-slate-700'
+      }`}
+    >
       {/* Row */}
-      <div className="flex items-center gap-3 px-4 py-3">
+      <div className="flex items-center gap-2 px-2 py-3 sm:gap-3 sm:px-4">
+        {/* Drag handle */}
+        <button
+          draggable
+          onDragStart={onDragHandleStart}
+          onDragEnd={onDragEndItem}
+          title="Drag to reorder"
+          className="shrink-0 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400 touch-none"
+        >
+          <GripVertical size={16} />
+        </button>
+
         {/* Checkbox */}
         <button
           onClick={onToggle}
@@ -334,11 +372,18 @@ const ItemCard: React.FC<ItemCardProps> = ({
           }`}>
             {item.description || <span className="italic text-slate-400">No description</span>}
           </p>
-          {item.location && (
-            <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-0.5">
-              <MapPin size={11} />{item.location}
-            </p>
-          )}
+          <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+            {item.location && (
+              <span className="flex items-center gap-1 truncate">
+                <MapPin size={11} />{item.location}
+              </span>
+            )}
+            {item.comments && item.comments.trim() && (
+              <span className="flex items-center gap-1 shrink-0">
+                <MessageSquare size={11} /> Note
+              </span>
+            )}
+          </div>
         </button>
 
         {/* Photo thumbnails */}
@@ -348,14 +393,19 @@ const ItemCard: React.FC<ItemCardProps> = ({
               <img src={src} className="w-full h-full object-cover" alt="before" />
             </div>
           ))}
+          {iPhotos.slice(0, 1).map((src, i) => (
+            <div key={`i${i}`} className="w-7 h-7 rounded overflow-hidden border border-amber-300 dark:border-amber-700">
+              <img src={src} className="w-full h-full object-cover" alt="in progress" />
+            </div>
+          ))}
           {aPhotos.slice(0, 2).map((src, i) => (
             <div key={`a${i}`} className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
               <img src={src} className="w-full h-full object-cover" alt="after" />
             </div>
           ))}
-          {totalThumbs > 4 && (
+          {totalThumbs > 5 && (
             <div className="h-7 px-1.5 rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-medium text-slate-500">
-              +{totalThumbs - 4}
+              +{totalThumbs - 5}
             </div>
           )}
         </div>
@@ -392,12 +442,33 @@ const ItemCard: React.FC<ItemCardProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="flex items-center gap-1 text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+              <MessageSquare size={11} /> Comments
+            </label>
+            <textarea
+              value={item.comments ?? ''}
+              onChange={e => onUpdate({ comments: e.target.value })}
+              rows={2}
+              placeholder="Notes, blockers, reasons this can't be completed yet..."
+              className="w-full text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 resize-none focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <PhotoSection
               type="before"
               label="Before Photos"
               photos={bPhotos}
               inputRef={beforeRef}
+              onPhotoUpload={onPhotoUpload}
+              onRemovePhoto={onRemovePhoto}
+            />
+            <PhotoSection
+              type="in_progress"
+              label="In-Progress Photos"
+              photos={iPhotos}
+              inputRef={inProgressRef}
               onPhotoUpload={onPhotoUpload}
               onRemovePhoto={onRemovePhoto}
             />
@@ -437,7 +508,10 @@ export const ChecklistEditor: React.FC = () => {
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [beforePhotos, setBeforePhotos] = useState<Record<string, string[]>>({});
+  const [inProgressPhotos, setInProgressPhotos] = useState<Record<string, string[]>>({});
   const [afterPhotos, setAfterPhotos] = useState<Record<string, string[]>>({});
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -481,21 +555,22 @@ export const ChecklistEditor: React.FC = () => {
 
   const loadPhotosForList = async (list: Checklist) => {
     const allIds = list.items.flatMap(item => [
-      ...(item.beforePhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'before' as const })),
-      ...(item.afterPhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'after' as const })),
+      ...(item.beforePhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'before' as PhotoStage })),
+      ...(item.inProgressPhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'in_progress' as PhotoStage })),
+      ...(item.afterPhotoIds ?? []).map(pid => ({ pid, itemId: item.id, type: 'after' as PhotoStage })),
     ]);
     const before: Record<string, string[]> = {};
+    const inProgress: Record<string, string[]> = {};
     const after: Record<string, string[]> = {};
     await Promise.all(allIds.map(async ({ pid, itemId, type }) => {
       const url = await getFile(pid).catch(() => null);
       if (!url) return;
-      if (type === 'before') {
-        before[itemId] = [...(before[itemId] ?? []), url];
-      } else {
-        after[itemId] = [...(after[itemId] ?? []), url];
-      }
+      if (type === 'before') before[itemId] = [...(before[itemId] ?? []), url];
+      else if (type === 'in_progress') inProgress[itemId] = [...(inProgress[itemId] ?? []), url];
+      else after[itemId] = [...(after[itemId] ?? []), url];
     }));
     setBeforePhotos(before);
+    setInProgressPhotos(inProgress);
     setAfterPhotos(after);
   };
 
@@ -592,6 +667,7 @@ export const ChecklistEditor: React.FC = () => {
 
   const deleteItem = async (itemId: string) => {
     setBeforePhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
+    setInProgressPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
     setAfterPhotos(p => { const n = { ...p }; delete n[itemId]; return n; });
     setLists(checklists.map(c => c.id !== activeId ? c : {
       ...c, items: c.items.filter(i => i.id !== itemId),
@@ -600,7 +676,7 @@ export const ChecklistEditor: React.FC = () => {
   };
 
   // ── Photos ──────────────────────────────────────────────────────────────────
-  const handlePhotoUpload = async (itemId: string, type: 'before' | 'after', file: File) => {
+  const handlePhotoUpload = async (itemId: string, type: PhotoStage, file: File) => {
     if (!file.type.startsWith('image/')) return;
     const dataUrl = await normalizeImage(file);
     const photoId = `checklist-photo-${nanoid()}`;
@@ -616,6 +692,10 @@ export const ChecklistEditor: React.FC = () => {
       const newIds = [...(currentItem.beforePhotoIds ?? []), photoId];
       setBeforePhotos(p => ({ ...p, [itemId]: [...(p[itemId] ?? []), dataUrl] }));
       updateItem(itemId, { beforePhotoIds: newIds });
+    } else if (type === 'in_progress') {
+      const newIds = [...(currentItem.inProgressPhotoIds ?? []), photoId];
+      setInProgressPhotos(p => ({ ...p, [itemId]: [...(p[itemId] ?? []), dataUrl] }));
+      updateItem(itemId, { inProgressPhotoIds: newIds });
     } else {
       const newIds = [...(currentItem.afterPhotoIds ?? []), photoId];
       setAfterPhotos(p => ({ ...p, [itemId]: [...(p[itemId] ?? []), dataUrl] }));
@@ -623,7 +703,7 @@ export const ChecklistEditor: React.FC = () => {
     }
   };
 
-  const handleRemovePhoto = async (itemId: string, type: 'before' | 'after', index: number) => {
+  const handleRemovePhoto = async (itemId: string, type: PhotoStage, index: number) => {
     const list = checklistsRef.current.find(c => c.id === activeIdRef.current);
     const currentItem = list?.items.find(i => i.id === itemId);
     if (!currentItem) return;
@@ -636,6 +716,14 @@ export const ChecklistEditor: React.FC = () => {
         return { ...p, [itemId]: photos };
       });
       updateItem(itemId, { beforePhotoIds: ids.filter((_, i) => i !== index) });
+    } else if (type === 'in_progress') {
+      const ids = currentItem.inProgressPhotoIds ?? [];
+      setInProgressPhotos(p => {
+        const photos = [...(p[itemId] ?? [])];
+        photos.splice(index, 1);
+        return { ...p, [itemId]: photos };
+      });
+      updateItem(itemId, { inProgressPhotoIds: ids.filter((_, i) => i !== index) });
     } else {
       const ids = currentItem.afterPhotoIds ?? [];
       setAfterPhotos(p => {
@@ -645,6 +733,31 @@ export const ChecklistEditor: React.FC = () => {
       });
       updateItem(itemId, { afterPhotoIds: ids.filter((_, i) => i !== index) });
     }
+  };
+
+  // ── Reorder ─────────────────────────────────────────────────────────────────
+  const handleReorder = (draggedId: string, targetId: string) => {
+    if (!active || draggedId === targetId) return;
+
+    // Compute the visible order (pending first, then completed) and renumber
+    // contiguously after splicing the dragged item to its new slot. Cross-section
+    // drops are allowed; the dragged item's `done` state is not changed.
+    const ordered = [
+      ...active.items.filter(i => !i.done).sort((a, b) => a.order - b.order),
+      ...active.items.filter(i => i.done).sort((a, b) => a.order - b.order),
+    ];
+    const fromIdx = ordered.findIndex(i => i.id === draggedId);
+    const toIdx = ordered.findIndex(i => i.id === targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+
+    const [moved] = ordered.splice(fromIdx, 1);
+    ordered.splice(toIdx, 0, moved);
+
+    const orderMap = new Map(ordered.map((it, idx) => [it.id, idx]));
+    setLists(checklists.map(c => c.id !== activeId ? c : {
+      ...c,
+      items: c.items.map(i => ({ ...i, order: orderMap.get(i.id) ?? i.order })),
+    }));
   };
 
   // ── PDF Generation ──────────────────────────────────────────────────────────
@@ -723,15 +836,27 @@ export const ChecklistEditor: React.FC = () => {
 
       const drawItem = (item: ChecklistItem, index: number, isDone: boolean) => {
         const bPhotosArr = beforePhotos[item.id] ?? [];
+        const iPhotosArr = inProgressPhotos[item.id] ?? [];
         const aPhotosArr = afterPhotos[item.id] ?? [];
-        const hasPhotos = bPhotosArr.length > 0 || aPhotosArr.length > 0;
+        const hasPhotos = bPhotosArr.length > 0 || iPhotosArr.length > 0 || aPhotosArr.length > 0;
+        const photoGroupCount = (bPhotosArr.length > 0 ? 1 : 0) + (iPhotosArr.length > 0 ? 1 : 0) + (aPhotosArr.length > 0 ? 1 : 0);
+        const interGroupGap = Math.max(0, photoGroupCount - 1) * 6;
 
         const photosTotalH =
           photoGroupH(bPhotosArr.length) +
-          (bPhotosArr.length > 0 && aPhotosArr.length > 0 ? 6 : 0) +
-          photoGroupH(aPhotosArr.length);
+          photoGroupH(iPhotosArr.length) +
+          photoGroupH(aPhotosArr.length) +
+          interGroupGap;
 
-        const boxH = hasPhotos ? 52 + photosTotalH + 12 : 72;
+        // Optional comments block
+        const commentTw = W - margin * 2 - 44;
+        const commentLines = item.comments && item.comments.trim()
+          ? pdf.splitTextToSize(item.comments.trim(), commentTw) as string[]
+          : [];
+        const commentH = commentLines.length > 0 ? 14 + commentLines.length * 11 + 4 : 0;
+
+        const baseH = hasPhotos ? 52 + photosTotalH + 12 : 72;
+        const boxH = baseH + commentH;
 
         if (y + boxH > H - margin) { pdf.addPage(); y = margin; }
 
@@ -809,11 +934,28 @@ export const ChecklistEditor: React.FC = () => {
           let photoY = y + 52;
           if (bPhotosArr.length > 0) {
             const used = drawPhotoGroup('BEFORE', bPhotosArr, tx, photoY, photoMaxW);
+            photoY += used + (iPhotosArr.length > 0 || aPhotosArr.length > 0 ? 6 : 0);
+          }
+          if (iPhotosArr.length > 0) {
+            const used = drawPhotoGroup('IN PROGRESS', iPhotosArr, tx, photoY, photoMaxW);
             photoY += used + (aPhotosArr.length > 0 ? 6 : 0);
           }
           if (aPhotosArr.length > 0) {
             drawPhotoGroup('AFTER', aPhotosArr, tx, photoY, photoMaxW);
           }
+        }
+
+        // Comments block (rendered at the bottom of the box)
+        if (commentLines.length > 0) {
+          const commentY = y + baseH;
+          pdf.setFontSize(7);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(148, 163, 184);
+          pdf.text('NOTES', margin + 12, commentY + 9);
+          pdf.setFontSize(9);
+          pdf.setFont('helvetica', 'italic');
+          pdf.setTextColor(71, 85, 105);
+          pdf.text(commentLines, margin + 12, commentY + 20);
         }
 
         y += boxH + 8;
@@ -1141,6 +1283,7 @@ export const ChecklistEditor: React.FC = () => {
                         item={item}
                         expanded={expandedItemId === item.id}
                         beforePhotos={beforePhotos[item.id]}
+                        inProgressPhotos={inProgressPhotos[item.id]}
                         afterPhotos={afterPhotos[item.id]}
                         onToggle={() => updateItem(item.id, { done: true })}
                         onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
@@ -1148,6 +1291,25 @@ export const ChecklistEditor: React.FC = () => {
                         onDelete={() => deleteItem(item.id)}
                         onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
                         onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
+                        onDragHandleStart={(e) => {
+                          setDraggingItemId(item.id);
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', item.id);
+                        }}
+                        onDragOverItem={(e) => {
+                          if (!draggingItemId || draggingItemId === item.id) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          if (dragOverItemId !== item.id) setDragOverItemId(item.id);
+                        }}
+                        onDropOnItem={(e) => {
+                          e.preventDefault();
+                          if (draggingItemId) handleReorder(draggingItemId, item.id);
+                          setDraggingItemId(null);
+                          setDragOverItemId(null);
+                        }}
+                        onDragEndItem={() => { setDraggingItemId(null); setDragOverItemId(null); }}
+                        isDraggedOver={dragOverItemId === item.id && draggingItemId !== item.id}
                       />
                     ))}
 
@@ -1170,6 +1332,7 @@ export const ChecklistEditor: React.FC = () => {
                           item={item}
                           expanded={expandedItemId === item.id}
                           beforePhotos={beforePhotos[item.id]}
+                          inProgressPhotos={inProgressPhotos[item.id]}
                           afterPhotos={afterPhotos[item.id]}
                           onToggle={() => updateItem(item.id, { done: false })}
                           onExpand={() => setExpandedItemId(expandedItemId === item.id ? null : item.id)}
@@ -1177,6 +1340,25 @@ export const ChecklistEditor: React.FC = () => {
                           onDelete={() => deleteItem(item.id)}
                           onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
                           onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
+                          onDragHandleStart={(e) => {
+                            setDraggingItemId(item.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                            e.dataTransfer.setData('text/plain', item.id);
+                          }}
+                          onDragOverItem={(e) => {
+                            if (!draggingItemId || draggingItemId === item.id) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            if (dragOverItemId !== item.id) setDragOverItemId(item.id);
+                          }}
+                          onDropOnItem={(e) => {
+                            e.preventDefault();
+                            if (draggingItemId) handleReorder(draggingItemId, item.id);
+                            setDraggingItemId(null);
+                            setDragOverItemId(null);
+                          }}
+                          onDragEndItem={() => { setDraggingItemId(null); setDragOverItemId(null); }}
+                          isDraggedOver={dragOverItemId === item.id && draggingItemId !== item.id}
                         />
                       ))}
                     </div>

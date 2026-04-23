@@ -4,7 +4,7 @@ import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
-import { loadPdfPagesGenerator } from '../utils/pdf';
+import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -256,7 +256,7 @@ async function renderPageToDataUrl(
   });
 
   // Legend
-  if (page.showLegend && project.takeoffs.length > 0) {
+  if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
     const legendItems: { color: string; name: string; total: string }[] = [];
     project.takeoffs.forEach(takeoff => {
       let totalRealValue = 0;
@@ -291,44 +291,56 @@ async function renderPageToDataUrl(
       }
     });
     if (legendItems.length > 0) {
-      const fontSize = page.legendFontSize || 14;
-      const padding = fontSize * 0.8;
-      const itemHeight = fontSize * 1.6;
+      const fontSize = page.legendFontSize || 24;
+      const padding = fontSize * 0.9;
+      const itemHeight = fontSize * 1.7;
       const colorBoxSize = fontSize;
-      const textOffsetX = colorBoxSize + 10;
-      const width = page.legendWidth || 350;
-      const height = padding * 2 + legendItems.length * itemHeight + fontSize * 2;
+      const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
+      const width = page.legendWidth || 500;
+      const headerH = padding * 2 + fontSize * 1.4;
+      const height = headerH + legendItems.length * itemHeight + padding;
       const pos = page.legendPosition || { x: 20, y: 20 };
       ctx.save();
       ctx.translate(pos.x, pos.y);
+      // Outer card with shadow
+      ctx.shadowColor = 'rgba(0,0,0,0.12)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 4;
       ctx.fillStyle = 'white';
-      ctx.shadowColor = 'rgba(0,0,0,0.1)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
-      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 6); ctx.fill();
-      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 8); ctx.fill();
       ctx.shadowColor = 'transparent';
-      ctx.fillStyle = '#334155';
+      ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.stroke();
+      // Header background
+      ctx.fillStyle = '#f1f5f9';
+      ctx.beginPath(); ctx.roundRect(0, 0, width, headerH, [8, 8, 0, 0]); ctx.fill();
+      // Title
+      ctx.fillStyle = '#1e293b';
       ctx.font = `bold ${fontSize + 2}px sans-serif`;
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('Legend', padding, padding);
+      ctx.fillText('Legend', padding, padding * 0.8);
+      // Separator
+      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, headerH); ctx.lineTo(width, headerH); ctx.stroke();
+      // Items
       legendItems.forEach((item, index) => {
-        const y = padding + fontSize * 2 + index * itemHeight;
+        const rowY = headerH + padding * 0.5 + index * itemHeight;
+        const boxY = rowY + Math.round((itemHeight - colorBoxSize) / 2);
+        const textY = rowY + Math.round((itemHeight - fontSize) / 2);
         ctx.fillStyle = item.color;
-        ctx.beginPath(); ctx.roundRect(padding, y + 2, colorBoxSize, colorBoxSize, 3); ctx.fill();
-        ctx.fillStyle = '#475569';
+        ctx.beginPath(); ctx.roundRect(padding, boxY, colorBoxSize, colorBoxSize, 4); ctx.fill();
+        ctx.fillStyle = '#334155';
         ctx.font = `${fontSize}px sans-serif`;
         ctx.textAlign = 'left'; ctx.textBaseline = 'top';
         let nameText = item.name;
-        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 10 : 0);
+        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
         if (ctx.measureText(nameText).width > maxNameWidth) {
           while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) nameText = nameText.slice(0, -1);
           nameText += '...';
         }
-        ctx.fillText(nameText, padding + textOffsetX, y + 2);
+        ctx.fillText(nameText, padding + textOffsetX, textY);
         if (page.showLegendTotals !== false) {
           ctx.fillStyle = '#0f172a';
           ctx.font = `bold ${fontSize}px sans-serif`;
           ctx.textAlign = 'right';
-          ctx.fillText(item.total, width - padding, y + 2);
+          ctx.fillText(item.total, width - padding, textY);
         }
       });
       ctx.restore();
@@ -434,6 +446,7 @@ export const ProjectView: React.FC = () => {
   const [proposalValidUntil, setProposalValidUntil] = useState('');
   const [proposalTerms, setProposalTerms] = useState('');
   const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
+  const [proposalIncludeTakeoffList, setProposalIncludeTakeoffList] = useState(true);
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
@@ -471,8 +484,9 @@ export const ProjectView: React.FC = () => {
         if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
         if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
         if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
-        if (p.includeSignature  != null)  setProposalIncludeSignature(p.includeSignature);
-        if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+        if (p.includeSignature    != null)  setProposalIncludeSignature(p.includeSignature);
+        if (p.includeTakeoffList  != null)  setProposalIncludeTakeoffList(p.includeTakeoffList);
+        if (p.highlightQuality)             setHighlightQuality(p.highlightQuality);
       }
     } catch { /* ignore corrupt data */ }
 
@@ -482,8 +496,9 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-fontFamily'])                 setProposalFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
       if (prefs['proposal-includeCostDetail'] != null)  setProposalIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
       if (prefs['proposal-includeHighlights'] != null)  setProposalIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
-      if (prefs['proposal-includeSignature']  != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
-      if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-includeSignature']    != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
+      if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
+      if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -496,7 +511,8 @@ export const ProjectView: React.FC = () => {
         fontFamily:        proposalFontFamily,
         includeCostDetail: proposalIncludeCostDetail,
         includeHighlights: proposalIncludeHighlights,
-        includeSignature:  proposalIncludeSignature,
+        includeSignature:    proposalIncludeSignature,
+        includeTakeoffList:  proposalIncludeTakeoffList,
         highlightQuality,
       }));
     } catch { /* ignore quota errors */ }
@@ -506,10 +522,11 @@ export const ProjectView: React.FC = () => {
       'proposal-fontFamily':        proposalFontFamily,
       'proposal-includeCostDetail': String(proposalIncludeCostDetail),
       'proposal-includeHighlights': String(proposalIncludeHighlights),
-      'proposal-includeSignature':  String(proposalIncludeSignature),
-      'proposal-highlightQuality':  highlightQuality,
+      'proposal-includeSignature':    String(proposalIncludeSignature),
+      'proposal-includeTakeoffList':  String(proposalIncludeTakeoffList),
+      'proposal-highlightQuality':    highlightQuality,
     }).catch(() => {});
-  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, highlightQuality]);
+  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, proposalIncludeTakeoffList, highlightQuality]);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -800,13 +817,21 @@ export const ProjectView: React.FC = () => {
 
       const extractedPages: any[] = [];
       const thumbnails: Record<string, string> = {};
-      
+
+      // Build map of existing page numbers for revision detection
+      const existingPageNums = new Map<string, string>(); // normalised → display
+      for (const pg of project.pages) {
+        if (pg.pageNumber?.trim()) {
+          existingPageNums.set(pg.pageNumber.trim().toLowerCase(), pg.pageNumber.trim());
+        }
+      }
+
       let startingPageNum = updatedProject.pages.length + 1;
 
       for (let i = 0; i < newPlanSetFiles.length; i++) {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
-        
+
         const generator = loadPdfPagesGenerator(file, (status, current, total) => {
           setAddProgress(prev => ({ ...prev, status, current, total }));
         });
@@ -818,17 +843,26 @@ export const ProjectView: React.FC = () => {
           await saveImage(imageId, pageData.dataUrl);
           await saveImage(thumbnailId, pageData.thumbnailDataUrl);
           thumbnails[imageId] = pageData.thumbnailDataUrl;
-          
+
+          const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+          const normNum = detected.pageNumber.trim().toLowerCase();
+          const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
+            ? existingPageNums.get(normNum)!
+            : undefined;
+
           const newPage = {
             id: uuidv4(),
-            name: pageData.suggestedName || `Page ${startingPageNum}`,
-            pageNumber: '',
-            description: pageData.suggestedName || `Page ${startingPageNum}`,
+            name: detected.pageNumber && detected.description
+              ? `${detected.pageNumber} - ${detected.description}`
+              : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${startingPageNum}`,
+            pageNumber: detected.pageNumber,
+            description: detected.description,
             imageId,
             thumbnailId,
             imageWidth: pageData.width,
             imageHeight: pageData.height,
             extractedText: pageData.extractedText,
+            revisionOf,
           };
           
           extractedPages.push(newPage);
@@ -1080,6 +1114,7 @@ export const ProjectView: React.FC = () => {
     validUntil = '',
     terms = '',
     includeSignature = false,
+    includeTakeoffList = true,
   ) => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setShowProposalModal(false);
@@ -1257,7 +1292,10 @@ export const ProjectView: React.FC = () => {
       pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
 
+      const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
+
       // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
+      if (includeTakeoffList) {
       pdf.addPage();
 
       pdf.setFillColor(hR, hG, hB);
@@ -1268,7 +1306,6 @@ export const ProjectView: React.FC = () => {
       pdf.text('Takeoff Summary', 40, 33);
       pdf.setFontSize(10);
       pdf.setFont(font, 'normal');
-      const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
       pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
 
       // Table columns
@@ -1478,6 +1515,7 @@ export const ProjectView: React.FC = () => {
       pdf.setTextColor(148, 163, 184);
       pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+      } // end includeTakeoffList
 
       // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
       if (terms.trim()) {
@@ -1694,17 +1732,30 @@ export const ProjectView: React.FC = () => {
     try {
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      const urls: string[] = [];
-      for (const pid of selectedPageIds) {
+
+      if (selectedPageIds.size === 1) {
+        // Single page — use the simple per-image share
+        const pid = [...selectedPageIds][0];
         const pg = project.pages.find(p => p.id === pid);
-        if (!pg) continue;
+        if (!pg) return;
         const id = await createShare('page', pg.imageId, pg.name || 'Page');
-        urls.push(`${host}/share/${id}`);
+        await copyShareUrl(`${host}/share/${id}`);
+        return;
       }
-      await navigator.clipboard.writeText(urls.join('\n'));
-      alert(`${urls.length} share link${urls.length > 1 ? 's' : ''} copied to clipboard`);
+
+      // Multiple pages — create one combined share
+      const orderedPages = project.pages.filter(p => selectedPageIds.has(p.id));
+      const payload = orderedPages.map(p => ({
+        imageId: p.imageId,
+        name: p.name || 'Page',
+        pageNumber: p.pageNumber,
+      }));
+      // Deduplicate by sorted imageId list so the same selection reuses the existing share
+      const resourceId = JSON.stringify(payload);
+      const id = await createShare('pages', resourceId, project.name);
+      await copyShareUrl(`${host}/share/${id}`);
     } catch {
-      alert('Failed to create share links');
+      alert('Failed to create share link');
     }
   };
 
@@ -3560,6 +3611,12 @@ export const ProjectView: React.FC = () => {
                           <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                             PAGE {index + 1}
                           </div>
+                          {/* Revision badge */}
+                          {page.revisionOf && (
+                            <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[9px] font-black px-2 py-1.5 rounded-lg shadow-sm">
+                              REVISION
+                            </div>
+                          )}
                         </div>
 
                         {/* Input Section */}
@@ -3581,6 +3638,11 @@ export const ProjectView: React.FC = () => {
                                 placeholder="e.g. A-101"
                               />
                             </div>
+                            {page.revisionOf && (
+                              <p className="text-[10px] text-amber-600 font-medium px-1">
+                                Replaces existing page {page.revisionOf} — measurements on the previous version will be hidden when this set is active
+                              </p>
+                            )}
                           </div>
 
                           <div className="space-y-2">
@@ -3924,8 +3986,8 @@ export const ProjectView: React.FC = () => {
       {/* Proposal PDF Modal */}
       {showProposalModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3 flex-shrink-0">
               <div className="p-2 bg-violet-50 dark:bg-violet-900/30 rounded-lg">
                 <FileText size={20} className="text-violet-600 dark:text-violet-400" />
               </div>
@@ -3936,7 +3998,7 @@ export const ProjectView: React.FC = () => {
                 </p>
               </div>
             </div>
-            <div className="p-6 space-y-5">
+            <div className="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
               <div>
                 <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
                   Proposal Title
@@ -4044,8 +4106,22 @@ export const ProjectView: React.FC = () => {
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
+                  checked={proposalIncludeTakeoffList}
+                  onChange={e => setProposalIncludeTakeoffList(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">Include takeoff list</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add a takeoff summary page with quantities and totals</span>
+                </span>
+              </label>
+
+              <label className={`flex items-start gap-3 cursor-pointer group ${!proposalIncludeTakeoffList ? 'opacity-40 pointer-events-none' : ''}`}>
+                <input
+                  type="checkbox"
                   checked={proposalIncludeCostDetail}
                   onChange={e => setProposalIncludeCostDetail(e.target.checked)}
+                  disabled={!proposalIncludeTakeoffList}
                   className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
                 />
                 <span>
@@ -4098,7 +4174,7 @@ export const ProjectView: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700 rounded-b-2xl flex justify-end gap-3">
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700 rounded-b-2xl flex justify-end gap-3 flex-shrink-0">
               <button
                 onClick={() => setShowProposalModal(false)}
                 className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
@@ -4106,7 +4182,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature)}
+                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature, proposalIncludeTakeoffList)}
                 className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
               >
                 <FileText size={15} />

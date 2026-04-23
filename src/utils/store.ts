@@ -290,7 +290,7 @@ export const createShare = async (type: string, resourceId: string, name: string
   return id;
 };
 
-export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string }> => {
+export const getShareInfo = async (shareId: string): Promise<{ type: string; name: string; count?: number }> => {
   const res = await fetch(`/api/share/${shareId}/info`);
   await handleResponse(res);
   return res.json();

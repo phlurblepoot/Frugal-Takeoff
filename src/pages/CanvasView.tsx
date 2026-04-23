@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -1221,44 +1221,129 @@ const CanvasViewInner: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-slate-700">Show Legend</label>
-              <input 
-                type="checkbox"
-                checked={page.showLegend || false}
-                onChange={(e) => savePageUpdates({ showLegend: e.target.checked })}
-                className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
-              />
-            </div>
+            {/* Legend */}
+            {(() => {
+              const effectiveLegendOn = page.showLegend ?? (project?.legendOnAllPages ?? false);
+              const legendFontSize = page.legendFontSize || 24;
+              const legendWidth = page.legendWidth || 500;
 
-            {page.showLegend && (
-              <>
-                <div className="flex items-center justify-between pl-4">
-                  <label className="text-xs font-medium text-slate-600">Show Legend Totals</label>
-                  <input 
-                    type="checkbox"
-                    checked={page.showLegendTotals !== false} // Default to true
-                    onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
-                    className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5 pl-4">
-                  <label className="text-xs font-medium text-slate-600">Legend Text Size</label>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="range"
-                      min="8"
-                      max="48"
-                      step="1"
-                      value={page.legendFontSize || 14}
-                      onChange={(e) => savePageUpdates({ legendFontSize: parseInt(e.target.value) })}
-                      className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              const setLegendPosition = (pos: { x: number; y: number }) =>
+                savePageUpdates({ legendPosition: pos });
+
+              const applyLegendToAllPages = async () => {
+                if (!project) return;
+                const updatedProject = {
+                  ...project,
+                  pages: project.pages.map(p => ({
+                    ...p,
+                    showLegend: true,
+                    showLegendTotals: page.showLegendTotals !== false,
+                    legendFontSize: legendFontSize,
+                    legendWidth: legendWidth,
+                  })),
+                };
+                setProject(updatedProject);
+                await saveProject(updatedProject);
+              };
+
+              const toggleProjectDefault = async (on: boolean) => {
+                if (!project) return;
+                const updatedProject = { ...project, legendOnAllPages: on };
+                setProject(updatedProject);
+                await saveProject(updatedProject);
+              };
+
+              return (
+                <>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-slate-700">Show Legend</label>
+                    <input
+                      type="checkbox"
+                      checked={effectiveLegendOn}
+                      onChange={(e) => savePageUpdates({ showLegend: e.target.checked })}
+                      className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                     />
-                    <span className="text-[10px] font-bold text-slate-500 w-6">{page.legendFontSize || 14}</span>
                   </div>
-                </div>
-              </>
-            )}
+
+                  {effectiveLegendOn && (
+                    <div className="pl-3 border-l-2 border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-medium text-slate-600">Show Totals</label>
+                        <input
+                          type="checkbox"
+                          checked={page.showLegendTotals !== false}
+                          onChange={(e) => savePageUpdates({ showLegendTotals: e.target.checked })}
+                          className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-slate-600">Text Size</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="8"
+                            max="72"
+                            step="1"
+                            value={legendFontSize}
+                            onChange={(e) => savePageUpdates({ legendFontSize: parseInt(e.target.value) })}
+                            className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                          />
+                          <span className="text-[10px] font-bold text-slate-500 w-6">{legendFontSize}</span>
+                        </div>
+                      </div>
+
+                      {/* Position presets */}
+                      <div>
+                        <label className="text-xs font-medium text-slate-600 block mb-1.5">Snap to corner</label>
+                        <div className="grid grid-cols-2 gap-1">
+                          {[
+                            { label: 'Top-left',     x: 20, y: 20 },
+                            { label: 'Top-right',    x: (page.imageWidth  - legendWidth - 20), y: 20 },
+                            { label: 'Bottom-left',  x: 20,                                    y: Math.max(20, page.imageHeight - 600) },
+                            { label: 'Bottom-right', x: (page.imageWidth  - legendWidth - 20), y: Math.max(20, page.imageHeight - 600) },
+                          ].map(({ label, x, y }) => (
+                            <button
+                              key={label}
+                              onClick={() => setLegendPosition({ x, y })}
+                              title={label}
+                              className="text-[10px] text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-1.5 py-1 transition-colors text-left"
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Switch to Pan tool to drag or scroll-resize</p>
+                      </div>
+
+                      {/* Apply to all pages */}
+                      {project && project.pages.length > 1 && (
+                        <button
+                          onClick={applyLegendToAllPages}
+                          className="w-full text-xs text-accent-600 border border-accent-300 hover:bg-accent-50 rounded-lg px-2 py-1.5 transition-colors font-medium"
+                        >
+                          Apply legend settings to all pages
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Project-level default */}
+                  <div className="flex items-center justify-between pt-1">
+                    <label className="text-xs font-medium text-slate-600 leading-tight">
+                      Enable on all pages<br />
+                      <span className="text-[10px] font-normal text-slate-400">by default</span>
+                    </label>
+                    <input
+                      type="checkbox"
+                      checked={project?.legendOnAllPages ?? false}
+                      onChange={(e) => toggleProjectDefault(e.target.checked)}
+                      className="rounded border-slate-300 text-accent-600 focus:ring-accent-500"
+                    />
+                  </div>
+                </>
+              );
+            })()}
 
             {!page.isMultiRegion && (
               <div>
@@ -1693,7 +1778,7 @@ const CanvasViewInner: React.FC = () => {
             selectedRegionId={selectedRegionId}
             onSelectRegion={setSelectedRegionId}
             calibratingRegionId={calibratingRegionId}
-            showLegend={page.showLegend}
+            showLegend={page.showLegend ?? (project?.legendOnAllPages ?? false)}
             showLegendTotals={page.showLegendTotals}
             legendPosition={page.legendPosition}
             legendScale={page.legendScale}
