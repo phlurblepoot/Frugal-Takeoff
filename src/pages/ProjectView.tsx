@@ -434,6 +434,7 @@ export const ProjectView: React.FC = () => {
   const [proposalValidUntil, setProposalValidUntil] = useState('');
   const [proposalTerms, setProposalTerms] = useState('');
   const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
+  const [proposalIncludeTakeoffList, setProposalIncludeTakeoffList] = useState(true);
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
@@ -471,8 +472,9 @@ export const ProjectView: React.FC = () => {
         if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
         if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
         if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
-        if (p.includeSignature  != null)  setProposalIncludeSignature(p.includeSignature);
-        if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+        if (p.includeSignature    != null)  setProposalIncludeSignature(p.includeSignature);
+        if (p.includeTakeoffList  != null)  setProposalIncludeTakeoffList(p.includeTakeoffList);
+        if (p.highlightQuality)             setHighlightQuality(p.highlightQuality);
       }
     } catch { /* ignore corrupt data */ }
 
@@ -482,8 +484,9 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-fontFamily'])                 setProposalFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
       if (prefs['proposal-includeCostDetail'] != null)  setProposalIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
       if (prefs['proposal-includeHighlights'] != null)  setProposalIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
-      if (prefs['proposal-includeSignature']  != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
-      if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-includeSignature']    != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
+      if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
+      if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -496,7 +499,8 @@ export const ProjectView: React.FC = () => {
         fontFamily:        proposalFontFamily,
         includeCostDetail: proposalIncludeCostDetail,
         includeHighlights: proposalIncludeHighlights,
-        includeSignature:  proposalIncludeSignature,
+        includeSignature:    proposalIncludeSignature,
+        includeTakeoffList:  proposalIncludeTakeoffList,
         highlightQuality,
       }));
     } catch { /* ignore quota errors */ }
@@ -506,10 +510,11 @@ export const ProjectView: React.FC = () => {
       'proposal-fontFamily':        proposalFontFamily,
       'proposal-includeCostDetail': String(proposalIncludeCostDetail),
       'proposal-includeHighlights': String(proposalIncludeHighlights),
-      'proposal-includeSignature':  String(proposalIncludeSignature),
-      'proposal-highlightQuality':  highlightQuality,
+      'proposal-includeSignature':    String(proposalIncludeSignature),
+      'proposal-includeTakeoffList':  String(proposalIncludeTakeoffList),
+      'proposal-highlightQuality':    highlightQuality,
     }).catch(() => {});
-  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, highlightQuality]);
+  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, proposalIncludeTakeoffList, highlightQuality]);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -1097,6 +1102,7 @@ export const ProjectView: React.FC = () => {
     validUntil = '',
     terms = '',
     includeSignature = false,
+    includeTakeoffList = true,
   ) => {
     if (!project || selectedTakeoffIds.size === 0) return;
     setShowProposalModal(false);
@@ -1274,7 +1280,10 @@ export const ProjectView: React.FC = () => {
       pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
 
+      const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
+
       // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
+      if (includeTakeoffList) {
       pdf.addPage();
 
       pdf.setFillColor(hR, hG, hB);
@@ -1285,7 +1294,6 @@ export const ProjectView: React.FC = () => {
       pdf.text('Takeoff Summary', 40, 33);
       pdf.setFontSize(10);
       pdf.setFont(font, 'normal');
-      const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
       pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
 
       // Table columns
@@ -1495,6 +1503,7 @@ export const ProjectView: React.FC = () => {
       pdf.setTextColor(148, 163, 184);
       pdf.setFont(font, 'normal');
       pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+      } // end includeTakeoffList
 
       // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
       if (terms.trim()) {
@@ -4072,8 +4081,22 @@ export const ProjectView: React.FC = () => {
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
+                  checked={proposalIncludeTakeoffList}
+                  onChange={e => setProposalIncludeTakeoffList(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">Include takeoff list</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add a takeoff summary page with quantities and totals</span>
+                </span>
+              </label>
+
+              <label className={`flex items-start gap-3 cursor-pointer group ${!proposalIncludeTakeoffList ? 'opacity-40 pointer-events-none' : ''}`}>
+                <input
+                  type="checkbox"
                   checked={proposalIncludeCostDetail}
                   onChange={e => setProposalIncludeCostDetail(e.target.checked)}
+                  disabled={!proposalIncludeTakeoffList}
                   className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
                 />
                 <span>
@@ -4134,7 +4157,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
-                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature)}
+                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature, proposalIncludeTakeoffList)}
                 className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
               >
                 <FileText size={15} />
