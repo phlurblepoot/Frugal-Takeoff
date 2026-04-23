@@ -16,6 +16,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.7.5',
+    date: 'April 23, 2026',
+    changes: [
+      'PDF Editor: "Save As" now opens a native save dialog (File System Access API) on supported browsers so you can rename the file and choose a download location before saving — falls back to the previous direct download on browsers that do not support it',
+      'PDF Editor: fixed the toolbar scrolling out of view on smaller desktop screens by switching to dynamic viewport height (100dvh), which also corrects layout on mobile browsers where the address bar reduces the available height',
+      'PDF Editor: each page thumbnail in the sidebar now has a delete button (hover to reveal) — deleting a page removes it from the document, shifts all annotation positions, and updates the underlying PDF so the exported file matches what is displayed',
+      'PDF Editor: "+" button in the sidebar header lets you import additional pages from a PDF file or from an image (JPEG, PNG, etc.) and append them to the current document',
+      'PDF Editor: pages in the sidebar can be reordered by dragging the grip handle — works with both mouse and touch; dragging updates annotation page indices and the PDF page order so the exported file reflects the new layout',
+    ],
+  },
+  {
     version: '0.9.8',
     date: 'April 23, 2026',
     changes: [
