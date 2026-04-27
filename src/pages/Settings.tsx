@@ -16,6 +16,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.7.9',
+    date: 'April 23, 2026',
+    changes: [
+      'Printouts: full-screen progress overlay now appears whenever a PDF or Excel export is being generated, with live status messages so it is clear the app is working and what step it is on (e.g. "Rendering page 2 of 5…", "Adding scope details…", "Saving…")',
+      'Proposals: the proposal generator reports each major stage — building cover, adding scope details, terms, rendering blueprint pages, and saving — instead of leaving the user with a greyed-out button',
+      'Checklists: the checklist PDF generator reports per-item progress ("Drawing item 4 of 12…") during generation',
+      'Shared printouts: fixed "Invalid data" error when opening a shared checklist PDF link — server data-URL parser now accepts the optional ;filename= parameter that jsPDF emits',
+      'Shared printouts: PDF previews now use an HTML <object> with a fallback "Download" call-to-action for mobile browsers that can\'t render PDFs inline; the download filename is also normalised to end in .pdf',
+      'Checklists: photos are now clickable everywhere they appear (the small thumbnails on the collapsed item row and the larger grid in the expanded view) — clicking opens a full-screen lightbox; click outside or press Esc to close',
+      'Documentation: the README has been rewritten from scratch with a full feature overview, setup walkthrough, and placeholders for screenshots',
+    ],
+  },
+  {
     version: '0.9.7.5',
     date: 'April 23, 2026',
     changes: [
