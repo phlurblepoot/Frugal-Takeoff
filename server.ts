@@ -504,7 +504,7 @@ async function startServer() {
         return res.status(404).send("Image not found");
       }
       
-      const matches = row.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      const matches = row.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
       if (!matches || matches.length !== 3) {
         return res.status(400).send("Invalid image data");
       }
@@ -727,7 +727,7 @@ async function startServer() {
       if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).send('Page not found');
       const img = db.prepare('SELECT data FROM images WHERE id = ?').get(pages[idx].imageId) as { data: string } | undefined;
       if (!img || !img.data) return res.status(404).send('File not found');
-      const matches = img.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      const matches = img.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
       if (!matches) return res.status(400).send('Invalid data');
       res.set('Content-Type', matches[1]);
       res.set('Cache-Control', 'public, max-age=3600');
@@ -744,7 +744,7 @@ async function startServer() {
       if (!share) return res.status(404).send('Share not found');
       const img = db.prepare('SELECT data FROM images WHERE id = ?').get(share.resourceId) as { data: string } | undefined;
       if (!img || !img.data) return res.status(404).send('File not found');
-      const matches = img.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      const matches = img.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
       if (!matches) return res.status(400).send('Invalid data');
       res.set('Content-Type', matches[1]);
       res.set('Cache-Control', 'public, max-age=3600');

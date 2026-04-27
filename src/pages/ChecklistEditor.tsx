@@ -232,10 +232,11 @@ interface PhotoSectionProps {
   inputRef: React.RefObject<HTMLInputElement>;
   onPhotoUpload: (type: PhotoStage, file: File) => void;
   onRemovePhoto: (type: PhotoStage, index: number) => void;
+  onClickPhoto: (src: string) => void;
 }
 
 const PhotoSection: React.FC<PhotoSectionProps> = ({
-  type, label, photos, inputRef, onPhotoUpload, onRemovePhoto,
+  type, label, photos, inputRef, onPhotoUpload, onRemovePhoto, onClickPhoto,
 }) => {
   const [dragOver, setDragOver] = useState(false);
 
@@ -262,9 +263,14 @@ const PhotoSection: React.FC<PhotoSectionProps> = ({
         <div className="grid grid-cols-3 sm:grid-cols-2 gap-2 mb-2">
           {photos.map((src, idx) => (
             <div key={idx} className="relative group">
-              <img src={src} className="w-full h-24 object-cover rounded-lg border border-slate-200 dark:border-slate-700" alt={`${type} ${idx + 1}`} />
+              <img
+                src={src}
+                onClick={() => onClickPhoto(src)}
+                className="w-full h-24 object-cover rounded-lg border border-slate-200 dark:border-slate-700 cursor-zoom-in"
+                alt={`${type} ${idx + 1}`}
+              />
               <button
-                onClick={() => onRemovePhoto(type, idx)}
+                onClick={(e) => { e.stopPropagation(); onRemovePhoto(type, idx); }}
                 className="absolute top-1 right-1 p-0.5 bg-red-500 text-white rounded-full opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
               >
                 <X size={10} />
@@ -307,6 +313,7 @@ interface ItemCardProps {
   onDelete: () => void;
   onPhotoUpload: (type: PhotoStage, file: File) => void;
   onRemovePhoto: (type: PhotoStage, index: number) => void;
+  onClickPhoto: (src: string) => void;
   // Drag/drop reorder
   onDragHandleStart: (e: React.DragEvent) => void;
   onDragOverItem: (e: React.DragEvent) => void;
@@ -317,7 +324,7 @@ interface ItemCardProps {
 
 const ItemCard: React.FC<ItemCardProps> = ({
   item, expanded, beforePhotos, inProgressPhotos, afterPhotos,
-  onToggle, onExpand, onUpdate, onDelete, onPhotoUpload, onRemovePhoto,
+  onToggle, onExpand, onUpdate, onDelete, onPhotoUpload, onRemovePhoto, onClickPhoto,
   onDragHandleStart, onDragOverItem, onDropOnItem, onDragEndItem, isDraggedOver,
 }) => {
   const beforeRef = useRef<HTMLInputElement>(null);
@@ -389,19 +396,31 @@ const ItemCard: React.FC<ItemCardProps> = ({
         {/* Photo thumbnails */}
         <div className="flex items-center gap-1.5 shrink-0">
           {bPhotos.slice(0, 2).map((src, i) => (
-            <div key={`b${i}`} className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+            <button
+              key={`b${i}`}
+              onClick={(e) => { e.stopPropagation(); onClickPhoto(src); }}
+              className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700 cursor-zoom-in"
+            >
               <img src={src} className="w-full h-full object-cover" alt="before" />
-            </div>
+            </button>
           ))}
           {iPhotos.slice(0, 1).map((src, i) => (
-            <div key={`i${i}`} className="w-7 h-7 rounded overflow-hidden border border-amber-300 dark:border-amber-700">
+            <button
+              key={`i${i}`}
+              onClick={(e) => { e.stopPropagation(); onClickPhoto(src); }}
+              className="w-7 h-7 rounded overflow-hidden border border-amber-300 dark:border-amber-700 cursor-zoom-in"
+            >
               <img src={src} className="w-full h-full object-cover" alt="in progress" />
-            </div>
+            </button>
           ))}
           {aPhotos.slice(0, 2).map((src, i) => (
-            <div key={`a${i}`} className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700">
+            <button
+              key={`a${i}`}
+              onClick={(e) => { e.stopPropagation(); onClickPhoto(src); }}
+              className="w-7 h-7 rounded overflow-hidden border border-slate-200 dark:border-slate-700 cursor-zoom-in"
+            >
               <img src={src} className="w-full h-full object-cover" alt="after" />
-            </div>
+            </button>
           ))}
           {totalThumbs > 5 && (
             <div className="h-7 px-1.5 rounded bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-medium text-slate-500">
@@ -463,6 +482,7 @@ const ItemCard: React.FC<ItemCardProps> = ({
               inputRef={beforeRef}
               onPhotoUpload={onPhotoUpload}
               onRemovePhoto={onRemovePhoto}
+              onClickPhoto={onClickPhoto}
             />
             <PhotoSection
               type="in_progress"
@@ -471,6 +491,7 @@ const ItemCard: React.FC<ItemCardProps> = ({
               inputRef={inProgressRef}
               onPhotoUpload={onPhotoUpload}
               onRemovePhoto={onRemovePhoto}
+              onClickPhoto={onClickPhoto}
             />
             <PhotoSection
               type="after"
@@ -479,6 +500,7 @@ const ItemCard: React.FC<ItemCardProps> = ({
               inputRef={afterRef}
               onPhotoUpload={onPhotoUpload}
               onRemovePhoto={onRemovePhoto}
+              onClickPhoto={onClickPhoto}
             />
           </div>
 
@@ -515,6 +537,14 @@ export const ChecklistEditor: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [generateMsg, setGenerateMsg] = useState('');
   const [loading, setLoading] = useState(true);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!lightboxImage) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightboxImage(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxImage]);
 
   const pdfDbRef = useRef<IDBDatabase | null>(null);
   const checklistsRef = useRef(checklists);
@@ -1093,6 +1123,28 @@ export const ChecklistEditor: React.FC = () => {
   return (
     <div className="h-full flex flex-col bg-slate-50 dark:bg-slate-950">
 
+      {/* ── Photo lightbox ── */}
+      {lightboxImage && (
+        <div
+          onClick={() => setLightboxImage(null)}
+          className="fixed inset-0 z-[1000] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+        >
+          <img
+            src={lightboxImage}
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-full object-contain rounded shadow-2xl cursor-default"
+            alt=""
+          />
+          <button
+            onClick={() => setLightboxImage(null)}
+            title="Close (Esc)"
+            className="absolute top-4 right-4 p-2 bg-black/40 hover:bg-black/60 text-white rounded-full transition-colors"
+          >
+            <X size={22} />
+          </button>
+        </div>
+      )}
+
       {/* ── PDF generation progress overlay ── */}
       {generating && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1317,6 +1369,7 @@ export const ChecklistEditor: React.FC = () => {
                         onDelete={() => deleteItem(item.id)}
                         onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
                         onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
+                        onClickPhoto={setLightboxImage}
                         onDragHandleStart={(e) => {
                           setDraggingItemId(item.id);
                           e.dataTransfer.effectAllowed = 'move';
@@ -1366,6 +1419,7 @@ export const ChecklistEditor: React.FC = () => {
                           onDelete={() => deleteItem(item.id)}
                           onPhotoUpload={(type, file) => handlePhotoUpload(item.id, type, file)}
                           onRemovePhoto={(type, index) => handleRemovePhoto(item.id, type, index)}
+                          onClickPhoto={setLightboxImage}
                           onDragHandleStart={(e) => {
                             setDraggingItemId(item.id);
                             e.dataTransfer.effectAllowed = 'move';
