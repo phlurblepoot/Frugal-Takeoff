@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X, Mail, Upload, Send, ChevronDown, ChevronUp, RefreshCw, FileText, ExternalLink } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X, Mail, Upload, ChevronDown, ChevronUp, RefreshCw, FileText, ExternalLink } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Project, Bid, BidStatus } from '../types';
-import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid, sendProposal } from '../utils/store';
+import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -59,11 +59,6 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   const [showImportModal, setShowImportModal] = useState(false);
   const [importForm, setImportForm] = useState({ from: '', fromName: '', subject: '', body: '' });
   const [importSaving, setImportSaving] = useState(false);
-  const [showProposalModal, setShowProposalModal] = useState(false);
-  const [proposalBid, setProposalBid] = useState<Bid | null>(null);
-  const [proposalFileId, setProposalFileId] = useState('');
-  const [proposalMessage, setProposalMessage] = useState('');
-  const [proposalSending, setProposalSending] = useState(false);
   const [showAddManual, setShowAddManual] = useState(false);
   const [manualBid, setManualBid] = useState({ name: '', contractor: '', address: '' });
 
@@ -141,26 +136,13 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
         initialName: bid.name,
         initialContractor: bid.contractor,
         initialAddress: bid.address,
-        fromBidId: bid.id
+        fromBidId: bid.id,
+        fromBidEmail: bid.email,
+        fromBidEmails: bid.emails,
+        fromBidProposalFileId: bid.proposalFileId,
+        fromBidProposalSentAt: bid.proposalSentAt,
       }
     });
-  };
-
-  const handleSendProposal = async () => {
-    if (!proposalBid || !proposalFileId) return;
-    setProposalSending(true);
-    try {
-      const updated = await sendProposal(proposalBid.id, proposalFileId, proposalMessage || undefined);
-      setBids(prev => prev.map(b => b.id === updated.id ? updated : b));
-      setShowProposalModal(false);
-      setProposalBid(null);
-      setProposalFileId('');
-      setProposalMessage('');
-    } catch (e: any) {
-      alert('Failed to send: ' + (e.message || 'Unknown error'));
-    } finally {
-      setProposalSending(false);
-    }
   };
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -885,12 +867,6 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                   <FolderOpen size={13} /> Create Project
                                 </button>
                               )}
-                              {bid.email && (
-                                <button onClick={() => { setProposalBid(bid); setShowProposalModal(true); }}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all">
-                                  <Send size={13} /> Send Proposal
-                                </button>
-                              )}
                               <button onClick={() => handleDeleteBid(bid.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-all">
                                 <Trash2 size={15} />
                               </button>
@@ -949,48 +925,6 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
               <button onClick={() => setShowImportModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
               <button onClick={handleImportEmail} disabled={importSaving || (!importForm.subject && !importForm.body)} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
                 {importSaving ? <><RefreshCw size={15} className="animate-spin" /> Importing…</> : <><Upload size={15} /> Import</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Send Proposal Modal */}
-      {showProposalModal && proposalBid && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
-            <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Send size={20} className="text-accent-600" /> Send Proposal</h3>
-              <button onClick={() => setShowProposalModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3 text-sm">
-                <p className="text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider mb-1">Replying to</p>
-                <p className="font-semibold text-slate-800 dark:text-slate-200">{proposalBid.email?.fromName || proposalBid.email?.from}</p>
-                <p className="text-slate-500 dark:text-slate-400 text-xs">{proposalBid.email?.from} · Re: {proposalBid.email?.subject}</p>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Attach Proposal</label>
-                <select className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500"
-                  value={proposalFileId} onChange={e => setProposalFileId(e.target.value)}>
-                  <option value="">— Select a printout —</option>
-                  {projects.flatMap(p => (p.printouts || []).filter(pr => pr.type === 'pdf').map(pr => (
-                    <option key={pr.fileId} value={pr.fileId}>{p.name} › {pr.name}</option>
-                  )))}
-                </select>
-                {projects.every(p => !(p.printouts || []).some(pr => pr.type === 'pdf')) && (
-                  <p className="mt-1.5 text-xs text-slate-400">No PDF printouts found. Generate one from a project first.</p>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Message <span className="font-normal text-slate-400 normal-case">(optional)</span></label>
-                <textarea rows={4} className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500 resize-none" value={proposalMessage} onChange={e => setProposalMessage(e.target.value)} placeholder="Please find our proposal attached. Don't hesitate to reach out with any questions." />
-              </div>
-            </div>
-            <div className="p-6 pt-0 flex justify-end gap-3">
-              <button onClick={() => setShowProposalModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
-              <button onClick={handleSendProposal} disabled={proposalSending || !proposalFileId} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
-                {proposalSending ? <><RefreshCw size={15} className="animate-spin" /> Sending…</> : <><Send size={15} /> Send</>}
               </button>
             </div>
           </div>

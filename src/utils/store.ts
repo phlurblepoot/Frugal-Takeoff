@@ -264,6 +264,16 @@ export const sendProposal = async (bidId: string, fileId: string, message?: stri
   return await res.json();
 };
 
+export const sendProjectProposal = async (projectId: string, fileId: string, message?: string): Promise<Project> => {
+  const res = await fetch(`/api/projects/${projectId}/send-proposal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ fileId, message }),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
   const res = await fetch(`/api/projects/${projectId}/notes`, { headers: getAuthHeaders() });
   await handleResponse(res);

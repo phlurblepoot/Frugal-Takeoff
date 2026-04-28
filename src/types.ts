@@ -180,6 +180,11 @@ export interface Project {
   responded?: boolean;
   accepted?: boolean;
   legendOnAllPages?: boolean;
+  // Email thread the project was created from (moved from the bid pipeline on conversion)
+  email?: BidEmail;
+  emails?: BidEmail[];
+  proposalFileId?: string;
+  proposalSentAt?: number;
 }
 
 export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';
