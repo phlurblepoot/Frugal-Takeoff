@@ -16,6 +16,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.9.9',
+    date: 'April 29, 2026',
+    changes: [
+      'Measurements: drawing a new segment now correctly appends to the selected measurement instead of silently spawning a fresh one — the first click of the segment used to clear the selection before the canvas could read it',
+      'Measurements: a new measurement is only created when nothing is selected; in that case it lands in the currently selected takeoff (or in Ungrouped if no takeoff is selected) so it can be assigned later',
+      'Measurements: clicking a measurement in the sidebar now also activates the takeoff it belongs to, so the selected takeoff always matches the selected measurement and new segments inherit the right color and totals group',
+    ],
+  },
+  {
     version: '0.9.7.9',
     date: 'April 23, 2026',
     changes: [

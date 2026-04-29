@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -425,7 +425,12 @@ export const ProjectView: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeletePrintoutConfirm, setShowDeletePrintoutConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts' | 'notes'>('pages');
+  const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts' | 'email' | 'notes'>('pages');
+  const [showSendProposalModal, setShowSendProposalModal] = useState(false);
+  const [sendProposalFileId, setSendProposalFileId] = useState('');
+  const [sendProposalMessage, setSendProposalMessage] = useState('');
+  const [sendingProposal, setSendingProposal] = useState(false);
+  const [expandedThreadKeys, setExpandedThreadKeys] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [projectNote, setProjectNote] = useState<ProjectNote | null>(null);
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
@@ -2524,6 +2529,24 @@ export const ProjectView: React.FC = () => {
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
             )}
           </button>
+          {project.email && (
+            <button
+              onClick={() => setActiveTab('email')}
+              className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap flex items-center gap-1.5 ${
+                activeTab === 'email' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              }`}
+            >
+              <Mail size={14} /> Email
+              {project.emails && project.emails.length > 1 && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300">
+                  {project.emails.length}
+                </span>
+              )}
+              {activeTab === 'email' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
+              )}
+            </button>
+          )}
         </div>
 
         {activeTab === 'pages' ? (
@@ -3071,7 +3094,7 @@ export const ProjectView: React.FC = () => {
               </div>
             )}
           </div>
-        ) : (
+        ) : activeTab === 'printouts' ? (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Generated Printouts</h2>
@@ -3140,8 +3163,154 @@ export const ProjectView: React.FC = () => {
               </div>
             )}
           </div>
+        ) : (
+          /* Email tab — only reachable when project.email exists */
+          project.email ? (
+            <div className="space-y-4 max-w-3xl">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-5">
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="p-2 rounded-lg bg-accent-50 dark:bg-accent-900/30 shrink-0">
+                    <Mail size={18} className="text-accent-600 dark:text-accent-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900 dark:text-white leading-tight">{project.email.subject}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                      <span className="font-medium text-slate-700 dark:text-slate-300">{project.email.fromName || project.email.from}</span>
+                      {project.email.fromName && <span className="text-slate-400"> &lt;{project.email.from}&gt;</span>}
+                      <span className="ml-2">{new Date(project.email.receivedAt).toLocaleString()}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setSendProposalFileId(''); setSendProposalMessage(''); setShowSendProposalModal(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all shrink-0"
+                  >
+                    <Send size={13} /> Send Proposal
+                  </button>
+                </div>
+
+                {project.proposalSentAt && (
+                  <div className="mb-4 px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/40 text-xs text-emerald-700 dark:text-emerald-300">
+                    Proposal sent {new Date(project.proposalSentAt).toLocaleString()}
+                  </div>
+                )}
+
+                {(() => {
+                  const thread = project.emails && project.emails.length > 0
+                    ? [...project.emails].reverse() // newest first
+                    : project.email ? [project.email] : [];
+                  return (
+                    <div className="space-y-2">
+                      {thread.map((em, idx) => {
+                        const isLatest = idx === 0;
+                        const isOpen = isLatest || expandedThreadKeys.has(idx);
+                        const toggle = () => setExpandedThreadKeys(s => {
+                          const n = new Set(s); isOpen ? n.delete(idx) : n.add(idx); return n;
+                        });
+                        return (
+                          <div key={idx} className="rounded-xl border border-slate-200 dark:border-slate-600 overflow-hidden">
+                            <button onClick={toggle} className={`w-full flex items-center justify-between px-4 py-2.5 text-left transition-colors ${isLatest ? 'bg-accent-50 dark:bg-accent-900/20' : 'bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-700/60'}`}>
+                              <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+                                {em.fromName || em.from}
+                                {em.fromName && <span className="ml-1 text-slate-400 font-normal text-xs">&lt;{em.from}&gt;</span>}
+                              </span>
+                              <span className="flex items-center gap-2 shrink-0 ml-3">
+                                <span className="text-xs text-slate-400">{new Date(em.receivedAt).toLocaleDateString()}</span>
+                                {isOpen ? <ChevronUp size={13} className="text-slate-400" /> : <ChevronDown size={13} className="text-slate-400" />}
+                              </span>
+                            </button>
+                            {isOpen && (
+                              <div className="border-t border-slate-100 dark:border-slate-700">
+                                {em.htmlBody ? (
+                                  <iframe
+                                    srcDoc={em.htmlBody}
+                                    sandbox="allow-same-origin"
+                                    title="Email content"
+                                    className="w-full bg-white"
+                                    style={{ minHeight: 120 }}
+                                    onLoad={e => {
+                                      const frame = e.currentTarget;
+                                      try {
+                                        const h = frame.contentDocument?.documentElement?.scrollHeight;
+                                        if (h && h > 0) frame.style.height = h + 16 + 'px';
+                                      } catch {}
+                                    }}
+                                  />
+                                ) : (
+                                  <p className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{em.body}</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          ) : null
         )}
       </div>
+
+      {/* Send Proposal Modal */}
+      {showSendProposalModal && project.email && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Send size={20} className="text-accent-600" /> Send Proposal</h3>
+              <button onClick={() => setShowSendProposalModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3 text-sm">
+                <p className="text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider mb-1">Replying to</p>
+                <p className="font-semibold text-slate-800 dark:text-slate-200">{project.email.fromName || project.email.from}</p>
+                <p className="text-slate-500 dark:text-slate-400 text-xs">{project.email.from} · Re: {project.email.subject}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Attach Proposal</label>
+                <select className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500"
+                  value={sendProposalFileId} onChange={e => setSendProposalFileId(e.target.value)}>
+                  <option value="">— Select a printout —</option>
+                  {(project.printouts || []).filter(pr => pr.type === 'pdf').map(pr => (
+                    <option key={pr.fileId} value={pr.fileId}>{pr.name}</option>
+                  ))}
+                </select>
+                {!(project.printouts || []).some(pr => pr.type === 'pdf') && (
+                  <p className="mt-1.5 text-xs text-slate-400">No PDF printouts on this project yet. Generate one from the Takeoffs tab.</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Message <span className="font-normal text-slate-400 normal-case">(optional)</span></label>
+                <textarea rows={4} className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500 resize-none" value={sendProposalMessage} onChange={e => setSendProposalMessage(e.target.value)} placeholder="Please find our proposal attached. Don't hesitate to reach out with any questions." />
+              </div>
+            </div>
+            <div className="p-6 pt-0 flex justify-end gap-3">
+              <button onClick={() => setShowSendProposalModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
+              <button
+                onClick={async () => {
+                  if (!sendProposalFileId || !project) return;
+                  setSendingProposal(true);
+                  try {
+                    const updated = await sendProjectProposal(project.id, sendProposalFileId, sendProposalMessage || undefined);
+                    setProject(updated);
+                    setShowSendProposalModal(false);
+                    setSendProposalFileId('');
+                    setSendProposalMessage('');
+                  } catch (e: any) {
+                    alert('Failed to send: ' + (e.message || 'Unknown error'));
+                  } finally {
+                    setSendingProposal(false);
+                  }
+                }}
+                disabled={sendingProposal || !sendProposalFileId}
+                className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {sendingProposal ? <><RefreshCw size={15} className="animate-spin" /> Sending…</> : <><Send size={15} /> Send</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showDeleteAllConfirm && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">

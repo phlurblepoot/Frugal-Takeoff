@@ -1168,6 +1168,57 @@ async function startServer() {
     }
   });
 
+  // Send a proposal as a reply to the email stored on a project
+  app.post("/api/projects/:id/send-proposal", authenticateToken, async (req, res) => {
+    try {
+      const row = db.prepare('SELECT data FROM projects WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!row) return res.status(404).json({ error: "Project not found" });
+      const project = JSON.parse(row.data);
+      if (!project.email) return res.status(400).json({ error: "Project has no associated email to reply to" });
+
+      const { fileId, message } = req.body as { fileId: string; message?: string };
+      const fileRow = db.prepare('SELECT data FROM images WHERE id = ?').get(fileId) as { data: string } | undefined;
+      if (!fileRow) return res.status(404).json({ error: "File not found" });
+
+      const transport = buildTransporter();
+      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
+
+      const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+      const smtpCfg: Record<string, string> = {};
+      smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
+
+      const dataUrl = fileRow.data;
+      const base64Data = dataUrl.split(',')[1];
+      const mimeType = dataUrl.split(';')[0].replace('data:', '');
+      const fileBuffer = Buffer.from(base64Data, 'base64');
+
+      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
+      const toAddress = project.email.from || '';
+      if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
+
+      const mailOptions: nodemailer.SendMailOptions = {
+        from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+        to: toAddress,
+        subject,
+        text: message || 'Please find the attached proposal.',
+        attachments: [{ filename: 'proposal.pdf', content: fileBuffer, contentType: mimeType }],
+      };
+      if (project.email.messageId) {
+        mailOptions.inReplyTo = project.email.messageId;
+        mailOptions.references = project.email.messageId;
+      }
+
+      await transport.sendMail(mailOptions);
+
+      const updatedProject = { ...project, proposalFileId: fileId, proposalSentAt: Date.now() };
+      db.prepare('INSERT OR REPLACE INTO projects (id, data, createdAt) VALUES (?, ?, ?)').run(updatedProject.id, JSON.stringify(updatedProject), updatedProject.createdAt);
+      res.json(updatedProject);
+    } catch (error: any) {
+      console.error("Error sending project proposal:", error);
+      res.status(500).json({ error: error.message || "Failed to send proposal" });
+    }
+  });
+
   // ── IMAP background poller ──────────────────────────────────────────────────
 
   function startImapPoller() {

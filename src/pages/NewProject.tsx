@@ -249,12 +249,27 @@ export const NewProject: React.FC = () => {
       }));
 
       project.pages = updatedPages;
+
+      // If converted from a bid, move the email thread onto the project so the
+      // pipeline entry can be deleted while keeping the conversation history.
+      const state = location.state as {
+        fromBidId?: string;
+        fromBidEmail?: import('../types').BidEmail;
+        fromBidEmails?: import('../types').BidEmail[];
+        fromBidProposalFileId?: string;
+        fromBidProposalSentAt?: number;
+      } | null;
+      if (state?.fromBidEmail) project.email = state.fromBidEmail;
+      if (state?.fromBidEmails) project.emails = state.fromBidEmails;
+      if (state?.fromBidProposalFileId) project.proposalFileId = state.fromBidProposalFileId;
+      if (state?.fromBidProposalSentAt) project.proposalSentAt = state.fromBidProposalSentAt;
+
       await saveProject(project);
-      
-      if (location.state?.fromBidId) {
-        await deleteBid(location.state.fromBidId);
+
+      if (state?.fromBidId) {
+        await deleteBid(state.fromBidId);
       }
-      
+
       navigate(`/project/${projectId}`);
     } catch (error) {
       console.error('Error saving project:', error);
