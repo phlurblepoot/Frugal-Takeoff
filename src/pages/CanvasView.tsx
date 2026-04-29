@@ -259,7 +259,9 @@ const CanvasViewInner: React.FC = () => {
   const [showPageJump, setShowPageJump] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
-  const [newMeasurementToken, setNewMeasurementToken] = useState(0);
+  const [newMeasurementModal, setNewMeasurementModal] = useState<{ takeoffId: string } | null>(null);
+  const [newMeasurementName, setNewMeasurementName] = useState('');
+  const [newMeasurementType, setNewMeasurementType] = useState<'length' | 'area'>('area');
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
 
@@ -518,6 +520,7 @@ const CanvasViewInner: React.FC = () => {
       if (e.key === 'Escape') {
         if (showShortcutsHelp) { setShowShortcutsHelp(false); return; }
         if (showScaleModal) { setShowScaleModal(false); return; }
+        if (newMeasurementModal) { setNewMeasurementModal(null); return; }
         if (showDeleteConfirm) { setShowDeleteConfirm(false); setMeasurementToDelete(null); return; }
         if (showTakeoffModal) { setShowTakeoffModal(false); return; }
         if (heightsModalMeasurementId) { setHeightsModalMeasurementId(null); return; }
@@ -586,7 +589,7 @@ const CanvasViewInner: React.FC = () => {
   }, [selectedMeasurementId, page, project, history, redoStack, aggregatedMeasurements,
       showShortcutsHelp, showScaleModal, showDeleteConfirm, showTakeoffModal,
       heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
-      showPageJump, prevPageId, nextPageId, pageIds]);
+      showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal]);
 
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
@@ -735,6 +738,47 @@ const CanvasViewInner: React.FC = () => {
     if (takeoff?.type === 'area' && measurement.type === 'length') {
       setHeightsModalMeasurementId(newMeasurement.id);
     }
+  };
+
+  const openNewMeasurementModal = (takeoffId: string) => {
+    const takeoff = project?.takeoffs.find(t => t.id === takeoffId);
+    if (!takeoff) return;
+    // For length-typed takeoffs, only line-type measurements are valid.
+    setNewMeasurementType(takeoff.type === 'length' ? 'length' : 'area');
+    setNewMeasurementName('');
+    setNewMeasurementModal({ takeoffId });
+  };
+
+  const confirmNewMeasurement = async () => {
+    if (!project || !page || !newMeasurementModal) return;
+    const trimmed = newMeasurementName.trim();
+    if (!trimmed) {
+      toast('Please enter a name', { type: 'warning' });
+      return;
+    }
+    const takeoff = project.takeoffs.find(t => t.id === newMeasurementModal.takeoffId);
+    if (!takeoff) return;
+
+    const newId = uuidv4();
+    const newMeasurement: Measurement = {
+      id: newId,
+      type: newMeasurementType,
+      points: [],
+      color: takeoff.color,
+      name: trimmed,
+      takeoffId: takeoff.id,
+      planSetId: page.planSetId,
+    };
+
+    pushToHistory({ type: 'add', measurement: newMeasurement });
+    await savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
+    sendMeasurementUpdate(page.id, 'add', newMeasurement);
+
+    setSelectedTakeoffId(takeoff.id);
+    setSelectedColor(takeoff.color);
+    setSelectedMeasurementId(newId);
+    setCurrentTool(newMeasurementType);
+    setNewMeasurementModal(null);
   };
 
   const updateMeasurement = (id: string, updates: Partial<Measurement>, targetPageId?: string) => {
@@ -1015,6 +1059,15 @@ const CanvasViewInner: React.FC = () => {
   });
 
   const activeTakeoff = project.takeoffs.find(t => t.id === selectedTakeoffId);
+  const selectedMeasurement = selectedMeasurementId
+    ? project.pages.flatMap(p => p.measurements).find(m => m.id === selectedMeasurementId) || null
+    : null;
+  // Lock the drawing tool to the selected measurement's type so subsequent
+  // segments cannot mix lines and areas inside one measurement.
+  const lockedMeasurementType: 'length' | 'area' | null =
+    selectedMeasurement && (selectedMeasurement.type === 'length' || selectedMeasurement.type === 'area')
+      ? selectedMeasurement.type
+      : null;
 
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-900 overflow-hidden font-sans relative">
@@ -1119,10 +1172,11 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('length')}
               icon={<Ruler size={18} />}
               label="Length"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'count'}
+              disabled={!page.scaleConfig || activeTakeoff?.type === 'count' || lockedMeasurementType === 'area'}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Length tools are disabled for count takeoffs.");
+                else if (lockedMeasurementType === 'area') setToolDisabledMessage("This measurement is an area — deselect it to start a line.");
               }}
             />
             <ToolButton
@@ -1130,11 +1184,12 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('area')}
               icon={<Square size={18} />}
               label="Area"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count'}
+              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count' || lockedMeasurementType === 'length'}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Area tools are disabled for linear takeoffs.");
                 else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Area tools are disabled for count takeoffs.");
+                else if (lockedMeasurementType === 'length') setToolDisabledMessage("This measurement is a line — deselect it to start an area.");
               }}
             />
             <ToolButton
@@ -1142,11 +1197,12 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('count')}
               icon={<Hash size={18} />}
               label="Count"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area'}
+              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area' || lockedMeasurementType !== null}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Count tools are disabled for linear takeoffs.");
                 else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
+                else if (lockedMeasurementType !== null) setToolDisabledMessage("Deselect the current measurement to use the count tool.");
               }}
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
@@ -1667,10 +1723,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('length')}
                 icon={<Ruler size={20} />}
                 label="Length"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'count'}
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'count' || lockedMeasurementType === 'area'}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Length tools are disabled for count takeoffs.");
+                  else if (lockedMeasurementType === 'area') setToolDisabledMessage("This measurement is an area — deselect it to start a line.");
                 }}
               />
               <ToolButton
@@ -1678,11 +1735,12 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('area')}
                 icon={<Square size={20} />}
                 label="Area"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count'}
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count' || lockedMeasurementType === 'length'}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Area tools are disabled for linear takeoffs.");
                   else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Area tools are disabled for count takeoffs.");
+                  else if (lockedMeasurementType === 'length') setToolDisabledMessage("This measurement is a line — deselect it to start an area.");
                 }}
               />
               <ToolButton
@@ -1690,11 +1748,12 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('count')}
                 icon={<Hash size={20} />}
                 label="Count"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area'}
+                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area' || lockedMeasurementType !== null}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Count tools are disabled for linear takeoffs.");
                   else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
+                  else if (lockedMeasurementType !== null) setToolDisabledMessage("Deselect the current measurement to use the count tool.");
                 }}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
@@ -1851,7 +1910,6 @@ const CanvasViewInner: React.FC = () => {
             onCopy={selectedMeasurementId ? handleCopy : undefined}
             onPaste={handlePaste}
             hasCopied={!!localStorage.getItem('copiedMeasurement')}
-            newMeasurementToken={newMeasurementToken}
             multiSelectedIds={multiSelectedIds}
             onMultiSelectToggle={handleMultiSelectToggle}
             onClearMultiSelect={() => setMultiSelectedIds(new Set())}
@@ -2111,6 +2169,13 @@ const CanvasViewInner: React.FC = () => {
                   </div>
                   {isExpanded && takeoff.type !== 'count' && (
                     <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
+                      <button
+                        onClick={() => openNewMeasurementModal(takeoff.id)}
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-b border-dashed border-slate-200 dark:border-slate-700 transition-colors"
+                      >
+                        <Plus size={14} />
+                        New Measurement
+                      </button>
                       {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
                         p.measurements
                           .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
@@ -2133,15 +2198,6 @@ const CanvasViewInner: React.FC = () => {
                               pageIds={project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id)}
                             />
                           ))
-                      )}
-                      {isActive && (currentTool === 'length' || currentTool === 'area') && (
-                        <button
-                          onClick={() => setNewMeasurementToken(t => t + 1)}
-                          className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-t border-dashed border-slate-200 dark:border-slate-700 transition-colors"
-                        >
-                          <Plus size={14} />
-                          New Measurement
-                        </button>
                       )}
                     </div>
                   )}
@@ -2310,6 +2366,81 @@ const CanvasViewInner: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* New Measurement Modal */}
+      {newMeasurementModal && (() => {
+        const targetTakeoff = project.takeoffs.find(t => t.id === newMeasurementModal.takeoffId);
+        const allowAreaType = targetTakeoff?.type === 'area';
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+              <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">New Measurement</h3>
+                {targetTakeoff && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Adding to <span className="font-medium" style={{ color: targetTakeoff.color }}>{targetTakeoff.name}</span>
+                  </p>
+                )}
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Name</label>
+                  <input
+                    type="text"
+                    value={newMeasurementName}
+                    onChange={(e) => setNewMeasurementName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') confirmNewMeasurement();
+                    }}
+                    placeholder="e.g. North Wall"
+                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Type</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewMeasurementType('length')}
+                      className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${newMeasurementType === 'length' ? 'border-accent-500 bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300' : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                    >
+                      <Ruler size={14} /> Line
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!allowAreaType}
+                      onClick={() => allowAreaType && setNewMeasurementType('area')}
+                      className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${newMeasurementType === 'area' ? 'border-accent-500 bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300' : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'} ${!allowAreaType ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    >
+                      <Square size={14} /> Area
+                    </button>
+                  </div>
+                  {!allowAreaType && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1.5">
+                      Linear takeoffs only support line measurements.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
+                <button
+                  onClick={() => setNewMeasurementModal(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-lg transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmNewMeasurement}
+                  className="px-4 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 active:scale-95 rounded-lg transition-all"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
@@ -2748,6 +2879,13 @@ function MeasurementItem({
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(measurement.name);
+  const rowRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (selected && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [selected]);
 
   const handleSaveName = () => {
     if (editName.trim()) {
@@ -2759,8 +2897,9 @@ function MeasurementItem({
   };
 
   return (
-    <div 
-      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-500' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
+    <div
+      ref={rowRef}
+      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
       onClick={onSelect}
       draggable
       onDragStart={(e) => {
@@ -2768,6 +2907,12 @@ function MeasurementItem({
         e.dataTransfer.effectAllowed = 'move';
       }}
     >
+      {selected && (
+        <span className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-bold uppercase tracking-wider shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-700 animate-pulse" />
+          Active
+        </span>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {!measurement.takeoffId && (

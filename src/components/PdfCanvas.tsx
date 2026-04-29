@@ -52,7 +52,6 @@ interface PdfCanvasProps {
   onCopy?: () => void;
   onPaste?: () => void;
   hasCopied?: boolean;
-  newMeasurementToken?: number;
   multiSelectedIds?: Set<string>;
   onMultiSelectToggle?: (id: string, type: string) => void;
   onClearMultiSelect?: () => void;
@@ -103,7 +102,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onCopy,
   onPaste,
   hasCopied,
-  newMeasurementToken,
   multiSelectedIds,
   onMultiSelectToggle,
   onClearMultiSelect,
@@ -138,23 +136,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [arcMidPoint, setArcMidPoint] = useState<Point | null>(null);
   const [activeArcMidIndices, setActiveArcMidIndices] = useState<number[]>([]);
   
-  const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number } | null>(null);
+  const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number, segIdx?: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; measurementId: string | null } | null>(null);
 
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
-  const [activeMultiSegmentId, setActiveMultiSegmentId] = useState<string | null>(null);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-
-  const newMeasurementTokenRef = useRef(newMeasurementToken ?? 0);
-  useEffect(() => {
-    if (newMeasurementToken !== undefined && newMeasurementToken !== newMeasurementTokenRef.current) {
-      newMeasurementTokenRef.current = newMeasurementToken;
-      setActiveMultiSegmentId(null);
-    }
-  }, [newMeasurementToken]);
 
   useEffect(() => {
     if (resumeMeasurement) {
@@ -677,7 +666,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePoints, currentTool, measurements, onAddMeasurement, arcMode, onCancel, resumeMeasurementId, activeMultiSegmentId, activeArcMidIndices]);
+  }, [activePoints, currentTool, measurements, onAddMeasurement, arcMode, onCancel, resumeMeasurementId, activeArcMidIndices, selectedMeasurementId]);
 
   const cancelDrawing = () => {
     setActivePoints([]);
@@ -686,12 +675,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     setArcMidPoint(null);
     setActiveArcMidIndices([]);
     setResumeMeasurementId(null);
-    setActiveMultiSegmentId(null);
     onCancel?.();
   };
 
   // Finalize the current in-progress segment, save it to the measurement, and
   // leave drawing active so the user can immediately start the next segment.
+  // Append target = the currently selected measurement (when its type matches
+  // the active tool). Otherwise create a fresh measurement and select it.
   const finalizeSegment = () => {
     if (activePoints.length <= 1) return;
 
@@ -705,44 +695,58 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const segArcMids: MeasurementSegment['arcMidIndices'] = activeArcMidIndices.length > 0
       ? [...activeArcMidIndices]
       : undefined;
+    const drawingType = currentTool as 'length' | 'area';
 
     if (resumeMeasurementId) {
       const existing = measurements.find(m => m.id === resumeMeasurementId);
       const updated: Measurement = {
         id: resumeMeasurementId,
-        type: currentTool as 'length' | 'area',
+        type: drawingType,
         points: segPoints,
-        color: existing?.color ?? (currentTool === 'length' ? '#3b82f6' : '#10b981'),
-        name: existing?.name ?? `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
+        color: existing?.color ?? (drawingType === 'length' ? '#3b82f6' : '#10b981'),
+        name: existing?.name ?? `${drawingType === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
         regionId,
         arcMidIndices: segArcMids,
       };
       onUpdateMeasurement(resumeMeasurementId, updated);
       setResumeMeasurementId(null);
-      // Resume mode replaces the measurement — don't continue multi-segment
-      setActiveMultiSegmentId(null);
-    } else if (activeMultiSegmentId) {
-      const existing = measurements.find(m => m.id === activeMultiSegmentId);
-      if (existing) {
-        const newSeg: MeasurementSegment = { points: segPoints, arcMidIndices: segArcMids };
-        onUpdateMeasurement(activeMultiSegmentId, {
-          segments: [...(existing.segments ?? []), newSeg],
-        });
-      }
-      // Keep activeMultiSegmentId — user continues adding segments
     } else {
-      const newId = uuidv4();
-      const newMeasurement: Measurement = {
-        id: newId,
-        type: currentTool as 'length' | 'area',
-        points: segPoints,
-        color: currentTool === 'length' ? '#3b82f6' : '#10b981',
-        name: `${currentTool === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
-        regionId,
-        arcMidIndices: segArcMids,
-      };
-      onAddMeasurement(newMeasurement);
-      setActiveMultiSegmentId(newId);
+      const selected = selectedMeasurementId
+        ? measurements.find(m => m.id === selectedMeasurementId)
+        : null;
+      const canAppend = !!selected && selected.type === drawingType;
+
+      if (canAppend && selected) {
+        if (selected.points.length === 0) {
+          // Empty placeholder created via "New Measurement" — fill the first segment.
+          onUpdateMeasurement(selected.id, {
+            points: segPoints,
+            arcMidIndices: segArcMids,
+            regionId: selected.regionId ?? regionId,
+          });
+        } else {
+          // Append as an additional segment.
+          const newSeg: MeasurementSegment = { points: segPoints, arcMidIndices: segArcMids };
+          onUpdateMeasurement(selected.id, {
+            segments: [...(selected.segments ?? []), newSeg],
+          });
+        }
+      } else {
+        const newId = uuidv4();
+        const newMeasurement: Measurement = {
+          id: newId,
+          type: drawingType,
+          points: segPoints,
+          color: drawingType === 'length' ? '#3b82f6' : '#10b981',
+          name: `${drawingType === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
+          regionId,
+          arcMidIndices: segArcMids,
+        };
+        onAddMeasurement(newMeasurement);
+        // Promote the new measurement to the selection so subsequent segments
+        // append to it.
+        onSelectMeasurement(newId);
+      }
     }
 
     setActivePoints([]);
@@ -813,7 +817,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const getSelectedMeasurementCenter = () => {
     if (!selectedMeasurementId) return null;
     const m = measurements.find(m => m.id === selectedMeasurementId);
-    if (!m) return null;
+    if (!m || m.points.length === 0) return null;
 
     let centerX = 0, centerY = 0;
     if (m.type === 'count') {
@@ -833,7 +837,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   const renderMeasurements = () => {
-    return measurements.filter(m => m.id !== resumeMeasurementId).map((m) => {
+    return measurements
+      .filter(m => m.id !== resumeMeasurementId)
+      .filter(m => m.points.length > 0 || (m.segments && m.segments.length > 0))
+      .map((m) => {
       // Find region scale if applicable
       let currentScale = scaleConfig;
       if (isMultiRegion && m.regionId) {
@@ -845,7 +852,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
       // Compact points (including arc control mid-points)
       const points = m.points.map((p, i) => {
-        if (draggingPoint && draggingPoint.mId === m.id && draggingPoint.idx === i) {
+        if (draggingPoint && draggingPoint.mId === m.id && draggingPoint.segIdx === undefined && draggingPoint.idx === i) {
           return { x: draggingPoint.x, y: draggingPoint.y };
         }
         return { x: p.x, y: p.y };
@@ -901,11 +908,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const isMultiSelected = multiSelectedIds?.has(m.id) ?? false;
       const isDrawingTool = currentTool === 'length' || currentTool === 'area' || currentTool === 'count';
 
+      // Shared drag handlers used by each segment subgroup. Each subgroup is
+      // independently draggable so multi-segment measurements move per segment
+      // rather than as a single rigid shape.
+      const segmentDragStart = (e: any) => {
+        if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
+          e.target.stopDrag();
+          return;
+        }
+        e.cancelBubble = true;
+      };
+      const segmentDragMove = (e: any) => { e.cancelBubble = true; };
+
       return (
         <Group
           key={m.id}
           listening={!isDrawingTool}
-          draggable={currentTool === 'pan' && !isMiddleMouseDown}
           onClick={(e) => {
             e.cancelBubble = true;
             if (activePoints.length === 0) {
@@ -932,38 +950,37 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             e.cancelBubble = true;
             setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: m.id });
           }}
-          onDragStart={(e) => {
-            if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
-              e.target.stopDrag();
-              return;
-            }
-            e.cancelBubble = true;
-          }}
-          onDragMove={(e) => {
-            e.cancelBubble = true;
-          }}
-          onDragEnd={(e) => {
-            e.cancelBubble = true;
-            if (e.target.name() === 'measurement-group') {
-              const dx = e.target.x();
-              const dy = e.target.y();
-              e.target.x(0);
-              e.target.y(0);
-              const newPoints = m.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-              onUpdateMeasurement(m.id, { points: newPoints });
-            }
-          }}
           name="measurement-group"
         >
           {m.type === 'count' ? (
-            <Group x={points[0].x} y={points[0].y}>
+            <Group
+              x={points[0].x}
+              y={points[0].y}
+              draggable={currentTool === 'pan' && !isMiddleMouseDown}
+              onDragStart={segmentDragStart}
+              onDragMove={segmentDragMove}
+              onDragEnd={(e) => {
+                e.cancelBubble = true;
+                onUpdateMeasurement(m.id, { points: [{ x: e.target.x(), y: e.target.y() }] });
+              }}
+            >
+              {isSelected && (
+                <Circle
+                  radius={20 / stageScale}
+                  stroke="#fbbf24"
+                  strokeWidth={3 / stageScale}
+                  dash={[6 / stageScale, 4 / stageScale]}
+                  opacity={0.95}
+                  listening={false}
+                />
+              )}
               <Circle
                 radius={isSelected ? 14 / stageScale : 12 / stageScale}
                 fill={m.color}
                 opacity={0.8}
-                shadowColor={isSelected ? m.color : undefined}
-                shadowBlur={isSelected ? 10 / stageScale : 0}
-                shadowOpacity={isSelected ? 0.5 : 0}
+                shadowColor={isSelected ? '#fbbf24' : undefined}
+                shadowBlur={isSelected ? 16 / stageScale : 0}
+                shadowOpacity={isSelected ? 0.9 : 0}
               />
               <Line
                 points={[-6 / stageScale, 0, 6 / stageScale, 0]}
@@ -977,7 +994,33 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               />
             </Group>
           ) : (
-            <>
+            <Group
+              draggable={currentTool === 'pan' && !isMiddleMouseDown}
+              onDragStart={segmentDragStart}
+              onDragMove={segmentDragMove}
+              onDragEnd={(e) => {
+                e.cancelBubble = true;
+                const dx = e.target.x();
+                const dy = e.target.y();
+                e.target.x(0);
+                e.target.y(0);
+                const newPoints = m.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+                onUpdateMeasurement(m.id, { points: newPoints });
+              }}
+            >
+              {isSelected && (
+                <Line
+                  points={flatPoints}
+                  stroke="#fbbf24"
+                  strokeWidth={14 / stageScale}
+                  opacity={0.55}
+                  lineJoin="round"
+                  lineCap="round"
+                  closed={m.type === 'area'}
+                  dash={[14 / stageScale, 8 / stageScale]}
+                  listening={false}
+                />
+              )}
               <Line
                 points={flatPoints}
                 stroke={isMultiSelected ? '#f59e0b' : m.color}
@@ -987,9 +1030,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 lineCap="round"
                 closed={m.type === 'area'}
                 fill={m.type === 'area' ? `${isMultiSelected ? '#f59e0b' : m.color}${isSelected ? '60' : isMultiSelected ? '50' : '40'}` : undefined}
-                shadowColor={isMultiSelected ? '#f59e0b' : isSelected ? m.color : undefined}
-                shadowBlur={isMultiSelected ? 14 / stageScale : isSelected ? 10 / stageScale : 0}
-                shadowOpacity={isMultiSelected ? 0.7 : isSelected ? 0.5 : 0}
+                shadowColor={isMultiSelected ? '#f59e0b' : isSelected ? '#fbbf24' : undefined}
+                shadowBlur={isMultiSelected ? 14 / stageScale : isSelected ? 18 / stageScale : 0}
+                shadowOpacity={isMultiSelected ? 0.7 : isSelected ? 0.85 : 0}
                 onDblClick={(e) => {
                   e.cancelBubble = true;
                   const stage = stageRef.current;
@@ -1042,37 +1085,102 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     e.cancelBubble = true;
                     const newPoints = [...m.points];
                     newPoints[i] = { x: e.target.x(), y: e.target.y() };
-                    
+
                     // Reset the circle's position so it doesn't double-apply the offset
                     e.target.x(p.x);
                     e.target.y(p.y);
-                    
+
                     setDraggingPoint(null);
                     onUpdateMeasurement(m.id, { points: newPoints });
                   }}
                   hitStrokeWidth={10 / stageScale}
                 />
               ))}
-            </>
+              {/* Text label is anchored to the primary segment so it tracks
+                  the segment's drag transform. */}
+              {text && (
+                <Group x={centerX} y={centerY} listening={false}>
+                  <Text
+                    text={text}
+                    fontSize={14 / stageScale}
+                    fill="#fff"
+                    padding={4 / stageScale}
+                    align="center"
+                    offsetY={10 / stageScale}
+                  />
+                  <Text
+                    text={text}
+                    fontSize={14 / stageScale}
+                    fill="#000"
+                    padding={4 / stageScale}
+                    align="center"
+                    offsetY={10 / stageScale}
+                    stroke="#fff"
+                    strokeWidth={2 / stageScale}
+                    fillAfterStrokeEnabled
+                  />
+                </Group>
+              )}
+            </Group>
           )}
           {(m.segments ?? []).map((seg, segIdx) => {
-            const segDisplayPts = expandArcPoints(seg.points, seg.arcMidIndices);
+            // Resolve the segment's points with any in-progress vertex drag
+            // applied so the line tracks the dragged vertex.
+            const segPts = seg.points.map((p, pi) => {
+              if (draggingPoint && draggingPoint.mId === m.id && draggingPoint.segIdx === segIdx && draggingPoint.idx === pi) {
+                return { x: draggingPoint.x, y: draggingPoint.y };
+              }
+              return { x: p.x, y: p.y };
+            });
+            const segDisplayPts = expandArcPoints(segPts, seg.arcMidIndices);
             const segFlat = segDisplayPts.flatMap(p => [p.x, p.y]);
             return (
-              <React.Fragment key={`extra-seg-${segIdx}`}>
+              <Group
+                key={`extra-seg-${segIdx}`}
+                draggable={currentTool === 'pan' && !isMiddleMouseDown}
+                onDragStart={segmentDragStart}
+                onDragMove={segmentDragMove}
+                onDragEnd={(e) => {
+                  e.cancelBubble = true;
+                  const dx = e.target.x();
+                  const dy = e.target.y();
+                  e.target.x(0);
+                  e.target.y(0);
+                  const newSegments = (m.segments ?? []).map((s, i) =>
+                    i === segIdx
+                      ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
+                      : s
+                  );
+                  onUpdateMeasurement(m.id, { segments: newSegments });
+                }}
+              >
+                {isSelected && (
+                  <Line
+                    points={segFlat}
+                    stroke="#fbbf24"
+                    strokeWidth={14 / stageScale}
+                    opacity={0.55}
+                    lineJoin="round"
+                    lineCap="round"
+                    closed={m.type === 'area'}
+                    dash={[14 / stageScale, 8 / stageScale]}
+                    listening={false}
+                  />
+                )}
                 <Line
                   points={segFlat}
                   stroke={m.color}
                   strokeWidth={isSelected ? 8 / stageScale : 5 / stageScale}
+                  hitStrokeWidth={20 / stageScale}
                   lineJoin="round"
                   lineCap="round"
                   closed={m.type === 'area'}
                   fill={m.type === 'area' ? `${m.color}${isSelected ? '60' : '40'}` : undefined}
-                  shadowColor={isSelected ? m.color : undefined}
-                  shadowBlur={isSelected ? 10 / stageScale : 0}
-                  shadowOpacity={isSelected ? 0.5 : 0}
+                  shadowColor={isSelected ? '#fbbf24' : undefined}
+                  shadowBlur={isSelected ? 18 / stageScale : 0}
+                  shadowOpacity={isSelected ? 0.85 : 0}
                 />
-                {seg.points.map((p, pi) => (
+                {segPts.map((p, pi) => (
                   <Circle
                     key={pi}
                     x={p.x}
@@ -1081,34 +1189,43 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     fill={m.color}
                     stroke={isSelected ? '#fff' : undefined}
                     strokeWidth={isSelected ? 2 / stageScale : 0}
+                    draggable={currentTool === 'pan' && !isMiddleMouseDown}
+                    onDragStart={(e) => {
+                      if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
+                        e.target.stopDrag();
+                        return;
+                      }
+                      e.cancelBubble = true;
+                      setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: p.x, y: p.y });
+                    }}
+                    onDragMove={(e) => {
+                      e.cancelBubble = true;
+                      setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: e.target.x(), y: e.target.y() });
+                    }}
+                    onDragEnd={(e) => {
+                      e.cancelBubble = true;
+                      const newX = e.target.x();
+                      const newY = e.target.y();
+                      const newSegments = (m.segments ?? []).map((s, i) => {
+                        if (i !== segIdx) return s;
+                        const newPts = [...s.points];
+                        newPts[pi] = { x: newX, y: newY };
+                        return { ...s, points: newPts };
+                      });
+
+                      // Reset the circle's position so it doesn't double-apply the offset
+                      e.target.x(p.x);
+                      e.target.y(p.y);
+
+                      setDraggingPoint(null);
+                      onUpdateMeasurement(m.id, { segments: newSegments });
+                    }}
+                    hitStrokeWidth={10 / stageScale}
                   />
                 ))}
-              </React.Fragment>
+              </Group>
             );
           })}
-          {text && m.type !== 'count' && (
-            <Group x={centerX} y={centerY}>
-              <Text
-                text={text}
-                fontSize={14 / stageScale}
-                fill="#fff"
-                padding={4 / stageScale}
-                align="center"
-                offsetY={10 / stageScale}
-              />
-              <Text
-                text={text}
-                fontSize={14 / stageScale}
-                fill="#000"
-                padding={4 / stageScale}
-                align="center"
-                offsetY={10 / stageScale}
-                stroke="#fff"
-                strokeWidth={2 / stageScale}
-                fillAfterStrokeEnabled
-              />
-            </Group>
-          )}
         </Group>
       );
     });
