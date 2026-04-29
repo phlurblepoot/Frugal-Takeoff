@@ -740,6 +740,19 @@ const CanvasViewInner: React.FC = () => {
     }
   };
 
+  // Selecting a measurement keeps the selected takeoff in sync with the
+  // takeoff the measurement belongs to (or clears it if the measurement is
+  // ungrouped). New segments drawn after this will append to the measurement
+  // and any new measurement created will inherit the synced takeoff/color.
+  const selectMeasurement = (m: Measurement) => {
+    setSelectedMeasurementId(m.id);
+    setSelectedTakeoffId(m.takeoffId);
+    if (m.takeoffId) {
+      const takeoff = project?.takeoffs.find(t => t.id === m.takeoffId);
+      if (takeoff) setSelectedColor(takeoff.color);
+    }
+  };
+
   const openNewMeasurementModal = (takeoffId: string) => {
     const takeoff = project?.takeoffs.find(t => t.id === takeoffId);
     if (!takeoff) return;
@@ -1824,7 +1837,15 @@ const CanvasViewInner: React.FC = () => {
             onDeleteMeasurement={deleteMeasurement}
             onSetScale={handleSetScale}
             selectedMeasurementId={selectedMeasurementId}
-            onSelectMeasurement={setSelectedMeasurementId}
+            onSelectMeasurement={(id) => {
+              if (id === null) {
+                setSelectedMeasurementId(null);
+                return;
+              }
+              const m = page.measurements.find(mm => mm.id === id);
+              if (m) selectMeasurement(m);
+              else setSelectedMeasurementId(id);
+            }}
             resumeMeasurement={resumeMeasurement}
             onMeasurementResumed={() => setResumeMeasurement(null)}
             onCancel={() => {
@@ -2187,7 +2208,7 @@ const CanvasViewInner: React.FC = () => {
                               takeoffType={takeoff.type}
                               onDelete={() => deleteMeasurement(m.id, p.id)}
                               selected={selectedMeasurementId === m.id}
-                              onSelect={() => setSelectedMeasurementId(m.id)}
+                              onSelect={() => selectMeasurement(m)}
                               onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
                               onEditHeights={() => setHeightsModalMeasurementId(m.id)}
                               takeoff={takeoff}
@@ -2281,7 +2302,7 @@ const CanvasViewInner: React.FC = () => {
                           takeoffType={undefined}
                           onDelete={() => deleteMeasurement(m.id, p.id)}
                           selected={selectedMeasurementId === m.id}
-                          onSelect={() => setSelectedMeasurementId(m.id)}
+                          onSelect={() => selectMeasurement(m)}
                           onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
                           onEditHeights={() => setHeightsModalMeasurementId(m.id)}
                           pageName={showCurrentPageOnly ? undefined : p.name}

@@ -393,8 +393,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         return;
       }
     } else {
-      // Clicked on background, deselect if not drawing
-      if (activePoints.length === 0) {
+      // Clicked on background. Only deselect for non-drawing tools — drawing
+      // a new segment must keep the selected measurement so the segment is
+      // appended to it. (Drawing tools enter this branch for the very first
+      // click of a segment, where activePoints is still empty.)
+      const isDrawingTool = currentTool === 'length' || currentTool === 'area';
+      if (activePoints.length === 0 && !isDrawingTool) {
         if (!e.evt.ctrlKey && !e.evt.metaKey && !isMultiSelectMode) {
           onSelectMeasurement(null);
           onClearMultiSelect?.();
