@@ -16,6 +16,20 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0',
+    date: 'May 4, 2026',
+    changes: [
+      'Measurements: renaming a measurement from the sidebar while viewing a different page no longer drags the highlight to the current page — the annotation stays put and only the name changes',
+      'Drawing tools: length / area / count are now disabled when no measurement or takeoff is selected, and locked to match the type of the selected item so you cannot accidentally start a different kind of measurement; selecting a measurement automatically picks the right tool',
+      'Drawing tools: the toolbar now follows the selected measurement\'s own type rather than its takeoff\'s, so a length measurement living inside an area takeoff correctly locks to the line tool',
+      'Canvas: pressing Backspace while drawing now removes the last point instead of deleting the whole selected measurement; Delete still removes the selection as before',
+      'Canvas: clicking a single segment on a multi-segment measurement now selects just that segment; clicking the measurement in the sidebar still selects the whole thing. Pressing P resumes the specific segment that\'s highlighted, and finalising rewrites that segment in place',
+      'Canvas: selecting a segment by clicking it does not change the active tool — only sidebar selection switches the tool, since that signals an intent to draw',
+      'Sidebar: a new chevron button at the top of the takeoff list collapses or expands every takeoff at once',
+      'Sidebar: when a measurement is selected (from canvas or sidebar), its containing takeoff auto-expands and the row scrolls into view so you never lose track of where the selection lives',
+    ],
+  },
+  {
     version: '0.9.9',
     date: 'April 29, 2026',
     changes: [
