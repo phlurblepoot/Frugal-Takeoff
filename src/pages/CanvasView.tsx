@@ -787,6 +787,7 @@ const CanvasViewInner: React.FC = () => {
   };
 
   // Canvas-click selection: highlight a single segment within a measurement.
+  // Does not change the active tool — the user is inspecting/picking, not drawing.
   const selectMeasurementSegment = (measurementId: string, segIdx: number) => {
     const m = project?.pages.flatMap(p => p.measurements).find(mm => mm.id === measurementId);
     if (!m) return;
@@ -799,7 +800,6 @@ const CanvasViewInner: React.FC = () => {
     } else {
       setSelectedColor(m.color);
     }
-    if (m.type !== 'scale') setCurrentTool(m.type as Tool);
   };
 
   const openNewMeasurementModal = (takeoffId: string) => {
