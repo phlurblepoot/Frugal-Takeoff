@@ -1129,7 +1129,9 @@ const CanvasViewInner: React.FC = () => {
   const selectedMeasurement = selectedMeasurementId
     ? project.pages.flatMap(p => p.measurements).find(m => m.id === selectedMeasurementId) ?? null
     : null;
-  const activeType = activeTakeoff?.type ?? selectedMeasurement?.type ?? null;
+  // The measurement's own type wins — a length measurement inside an area takeoff
+  // should still lock the tool to length.
+  const activeType = selectedMeasurement?.type ?? activeTakeoff?.type ?? null;
   const hasNoSelection = !selectedTakeoffId && !selectedMeasurementId;
 
   return (
