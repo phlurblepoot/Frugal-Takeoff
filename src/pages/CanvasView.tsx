@@ -816,7 +816,8 @@ const CanvasViewInner: React.FC = () => {
     
     if (!sourcePageId || !existingMeasurement) return;
 
-    const destinationPageId = page.id;
+    // If targetPageId was explicitly provided, keep the measurement on that page (rename in place).
+    const destinationPageId = targetPageId ?? page.id;
     const isMoving = sourcePageId !== destinationPageId;
 
     if (!isMoving) {
@@ -827,7 +828,11 @@ const CanvasViewInner: React.FC = () => {
       pushToHistory({ type: 'update', measurementId: id, before, after: updates });
     }
 
-    const updatedMeasurement = { ...existingMeasurement, ...updates, planSetId: page.planSetId };
+    const updatedMeasurement = {
+      ...existingMeasurement,
+      ...updates,
+      planSetId: destinationPageId === page.id ? page.planSetId : existingMeasurement.planSetId,
+    };
 
     const updatedProject = {
       ...project,
