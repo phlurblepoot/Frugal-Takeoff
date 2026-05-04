@@ -1041,6 +1041,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
+                // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
+                if (e.target !== e.currentTarget) return;
                 e.cancelBubble = true;
                 const dx = e.target.x();
                 const dy = e.target.y();
@@ -1185,6 +1187,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
+                  // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
+                  if (e.target !== e.currentTarget) return;
                   e.cancelBubble = true;
                   const dx = e.target.x();
                   const dy = e.target.y();
