@@ -1242,10 +1242,25 @@ async function startServer() {
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
-    socket.on("join-page", ({ pageId, pageName, name, color }) => {
-      users[socket.id] = { id: socket.id, name, pageId, pageName: pageName || '', cursor: null, color };
+    socket.on("join-page", ({ pageId, pageName, name, userId, color }) => {
+      // If this socket already had a different page, leave it so we don't
+      // accidentally fan out room messages to stale rooms.
+      const previous = users[socket.id];
+      if (previous && previous.pageId && previous.pageId !== pageId) {
+        socket.leave(previous.pageId);
+      }
+      users[socket.id] = {
+        id: socket.id,
+        userId: userId || undefined,
+        name,
+        pageId,
+        pageName: pageName || '',
+        cursor: null,
+        color,
+        lastActive: Date.now(),
+      };
       socket.join(pageId);
-      
+
       // Notify others in the room
       const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
       io.to(pageId).emit("room-users", roomUsers);
@@ -1258,6 +1273,7 @@ async function startServer() {
       const user = users[socket.id];
       if (user) {
         user.cursor = { x, y };
+        user.lastActive = Date.now();
         socket.to(user.pageId).emit("user-cursor", { id: socket.id, cursor: { x, y } });
       }
     });

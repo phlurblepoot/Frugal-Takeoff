@@ -960,6 +960,32 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       };
       const segmentDragMove = (e: any) => { e.cancelBubble = true; };
 
+      // Double-click on a segment line inserts a new vertex at the click,
+      // ordered between the surrounding vertices.
+      const insertVertexAtClick = (segPts: Point[]): Point[] | null => {
+        const stage = stageRef.current;
+        const pos = getRelativePointerPosition(stage.getLayers()[0]);
+        if (!pos || segPts.length < 2) return null;
+        const isArea = m.type === 'area';
+        const pairs: [Point, Point][] = isArea
+          ? segPts.map((p, i) => [p, segPts[(i + 1) % segPts.length]] as [Point, Point])
+          : segPts.slice(0, -1).map((p, i) => [p, segPts[i + 1]] as [Point, Point]);
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        pairs.forEach(([a, b], i) => {
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const lenSq = dx * dx + dy * dy;
+          let t = lenSq > 0 ? ((pos.x - a.x) * dx + (pos.y - a.y) * dy) / lenSq : 0;
+          t = Math.max(0, Math.min(1, t));
+          const cx = a.x + t * dx, cy = a.y + t * dy;
+          const d = Math.hypot(pos.x - cx, pos.y - cy);
+          if (d < bestDist) { bestDist = d; bestIdx = i; }
+        });
+        const newPoints = [...segPts];
+        newPoints.splice(bestIdx + 1, 0, pos);
+        return newPoints;
+      };
+
       return (
         <Group
           key={m.id}
@@ -1041,6 +1067,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
+                // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
+                if (e.target !== e.currentTarget) return;
                 e.cancelBubble = true;
                 const dx = e.target.x();
                 const dy = e.target.y();
@@ -1077,28 +1105,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 shadowOpacity={isMultiSelected ? 0.7 : isPrimarySelected ? 0.85 : 0}
                 onDblClick={(e) => {
                   e.cancelBubble = true;
-                  const stage = stageRef.current;
-                  const pos = getRelativePointerPosition(stage.getLayers()[0]);
-                  if (!pos) return;
-                  // Find which segment is closest to the click
-                  const segs = m.type === 'area'
-                    ? [...m.points.map((_, i) => i), 0].map((_, i, arr) => i < arr.length - 1 ? [m.points[arr[i]], m.points[arr[i+1]]] : null).filter(Boolean) as [Point, Point][]
-                    : m.points.slice(0, -1).map((p, i) => [p, m.points[i + 1]] as [Point, Point]);
-                  let bestIdx = 0;
-                  let bestDist = Infinity;
-                  segs.forEach(([a, b], i) => {
-                    const dx = b.x - a.x, dy = b.y - a.y;
-                    const lenSq = dx * dx + dy * dy;
-                    let t = lenSq > 0 ? ((pos.x - a.x) * dx + (pos.y - a.y) * dy) / lenSq : 0;
-                    t = Math.max(0, Math.min(1, t));
-                    const cx = a.x + t * dx, cy = a.y + t * dy;
-                    const d = Math.hypot(pos.x - cx, pos.y - cy);
-                    if (d < bestDist) { bestDist = d; bestIdx = i; }
-                  });
-                  const insertAfter = m.type === 'area' && bestIdx === segs.length - 1 ? m.points.length - 1 : bestIdx;
-                  const newPoints = [...m.points];
-                  newPoints.splice(insertAfter + 1, 0, pos);
-                  onUpdateMeasurement(m.id, { points: newPoints });
+                  const newPoints = insertVertexAtClick(m.points);
+                  if (newPoints) onUpdateMeasurement(m.id, { points: newPoints });
+                }}
+                onDblTap={(e) => {
+                  e.cancelBubble = true;
+                  const newPoints = insertVertexAtClick(m.points);
+                  if (newPoints) onUpdateMeasurement(m.id, { points: newPoints });
                 }}
               />
               {points.map((p, i) => (
@@ -1185,6 +1198,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
+                  // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
+                  if (e.target !== e.currentTarget) return;
                   e.cancelBubble = true;
                   const dx = e.target.x();
                   const dy = e.target.y();
@@ -1223,6 +1238,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   shadowColor={isSegmentSelected(segIdx) ? '#fbbf24' : undefined}
                   shadowBlur={isSegmentSelected(segIdx) ? 18 / stageScale : 0}
                   shadowOpacity={isSegmentSelected(segIdx) ? 0.85 : 0}
+                  onDblClick={(e) => {
+                    e.cancelBubble = true;
+                    const newPts = insertVertexAtClick(seg.points);
+                    if (!newPts) return;
+                    const newSegments = (m.segments ?? []).map((s, i) =>
+                      i === segIdx ? { ...s, points: newPts } : s
+                    );
+                    onUpdateMeasurement(m.id, { segments: newSegments });
+                  }}
+                  onDblTap={(e) => {
+                    e.cancelBubble = true;
+                    const newPts = insertVertexAtClick(seg.points);
+                    if (!newPts) return;
+                    const newSegments = (m.segments ?? []).map((s, i) =>
+                      i === segIdx ? { ...s, points: newPts } : s
+                    );
+                    onUpdateMeasurement(m.id, { segments: newSegments });
+                  }}
                 />
                 {segPts.map((p, pi) => (
                   <Circle
@@ -1744,10 +1777,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             {renderLegend()}
           </Layer>
           <Layer>
-            {/* Remote Cursors */}
-            {remoteUsers
-              .filter(u => u.id !== currentUserId && u.cursor)
-              .map(u => (
+            {/* Remote Cursors. Hide anonymous sessions, and when one user has
+                multiple sockets here only show the cursor for whichever
+                session is most recently active. */}
+            {(() => {
+              const visible = remoteUsers
+                .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId);
+              const byUser: Record<string, any> = {};
+              visible.forEach((u: any) => {
+                const existing = byUser[u.userId];
+                if (!existing || (u.lastActive ?? 0) > (existing.lastActive ?? 0)) {
+                  byUser[u.userId] = u;
+                }
+              });
+              return Object.values(byUser);
+            })()
+              .map((u: any) => (
                 <Group key={u.id} x={u.cursor!.x} y={u.cursor!.y}>
                   <Line
                     points={[0, 0, 10, 10, 4, 10, 0, 14]}

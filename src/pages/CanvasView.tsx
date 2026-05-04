@@ -1653,7 +1653,10 @@ const CanvasViewInner: React.FC = () => {
             </div>
           )}
 
-          {globalUsers.length > 1 && (
+          {(() => {
+            const otherUsers = collapseSessions(globalUsers.filter(u => u.id !== socket?.id));
+            if (otherUsers.length === 0) return null;
+            return (
             <div className="mt-4 pt-4 border-t border-slate-100">
               <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Collaboration</h3>
               <div className="space-y-3">
@@ -1675,7 +1678,7 @@ const CanvasViewInner: React.FC = () => {
                 <div className="pt-2">
                   <p className="text-xs text-slate-500 mb-2">Other Users:</p>
                   <div className="space-y-2">
-                    {withDisplayNames(globalUsers.filter(u => u.id !== socket?.id)).map(user => (
+                    {otherUsers.map(user => (
                       <div key={user.id} className="flex items-center justify-between gap-2 text-sm">
                         <div className="flex items-center gap-2 min-w-0">
                           <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: user.color }}></div>
@@ -1703,7 +1706,8 @@ const CanvasViewInner: React.FC = () => {
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
         </div>
       </div>
       <button
@@ -2878,16 +2882,23 @@ const CanvasViewInner: React.FC = () => {
   );
 };
 
-interface CollabUser { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; }
+interface CollabUser { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number; }
 
-function withDisplayNames(users: CollabUser[]): (CollabUser & { displayName: string })[] {
-  const counts: Record<string, number> = {};
-  users.forEach(u => { counts[u.name] = (counts[u.name] || 0) + 1; });
-  const indexes: Record<string, number> = {};
-  return users.map(u => {
-    if (counts[u.name] <= 1) return { ...u, displayName: u.name };
-    indexes[u.name] = (indexes[u.name] || 0) + 1;
-    return { ...u, displayName: `${u.name} (${indexes[u.name]})` };
+// Hide anonymous (not-logged-in) sessions, then collapse all sessions belonging
+// to the same authenticated user into a single entry. The collapsed entry's
+// page/cursor come from the most recently active session.
+function collapseSessions(users: CollabUser[]): (CollabUser & { displayName: string })[] {
+  const authed = users.filter(u => u.userId);
+  const byUser: Record<string, CollabUser[]> = {};
+  authed.forEach(u => {
+    const key = u.userId!;
+    (byUser[key] = byUser[key] || []).push(u);
+  });
+  return Object.values(byUser).map(sessions => {
+    const active = sessions.reduce((best, s) =>
+      (s.lastActive ?? 0) > (best.lastActive ?? 0) ? s : best
+    , sessions[0]);
+    return { ...active, displayName: active.name };
   });
 }
 

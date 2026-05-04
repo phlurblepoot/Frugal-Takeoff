@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'reac
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
@@ -221,12 +221,21 @@ async function renderPageToDataUrl(
       ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
       ctx.stroke();
     } else {
-      ctx.beginPath();
-      ctx.moveTo(m.points[0].x, m.points[0].y);
-      for (let j = 1; j < m.points.length; j++) ctx.lineTo(m.points[j].x, m.points[j].y);
-      if (m.type === 'area') { ctx.closePath(); ctx.fill(); }
-      ctx.stroke();
-      // Label
+      // Draw the primary segment plus any additional segments, with arcs expanded.
+      const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
+        { points: m.points, arcMidIndices: m.arcMidIndices },
+        ...(m.segments ?? []),
+      ];
+      allSegs.forEach(seg => {
+        if (!seg.points || seg.points.length === 0) return;
+        const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
+        ctx.beginPath();
+        ctx.moveTo(dispPts[0].x, dispPts[0].y);
+        for (let j = 1; j < dispPts.length; j++) ctx.lineTo(dispPts[j].x, dispPts[j].y);
+        if (m.type === 'area') { ctx.closePath(); ctx.fill(); }
+        ctx.stroke();
+      });
+      // Label is anchored to the primary segment.
       let centerX = 0, centerY = 0;
       if (m.type === 'length') {
         const midIdx = Math.floor((m.points.length - 1) / 2);

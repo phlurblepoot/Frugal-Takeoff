@@ -5,11 +5,18 @@ import { Measurement } from '../types';
 
 interface User {
   id: string;
+  // The authenticated user's id from the database. Multiple sockets/sessions
+  // for the same logged-in user share this. Undefined for anonymous sessions.
+  userId?: string;
   name: string;
   pageId: string;
   pageName: string;
   cursor: { x: number; y: number } | null;
   color: string;
+  // Server-set timestamp of the last time this socket did something (cursor
+  // move, page change, etc.). Used to pick the "active" session when one user
+  // has multiple tabs open.
+  lastActive?: number;
 }
 
 interface CollaborationContextType {
@@ -38,7 +45,8 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
   const currentUserNameRef = useRef<string>('');
-  
+  const currentUserIdRef = useRef<string | undefined>(undefined);
+
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -50,18 +58,20 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     const user = storedUser ? JSON.parse(storedUser) : null;
     const userName = user?.username || `User${Math.floor(Math.random() * 1000)}`;
     currentUserNameRef.current = userName;
-    
+    currentUserIdRef.current = user?.id ? String(user.id) : undefined;
+
     const storedColor = localStorage.getItem('userColor');
     const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
     const userColor = storedColor || colors[Math.floor(Math.random() * colors.length)];
     if (!storedColor) localStorage.setItem('userColor', userColor);
 
     // Join with current location
-    newSocket.emit('join-page', { 
-      pageId: location.pathname, 
+    newSocket.emit('join-page', {
+      pageId: location.pathname,
       pageName: currentPageName,
-      name: userName, 
-      color: userColor 
+      name: userName,
+      userId: currentUserIdRef.current,
+      color: userColor,
     });
 
     newSocket.on('room-users', (roomUsers: User[]) => {
@@ -73,7 +83,9 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     });
 
     newSocket.on('user-cursor', ({ id, cursor }: { id: string; cursor: { x: number; y: number } }) => {
-      setUsers(prev => prev.map(u => u.id === id ? { ...u, cursor } : u));
+      const now = Date.now();
+      setUsers(prev => prev.map(u => u.id === id ? { ...u, cursor, lastActive: now } : u));
+      setGlobalUsers(prev => prev.map(u => u.id === id ? { ...u, cursor, lastActive: now } : u));
     });
 
     newSocket.on('measurement-sync', (data) => {
@@ -99,11 +111,12 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   // Update location when URL changes
   useEffect(() => {
     if (socket) {
-      socket.emit('join-page', { 
-        pageId: location.pathname, 
+      socket.emit('join-page', {
+        pageId: location.pathname,
         pageName: currentPageName,
         name: currentUserNameRef.current,
-        color: localStorage.getItem('userColor') || '#3b82f6'
+        userId: currentUserIdRef.current,
+        color: localStorage.getItem('userColor') || '#3b82f6',
       });
     }
   }, [location.pathname, socket, currentPageName]);
