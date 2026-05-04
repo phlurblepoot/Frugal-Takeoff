@@ -16,6 +16,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.1',
+    date: 'May 4, 2026',
+    changes: [
+      'Printouts: every segment of a multi-segment measurement is now rendered (and arcs are expanded), instead of only the first segment',
+      'Canvas: dragging a vertex no longer drags the whole segment along with it — the parent group ignored its own children\'s drag-end events',
+      'Canvas: double-clicking a segment line inserts a new vertex at the cursor, ordered between the surrounding pins; works on both primary and additional segments, and on touch via double-tap',
+      'Collaboration: the user list now shows one entry per logged-in user even when they have multiple tabs open — the cursor and page come from whichever session is most recently active. Anonymous (not logged in) sessions are hidden from the list and from the canvas cursor layer',
+    ],
+  },
+  {
     version: '1.0',
     date: 'May 4, 2026',
     changes: [
