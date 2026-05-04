@@ -22,7 +22,9 @@ interface PdfCanvasProps {
   onDeleteMeasurement: (id: string) => void;
   onSetScale: (pixelDistance: number) => void;
   selectedMeasurementId: string | null;
+  selectedSegmentIdx?: number | null;
   onSelectMeasurement: (id: string | null) => void;
+  onSelectSegment?: (id: string, segIdx: number) => void;
   onCancel?: () => void;
   isMultiRegion?: boolean;
   scaleRegions?: ScaleRegion[];
@@ -36,6 +38,7 @@ interface PdfCanvasProps {
   onCursorMove?: (x: number, y: number) => void;
   currentUserId?: string;
   resumeMeasurement?: Measurement | null;
+  resumeSegmentIdx?: number;
   onMeasurementResumed?: () => void;
   showLegend?: boolean;
   showLegendTotals?: boolean;
@@ -72,7 +75,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onDeleteMeasurement,
   onSetScale,
   selectedMeasurementId,
+  selectedSegmentIdx = null,
   onSelectMeasurement,
+  onSelectSegment,
   onCancel,
   isMultiRegion = false,
   scaleRegions = [],
@@ -86,6 +91,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onCursorMove,
   currentUserId,
   resumeMeasurement,
+  resumeSegmentIdx = -1,
   onMeasurementResumed,
   showLegend = false,
   showLegendTotals = true,
@@ -140,6 +146,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; measurementId: string | null } | null>(null);
 
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
+  // Which segment is being resumed: -1 = primary (m.points), 0+ = m.segments[i].
+  const [resumingSegmentIdx, setResumingSegmentIdx] = useState<number>(-1);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
@@ -150,11 +158,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       setActivePoints(resumeMeasurement.points);
       setActiveArcMidIndices(resumeMeasurement.arcMidIndices || []);
       setResumeMeasurementId(resumeMeasurement.id);
+      setResumingSegmentIdx(resumeSegmentIdx);
       setArcMode('inactive');
       setArcMidPoint(null);
       onMeasurementResumed?.();
     }
-  }, [resumeMeasurement, onMeasurementResumed]);
+  }, [resumeMeasurement, resumeSegmentIdx, onMeasurementResumed]);
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);
@@ -678,6 +687,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     setArcMode('inactive');
     setArcMidPoint(null);
     setActiveArcMidIndices([]);
+    setResumingSegmentIdx(-1);
     setResumeMeasurementId(null);
     onCancel?.();
   };
@@ -703,17 +713,26 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
     if (resumeMeasurementId) {
       const existing = measurements.find(m => m.id === resumeMeasurementId);
-      const updated: Measurement = {
-        id: resumeMeasurementId,
-        type: drawingType,
-        points: segPoints,
-        color: existing?.color ?? (drawingType === 'length' ? '#3b82f6' : '#10b981'),
-        name: existing?.name ?? `${drawingType === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
-        regionId,
-        arcMidIndices: segArcMids,
-      };
-      onUpdateMeasurement(resumeMeasurementId, updated);
+      if (resumingSegmentIdx >= 0 && existing) {
+        // Resuming an additional segment — rewrite that segment in place.
+        const newSegments = (existing.segments ?? []).map((s, i) =>
+          i === resumingSegmentIdx ? { points: segPoints, arcMidIndices: segArcMids } : s
+        );
+        onUpdateMeasurement(resumeMeasurementId, { segments: newSegments });
+      } else {
+        const updated: Measurement = {
+          id: resumeMeasurementId,
+          type: drawingType,
+          points: segPoints,
+          color: existing?.color ?? (drawingType === 'length' ? '#3b82f6' : '#10b981'),
+          name: existing?.name ?? `${drawingType === 'length' ? 'Length' : 'Area'} ${measurements.length + 1}`,
+          regionId,
+          arcMidIndices: segArcMids,
+        };
+        onUpdateMeasurement(resumeMeasurementId, updated);
+      }
       setResumeMeasurementId(null);
+      setResumingSegmentIdx(-1);
     } else {
       const selected = selectedMeasurementId
         ? measurements.find(m => m.id === selectedMeasurementId)
@@ -909,8 +928,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
 
       const isSelected = selectedMeasurementId === m.id;
+      // null = whole measurement selected (highlight all segments)
+      // -1 = primary segment only; 0+ = that extra segment only
+      const isPrimarySelected = isSelected && (selectedSegmentIdx === null || selectedSegmentIdx === -1);
+      const isSegmentSelected = (segIdx: number) => isSelected && (selectedSegmentIdx === null || selectedSegmentIdx === segIdx);
       const isMultiSelected = multiSelectedIds?.has(m.id) ?? false;
       const isDrawingTool = currentTool === 'length' || currentTool === 'area' || currentTool === 'count';
+
+      // Per-segment click — falls through to whole-measurement select if no handler is wired.
+      const handleSegmentClick = (e: any, segIdx: number) => {
+        e.cancelBubble = true;
+        if (activePoints.length > 0) return;
+        if (e.evt?.ctrlKey || e.evt?.metaKey || isMultiSelectMode) {
+          onMultiSelectToggle?.(m.id, m.type);
+          return;
+        }
+        onClearMultiSelect?.();
+        if (onSelectSegment) onSelectSegment(m.id, segIdx);
+        else onSelectMeasurement(m.id);
+      };
 
       // Shared drag handlers used by each segment subgroup. Each subgroup is
       // independently draggable so multi-segment measurements move per segment
@@ -1002,6 +1038,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               draggable={currentTool === 'pan' && !isMiddleMouseDown}
               onDragStart={segmentDragStart}
               onDragMove={segmentDragMove}
+              onClick={(e) => handleSegmentClick(e, -1)}
+              onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
                 e.cancelBubble = true;
                 const dx = e.target.x();
@@ -1012,7 +1050,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onUpdateMeasurement(m.id, { points: newPoints });
               }}
             >
-              {isSelected && (
+              {isPrimarySelected && (
                 <Line
                   points={flatPoints}
                   stroke="#fbbf24"
@@ -1028,15 +1066,15 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               <Line
                 points={flatPoints}
                 stroke={isMultiSelected ? '#f59e0b' : m.color}
-                strokeWidth={isSelected ? 8 / stageScale : isMultiSelected ? 7 / stageScale : 5 / stageScale}
+                strokeWidth={isPrimarySelected ? 8 / stageScale : isMultiSelected ? 7 / stageScale : 5 / stageScale}
                 hitStrokeWidth={20 / stageScale}
                 lineJoin="round"
                 lineCap="round"
                 closed={m.type === 'area'}
-                fill={m.type === 'area' ? `${isMultiSelected ? '#f59e0b' : m.color}${isSelected ? '60' : isMultiSelected ? '50' : '40'}` : undefined}
-                shadowColor={isMultiSelected ? '#f59e0b' : isSelected ? '#fbbf24' : undefined}
-                shadowBlur={isMultiSelected ? 14 / stageScale : isSelected ? 18 / stageScale : 0}
-                shadowOpacity={isMultiSelected ? 0.7 : isSelected ? 0.85 : 0}
+                fill={m.type === 'area' ? `${isMultiSelected ? '#f59e0b' : m.color}${isPrimarySelected ? '60' : isMultiSelected ? '50' : '40'}` : undefined}
+                shadowColor={isMultiSelected ? '#f59e0b' : isPrimarySelected ? '#fbbf24' : undefined}
+                shadowBlur={isMultiSelected ? 14 / stageScale : isPrimarySelected ? 18 / stageScale : 0}
+                shadowOpacity={isMultiSelected ? 0.7 : isPrimarySelected ? 0.85 : 0}
                 onDblClick={(e) => {
                   e.cancelBubble = true;
                   const stage = stageRef.current;
@@ -1068,10 +1106,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   key={i}
                   x={p.x}
                   y={p.y}
-                  radius={isSelected ? 8 / stageScale : 6 / stageScale}
+                  radius={isPrimarySelected ? 8 / stageScale : 6 / stageScale}
                   fill={m.color}
-                  stroke={isSelected ? '#fff' : undefined}
-                  strokeWidth={isSelected ? 2 / stageScale : 0}
+                  stroke={isPrimarySelected ? '#fff' : undefined}
+                  strokeWidth={isPrimarySelected ? 2 / stageScale : 0}
                   draggable={currentTool === 'pan' && !isMiddleMouseDown}
                   onDragStart={(e) => {
                     if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
@@ -1144,6 +1182,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 draggable={currentTool === 'pan' && !isMiddleMouseDown}
                 onDragStart={segmentDragStart}
                 onDragMove={segmentDragMove}
+                onClick={(e) => handleSegmentClick(e, segIdx)}
+                onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
                   e.cancelBubble = true;
                   const dx = e.target.x();
@@ -1158,7 +1198,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   onUpdateMeasurement(m.id, { segments: newSegments });
                 }}
               >
-                {isSelected && (
+                {isSegmentSelected(segIdx) && (
                   <Line
                     points={segFlat}
                     stroke="#fbbf24"
@@ -1174,25 +1214,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 <Line
                   points={segFlat}
                   stroke={m.color}
-                  strokeWidth={isSelected ? 8 / stageScale : 5 / stageScale}
+                  strokeWidth={isSegmentSelected(segIdx) ? 8 / stageScale : 5 / stageScale}
                   hitStrokeWidth={20 / stageScale}
                   lineJoin="round"
                   lineCap="round"
                   closed={m.type === 'area'}
-                  fill={m.type === 'area' ? `${m.color}${isSelected ? '60' : '40'}` : undefined}
-                  shadowColor={isSelected ? '#fbbf24' : undefined}
-                  shadowBlur={isSelected ? 18 / stageScale : 0}
-                  shadowOpacity={isSelected ? 0.85 : 0}
+                  fill={m.type === 'area' ? `${m.color}${isSegmentSelected(segIdx) ? '60' : '40'}` : undefined}
+                  shadowColor={isSegmentSelected(segIdx) ? '#fbbf24' : undefined}
+                  shadowBlur={isSegmentSelected(segIdx) ? 18 / stageScale : 0}
+                  shadowOpacity={isSegmentSelected(segIdx) ? 0.85 : 0}
                 />
                 {segPts.map((p, pi) => (
                   <Circle
                     key={pi}
                     x={p.x}
                     y={p.y}
-                    radius={isSelected ? 8 / stageScale : 6 / stageScale}
+                    radius={isSegmentSelected(segIdx) ? 8 / stageScale : 6 / stageScale}
                     fill={m.color}
-                    stroke={isSelected ? '#fff' : undefined}
-                    strokeWidth={isSelected ? 2 / stageScale : 0}
+                    stroke={isSegmentSelected(segIdx) ? '#fff' : undefined}
+                    strokeWidth={isSegmentSelected(segIdx) ? 2 / stageScale : 0}
                     draggable={currentTool === 'pan' && !isMiddleMouseDown}
                     onDragStart={(e) => {
                       if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {

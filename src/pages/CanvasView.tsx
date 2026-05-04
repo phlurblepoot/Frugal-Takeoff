@@ -259,6 +259,10 @@ const CanvasViewInner: React.FC = () => {
   const [showPageJump, setShowPageJump] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [resumeMeasurement, setResumeMeasurement] = useState<Measurement | null>(null);
+  const [resumeSegmentIdx, setResumeSegmentIdx] = useState<number>(-1);
+  // Which segment of the selected measurement is highlighted on canvas.
+  // null = whole measurement (sidebar selection); -1 = primary segment; 0+ = m.segments[i].
+  const [selectedSegmentIdx, setSelectedSegmentIdx] = useState<number | null>(null);
   const [newMeasurementModal, setNewMeasurementModal] = useState<{ takeoffId: string } | null>(null);
   const [newMeasurementName, setNewMeasurementName] = useState('');
   const [newMeasurementType, setNewMeasurementType] = useState<'length' | 'area'>('area');
@@ -545,9 +549,23 @@ const CanvasViewInner: React.FC = () => {
       if ((e.key === 'p' || e.key === 'P') && selectedMeasurementId) {
         const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
         if (measurement && (measurement.type === 'length' || measurement.type === 'area')) {
-          setResumeMeasurement(measurement);
+          // Resume the specific segment that's highlighted on canvas. null/-1 = primary.
+          if (selectedSegmentIdx != null && selectedSegmentIdx >= 0) {
+            const seg = measurement.segments?.[selectedSegmentIdx];
+            if (seg) {
+              setResumeMeasurement({ ...measurement, points: seg.points, arcMidIndices: seg.arcMidIndices });
+              setResumeSegmentIdx(selectedSegmentIdx);
+            } else {
+              setResumeMeasurement(measurement);
+              setResumeSegmentIdx(-1);
+            }
+          } else {
+            setResumeMeasurement(measurement);
+            setResumeSegmentIdx(-1);
+          }
           setCurrentTool(measurement.type);
           setSelectedMeasurementId(null);
+          setSelectedSegmentIdx(null);
         }
       }
 
@@ -586,7 +604,7 @@ const CanvasViewInner: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeasurementId, page, project, history, redoStack, aggregatedMeasurements,
+  }, [selectedMeasurementId, selectedSegmentIdx, page, project, history, redoStack, aggregatedMeasurements,
       showShortcutsHelp, showScaleModal, showDeleteConfirm, showTakeoffModal,
       heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
       showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal]);
@@ -757,6 +775,23 @@ const CanvasViewInner: React.FC = () => {
   // and any new measurement created will inherit the synced takeoff/color.
   const selectMeasurement = (m: Measurement) => {
     setSelectedMeasurementId(m.id);
+    setSelectedSegmentIdx(null);
+    setSelectedTakeoffId(m.takeoffId);
+    if (m.takeoffId) {
+      const takeoff = project?.takeoffs.find(t => t.id === m.takeoffId);
+      if (takeoff) setSelectedColor(takeoff.color);
+    } else {
+      setSelectedColor(m.color);
+    }
+    if (m.type !== 'scale') setCurrentTool(m.type as Tool);
+  };
+
+  // Canvas-click selection: highlight a single segment within a measurement.
+  const selectMeasurementSegment = (measurementId: string, segIdx: number) => {
+    const m = project?.pages.flatMap(p => p.measurements).find(mm => mm.id === measurementId);
+    if (!m) return;
+    setSelectedMeasurementId(m.id);
+    setSelectedSegmentIdx(segIdx);
     setSelectedTakeoffId(m.takeoffId);
     if (m.takeoffId) {
       const takeoff = project?.takeoffs.find(t => t.id === m.takeoffId);
@@ -1848,19 +1883,24 @@ const CanvasViewInner: React.FC = () => {
             onDeleteMeasurement={deleteMeasurement}
             onSetScale={handleSetScale}
             selectedMeasurementId={selectedMeasurementId}
+            selectedSegmentIdx={selectedSegmentIdx}
             onSelectMeasurement={(id) => {
               if (id === null) {
                 setSelectedMeasurementId(null);
+                setSelectedSegmentIdx(null);
                 return;
               }
               const m = page.measurements.find(mm => mm.id === id);
               if (m) selectMeasurement(m);
-              else setSelectedMeasurementId(id);
+              else { setSelectedMeasurementId(id); setSelectedSegmentIdx(null); }
             }}
+            onSelectSegment={selectMeasurementSegment}
             resumeMeasurement={resumeMeasurement}
-            onMeasurementResumed={() => setResumeMeasurement(null)}
+            resumeSegmentIdx={resumeSegmentIdx}
+            onMeasurementResumed={() => { setResumeMeasurement(null); setResumeSegmentIdx(-1); }}
             onCancel={() => {
               setSelectedMeasurementId(null);
+              setSelectedSegmentIdx(null);
               setCurrentTool('pan');
               setCalibratingRegionId(null);
             }}
@@ -2752,7 +2792,7 @@ const CanvasViewInner: React.FC = () => {
                     ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'],
                     ['Delete', 'Delete selected measurement'],
                     ['Backspace (while drawing)', 'Remove last point'],
-                    ['P', 'Resume/extend selected measurement'],
+                    ['P', 'Resume/extend selected measurement (or segment)'],
                     ['Ctrl+C', 'Copy measurement'],
                     ['Ctrl+V', 'Paste measurement'],
                     ['← / →', 'Previous / next page'],
