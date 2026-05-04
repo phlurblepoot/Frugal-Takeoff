@@ -591,6 +591,13 @@ const CanvasViewInner: React.FC = () => {
       heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
       showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal]);
 
+  // When nothing is selected, drawing tools are disabled — reset to pan so the user isn't stuck.
+  useEffect(() => {
+    if (!selectedTakeoffId && !selectedMeasurementId && ['length', 'area', 'count'].includes(currentTool)) {
+      setCurrentTool('pan');
+    }
+  }, [selectedTakeoffId, selectedMeasurementId]);
+
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
     const proj = await getProject(pId);
@@ -717,12 +724,16 @@ const CanvasViewInner: React.FC = () => {
 
   const addMeasurement = (measurement: Measurement) => {
     if (!page) return;
-    
-    // Apply current takeoff and color
+
+    // Derive takeoff + color: prefer explicitly selected takeoff, fall back to selected measurement's takeoff
+    const effectiveTakeoffId = selectedTakeoffId
+      ?? (selectedMeasurement?.takeoffId);
+    const effectiveColor = selectedTakeoffId ? selectedColor : (selectedMeasurement?.color ?? selectedColor);
+
     const newMeasurement = {
       ...measurement,
-      takeoffId: selectedTakeoffId,
-      color: selectedColor,
+      takeoffId: effectiveTakeoffId,
+      color: effectiveColor,
       planSetId: page.planSetId,
     };
     
@@ -750,7 +761,10 @@ const CanvasViewInner: React.FC = () => {
     if (m.takeoffId) {
       const takeoff = project?.takeoffs.find(t => t.id === m.takeoffId);
       if (takeoff) setSelectedColor(takeoff.color);
+    } else {
+      setSelectedColor(m.color);
     }
+    if (m.type !== 'scale') setCurrentTool(m.type as Tool);
   };
 
   const openNewMeasurementModal = (takeoffId: string) => {
@@ -1078,14 +1092,10 @@ const CanvasViewInner: React.FC = () => {
 
   const activeTakeoff = project.takeoffs.find(t => t.id === selectedTakeoffId);
   const selectedMeasurement = selectedMeasurementId
-    ? project.pages.flatMap(p => p.measurements).find(m => m.id === selectedMeasurementId) || null
+    ? project.pages.flatMap(p => p.measurements).find(m => m.id === selectedMeasurementId) ?? null
     : null;
-  // Lock the drawing tool to the selected measurement's type so subsequent
-  // segments cannot mix lines and areas inside one measurement.
-  const lockedMeasurementType: 'length' | 'area' | null =
-    selectedMeasurement && (selectedMeasurement.type === 'length' || selectedMeasurement.type === 'area')
-      ? selectedMeasurement.type
-      : null;
+  const activeType = activeTakeoff?.type ?? selectedMeasurement?.type ?? null;
+  const hasNoSelection = !selectedTakeoffId && !selectedMeasurementId;
 
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-900 overflow-hidden font-sans relative">
@@ -1190,11 +1200,11 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('length')}
               icon={<Ruler size={18} />}
               label="Length"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'count' || lockedMeasurementType === 'area'}
+              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Length tools are disabled for count takeoffs.");
-                else if (lockedMeasurementType === 'area') setToolDisabledMessage("This measurement is an area — deselect it to start a line.");
+                else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
             />
             <ToolButton
@@ -1202,12 +1212,11 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('area')}
               icon={<Square size={18} />}
               label="Area"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count' || lockedMeasurementType === 'length'}
+              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Area tools are disabled for linear takeoffs.");
-                else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Area tools are disabled for count takeoffs.");
-                else if (lockedMeasurementType === 'length') setToolDisabledMessage("This measurement is a line — deselect it to start an area.");
+                else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
             />
             <ToolButton
@@ -1215,12 +1224,11 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('count')}
               icon={<Hash size={18} />}
               label="Count"
-              disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area' || lockedMeasurementType !== null}
+              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
               onDisabledClick={() => {
                 if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Count tools are disabled for linear takeoffs.");
-                else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
-                else if (lockedMeasurementType !== null) setToolDisabledMessage("Deselect the current measurement to use the count tool.");
+                else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
@@ -1741,11 +1749,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('length')}
                 icon={<Ruler size={20} />}
                 label="Length"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'count' || lockedMeasurementType === 'area'}
+                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                  else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Length tools are disabled for count takeoffs.");
-                  else if (lockedMeasurementType === 'area') setToolDisabledMessage("This measurement is an area — deselect it to start a line.");
+                  else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                  else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
               />
               <ToolButton
@@ -1753,12 +1761,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('area')}
                 icon={<Square size={20} />}
                 label="Area"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'count' || lockedMeasurementType === 'length'}
+                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                  else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Area tools are disabled for linear takeoffs.");
-                  else if (activeTakeoff?.type === 'count') setToolDisabledMessage("Area tools are disabled for count takeoffs.");
-                  else if (lockedMeasurementType === 'length') setToolDisabledMessage("This measurement is a line — deselect it to start an area.");
+                  else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                  else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
               />
               <ToolButton
@@ -1766,12 +1773,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('count')}
                 icon={<Hash size={20} />}
                 label="Count"
-                disabled={!page.scaleConfig || activeTakeoff?.type === 'length' || activeTakeoff?.type === 'area' || lockedMeasurementType !== null}
+                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
                 onDisabledClick={() => {
                   if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
-                  else if (activeTakeoff?.type === 'length') setToolDisabledMessage("Count tools are disabled for linear takeoffs.");
-                  else if (activeTakeoff?.type === 'area') setToolDisabledMessage("Count tools are disabled for area takeoffs.");
-                  else if (lockedMeasurementType !== null) setToolDisabledMessage("Deselect the current measurement to use the count tool.");
+                  else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
+                  else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
