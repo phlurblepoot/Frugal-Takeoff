@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -615,6 +615,22 @@ const CanvasViewInner: React.FC = () => {
       setCurrentTool('pan');
     }
   }, [selectedTakeoffId, selectedMeasurementId]);
+
+  // Expand the containing takeoff and scroll to the selected measurement in the sidebar.
+  useEffect(() => {
+    if (!selectedMeasurementId || !project) return;
+    const m = project.pages.flatMap(p => p.measurements).find(mm => mm.id === selectedMeasurementId);
+    if (!m) return;
+    if (m.takeoffId) {
+      setExpandedTakeoffs(prev => prev[m.takeoffId!] === true ? prev : { ...prev, [m.takeoffId!]: true });
+    }
+    // Wait for the row to render after the expand state updates.
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-measurement-id="${selectedMeasurementId}"]`) as HTMLElement | null;
+      el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [selectedMeasurementId, project]);
 
   const loadData = async (pId: string, pgId: string) => {
     setIsLoading(true);
@@ -2029,9 +2045,26 @@ const CanvasViewInner: React.FC = () => {
                 <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Takeoffs & Measurements</h2>
               </div>
               <div className="flex items-center gap-3">
+                {(() => {
+                  const anyExpanded = project.takeoffs.some(t => expandedTakeoffs[t.id] !== false);
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next: Record<string, boolean> = {};
+                        project.takeoffs.forEach(t => { next[t.id] = !anyExpanded; });
+                        setExpandedTakeoffs(next);
+                      }}
+                      title={anyExpanded ? 'Collapse all takeoffs' : 'Expand all takeoffs'}
+                      className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors"
+                    >
+                      {anyExpanded ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
+                    </button>
+                  );
+                })()}
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
-                  <input 
-                    type="checkbox" 
+                  <input
+                    type="checkbox"
                     checked={showCurrentPageOnly}
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
                     className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
@@ -2974,6 +3007,7 @@ function MeasurementItem({
   return (
     <div
       ref={rowRef}
+      data-measurement-id={measurement.id}
       className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
       onClick={onSelect}
       draggable
