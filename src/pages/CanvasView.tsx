@@ -538,7 +538,7 @@ const CanvasViewInner: React.FC = () => {
         return;
       }
 
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMeasurementId) {
+      if (e.key === 'Delete' && selectedMeasurementId) {
         deleteMeasurement(selectedMeasurementId);
       }
 
@@ -2750,7 +2750,8 @@ const CanvasViewInner: React.FC = () => {
                     ['Escape', 'Cancel / close modal / deselect'],
                     ['Ctrl+Z', 'Undo'],
                     ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'],
-                    ['Delete / Backspace', 'Delete selected measurement'],
+                    ['Delete', 'Delete selected measurement'],
+                    ['Backspace (while drawing)', 'Remove last point'],
                     ['P', 'Resume/extend selected measurement'],
                     ['Ctrl+C', 'Copy measurement'],
                     ['Ctrl+V', 'Paste measurement'],
