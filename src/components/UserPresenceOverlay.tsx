@@ -4,16 +4,23 @@ import { Users, X, ExternalLink } from 'lucide-react';
 import { useCollaboration } from '../context/CollaborationContext';
 import { motion, AnimatePresence } from 'motion/react';
 
-interface User { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; }
+interface User { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number; }
 
-function withDisplayNames(users: User[]): (User & { displayName: string })[] {
-  const counts: Record<string, number> = {};
-  users.forEach(u => { counts[u.name] = (counts[u.name] || 0) + 1; });
-  const indexes: Record<string, number> = {};
-  return users.map(u => {
-    if (counts[u.name] <= 1) return { ...u, displayName: u.name };
-    indexes[u.name] = (indexes[u.name] || 0) + 1;
-    return { ...u, displayName: `${u.name} (${indexes[u.name]})` };
+// Hide anonymous (not-logged-in) sessions and collapse multiple sessions
+// belonging to the same authenticated user into a single entry. The collapsed
+// entry's page/cursor come from the most recently active session.
+function collapseSessions(users: User[]): (User & { displayName: string })[] {
+  const authed = users.filter(u => u.userId);
+  const byUser: Record<string, User[]> = {};
+  authed.forEach(u => {
+    const key = u.userId!;
+    (byUser[key] = byUser[key] || []).push(u);
+  });
+  return Object.values(byUser).map(sessions => {
+    const active = sessions.reduce((best, s) =>
+      (s.lastActive ?? 0) > (best.lastActive ?? 0) ? s : best
+    , sessions[0]);
+    return { ...active, displayName: active.name };
   });
 }
 
@@ -26,7 +33,7 @@ export const UserPresenceOverlay: React.FC = () => {
   // Don't show on canvas page (it has its own list in sidebar)
   if (location.pathname.includes('/page/')) return null;
 
-  const otherUsers = globalUsers.filter(u => u.id !== socket?.id);
+  const otherUsers = collapseSessions(globalUsers.filter(u => u.id !== socket?.id));
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
@@ -67,7 +74,7 @@ export const UserPresenceOverlay: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {withDisplayNames(otherUsers).map(user => (
+                  {otherUsers.map(user => (
                     <div
                       key={user.id}
                       className="group flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
