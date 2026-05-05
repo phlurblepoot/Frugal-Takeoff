@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
@@ -123,6 +124,16 @@ function initDb() {
         data TEXT NOT NULL,
         createdAt INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS time_entries (
+        id TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
+        projectId TEXT,
+        clockIn INTEGER NOT NULL,
+        clockOut INTEGER,
+        description TEXT,
+        createdAt INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_time_entries_userId ON time_entries (userId);
       CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
       CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
       CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
@@ -1304,6 +1315,115 @@ async function startServer() {
       }
       console.log("User disconnected:", socket.id);
     });
+  });
+
+  // Time Entry Routes
+  app.get("/api/time-entries", authenticateToken, (req: any, res: any) => {
+    try {
+      const { projectId } = req.query;
+      let rows;
+      if (projectId) {
+        rows = db.prepare('SELECT * FROM time_entries WHERE userId = ? AND projectId = ? ORDER BY clockIn DESC').all(req.user.id, projectId);
+      } else {
+        rows = db.prepare('SELECT * FROM time_entries WHERE userId = ? ORDER BY clockIn DESC').all(req.user.id);
+      }
+      res.json(rows);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch time entries' });
+    }
+  });
+
+  app.post("/api/time-entries/clock-in", authenticateToken, (req: any, res: any) => {
+    try {
+      const { projectId } = req.body;
+      const existing = db.prepare('SELECT * FROM time_entries WHERE userId = ? AND clockOut IS NULL').get(req.user.id) as any;
+      if (existing) {
+        return res.status(400).json({ error: 'Already clocked in', entry: existing });
+      }
+      const entry = {
+        id: uuidv4(),
+        userId: req.user.id,
+        projectId: projectId || null,
+        clockIn: Date.now(),
+        clockOut: null,
+        description: '',
+        createdAt: Date.now(),
+      };
+      db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
+      );
+      res.json(entry);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to clock in' });
+    }
+  });
+
+  app.put("/api/time-entries/clock-out", authenticateToken, (req: any, res: any) => {
+    try {
+      const { description } = req.body;
+      const existing = db.prepare('SELECT * FROM time_entries WHERE userId = ? AND clockOut IS NULL').get(req.user.id) as any;
+      if (!existing) {
+        return res.status(400).json({ error: 'Not clocked in' });
+      }
+      const clockOut = Date.now();
+      db.prepare('UPDATE time_entries SET clockOut = ?, description = ? WHERE id = ?').run(clockOut, description ?? existing.description, existing.id);
+      res.json({ ...existing, clockOut, description: description ?? existing.description });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to clock out' });
+    }
+  });
+
+  app.post("/api/time-entries", authenticateToken, (req: any, res: any) => {
+    try {
+      const { projectId, clockIn, clockOut, description } = req.body;
+      if (!clockIn || !clockOut) {
+        return res.status(400).json({ error: 'clockIn and clockOut are required for manual entries' });
+      }
+      const entry = {
+        id: uuidv4(),
+        userId: req.user.id,
+        projectId: projectId || null,
+        clockIn: Number(clockIn),
+        clockOut: Number(clockOut),
+        description: description || '',
+        createdAt: Date.now(),
+      };
+      db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
+      );
+      res.json(entry);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create time entry' });
+    }
+  });
+
+  app.put("/api/time-entries/:id", authenticateToken, (req: any, res: any) => {
+    try {
+      const existing = db.prepare('SELECT * FROM time_entries WHERE id = ? AND userId = ?').get(req.params.id, req.user.id) as any;
+      if (!existing) {
+        return res.status(404).json({ error: 'Entry not found' });
+      }
+      const { clockIn, clockOut, description } = req.body;
+      db.prepare('UPDATE time_entries SET clockIn = ?, clockOut = ?, description = ? WHERE id = ?').run(
+        clockIn ?? existing.clockIn, clockOut ?? existing.clockOut, description ?? existing.description, existing.id
+      );
+      res.json({ ...existing, clockIn: clockIn ?? existing.clockIn, clockOut: clockOut ?? existing.clockOut, description: description ?? existing.description });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update time entry' });
+    }
+  });
+
+  app.delete("/api/time-entries/:id", authenticateToken, (req: any, res: any) => {
+    try {
+      const existing = db.prepare('SELECT id FROM time_entries WHERE id = ? AND userId = ?').get(req.params.id, req.user.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'Entry not found' });
+      }
+      db.prepare('DELETE FROM time_entries WHERE id = ?').run(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to delete time entry' });
+    }
   });
 
   // Vite middleware for development
