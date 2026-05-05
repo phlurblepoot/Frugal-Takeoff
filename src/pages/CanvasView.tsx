@@ -543,7 +543,12 @@ const CanvasViewInner: React.FC = () => {
       }
 
       if (e.key === 'Delete' && selectedMeasurementId) {
-        deleteMeasurement(selectedMeasurementId);
+        // If a single canvas segment is selected, only delete that segment
+        if (selectedSegmentIdx !== null) {
+          deleteSegment(selectedMeasurementId, selectedSegmentIdx);
+        } else {
+          deleteMeasurement(selectedMeasurementId);
+        }
       }
 
       if ((e.key === 'p' || e.key === 'P') && selectedMeasurementId) {
@@ -977,6 +982,67 @@ const CanvasViewInner: React.FC = () => {
     setMeasurementToDelete(null);
     
     sendMeasurementUpdate(sourcePageId, 'delete', mToDelete);
+  };
+
+  const deleteSegment = async (measurementId: string, segmentIdx: number) => {
+    if (!project || !page) return;
+
+    let sourcePageId: string | undefined;
+    let measurement: Measurement | undefined;
+    for (const p of project.pages) {
+      const m = p.measurements.find(m => m.id === measurementId);
+      if (m) { sourcePageId = p.id; measurement = m; break; }
+    }
+    if (!sourcePageId || !measurement) return;
+
+    pushToHistory({ type: 'update', measurementId, before: { points: measurement.points, arcMidIndices: measurement.arcMidIndices, segments: measurement.segments }, after: {} });
+
+    let updatedMeasurement: Measurement;
+
+    if (segmentIdx === -1) {
+      // Deleting primary segment
+      const extraSegs = measurement.segments ?? [];
+      if (extraSegs.length === 0) {
+        // No other segments — delete the whole measurement
+        deleteMeasurement(measurementId);
+        return;
+      }
+      // Promote first extra segment to primary
+      const [newPrimary, ...rest] = extraSegs;
+      updatedMeasurement = {
+        ...measurement,
+        points: newPrimary.points,
+        arcMidIndices: newPrimary.arcMidIndices,
+        segments: rest.length > 0 ? rest : undefined,
+      };
+    } else {
+      // Deleting an extra segment
+      const extraSegs = measurement.segments ?? [];
+      const newSegs = extraSegs.filter((_, i) => i !== segmentIdx);
+      if (newSegs.length === 0 && (!measurement.points || measurement.points.length === 0)) {
+        deleteMeasurement(measurementId);
+        return;
+      }
+      updatedMeasurement = {
+        ...measurement,
+        segments: newSegs.length > 0 ? newSegs : undefined,
+      };
+    }
+
+    const updatedProject = {
+      ...project,
+      pages: project.pages.map(p =>
+        p.id === sourcePageId
+          ? { ...p, measurements: p.measurements.map(m => m.id === measurementId ? updatedMeasurement : m) }
+          : p
+      ),
+    };
+
+    setProject(updatedProject);
+    saveProject(updatedProject);
+    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+    setSelectedSegmentIdx(null);
+    sendMeasurementUpdate(sourcePageId, 'update', updatedMeasurement);
   };
 
   const confirmDeleteTakeoff = async () => {
