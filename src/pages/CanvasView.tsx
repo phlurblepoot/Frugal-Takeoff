@@ -200,6 +200,8 @@ const CanvasViewInner: React.FC = () => {
   const searchTerm = searchParams.get('search') || '';
   
   const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
+  // Socket rooms are keyed by full URL path; page UUIDs alone don't match.
+  const pageRoom = (pId: string) => `/project/${projectId}/page/${pId}`;
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -358,7 +360,7 @@ const CanvasViewInner: React.FC = () => {
       };
       pushToHistory({ type: 'add', measurement: newMeasurement });
       savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-      sendMeasurementUpdate(page.id, 'add', newMeasurement);
+      sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
       setSelectedMeasurementId(newMeasurement.id);
       toast('Measurement pasted', { type: 'success', duration: 1500 });
     } catch (err) {
@@ -781,8 +783,8 @@ const CanvasViewInner: React.FC = () => {
     savePageUpdates({
       measurements: [...page.measurements, newMeasurement]
     });
-    
-    sendMeasurementUpdate(page.id, 'add', newMeasurement);
+
+    sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
 
     const takeoff = project?.takeoffs.find(t => t.id === selectedTakeoffId);
     if (takeoff?.type === 'area' && measurement.type === 'length') {
@@ -855,7 +857,7 @@ const CanvasViewInner: React.FC = () => {
 
     pushToHistory({ type: 'add', measurement: newMeasurement });
     await savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-    sendMeasurementUpdate(page.id, 'add', newMeasurement);
+    sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
 
     setSelectedTakeoffId(takeoff.id);
     setSelectedColor(takeoff.color);
@@ -925,10 +927,10 @@ const CanvasViewInner: React.FC = () => {
     setPage(updatedProject.pages.find(p => p.id === page.id) || page);
     
     if (isMoving) {
-      sendMeasurementUpdate(sourcePageId, 'delete', existingMeasurement);
-      sendMeasurementUpdate(destinationPageId, 'add', updatedMeasurement);
+      sendMeasurementUpdate(pageRoom(sourcePageId), 'delete', existingMeasurement);
+      sendMeasurementUpdate(pageRoom(destinationPageId), 'add', updatedMeasurement);
     } else {
-      sendMeasurementUpdate(destinationPageId, 'update', updatedMeasurement);
+      sendMeasurementUpdate(pageRoom(destinationPageId), 'update', updatedMeasurement);
     }
   };
 
@@ -980,8 +982,8 @@ const CanvasViewInner: React.FC = () => {
 
     setShowDeleteConfirm(false);
     setMeasurementToDelete(null);
-    
-    sendMeasurementUpdate(sourcePageId, 'delete', mToDelete);
+
+    sendMeasurementUpdate(pageRoom(sourcePageId), 'delete', mToDelete);
   };
 
   const deleteSegment = async (measurementId: string, segmentIdx: number) => {
@@ -1042,7 +1044,7 @@ const CanvasViewInner: React.FC = () => {
     saveProject(updatedProject);
     setPage(updatedProject.pages.find(p => p.id === page.id) || page);
     setSelectedSegmentIdx(null);
-    sendMeasurementUpdate(sourcePageId, 'update', updatedMeasurement);
+    sendMeasurementUpdate(pageRoom(sourcePageId), 'update', updatedMeasurement);
   };
 
   const confirmDeleteTakeoff = async () => {
