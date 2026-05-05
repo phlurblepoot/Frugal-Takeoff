@@ -1333,6 +1333,30 @@ async function startServer() {
     }
   });
 
+  // Admin-only: every user's entries, joined with username for display.
+  app.get("/api/time-entries/all", authenticateToken, requireAdmin, (req: any, res: any) => {
+    try {
+      const { userId } = req.query;
+      const rows = userId
+        ? db.prepare(`
+            SELECT te.*, u.username
+            FROM time_entries te
+            JOIN users u ON te.userId = u.id
+            WHERE te.userId = ?
+            ORDER BY te.clockIn DESC
+          `).all(userId)
+        : db.prepare(`
+            SELECT te.*, u.username
+            FROM time_entries te
+            JOIN users u ON te.userId = u.id
+            ORDER BY te.clockIn DESC
+          `).all();
+      res.json(rows);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch all time entries' });
+    }
+  });
+
   app.post("/api/time-entries/clock-in", authenticateToken, (req: any, res: any) => {
     try {
       const { projectId } = req.body;
