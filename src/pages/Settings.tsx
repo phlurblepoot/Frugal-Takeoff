@@ -16,6 +16,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.5',
+    date: 'May 5, 2026',
+    changes: [
+      'Time Tracking: new standalone app in the navigation dock — clock in and out with a live running timer, add an optional description when clocking out, log manual entries (date, start/end time, description), and view entries grouped by day with daily and weekly totals. Anonymous sessions see a prompt to log in.',
+      'Canvas: pressing Delete when a single segment is selected now removes only that segment instead of the entire measurement. Deleting the primary segment promotes the first additional segment to take its place; deleting the last remaining segment still removes the whole measurement.',
+    ],
+  },
+  {
     version: '1.0.1',
     date: 'May 4, 2026',
     changes: [
