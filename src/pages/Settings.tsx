@@ -16,6 +16,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.6',
+    date: 'May 5, 2026',
+    changes: [
+      'Time Tracking: monthly calendar heatmap above the entry list — each day shows total hours with shading by intensity, prev/next month navigation, and clicking a day filters the list to that date.',
+      'Time Tracking: admins now see a "Team Time" tab that lists every user\'s entries, with a per-user totals summary, a user filter dropdown, and the same calendar heatmap aggregated across the team.',
+      'Canvas: real-time collaboration sync now actually reaches other users on the same page — measurement add/update/delete and segment delete events were being broadcast to a room that nobody was joined to, so changes only appeared after a refresh.',
+    ],
+  },
+  {
     version: '1.0.5',
     date: 'May 5, 2026',
     changes: [
