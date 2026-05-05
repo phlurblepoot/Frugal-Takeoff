@@ -10,6 +10,7 @@ import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
 import { ChecklistEditor } from './pages/ChecklistEditor';
+import { TimeKeeping } from './pages/TimeKeeping';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
@@ -133,6 +134,10 @@ export default function App() {
         {
           path: 'checklist',
           element: <ChecklistEditor />,
+        },
+        {
+          path: 'time',
+          element: <TimeKeeping />,
         },
       ],
     },

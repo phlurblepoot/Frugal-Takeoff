@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, matchPath } from 'react-router-dom';
-import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Settings, LogOut, PanelLeftClose } from 'lucide-react';
+import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Clock, Settings, LogOut, PanelLeftClose } from 'lucide-react';
 
 export type DockState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -40,6 +40,13 @@ const APPS: App[] = [
     Icon: ClipboardList,
     path: '/checklist',
     matchRoute: (p) => p.startsWith('/checklist'),
+  },
+  {
+    id: 'time',
+    label: 'Time',
+    Icon: Clock,
+    path: '/time',
+    matchRoute: (p) => p.startsWith('/time'),
   },
 ];
 
