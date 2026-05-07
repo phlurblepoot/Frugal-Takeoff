@@ -203,6 +203,7 @@ async function renderPageToDataUrl(
   // Measurements
   page.measurements.forEach(m => {
     if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
+    if (!m.points || m.points.length === 0) return; // skip empty measurements
     const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
     const color = takeoff?.color || m.color || '#3b82f6';
     ctx.strokeStyle = color;
