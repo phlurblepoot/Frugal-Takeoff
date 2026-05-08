@@ -109,6 +109,19 @@ export const NewProject: React.FC = () => {
     }
   };
 
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isProcessing) return;
+    const dropped = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+    if (dropped.length > 0) {
+      setFiles(prev => [...prev, ...dropped]);
+      if (!name) {
+        setName(dropped[0].name.replace('.pdf', ''));
+      }
+    }
+  };
+
   const removeFile = (indexToRemove: number) => {
     setFiles(files.filter((_, index) => index !== indexToRemove));
   };
@@ -896,11 +909,14 @@ export const NewProject: React.FC = () => {
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                   Blueprint PDFs
                 </label>
-                <div 
+                <div
                   className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
                     files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-slate-300 hover:border-accent-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
                   }`}
                   onClick={() => !isProcessing && files.length === 0 && fileInputRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
+                  onDragEnter={e => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={handleDrop}
                 >
                   {files.length > 0 ? (
                     <div className="flex flex-col items-center w-full">

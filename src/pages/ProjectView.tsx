@@ -203,6 +203,7 @@ async function renderPageToDataUrl(
   // Measurements
   page.measurements.forEach(m => {
     if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
+    if (!m.points || m.points.length === 0) return; // skip empty measurements
     const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
     const color = takeoff?.color || m.color || '#3b82f6';
     ctx.strokeStyle = color;
@@ -3232,15 +3233,21 @@ export const ProjectView: React.FC = () => {
                                 {em.htmlBody ? (
                                   <iframe
                                     srcDoc={em.htmlBody}
-                                    sandbox="allow-same-origin"
+                                    sandbox="allow-same-origin allow-popups"
                                     title="Email content"
                                     className="w-full bg-white"
                                     style={{ minHeight: 120 }}
                                     onLoad={e => {
                                       const frame = e.currentTarget;
                                       try {
-                                        const h = frame.contentDocument?.documentElement?.scrollHeight;
+                                        const doc = frame.contentDocument;
+                                        if (!doc) return;
+                                        const h = doc.documentElement?.scrollHeight;
                                         if (h && h > 0) frame.style.height = h + 16 + 'px';
+                                        doc.querySelectorAll('a[href]').forEach(a => {
+                                          (a as HTMLAnchorElement).target = '_blank';
+                                          (a as HTMLAnchorElement).rel = 'noopener noreferrer';
+                                        });
                                       } catch {}
                                     }}
                                   />
