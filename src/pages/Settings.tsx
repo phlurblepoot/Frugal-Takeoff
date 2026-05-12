@@ -16,6 +16,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.7',
+    date: 'May 12, 2026',
+    changes: [
+      'Page naming: the "Extract Number / Description" OCR now crops, upscales and contrast-enhances the selected region and constrains Tesseract to sheet-number characters on a single line, so codes like "A1.1" read correctly far more often instead of garbled near-misses.',
+      'Page naming: the selection box border is now a thin hairline that stays crisp at any zoom, the corner grabbers have larger hit targets, and dragging a grabber resizes from that corner while the opposite corner stays anchored (it no longer drifts the whole box).',
+      'Page naming: the preview now zooms with the mouse wheel toward the cursor and pans with a middle-mouse drag at any zoom level.',
+    ],
+  },
+  {
     version: '1.0.6',
     date: 'May 5, 2026',
     changes: [
