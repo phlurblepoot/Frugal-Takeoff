@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import Tesseract from 'tesseract.js';
+import Tesseract, { PSM } from 'tesseract.js';
 
 // Background timer worker to prevent throttling in background tabs
 let pulseWorker: Worker | null = null;
@@ -93,6 +93,105 @@ function findBestSheetNumber(text: string): string | null {
 const isDefaultName = (s: string) => /^page\s*\d+$/i.test(s.trim());
 const stripNum = (text: string, num: string) =>
   text.replace(num, '').replace(/^[\s\-–.:|/]+|[\s\-–.:|/]+$/g, '').trim();
+
+// ── OCR region extraction helpers ─────────────────────────────────────────────
+
+const loadImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image for OCR'));
+    img.src = src;
+  });
+
+/**
+ * Crop a rectangular region (given as percentages 0–100 of the source image)
+ * and return a PNG data URL that has been upscaled and contrast-enhanced so
+ * Tesseract can read small sheet numbers reliably.
+ */
+export async function buildOcrCrop(
+  imageUrl: string,
+  region: { x: number; y: number; width: number; height: number }
+): Promise<string> {
+  const img = await loadImage(imageUrl);
+  const naturalW = img.naturalWidth || img.width;
+  const naturalH = img.naturalHeight || img.height;
+
+  const sx = Math.max(0, (region.x / 100) * naturalW);
+  const sy = Math.max(0, (region.y / 100) * naturalH);
+  const sw = Math.max(1, Math.min(naturalW - sx, (region.width / 100) * naturalW));
+  const sh = Math.max(1, Math.min(naturalH - sy, (region.height / 100) * naturalH));
+
+  // Upscale so the shortest side of the crop is at least ~160px — Tesseract is
+  // far more accurate when glyphs are large. Cap the multiplier to keep memory sane.
+  const upscale = Math.min(6, Math.max(1, 160 / Math.min(sw, sh)));
+  const dw = Math.max(1, Math.round(sw * upscale));
+  const dh = Math.max(1, Math.round(sh * upscale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = dw;
+  canvas.height = dh;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not create canvas context for OCR');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, dw, dh);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+
+  // Grayscale first; track the brightness range so we can stretch contrast.
+  const imageData = ctx.getImageData(0, 0, dw, dh);
+  const d = imageData.data;
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    d[i] = d[i + 1] = d[i + 2] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  // Only stretch when there is real contrast — otherwise a near-blank crop would
+  // be pushed to solid black, which is worse for OCR than leaving it alone.
+  const span = max - min;
+  if (span >= 16) {
+    for (let i = 0; i < d.length; i += 4) {
+      let v = ((d[i] - min) / span) * 255;
+      v = 255 * Math.pow(Math.max(0, Math.min(1, v / 255)), 1.25);
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+/** Tesseract parameters tuned for the kind of text being extracted. */
+export function ocrParamsFor(mode: 'pageNumber' | 'description'): { tessedit_char_whitelist: string; tessedit_pageseg_mode: PSM } {
+  return mode === 'pageNumber'
+    ? {
+        // Sheet numbers are short uppercase codes (e.g. A1.1, S-201, M2.3).
+        tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.-/ ',
+        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+      }
+    : {
+        tessedit_char_whitelist: '',
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      };
+}
+
+/** Clean up Tesseract output for a sheet number: uppercase, drop spaces, trim stray punctuation. */
+export function cleanSheetNumber(raw: string): string {
+  return (raw || '')
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9.\-/]/g, '')
+    .replace(/^[.\-/]+|[.\-/]+$/g, '')
+    .trim();
+}
+
+/** Clean up Tesseract output for a free-text description. */
+export function cleanDescriptionText(raw: string): string {
+  return (raw || '').replace(/\s+/g, ' ').trim();
+}
 
 /**
  * Attempt to auto-detect a sheet number and description from available metadata.
