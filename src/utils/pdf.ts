@@ -74,6 +74,8 @@ export interface PdfPageImage {
   pageNum: number;
   suggestedName?: string;
   extractedText?: string;
+  /** Populated when this page could not be rendered. dataUrl will be empty. */
+  error?: string;
 }
 
 // Typical architectural/engineering sheet number: 1–3 letters, optional separator, 1–4 digits, optional decimal
@@ -244,11 +246,11 @@ export function detectPageInfo(
 }
 
 export const loadPdfPagesGenerator = async function*(
-  file: File, 
+  file: File,
   onProgress?: (status: string, pageNum: number, totalPages: number) => void
 ): AsyncGenerator<PdfPageImage, void, unknown> {
   const fileUrl = URL.createObjectURL(file);
-  const getPdfDoc = () => pdfjsLib.getDocument({ 
+  const getPdfDoc = () => pdfjsLib.getDocument({
     url: fileUrl,
     cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/cmaps/',
     cMapPacked: true,
@@ -276,112 +278,138 @@ export const loadPdfPagesGenerator = async function*(
     throw new Error('Could not create canvas context');
   }
 
+  const renderOnePage = async (i: number): Promise<PdfPageImage> => {
+    const page = await pdf.getPage(i);
+
+    const scale = 2.0;
+    const viewport = page.getViewport({ scale });
+
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    context.fillStyle = 'white';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
+
+    if (onProgress) onProgress('reading the text', i, totalPages);
+    let extractedText = '';
+    try {
+      const textContent = await page.getTextContent();
+      extractedText = textContent.items.map((item: any) => item.str).join(' ');
+    } catch (e) {
+      console.warn('Could not extract text from page', e);
+    }
+
+    // Fallback to OCR when no embedded text is available (image-based PDFs).
+    if (!extractedText || extractedText.trim().length < 5) {
+      if (onProgress) onProgress('reading the text', i, totalPages);
+      try {
+        if (!tesseractWorker) {
+          tesseractWorker = await Tesseract.createWorker('eng');
+        }
+        const { data: { text } } = await tesseractWorker.recognize(canvas);
+        extractedText = text;
+
+        if (i % 10 === 0) {
+          await tesseractWorker.terminate();
+          tesseractWorker = null;
+        }
+      } catch (ocrError) {
+        console.warn('OCR failed', ocrError);
+      }
+    }
+
+    let suggestedName = `Page ${i}`;
+    if (totalPages === 1) {
+      suggestedName = file.name.replace(/\.[^/.]+$/, '');
+    } else if (pageLabels && pageLabels[i - 1]) {
+      suggestedName = pageLabels[i - 1];
+    }
+
+    const thumbScale = 400 / Math.max(viewport.width, viewport.height);
+    thumbCanvas.width = viewport.width * thumbScale;
+    thumbCanvas.height = viewport.height * thumbScale;
+    thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
+
+    page.cleanup();
+
+    return {
+      dataUrl,
+      thumbnailDataUrl,
+      width: viewport.width,
+      height: viewport.height,
+      pageNum: i,
+      suggestedName,
+      extractedText,
+    };
+  };
+
+  // Re-open the underlying pdf document — used both for periodic memory recycling
+  // and to recover the worker after a failed page render.
+  const reopenPdf = async () => {
+    try { await pdf.destroy(); } catch { /* ignore */ }
+    pdf = await getPdfDoc();
+  };
+
   try {
     for (let i = 1; i <= totalPages; i++) {
       if (onProgress) onProgress('processing the image', i, totalPages);
-      
-      const page = await pdf.getPage(i);
-      
-      // Use a higher scale for better resolution when zooming in
-      const scale = 2.0;
-      const viewport = page.getViewport({ scale });
-      
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-      
-      // Fill with white background for JPEG conversion
-      context.fillStyle = 'white';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      
-      await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
-      
-      if (onProgress) onProgress('reading the text', i, totalPages);
-      let extractedText = '';
-      try {
-        const textContent = await page.getTextContent();
-        extractedText = textContent.items.map((item: any) => item.str).join(' ');
-      } catch (e) {
-        console.warn('Could not extract text from page', e);
-      }
-      
-      // Fallback to OCR if no text was extracted (e.g. image-based PDF)
-      if (!extractedText || extractedText.trim().length < 5) {
-        if (onProgress) onProgress('reading the text', i, totalPages);
+
+      let result: PdfPageImage | null = null;
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 2 && !result; attempt++) {
         try {
-          if (!tesseractWorker) {
-            tesseractWorker = await Tesseract.createWorker('eng');
+          result = await renderOnePage(i);
+          lastError = null;
+        } catch (err) {
+          lastError = err;
+          console.warn(`Page ${i} render failed (attempt ${attempt + 1})`, err);
+          if (attempt === 0) {
+            // The pdf.js worker may have been torn down. Rebuild the document
+            // and pause briefly before retrying.
+            try { await reopenPdf(); } catch (reopenErr) {
+              console.warn('PDF reopen failed during retry', reopenErr);
+            }
+            await getPulse(250);
           }
-          const { data: { text } } = await tesseractWorker.recognize(canvas);
-          extractedText = text;
-          
-          if (i % 10 === 0) {
-            await tesseractWorker.terminate();
-            tesseractWorker = null;
-          }
-        } catch (ocrError) {
-          console.warn('OCR failed', ocrError);
         }
       }
-      
-      let suggestedName = `Page ${i}`;
-      if (totalPages === 1) {
-        // If it's a single page PDF, use the file name without extension
-        suggestedName = file.name.replace(/\.[^/.]+$/, "");
-      } else if (pageLabels && pageLabels[i - 1]) {
-        // If it's a multi-page PDF and has page labels, use the label
-        suggestedName = pageLabels[i - 1];
-      }
-      
-      // Generate a smaller thumbnail
-      const thumbScale = 400 / Math.max(viewport.width, viewport.height);
-      thumbCanvas.width = viewport.width * thumbScale;
-      thumbCanvas.height = viewport.height * thumbScale;
-      thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-      const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
 
-      page.cleanup();
+      if (!result) {
+        // Yield a placeholder so the consumer can verify totals and report failures.
+        result = {
+          dataUrl: '',
+          thumbnailDataUrl: '',
+          width: 0,
+          height: 0,
+          pageNum: i,
+          error: String((lastError as any)?.message || lastError || 'Unknown render error'),
+        };
+      }
 
       if (i % 10 === 0 && typeof pdf.cleanup === 'function') {
-        try {
-          await pdf.cleanup();
-        } catch (e) {
-          console.warn('pdf.cleanup failed', e);
-        }
+        try { await pdf.cleanup(); } catch (e) { console.warn('pdf.cleanup failed', e); }
       }
 
       if (i % 50 === 0 && i < totalPages) {
-        try {
-          await pdf.destroy();
-          pdf = await getPdfDoc();
-        } catch (e) {
-          console.warn('pdf reload failed', e);
-        }
+        try { await reopenPdf(); } catch (e) { console.warn('pdf reload failed', e); }
       }
 
-      yield {
-        dataUrl,
-        thumbnailDataUrl,
-        width: viewport.width,
-        height: viewport.height,
-        pageNum: i,
-        suggestedName,
-        extractedText,
-      };
+      yield result;
 
-      // Small delay to allow garbage collection and UI updates
-      // In background tabs, setTimeout is throttled to 1s, so we use a worker-based pulse instead
+      // Small delay to allow garbage collection and UI updates.
       await getPulse(100);
     }
   } finally {
     if (tesseractWorker) {
-      await tesseractWorker.terminate();
+      try { await tesseractWorker.terminate(); } catch { /* ignore */ }
     }
-    await pdf.destroy();
+    try { await pdf.destroy(); } catch { /* ignore */ }
     URL.revokeObjectURL(fileUrl);
-    
-    // Free canvas memory
+
     canvas.width = 0;
     canvas.height = 0;
     thumbCanvas.width = 0;

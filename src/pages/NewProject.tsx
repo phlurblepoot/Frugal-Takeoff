@@ -166,65 +166,144 @@ export const NewProject: React.FC = () => {
 
       const extractedPages: PendingPage[] = [];
       const thumbnails: Record<string, string> = {};
-      
+      const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
+      let totalExpected = 0;
+      let totalProcessed = 0;
       let globalPageNum = 1;
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: files.length }));
-        
-        const generator = loadPdfPagesGenerator(file, (status, current, total) => {
-          setProgress(prev => ({ ...prev, status, current, total }));
-        });
 
-        for await (const pageData of generator) {
-          setProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
-          const imageId = uuidv4();
-          const thumbnailId = uuidv4();
-          await saveImage(imageId, pageData.dataUrl);
-          await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-          thumbnails[imageId] = pageData.thumbnailDataUrl;
-          
-          const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
-          const newPage: PendingPage = {
-            id: uuidv4(),
-            name: detected.pageNumber && detected.description
-              ? `${detected.pageNumber} - ${detected.description}`
-              : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${globalPageNum}`,
-            pageNumber: detected.pageNumber,
-            description: detected.description,
-            imageId,
-            thumbnailId,
-            imageWidth: pageData.width,
-            imageHeight: pageData.height,
-            extractedText: pageData.extractedText,
-          };
-          
-          extractedPages.push(newPage);
-          
-          project.pages.push({
-            id: newPage.id,
-            name: newPage.name,
-            pageNumber: newPage.pageNumber,
-            description: newPage.description,
-            imageId: newPage.imageId,
-            thumbnailId: newPage.thumbnailId,
-            imageWidth: newPage.imageWidth,
-            imageHeight: newPage.imageHeight,
-            extractedText: newPage.extractedText,
-            measurements: [],
-            scaleConfig: null,
-            planSetId: newPlanSetId,
+        let fileExpected = 0;
+        let fileYielded = 0;
+
+        try {
+          const generator = loadPdfPagesGenerator(file, (status, current, total) => {
+            if (total > 0) fileExpected = total;
+            setProgress(prev => ({ ...prev, status, current, total }));
           });
-          
-          if (globalPageNum % 5 === 0) {
-            await saveProject(project);
+
+          for await (const pageData of generator) {
+            fileYielded++;
+
+            if (pageData.error) {
+              failures.push({ fileName: file.name, pageNum: pageData.pageNum, reason: pageData.error });
+              continue;
+            }
+
+            setProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
+
+            try {
+              const imageId = uuidv4();
+              const thumbnailId = uuidv4();
+              await saveImage(imageId, pageData.dataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              thumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+              const newPage: PendingPage = {
+                id: uuidv4(),
+                name: detected.pageNumber && detected.description
+                  ? `${detected.pageNumber} - ${detected.description}`
+                  : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${globalPageNum}`,
+                pageNumber: detected.pageNumber,
+                description: detected.description,
+                imageId,
+                thumbnailId,
+                imageWidth: pageData.width,
+                imageHeight: pageData.height,
+                extractedText: pageData.extractedText,
+              };
+
+              extractedPages.push(newPage);
+
+              project.pages.push({
+                id: newPage.id,
+                name: newPage.name,
+                pageNumber: newPage.pageNumber,
+                description: newPage.description,
+                imageId: newPage.imageId,
+                thumbnailId: newPage.thumbnailId,
+                imageWidth: newPage.imageWidth,
+                imageHeight: newPage.imageHeight,
+                extractedText: newPage.extractedText,
+                measurements: [],
+                scaleConfig: null,
+                planSetId: newPlanSetId,
+              });
+
+              totalProcessed++;
+
+              if (globalPageNum % 5 === 0) {
+                try { await saveProject(project); } catch (saveErr) {
+                  console.warn('Periodic saveProject failed', saveErr);
+                }
+              }
+
+              globalPageNum++;
+            } catch (perPageErr) {
+              console.warn(`Save failed for ${file.name} page ${pageData.pageNum}`, perPageErr);
+              failures.push({
+                fileName: file.name,
+                pageNum: pageData.pageNum,
+                reason: String((perPageErr as any)?.message || perPageErr),
+              });
+            }
           }
-          
-          globalPageNum++;
+        } catch (genErr) {
+          console.error(`PDF processing aborted for ${file.name}`, genErr);
+          failures.push({
+            fileName: file.name,
+            pageNum: null,
+            reason: `Processing aborted: ${String((genErr as any)?.message || genErr)}`,
+          });
         }
-        // Save any remaining pages
-        await saveProject(project);
+
+        totalExpected += fileExpected;
+
+        // Account for pages the generator never reached (e.g. iteration aborted mid-file).
+        if (fileExpected > fileYielded) {
+          for (let p = fileYielded + 1; p <= fileExpected; p++) {
+            failures.push({
+              fileName: file.name,
+              pageNum: p,
+              reason: 'Page was never reached during processing',
+            });
+          }
+        }
+
+        try { await saveProject(project); } catch (saveErr) {
+          console.warn('End-of-file saveProject failed', saveErr);
+        }
+      }
+
+      // Final verification — surface any losses to the user so silent skips can't happen.
+      if (failures.length > 0 || totalProcessed !== totalExpected) {
+        const byFile = new Map<string, typeof failures>();
+        failures.forEach(f => {
+          const arr = byFile.get(f.fileName) ?? [];
+          arr.push(f);
+          byFile.set(f.fileName, arr);
+        });
+        const lines: string[] = [];
+        byFile.forEach((arr, name) => {
+          const fileLevel = arr.find(a => a.pageNum == null);
+          const pageNums = arr.filter(a => a.pageNum != null).map(a => a.pageNum).join(', ');
+          if (fileLevel) lines.push(`• ${name}: ${fileLevel.reason}`);
+          if (pageNums) lines.push(`• ${name}: failed pages ${pageNums}`);
+        });
+        alert(
+          `${totalProcessed} of ${totalExpected} page${totalExpected === 1 ? '' : 's'} were imported successfully.\n\n` +
+          `Some pages could not be processed:\n${lines.join('\n')}\n\n` +
+          `You can continue with the pages that imported, then re-upload the file to retry the rest.`
+        );
+      }
+
+      if (totalProcessed === 0) {
+        // Nothing to name — stay on the upload step.
+        setIsProcessing(false);
+        return;
       }
 
       setPendingPages(extractedPages);

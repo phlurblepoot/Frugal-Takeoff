@@ -16,6 +16,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.8',
+    date: 'May 13, 2026',
+    changes: [
+      'PDF upload: a single failing page no longer silently truncates the rest of the file — the renderer now retries the page (rebuilding the pdf.js worker if needed) and, if it still fails, marks just that page as failed and keeps going.',
+      'PDF upload: at the end of an upload the app verifies that the page count it imported matches the page count of the source PDF, and shows a clear alert listing exactly which file and which pages were skipped so missing pages can no longer go unnoticed.',
+    ],
+  },
+  {
     version: '1.0.7',
     date: 'May 12, 2026',
     changes: [
