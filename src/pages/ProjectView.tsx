@@ -1981,7 +1981,9 @@ export const ProjectView: React.FC = () => {
     setIsExtracting(true);
     let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
     try {
-      worker = await createWorker('eng');
+      worker = await createWorker('eng', 1, {
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
+      });
       await worker.setParameters(ocrParamsFor(mode));
 
       const recognizePage = async (targetPage: any): Promise<string> => {

@@ -180,14 +180,25 @@ export function ocrParamsFor(mode: 'pageNumber' | 'description'): { tessedit_cha
       };
 }
 
-/** Clean up Tesseract output for a sheet number: uppercase, drop spaces, trim stray punctuation. */
+/** Clean up Tesseract output for a sheet number: uppercase, drop spaces, trim stray punctuation.
+ *  In the numeric body (after the 1-3 letter prefix), common letter/digit OCR confusions are
+ *  corrected: S→5, G→6, O→0, I→1, B→8, Z→2. */
 export function cleanSheetNumber(raw: string): string {
-  return (raw || '')
+  const upper = (raw || '')
     .toUpperCase()
     .replace(/\s+/g, '')
     .replace(/[^A-Z0-9.\-/]/g, '')
     .replace(/^[.\-/]+|[.\-/]+$/g, '')
     .trim();
+
+  if (!upper) return '';
+
+  // Sheet numbers follow <letters><sep><digits>. In the digit body, apply position-aware
+  // substitutions: letters that look like digits are almost certainly digit misreads there.
+  const DIGIT_SUBS: Record<string, string> = { S: '5', G: '6', O: '0', I: '1', B: '8', Z: '2' };
+  return upper.replace(/^([A-Z]{1,3})([-./]?)(.*)$/, (_, prefix, sep, body) =>
+    prefix + sep + body.replace(/[SGOIBZ]/g, (c: string) => DIGIT_SUBS[c] ?? c)
+  );
 }
 
 /** Clean up Tesseract output for a free-text description. */
@@ -305,7 +316,9 @@ export const loadPdfPagesGenerator = async function*(
       if (onProgress) onProgress('reading the text', i, totalPages);
       try {
         if (!tesseractWorker) {
-          tesseractWorker = await Tesseract.createWorker('eng');
+          tesseractWorker = await Tesseract.createWorker('eng', 1, {
+            langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
+          });
         }
         const { data: { text } } = await tesseractWorker.recognize(canvas);
         extractedText = text;

@@ -16,6 +16,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.9',
+    date: 'May 13, 2026',
+    changes: [
+      'Page naming OCR: switched to Tesseract\'s high-accuracy "tessdata_best" model for all sheet-number and description extractions — noticeably fewer garbled reads on stylised architectural fonts.',
+      'Page naming OCR: added position-aware digit correction — in the numeric body of a sheet number, common letter/digit misreads (S→5, G→6, O→0, I→1, B→8, Z→2) are automatically fixed so codes like "A-S01" or "E-G01" resolve to the correct "A-501" / "E-601".',
+    ],
+  },
+  {
     version: '1.0.8',
     date: 'May 13, 2026',
     changes: [
