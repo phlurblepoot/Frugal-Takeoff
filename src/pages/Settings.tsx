@@ -16,6 +16,31 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.9',
+    date: 'May 13, 2026',
+    changes: [
+      'Page naming OCR: switched to Tesseract\'s high-accuracy "tessdata_best" model for all sheet-number and description extractions — noticeably fewer garbled reads on stylised architectural fonts.',
+      'Page naming OCR: added position-aware digit correction — in the numeric body of a sheet number, common letter/digit misreads (S→5, G→6, O→0, I→1, B→8, Z→2) are automatically fixed so codes like "A-S01" or "E-G01" resolve to the correct "A-501" / "E-601".',
+    ],
+  },
+  {
+    version: '1.0.8',
+    date: 'May 13, 2026',
+    changes: [
+      'PDF upload: a single failing page no longer silently truncates the rest of the file — the renderer now retries the page (rebuilding the pdf.js worker if needed) and, if it still fails, marks just that page as failed and keeps going.',
+      'PDF upload: at the end of an upload the app verifies that the page count it imported matches the page count of the source PDF, and shows a clear alert listing exactly which file and which pages were skipped so missing pages can no longer go unnoticed.',
+    ],
+  },
+  {
+    version: '1.0.7',
+    date: 'May 12, 2026',
+    changes: [
+      'Page naming: the "Extract Number / Description" OCR now crops, upscales and contrast-enhances the selected region and constrains Tesseract to sheet-number characters on a single line, so codes like "A1.1" read correctly far more often instead of garbled near-misses.',
+      'Page naming: the selection box border is now a thin hairline that stays crisp at any zoom, the corner grabbers have larger hit targets, and dragging a grabber resizes from that corner while the opposite corner stays anchored (it no longer drifts the whole box).',
+      'Page naming: the preview now zooms with the mouse wheel toward the cursor and pans with a middle-mouse drag at any zoom level.',
+    ],
+  },
+  {
     version: '1.0.6',
     date: 'May 5, 2026',
     changes: [

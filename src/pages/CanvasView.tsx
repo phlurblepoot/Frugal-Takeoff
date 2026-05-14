@@ -888,50 +888,35 @@ const CanvasViewInner: React.FC = () => {
     
     if (!sourcePageId || !existingMeasurement) return;
 
-    // If targetPageId was explicitly provided, keep the measurement on that page (rename in place).
-    const destinationPageId = targetPageId ?? page.id;
-    const isMoving = sourcePageId !== destinationPageId;
-
-    if (!isMoving) {
-      const before: Partial<Measurement> = {};
-      for (const key of Object.keys(updates) as (keyof Measurement)[]) {
-        (before as any)[key] = (existingMeasurement as any)[key];
-      }
-      pushToHistory({ type: 'update', measurementId: id, before, after: updates });
+    // Always update the measurement on the page it lives on. targetPageId is
+    // just an optimization for callers that already know the source page; it
+    // must never cause the measurement to move to a different page.
+    const before: Partial<Measurement> = {};
+    for (const key of Object.keys(updates) as (keyof Measurement)[]) {
+      (before as any)[key] = (existingMeasurement as any)[key];
     }
+    pushToHistory({ type: 'update', measurementId: id, before, after: updates });
 
     const updatedMeasurement = {
       ...existingMeasurement,
       ...updates,
-      planSetId: destinationPageId === page.id ? page.planSetId : existingMeasurement.planSetId,
+      planSetId: sourcePageId === page.id ? page.planSetId : existingMeasurement.planSetId,
     };
 
     const updatedProject = {
       ...project,
-      pages: project.pages.map(p => {
-        if (p.id === sourcePageId && isMoving) {
-          return { ...p, measurements: p.measurements.filter(m => m.id !== id) };
-        }
-        if (p.id === destinationPageId && isMoving) {
-          return { ...p, measurements: [...p.measurements, updatedMeasurement] };
-        }
-        if (p.id === sourcePageId && !isMoving) {
-          return { ...p, measurements: p.measurements.map(m => m.id === id ? updatedMeasurement : m) };
-        }
-        return p;
-      })
+      pages: project.pages.map(p =>
+        p.id === sourcePageId
+          ? { ...p, measurements: p.measurements.map(m => m.id === id ? updatedMeasurement : m) }
+          : p
+      ),
     };
-    
+
     setProject(updatedProject);
     saveProject(updatedProject);
     setPage(updatedProject.pages.find(p => p.id === page.id) || page);
-    
-    if (isMoving) {
-      sendMeasurementUpdate(pageRoom(sourcePageId), 'delete', existingMeasurement);
-      sendMeasurementUpdate(pageRoom(destinationPageId), 'add', updatedMeasurement);
-    } else {
-      sendMeasurementUpdate(pageRoom(destinationPageId), 'update', updatedMeasurement);
-    }
+
+    sendMeasurementUpdate(pageRoom(sourcePageId), 'update', updatedMeasurement);
   };
 
   const deleteMeasurement = (id: string, targetPageId?: string) => {

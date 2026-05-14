@@ -4,7 +4,7 @@ import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
-import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
+import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -845,76 +845,158 @@ export const ProjectView: React.FC = () => {
       }
 
       let startingPageNum = updatedProject.pages.length + 1;
+      const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
+      let totalExpected = 0;
+      let totalProcessed = 0;
 
       for (let i = 0; i < newPlanSetFiles.length; i++) {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
 
-        const generator = loadPdfPagesGenerator(file, (status, current, total) => {
-          setAddProgress(prev => ({ ...prev, status, current, total }));
-        });
+        let fileExpected = 0;
+        let fileYielded = 0;
 
-        for await (const pageData of generator) {
-          setAddProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
-          const imageId = uuidv4();
-          const thumbnailId = uuidv4();
-          await saveImage(imageId, pageData.dataUrl);
-          await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-          thumbnails[imageId] = pageData.thumbnailDataUrl;
+        try {
+          const generator = loadPdfPagesGenerator(file, (status, current, total) => {
+            if (total > 0) fileExpected = total;
+            setAddProgress(prev => ({ ...prev, status, current, total }));
+          });
 
-          const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
-          const normNum = detected.pageNumber.trim().toLowerCase();
-          const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
-            ? existingPageNums.get(normNum)!
-            : undefined;
+          for await (const pageData of generator) {
+            fileYielded++;
 
-          const newPage = {
-            id: uuidv4(),
-            name: detected.pageNumber && detected.description
-              ? `${detected.pageNumber} - ${detected.description}`
-              : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${startingPageNum}`,
-            pageNumber: detected.pageNumber,
-            description: detected.description,
-            imageId,
-            thumbnailId,
-            imageWidth: pageData.width,
-            imageHeight: pageData.height,
-            extractedText: pageData.extractedText,
-            revisionOf,
-          };
-          
-          extractedPages.push(newPage);
-          
-          const newProjectPage = {
-            id: newPage.id,
-            name: newPage.name,
-            pageNumber: newPage.pageNumber,
-            description: newPage.description,
-            imageId: newPage.imageId,
-            thumbnailId: newPage.thumbnailId,
-            imageWidth: newPage.imageWidth,
-            imageHeight: newPage.imageHeight,
-            extractedText: newPage.extractedText,
-            measurements: [],
-            scaleConfig: null,
-            planSetId,
-          };
-          
-          updatedProject = {
-            ...updatedProject,
-            pages: [...updatedProject.pages, newProjectPage]
-          };
-          
-          if (startingPageNum % 5 === 0) {
-            await saveProject(updatedProject);
-            setProject(updatedProject);
+            if (pageData.error) {
+              failures.push({ fileName: file.name, pageNum: pageData.pageNum, reason: pageData.error });
+              continue;
+            }
+
+            setAddProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
+
+            try {
+              const imageId = uuidv4();
+              const thumbnailId = uuidv4();
+              await saveImage(imageId, pageData.dataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              thumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+              const normNum = detected.pageNumber.trim().toLowerCase();
+              const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
+                ? existingPageNums.get(normNum)!
+                : undefined;
+
+              const newPage = {
+                id: uuidv4(),
+                name: detected.pageNumber && detected.description
+                  ? `${detected.pageNumber} - ${detected.description}`
+                  : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${startingPageNum}`,
+                pageNumber: detected.pageNumber,
+                description: detected.description,
+                imageId,
+                thumbnailId,
+                imageWidth: pageData.width,
+                imageHeight: pageData.height,
+                extractedText: pageData.extractedText,
+                revisionOf,
+              };
+
+              extractedPages.push(newPage);
+
+              const newProjectPage = {
+                id: newPage.id,
+                name: newPage.name,
+                pageNumber: newPage.pageNumber,
+                description: newPage.description,
+                imageId: newPage.imageId,
+                thumbnailId: newPage.thumbnailId,
+                imageWidth: newPage.imageWidth,
+                imageHeight: newPage.imageHeight,
+                extractedText: newPage.extractedText,
+                measurements: [],
+                scaleConfig: null,
+                planSetId,
+              };
+
+              updatedProject = {
+                ...updatedProject,
+                pages: [...updatedProject.pages, newProjectPage]
+              };
+
+              totalProcessed++;
+
+              if (startingPageNum % 5 === 0) {
+                try {
+                  await saveProject(updatedProject);
+                  setProject(updatedProject);
+                } catch (saveErr) {
+                  console.warn('Periodic saveProject failed', saveErr);
+                }
+              }
+
+              startingPageNum++;
+            } catch (perPageErr) {
+              console.warn(`Save failed for ${file.name} page ${pageData.pageNum}`, perPageErr);
+              failures.push({
+                fileName: file.name,
+                pageNum: pageData.pageNum,
+                reason: String((perPageErr as any)?.message || perPageErr),
+              });
+            }
           }
-          
-          startingPageNum++;
+        } catch (genErr) {
+          console.error(`PDF processing aborted for ${file.name}`, genErr);
+          failures.push({
+            fileName: file.name,
+            pageNum: null,
+            reason: `Processing aborted: ${String((genErr as any)?.message || genErr)}`,
+          });
         }
-        // Save any remaining pages
-        await saveProject(updatedProject);
-        setProject(updatedProject);
+
+        totalExpected += fileExpected;
+
+        if (fileExpected > fileYielded) {
+          for (let p = fileYielded + 1; p <= fileExpected; p++) {
+            failures.push({
+              fileName: file.name,
+              pageNum: p,
+              reason: 'Page was never reached during processing',
+            });
+          }
+        }
+
+        try {
+          await saveProject(updatedProject);
+          setProject(updatedProject);
+        } catch (saveErr) {
+          console.warn('End-of-file saveProject failed', saveErr);
+        }
+      }
+
+      if (failures.length > 0 || totalProcessed !== totalExpected) {
+        const byFile = new Map<string, typeof failures>();
+        failures.forEach(f => {
+          const arr = byFile.get(f.fileName) ?? [];
+          arr.push(f);
+          byFile.set(f.fileName, arr);
+        });
+        const lines: string[] = [];
+        byFile.forEach((arr, name) => {
+          const fileLevel = arr.find(a => a.pageNum == null);
+          const pageNums = arr.filter(a => a.pageNum != null).map(a => a.pageNum).join(', ');
+          if (fileLevel) lines.push(`• ${name}: ${fileLevel.reason}`);
+          if (pageNums) lines.push(`• ${name}: failed pages ${pageNums}`);
+        });
+        alert(
+          `${totalProcessed} of ${totalExpected} page${totalExpected === 1 ? '' : 's'} were imported successfully.\n\n` +
+          `Some pages could not be processed:\n${lines.join('\n')}\n\n` +
+          `You can continue with the pages that imported, then re-upload the file to retry the rest.`
+        );
+      }
+
+      if (totalProcessed === 0) {
+        setIsAddingPages(false);
+        setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
+        return;
       }
 
       setPendingPages(extractedPages);
@@ -1888,82 +1970,53 @@ export const ProjectView: React.FC = () => {
 
   const handleExtractText = async (applyToAll: boolean) => {
     if (!previewPageId || !extractionRect || !extractionType) return;
-    
+
     const page = pendingPages.find(p => p.id === previewPageId);
     if (!page) return;
 
+    const mode = extractionType;
+    const region = { ...extractionRect };
+    const cleanValue = (t: string) => (mode === 'pageNumber' ? cleanSheetNumber(t) : cleanDescriptionText(t));
+
     setIsExtracting(true);
+    let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
     try {
-      const worker = await createWorker('eng');
-      
-      const extractFromPage = async (targetPage: any) => {
-        const imageUrl = getImageUrl(targetPage.imageId);
-        if (!imageUrl) return null;
+      worker = await createWorker('eng', 1, {
+        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
+      });
+      await worker.setParameters(ocrParamsFor(mode));
 
-        // Crop image to selection area for better OCR
-        const img = new Image();
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-          img.src = imageUrl;
-        });
-
-        const canvas = document.createElement('canvas');
-        const scaleX = img.width / 100;
-        const scaleY = img.height / 100;
-        
-        canvas.width = extractionRect.width * scaleX;
-        canvas.height = extractionRect.height * scaleY;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-        
-        ctx.drawImage(
-          img,
-          extractionRect.x * scaleX,
-          extractionRect.y * scaleY,
-          extractionRect.width * scaleX,
-          extractionRect.height * scaleY,
-          0, 0, canvas.width, canvas.height
-        );
-
-        const croppedDataUrl = canvas.toDataURL('image/png');
-        const { data: { text } } = await worker.recognize(croppedDataUrl);
-        
-        return text?.trim() || '';
+      const recognizePage = async (targetPage: any): Promise<string> => {
+        const cropDataUrl = await buildOcrCrop(getImageUrl(targetPage.imageId), region);
+        const { data: { text } } = await worker!.recognize(cropDataUrl);
+        return cleanValue(text || '');
       };
 
       if (applyToAll) {
-        // Extract for all pages
         const updatedPages = [...pendingPages];
         for (let i = 0; i < updatedPages.length; i++) {
-          const text = await extractFromPage(updatedPages[i]);
-          if (text !== null) {
-            updatedPages[i] = { 
-              ...updatedPages[i], 
-              [extractionType]: text,
-              name: extractionType === 'pageNumber' 
-                ? (text && updatedPages[i].description ? `${text} - ${updatedPages[i].description}` : (text || updatedPages[i].description || updatedPages[i].name))
-                : (updatedPages[i].pageNumber && text ? `${updatedPages[i].pageNumber} - ${text}` : (updatedPages[i].pageNumber || text || updatedPages[i].name))
-            };
-          }
+          const value = await recognizePage(updatedPages[i]);
+          const num = mode === 'pageNumber' ? value : (updatedPages[i].pageNumber || '');
+          const desc = mode === 'description' ? value : (updatedPages[i].description || '');
+          updatedPages[i] = {
+            ...updatedPages[i],
+            [mode]: value,
+            name: num && desc ? `${num} - ${desc}` : (num || desc || updatedPages[i].name),
+          };
         }
         setPendingPages(updatedPages);
       } else {
-        // Extract for current page only
-        const text = await extractFromPage(page);
-        if (text !== null) {
-          updatePendingPageField(previewPageId, extractionType, text);
-        }
+        const value = await recognizePage(page);
+        updatePendingPageField(previewPageId, mode, value);
       }
-      
-      await worker.terminate();
+
       setExtractionRect(null);
       setExtractionType(null);
     } catch (error) {
       console.error('Extraction error:', error);
       alert('Failed to extract text. Please try again.');
     } finally {
+      if (worker) await worker.terminate();
       setIsExtracting(false);
     }
   };
@@ -4005,32 +4058,30 @@ export const ProjectView: React.FC = () => {
               </div>
             </div>
             
-            <div 
-              className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${isPanning ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-crosshair'}`}
+            <div
+              className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${isPanning ? 'cursor-grabbing' : extractionType ? 'cursor-crosshair' : zoom > 1 ? 'cursor-grab' : 'cursor-default'}`}
               onWheel={(e) => {
-                if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const zoomDirection = e.deltaY > 0 ? -1 : 1;
+                const zoomFactor = 1.15;
+                const newZoom = Math.min(5, Math.max(1, zoomDirection > 0 ? zoom * zoomFactor : zoom / zoomFactor));
+                if (newZoom === zoom) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const mouseX = e.clientX - (rect.left + rect.width / 2);
+                const mouseY = e.clientY - (rect.top + rect.height / 2);
+                const scaleRatio = newZoom / zoom;
+                const nextOffset = newZoom === 1
+                  ? { x: 0, y: 0 }
+                  : { x: mouseX - (mouseX - panOffset.x) * scaleRatio, y: mouseY - (mouseY - panOffset.y) * scaleRatio };
+                setPanOffset(nextOffset);
+                setZoom(newZoom);
+              }}
+              onMouseDown={(e) => {
+                // Middle mouse button pans, regardless of zoom level or extraction mode.
+                if (e.button === 1) {
                   e.preventDefault();
-                  const zoomDirection = e.deltaY > 0 ? -1 : 1;
-                  const zoomFactor = 1.1;
-                  const newZoom = Math.min(5, Math.max(1, zoomDirection > 0 ? zoom * zoomFactor : zoom / zoomFactor));
-                  
-                  if (newZoom !== zoom) {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const centerX = rect.left + rect.width / 2;
-                    const centerY = rect.top + rect.height / 2;
-                    
-                    const mouseX = e.clientX - centerX;
-                    const mouseY = e.clientY - centerY;
-                    
-                    const scaleRatio = newZoom / zoom;
-                    
-                    setPanOffset({
-                      x: mouseX - (mouseX - panOffset.x) * scaleRatio,
-                      y: mouseY - (mouseY - panOffset.y) * scaleRatio
-                    });
-                    
-                    setZoom(newZoom);
-                  }
+                  setIsPanning(true);
+                  setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
                 }
               }}
               onMouseMove={(e) => {
@@ -4041,7 +4092,7 @@ export const ProjectView: React.FC = () => {
                   });
                   return;
                 }
-                
+
                 const rect = imageContainerRef.current?.getBoundingClientRect();
                 if (!rect) return;
 
@@ -4055,31 +4106,23 @@ export const ProjectView: React.FC = () => {
                   });
                   return;
                 }
-                
+
                 if (interactionMode && interactionMode.startsWith('resize-') && initialRect && selectionStart) {
-                  const dx = ((e.clientX - selectionStart.x) / rect.width) * 100;
-                  const dy = ((e.clientY - selectionStart.y) / rect.height) * 100;
-                  
-                  let newX = initialRect.x;
-                  let newY = initialRect.y;
-                  let newW = initialRect.width;
-                  let newH = initialRect.height;
-                  
-                  if (interactionMode.includes('w')) {
-                    newX = Math.min(initialRect.x + initialRect.width - 1, Math.max(0, initialRect.x + dx));
-                    newW = initialRect.x + initialRect.width - newX;
+                  // The opposite corner stays anchored; only the dragged edges move.
+                  const anchorX = interactionMode.includes('w') ? initialRect.x + initialRect.width : initialRect.x;
+                  const anchorY = interactionMode.includes('n') ? initialRect.y + initialRect.height : initialRect.y;
+                  const cursorX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+                  const cursorY = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+
+                  let { x: newX, y: newY, width: newW, height: newH } = initialRect;
+                  if (interactionMode.includes('w') || interactionMode.includes('e')) {
+                    newX = Math.min(cursorX, anchorX);
+                    newW = Math.max(0.5, Math.abs(cursorX - anchorX));
                   }
-                  if (interactionMode.includes('e')) {
-                    newW = Math.max(1, Math.min(100 - initialRect.x, initialRect.width + dx));
+                  if (interactionMode.includes('n') || interactionMode.includes('s')) {
+                    newY = Math.min(cursorY, anchorY);
+                    newH = Math.max(0.5, Math.abs(cursorY - anchorY));
                   }
-                  if (interactionMode.includes('n')) {
-                    newY = Math.min(initialRect.y + initialRect.height - 1, Math.max(0, initialRect.y + dy));
-                    newH = initialRect.y + initialRect.height - newY;
-                  }
-                  if (interactionMode.includes('s')) {
-                    newH = Math.max(1, Math.min(100 - initialRect.y, initialRect.height + dy));
-                  }
-                  
                   setExtractionRect({ x: newX, y: newY, width: newW, height: newH });
                   return;
                 }
@@ -4087,10 +4130,10 @@ export const ProjectView: React.FC = () => {
                 if (isSelecting && selectionStart && interactionMode === 'draw') {
                   const clientX = Math.max(rect.left, Math.min(rect.right, e.clientX));
                   const clientY = Math.max(rect.top, Math.min(rect.bottom, e.clientY));
-                  
+
                   const x = ((clientX - rect.left) / rect.width) * 100;
                   const y = ((clientY - rect.top) / rect.height) * 100;
-                  
+
                   setExtractionRect({
                     x: Math.min(x, selectionStart.x),
                     y: Math.min(y, selectionStart.y),
@@ -4110,14 +4153,15 @@ export const ProjectView: React.FC = () => {
                 setInteractionMode(null);
               }}
             >
-              <div 
+              <div
                 ref={imageContainerRef}
                 className="relative transition-transform duration-200 ease-out"
-                style={{ 
+                style={{
                   transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
                   transformOrigin: 'center center'
                 }}
                 onMouseDown={(e) => {
+                  if (e.button !== 0) return;
                   if (zoom > 1 && !extractionType) {
                     setIsPanning(true);
                     setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
@@ -4133,38 +4177,60 @@ export const ProjectView: React.FC = () => {
                   setExtractionRect({ x, y, width: 0, height: 0 });
                 }}
               >
-                <img 
-                  src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')} 
+                <img
+                  src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')}
                   alt="Preview"
                   className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
                   draggable={false}
                 />
                 {extractionRect && (
-                  <div 
-                    className="absolute border-2 border-accent-500 bg-accent-500/20 cursor-move pointer-events-auto"
+                  <div
+                    className="absolute border-accent-500 bg-accent-500/10 cursor-move pointer-events-auto"
                     style={{
                       left: `${extractionRect.x}%`,
                       top: `${extractionRect.y}%`,
                       width: `${extractionRect.width}%`,
-                      height: `${extractionRect.height}%`
+                      height: `${extractionRect.height}%`,
+                      borderStyle: 'solid',
+                      borderWidth: `${1 / zoom}px`,
                     }}
                     onMouseDown={(e) => {
+                      if (e.button !== 0) return;
                       e.stopPropagation();
                       setInteractionMode('move');
                       setSelectionStart({ x: e.clientX, y: e.clientY });
                       setInitialRect({ ...extractionRect });
                     }}
                   >
-                    <div className="absolute top-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(-50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-nw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute top-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(50%, -50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-ne'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute bottom-0 left-0 w-4 h-4 bg-white border border-accent-500 cursor-nesw-resize" style={{ transform: `translate(-50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-sw'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
-                    <div className="absolute bottom-0 right-0 w-4 h-4 bg-white border border-accent-500 cursor-nwse-resize" style={{ transform: `translate(50%, 50%) scale(${1/zoom})` }} onMouseDown={(e) => { e.stopPropagation(); setInteractionMode('resize-se'); setSelectionStart({ x: e.clientX, y: e.clientY }); setInitialRect({ ...extractionRect }); }} />
+                    {([
+                      { mode: 'resize-nw', pos: 'top-0 left-0', tx: '-50%', ty: '-50%', cursor: 'nwse-resize' },
+                      { mode: 'resize-ne', pos: 'top-0 right-0', tx: '50%', ty: '-50%', cursor: 'nesw-resize' },
+                      { mode: 'resize-sw', pos: 'bottom-0 left-0', tx: '-50%', ty: '50%', cursor: 'nesw-resize' },
+                      { mode: 'resize-se', pos: 'bottom-0 right-0', tx: '50%', ty: '50%', cursor: 'nwse-resize' },
+                    ] as const).map(h => (
+                      <div
+                        key={h.mode}
+                        className={`absolute ${h.pos} flex items-center justify-center`}
+                        style={{ width: 22, height: 22, transform: `translate(${h.tx}, ${h.ty}) scale(${1 / zoom})`, cursor: h.cursor }}
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setInteractionMode(h.mode);
+                          setSelectionStart({ x: e.clientX, y: e.clientY });
+                          setInitialRect({ ...extractionRect });
+                        }}
+                      >
+                        <div className="w-2.5 h-2.5 rounded-[2px] bg-white border border-accent-600 shadow" />
+                      </div>
+                    ))}
                   </div>
                 )}
                 {!extractionType && zoom === 1 && (
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="bg-black/60 text-white px-6 py-3 rounded-xl backdrop-blur-md text-sm font-medium">
-                      Select "Extract Number" or "Extract Description" then highlight an area
+                    <div className="bg-black/60 text-white px-6 py-3 rounded-xl backdrop-blur-md text-sm font-medium text-center">
+                      Pick "Extract Number" or "Extract Description", then drag a box around the text.<br />
+                      <span className="text-white/70 text-xs">Scroll to zoom · middle-mouse drag to pan</span>
                     </div>
                   </div>
                 )}

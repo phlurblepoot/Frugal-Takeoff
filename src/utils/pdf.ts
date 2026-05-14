@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import Tesseract from 'tesseract.js';
+import Tesseract, { PSM } from 'tesseract.js';
 
 // Background timer worker to prevent throttling in background tabs
 let pulseWorker: Worker | null = null;
@@ -74,6 +74,8 @@ export interface PdfPageImage {
   pageNum: number;
   suggestedName?: string;
   extractedText?: string;
+  /** Populated when this page could not be rendered. dataUrl will be empty. */
+  error?: string;
 }
 
 // Typical architectural/engineering sheet number: 1–3 letters, optional separator, 1–4 digits, optional decimal
@@ -93,6 +95,116 @@ function findBestSheetNumber(text: string): string | null {
 const isDefaultName = (s: string) => /^page\s*\d+$/i.test(s.trim());
 const stripNum = (text: string, num: string) =>
   text.replace(num, '').replace(/^[\s\-–.:|/]+|[\s\-–.:|/]+$/g, '').trim();
+
+// ── OCR region extraction helpers ─────────────────────────────────────────────
+
+const loadImage = (src: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to load image for OCR'));
+    img.src = src;
+  });
+
+/**
+ * Crop a rectangular region (given as percentages 0–100 of the source image)
+ * and return a PNG data URL that has been upscaled and contrast-enhanced so
+ * Tesseract can read small sheet numbers reliably.
+ */
+export async function buildOcrCrop(
+  imageUrl: string,
+  region: { x: number; y: number; width: number; height: number }
+): Promise<string> {
+  const img = await loadImage(imageUrl);
+  const naturalW = img.naturalWidth || img.width;
+  const naturalH = img.naturalHeight || img.height;
+
+  const sx = Math.max(0, (region.x / 100) * naturalW);
+  const sy = Math.max(0, (region.y / 100) * naturalH);
+  const sw = Math.max(1, Math.min(naturalW - sx, (region.width / 100) * naturalW));
+  const sh = Math.max(1, Math.min(naturalH - sy, (region.height / 100) * naturalH));
+
+  // Upscale so the shortest side of the crop is at least ~160px — Tesseract is
+  // far more accurate when glyphs are large. Cap the multiplier to keep memory sane.
+  const upscale = Math.min(6, Math.max(1, 160 / Math.min(sw, sh)));
+  const dw = Math.max(1, Math.round(sw * upscale));
+  const dh = Math.max(1, Math.round(sh * upscale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = dw;
+  canvas.height = dh;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('Could not create canvas context for OCR');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, dw, dh);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+
+  // Grayscale first; track the brightness range so we can stretch contrast.
+  const imageData = ctx.getImageData(0, 0, dw, dh);
+  const d = imageData.data;
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    d[i] = d[i + 1] = d[i + 2] = g;
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  // Only stretch when there is real contrast — otherwise a near-blank crop would
+  // be pushed to solid black, which is worse for OCR than leaving it alone.
+  const span = max - min;
+  if (span >= 16) {
+    for (let i = 0; i < d.length; i += 4) {
+      let v = ((d[i] - min) / span) * 255;
+      v = 255 * Math.pow(Math.max(0, Math.min(1, v / 255)), 1.25);
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+/** Tesseract parameters tuned for the kind of text being extracted. */
+export function ocrParamsFor(mode: 'pageNumber' | 'description'): { tessedit_char_whitelist: string; tessedit_pageseg_mode: PSM } {
+  return mode === 'pageNumber'
+    ? {
+        // Sheet numbers are short uppercase codes (e.g. A1.1, S-201, M2.3).
+        tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.-/ ',
+        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+      }
+    : {
+        tessedit_char_whitelist: '',
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      };
+}
+
+/** Clean up Tesseract output for a sheet number: uppercase, drop spaces, trim stray punctuation.
+ *  In the numeric body (after the 1-3 letter prefix), common letter/digit OCR confusions are
+ *  corrected: S→5, G→6, O→0, I→1, B→8, Z→2. */
+export function cleanSheetNumber(raw: string): string {
+  const upper = (raw || '')
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[^A-Z0-9.\-/]/g, '')
+    .replace(/^[.\-/]+|[.\-/]+$/g, '')
+    .trim();
+
+  if (!upper) return '';
+
+  // Sheet numbers follow <letters><sep><digits>. In the digit body, apply position-aware
+  // substitutions: letters that look like digits are almost certainly digit misreads there.
+  const DIGIT_SUBS: Record<string, string> = { S: '5', G: '6', O: '0', I: '1', B: '8', Z: '2' };
+  return upper.replace(/^([A-Z]{1,3})([-./]?)(.*)$/, (_, prefix, sep, body) =>
+    prefix + sep + body.replace(/[SGOIBZ]/g, (c: string) => DIGIT_SUBS[c] ?? c)
+  );
+}
+
+/** Clean up Tesseract output for a free-text description. */
+export function cleanDescriptionText(raw: string): string {
+  return (raw || '').replace(/\s+/g, ' ').trim();
+}
 
 /**
  * Attempt to auto-detect a sheet number and description from available metadata.
@@ -145,11 +257,11 @@ export function detectPageInfo(
 }
 
 export const loadPdfPagesGenerator = async function*(
-  file: File, 
+  file: File,
   onProgress?: (status: string, pageNum: number, totalPages: number) => void
 ): AsyncGenerator<PdfPageImage, void, unknown> {
   const fileUrl = URL.createObjectURL(file);
-  const getPdfDoc = () => pdfjsLib.getDocument({ 
+  const getPdfDoc = () => pdfjsLib.getDocument({
     url: fileUrl,
     cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/cmaps/',
     cMapPacked: true,
@@ -177,112 +289,140 @@ export const loadPdfPagesGenerator = async function*(
     throw new Error('Could not create canvas context');
   }
 
+  const renderOnePage = async (i: number): Promise<PdfPageImage> => {
+    const page = await pdf.getPage(i);
+
+    const scale = 2.0;
+    const viewport = page.getViewport({ scale });
+
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    context.fillStyle = 'white';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
+
+    if (onProgress) onProgress('reading the text', i, totalPages);
+    let extractedText = '';
+    try {
+      const textContent = await page.getTextContent();
+      extractedText = textContent.items.map((item: any) => item.str).join(' ');
+    } catch (e) {
+      console.warn('Could not extract text from page', e);
+    }
+
+    // Fallback to OCR when no embedded text is available (image-based PDFs).
+    if (!extractedText || extractedText.trim().length < 5) {
+      if (onProgress) onProgress('reading the text', i, totalPages);
+      try {
+        if (!tesseractWorker) {
+          tesseractWorker = await Tesseract.createWorker('eng', 1, {
+            langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
+          });
+        }
+        const { data: { text } } = await tesseractWorker.recognize(canvas);
+        extractedText = text;
+
+        if (i % 10 === 0) {
+          await tesseractWorker.terminate();
+          tesseractWorker = null;
+        }
+      } catch (ocrError) {
+        console.warn('OCR failed', ocrError);
+      }
+    }
+
+    let suggestedName = `Page ${i}`;
+    if (totalPages === 1) {
+      suggestedName = file.name.replace(/\.[^/.]+$/, '');
+    } else if (pageLabels && pageLabels[i - 1]) {
+      suggestedName = pageLabels[i - 1];
+    }
+
+    const thumbScale = 400 / Math.max(viewport.width, viewport.height);
+    thumbCanvas.width = viewport.width * thumbScale;
+    thumbCanvas.height = viewport.height * thumbScale;
+    thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
+
+    page.cleanup();
+
+    return {
+      dataUrl,
+      thumbnailDataUrl,
+      width: viewport.width,
+      height: viewport.height,
+      pageNum: i,
+      suggestedName,
+      extractedText,
+    };
+  };
+
+  // Re-open the underlying pdf document — used both for periodic memory recycling
+  // and to recover the worker after a failed page render.
+  const reopenPdf = async () => {
+    try { await pdf.destroy(); } catch { /* ignore */ }
+    pdf = await getPdfDoc();
+  };
+
   try {
     for (let i = 1; i <= totalPages; i++) {
       if (onProgress) onProgress('processing the image', i, totalPages);
-      
-      const page = await pdf.getPage(i);
-      
-      // Use a higher scale for better resolution when zooming in
-      const scale = 2.0;
-      const viewport = page.getViewport({ scale });
-      
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-      
-      // Fill with white background for JPEG conversion
-      context.fillStyle = 'white';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      
-      await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
-      
-      if (onProgress) onProgress('reading the text', i, totalPages);
-      let extractedText = '';
-      try {
-        const textContent = await page.getTextContent();
-        extractedText = textContent.items.map((item: any) => item.str).join(' ');
-      } catch (e) {
-        console.warn('Could not extract text from page', e);
-      }
-      
-      // Fallback to OCR if no text was extracted (e.g. image-based PDF)
-      if (!extractedText || extractedText.trim().length < 5) {
-        if (onProgress) onProgress('reading the text', i, totalPages);
+
+      let result: PdfPageImage | null = null;
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 2 && !result; attempt++) {
         try {
-          if (!tesseractWorker) {
-            tesseractWorker = await Tesseract.createWorker('eng');
+          result = await renderOnePage(i);
+          lastError = null;
+        } catch (err) {
+          lastError = err;
+          console.warn(`Page ${i} render failed (attempt ${attempt + 1})`, err);
+          if (attempt === 0) {
+            // The pdf.js worker may have been torn down. Rebuild the document
+            // and pause briefly before retrying.
+            try { await reopenPdf(); } catch (reopenErr) {
+              console.warn('PDF reopen failed during retry', reopenErr);
+            }
+            await getPulse(250);
           }
-          const { data: { text } } = await tesseractWorker.recognize(canvas);
-          extractedText = text;
-          
-          if (i % 10 === 0) {
-            await tesseractWorker.terminate();
-            tesseractWorker = null;
-          }
-        } catch (ocrError) {
-          console.warn('OCR failed', ocrError);
         }
       }
-      
-      let suggestedName = `Page ${i}`;
-      if (totalPages === 1) {
-        // If it's a single page PDF, use the file name without extension
-        suggestedName = file.name.replace(/\.[^/.]+$/, "");
-      } else if (pageLabels && pageLabels[i - 1]) {
-        // If it's a multi-page PDF and has page labels, use the label
-        suggestedName = pageLabels[i - 1];
-      }
-      
-      // Generate a smaller thumbnail
-      const thumbScale = 400 / Math.max(viewport.width, viewport.height);
-      thumbCanvas.width = viewport.width * thumbScale;
-      thumbCanvas.height = viewport.height * thumbScale;
-      thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-      
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-      const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
 
-      page.cleanup();
+      if (!result) {
+        // Yield a placeholder so the consumer can verify totals and report failures.
+        result = {
+          dataUrl: '',
+          thumbnailDataUrl: '',
+          width: 0,
+          height: 0,
+          pageNum: i,
+          error: String((lastError as any)?.message || lastError || 'Unknown render error'),
+        };
+      }
 
       if (i % 10 === 0 && typeof pdf.cleanup === 'function') {
-        try {
-          await pdf.cleanup();
-        } catch (e) {
-          console.warn('pdf.cleanup failed', e);
-        }
+        try { await pdf.cleanup(); } catch (e) { console.warn('pdf.cleanup failed', e); }
       }
 
       if (i % 50 === 0 && i < totalPages) {
-        try {
-          await pdf.destroy();
-          pdf = await getPdfDoc();
-        } catch (e) {
-          console.warn('pdf reload failed', e);
-        }
+        try { await reopenPdf(); } catch (e) { console.warn('pdf reload failed', e); }
       }
 
-      yield {
-        dataUrl,
-        thumbnailDataUrl,
-        width: viewport.width,
-        height: viewport.height,
-        pageNum: i,
-        suggestedName,
-        extractedText,
-      };
+      yield result;
 
-      // Small delay to allow garbage collection and UI updates
-      // In background tabs, setTimeout is throttled to 1s, so we use a worker-based pulse instead
+      // Small delay to allow garbage collection and UI updates.
       await getPulse(100);
     }
   } finally {
     if (tesseractWorker) {
-      await tesseractWorker.terminate();
+      try { await tesseractWorker.terminate(); } catch { /* ignore */ }
     }
-    await pdf.destroy();
+    try { await pdf.destroy(); } catch { /* ignore */ }
     URL.revokeObjectURL(fileUrl);
-    
-    // Free canvas memory
+
     canvas.width = 0;
     canvas.height = 0;
     thumbCanvas.width = 0;
