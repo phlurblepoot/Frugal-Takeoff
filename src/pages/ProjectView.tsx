@@ -969,6 +969,11 @@ export const ProjectView: React.FC = () => {
           setProject(updatedProject);
         } catch (saveErr) {
           console.warn('End-of-file saveProject failed', saveErr);
+          failures.push({
+            fileName: file.name,
+            pageNum: null,
+            reason: `Could not save project after processing ${file.name}: ${String((saveErr as any)?.message || saveErr)}`,
+          });
         }
       }
 

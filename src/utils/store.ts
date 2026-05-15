@@ -9,6 +9,50 @@ export const getImageUrl = (id: string) => {
   return `/api/images/${id}/raw`;
 };
 
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+// HTTP statuses that indicate the server is willing to retry the same request.
+// 401/4xx (other than 408/429) are caller errors — retrying won't help.
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+// Wraps fetch with a per-attempt timeout (via AbortController) and exponential-
+// backoff retries for network failures and transient server responses. Designed
+// for slow/flaky connections where a single transient drop should not lose
+// pages mid-PDF-upload.
+const fetchWithRetry = async (
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  opts: { timeoutMs?: number; retries?: number } = {}
+): Promise<Response> => {
+  const { timeoutMs = 60_000, retries = 3 } = opts;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(input, { ...init, signal: controller.signal });
+      clearTimeout(timer);
+      if (RETRYABLE_STATUS.has(res.status) && attempt < retries) {
+        // Drain the body so the connection can be reused for the retry.
+        try { await res.body?.cancel(); } catch { /* ignore */ }
+        await sleep(Math.min(1000 * Math.pow(2, attempt), 8000));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (attempt < retries) {
+        await sleep(Math.min(1000 * Math.pow(2, attempt), 8000));
+        continue;
+      }
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Network error');
+};
+
 const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
@@ -56,7 +100,7 @@ export const saveUserPreferences = async (prefs: Record<string, string>): Promis
 };
 
 export const saveProject = async (project: Project): Promise<void> => {
-  const res = await fetch('/api/projects/' + project.id, {
+  const res = await fetchWithRetry('/api/projects/' + project.id, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(project)
@@ -65,7 +109,7 @@ export const saveProject = async (project: Project): Promise<void> => {
 };
 
 export const createProject = async (project: Project): Promise<void> => {
-  const res = await fetch('/api/projects', {
+  const res = await fetchWithRetry('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(project)
@@ -74,7 +118,7 @@ export const createProject = async (project: Project): Promise<void> => {
 };
 
 export const getProject = async (id: string): Promise<Project | null> => {
-  const res = await fetch('/api/projects/' + id, { headers: getAuthHeaders() });
+  const res = await fetchWithRetry('/api/projects/' + id, { headers: getAuthHeaders() });
   if (res.status === 404) return null;
   await handleResponse(res);
   return await res.json();
@@ -92,16 +136,18 @@ export const deleteProject = async (id: string): Promise<void> => {
 };
 
 export const saveImage = async (id: string, dataUrl: string): Promise<void> => {
-  const res = await fetch('/api/images', {
+  // Per-page images can be several MB, so allow a longer timeout than the
+  // default for callers on slow connections.
+  const res = await fetchWithRetry('/api/images', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ id, data: dataUrl })
-  });
+  }, { timeoutMs: 120_000 });
   await handleResponse(res);
 };
 
 export const getImage = async (id: string): Promise<string | null> => {
-  const res = await fetch('/api/images/' + id, { headers: getAuthHeaders() });
+  const res = await fetchWithRetry('/api/images/' + id, { headers: getAuthHeaders() });
   if (res.status === 404) return null;
   await handleResponse(res);
   const { data } = await res.json();
