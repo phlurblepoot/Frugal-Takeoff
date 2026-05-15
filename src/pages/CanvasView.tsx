@@ -1562,6 +1562,20 @@ const CanvasViewInner: React.FC = () => {
                     ))}
                   </optgroup>
                 </select>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-[10px] text-slate-500 italic">
+                    {page.scaleConfig?.label === 'custom' ? 'Calibrated' : ''}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setCalibratingRegionId(null);
+                      setCurrentTool('scale');
+                    }}
+                    className="text-[10px] text-accent-600 font-medium hover:underline"
+                  >
+                    {page.scaleConfig ? 'Recalibrate' : 'Set Scale'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
