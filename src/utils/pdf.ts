@@ -258,7 +258,8 @@ export function detectPageInfo(
 
 export const loadPdfPagesGenerator = async function*(
   file: File,
-  onProgress?: (status: string, pageNum: number, totalPages: number) => void
+  onProgress?: (status: string, pageNum: number, totalPages: number) => void,
+  pageNums?: number[]
 ): AsyncGenerator<PdfPageImage, void, unknown> {
   const fileUrl = URL.createObjectURL(file);
   const getPdfDoc = () => pdfjsLib.getDocument({
@@ -271,6 +272,12 @@ export const loadPdfPagesGenerator = async function*(
 
   let pdf = await getPdfDoc();
   const totalPages = pdf.numPages;
+
+  // When `pageNums` is supplied (retry path), iterate only those pages —
+  // deduped, in-range, in sorted order. Otherwise process every page.
+  const indices: number[] = pageNums
+    ? [...new Set(pageNums)].filter(n => Number.isInteger(n) && n >= 1 && n <= totalPages).sort((a, b) => a - b)
+    : Array.from({ length: totalPages }, (_, i) => i + 1);
 
   let pageLabels: string[] | null = null;
   try {
@@ -368,7 +375,9 @@ export const loadPdfPagesGenerator = async function*(
   };
 
   try {
-    for (let i = 1; i <= totalPages; i++) {
+    let processed = 0;
+    for (const i of indices) {
+      processed++;
       if (onProgress) onProgress('processing the image', i, totalPages);
 
       let result: PdfPageImage | null = null;
@@ -403,11 +412,11 @@ export const loadPdfPagesGenerator = async function*(
         };
       }
 
-      if (i % 10 === 0 && typeof pdf.cleanup === 'function') {
+      if (processed % 10 === 0 && typeof pdf.cleanup === 'function') {
         try { await pdf.cleanup(); } catch (e) { console.warn('pdf.cleanup failed', e); }
       }
 
-      if (i % 50 === 0 && i < totalPages) {
+      if (processed % 50 === 0 && processed < indices.length) {
         try { await reopenPdf(); } catch (e) { console.warn('pdf reload failed', e); }
       }
 

@@ -12,6 +12,8 @@ import { CollaborationProvider, useCollaboration } from '../context/Collaboratio
 import { useNotes } from '../context/NotesContext';
 
 const STANDARD_SCALES = [
+  { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
+  { label: '3/64" = 1\'-0"', pixelDistance: 144, realWorldDistance: 64/3, unit: 'ft' },
   { label: '1/16" = 1\'-0"', pixelDistance: 144, realWorldDistance: 16, unit: 'ft' },
   { label: '3/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32/3, unit: 'ft' },
   { label: '1/8" = 1\'-0"', pixelDistance: 144, realWorldDistance: 8, unit: 'ft' },
@@ -23,12 +25,15 @@ const STANDARD_SCALES = [
   { label: '1" = 1\'-0"', pixelDistance: 144, realWorldDistance: 1, unit: 'ft' },
   { label: '1 1/2" = 1\'-0"', pixelDistance: 144, realWorldDistance: 2/3, unit: 'ft' },
   { label: '3" = 1\'-0"', pixelDistance: 144, realWorldDistance: 1/3, unit: 'ft' },
+  { label: '6" = 1\'-0"', pixelDistance: 144, realWorldDistance: 1/6, unit: 'ft' },
   { label: '1" = 10\'', pixelDistance: 144, realWorldDistance: 10, unit: 'ft' },
   { label: '1" = 20\'', pixelDistance: 144, realWorldDistance: 20, unit: 'ft' },
   { label: '1" = 30\'', pixelDistance: 144, realWorldDistance: 30, unit: 'ft' },
   { label: '1" = 40\'', pixelDistance: 144, realWorldDistance: 40, unit: 'ft' },
   { label: '1" = 50\'', pixelDistance: 144, realWorldDistance: 50, unit: 'ft' },
   { label: '1" = 60\'', pixelDistance: 144, realWorldDistance: 60, unit: 'ft' },
+  { label: '1" = 100\'', pixelDistance: 144, realWorldDistance: 100, unit: 'ft' },
+  { label: '1" = 200\'', pixelDistance: 144, realWorldDistance: 200, unit: 'ft' },
 ];
 
 const CustomCostRow: React.FC<{
@@ -731,7 +736,10 @@ const CanvasViewInner: React.FC = () => {
 
   const handleStandardScaleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
-    if (val === 'custom' || val === '') {
+    if (val === '') return;
+    if (val === 'custom') {
+      setCalibratingRegionId(null);
+      setCurrentTool('scale');
       return;
     }
     const scale = STANDARD_SCALES.find(s => s.label === val);
@@ -1544,16 +1552,30 @@ const CanvasViewInner: React.FC = () => {
                   <option value="" disabled>Select a scale...</option>
                   <option value="custom">Custom (Calibrated)</option>
                   <optgroup label="Architectural">
-                    {STANDARD_SCALES.slice(0, 11).map(s => (
+                    {STANDARD_SCALES.slice(0, 14).map(s => (
                       <option key={s.label} value={s.label}>{s.label}</option>
                     ))}
                   </optgroup>
                   <optgroup label="Engineering">
-                    {STANDARD_SCALES.slice(11).map(s => (
+                    {STANDARD_SCALES.slice(14).map(s => (
                       <option key={s.label} value={s.label}>{s.label}</option>
                     ))}
                   </optgroup>
                 </select>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="text-[10px] text-slate-500 italic">
+                    {page.scaleConfig?.label === 'custom' ? 'Calibrated' : ''}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setCalibratingRegionId(null);
+                      setCurrentTool('scale');
+                    }}
+                    className="text-[10px] text-accent-600 font-medium hover:underline"
+                  >
+                    {page.scaleConfig ? 'Recalibrate' : 'Set Scale'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1660,12 +1682,12 @@ const CanvasViewInner: React.FC = () => {
                         <option value="" disabled>Select a scale...</option>
                         <option value="custom">Custom (Calibrated)</option>
                         <optgroup label="Architectural">
-                          {STANDARD_SCALES.slice(0, 11).map(s => (
+                          {STANDARD_SCALES.slice(0, 14).map(s => (
                             <option key={s.label} value={s.label}>{s.label}</option>
                           ))}
                         </optgroup>
                         <optgroup label="Engineering">
-                          {STANDARD_SCALES.slice(11).map(s => (
+                          {STANDARD_SCALES.slice(14).map(s => (
                             <option key={s.label} value={s.label}>{s.label}</option>
                           ))}
                         </optgroup>
