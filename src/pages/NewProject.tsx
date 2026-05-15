@@ -511,22 +511,32 @@ export const NewProject: React.FC = () => {
       const project = await getProject(projectId);
       if (!project) throw new Error('Project not found');
 
-      const updatedPages: ProjectPage[] = pendingPages.map(p => ({
-        id: p.id,
-        name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
-        pageNumber: p.pageNumber,
-        description: p.description,
-        imageId: p.imageId,
-        thumbnailId: p.thumbnailId,
-        imageWidth: p.imageWidth,
-        imageHeight: p.imageHeight,
-        extractedText: p.extractedText,
-        measurements: project.pages.find(pp => pp.id === p.id)?.measurements || [],
-        scaleConfig: project.pages.find(pp => pp.id === p.id)?.scaleConfig || null,
-        planSetId,
-      }));
+      // Update names/numbers on the existing server-side pages in place. We
+      // never rebuild project.pages from pendingPages — if pendingPages is
+      // somehow shorter (e.g. a stale closure), any unmatched server-side
+      // pages would be silently dropped on save.
+      const updatedServerPages = [...project.pages];
+      pendingPages.forEach(p => {
+        const idx = updatedServerPages.findIndex(pp => pp.id === p.id);
+        const merged: ProjectPage = {
+          id: p.id,
+          name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+          pageNumber: p.pageNumber,
+          description: p.description,
+          imageId: p.imageId,
+          thumbnailId: p.thumbnailId,
+          imageWidth: p.imageWidth,
+          imageHeight: p.imageHeight,
+          extractedText: p.extractedText,
+          measurements: idx !== -1 ? updatedServerPages[idx].measurements : [],
+          scaleConfig: idx !== -1 ? updatedServerPages[idx].scaleConfig : null,
+          planSetId,
+        };
+        if (idx !== -1) updatedServerPages[idx] = merged;
+        else updatedServerPages.push(merged);
+      });
 
-      project.pages = updatedPages;
+      project.pages = updatedServerPages;
 
       // If converted from a bid, move the email thread onto the project so the
       // pipeline entry can be deleted while keeping the conversation history.

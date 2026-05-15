@@ -2435,40 +2435,47 @@ export const ProjectView: React.FC = () => {
     }
 
     const allowedPlanSetIds = new Set(allowedPlanSets.map(ps => ps.id));
-    
-    const candidatePages = project.pages.filter(page => 
+
+    const candidatePages = project.pages.filter(page =>
       !page.planSetId || allowedPlanSetIds.has(page.planSetId)
     );
 
-    const latestPagesMap = new Map<string, typeof project.pages[0]>();
-
+    // Revision dedup: when the SAME pageNumber appears in multiple plan
+    // sets, only the latest plan set's pages are shown. Within a single
+    // plan set we never collapse pages — automatic page-number detection
+    // (filename / OCR) can give multiple pages the same number on initial
+    // upload, and those are distinct pages, not revisions of each other.
+    const latestPlanSetByPageNumber = new Map<string, string | undefined>();
     candidatePages.forEach(page => {
-      const key = page.pageNumber ? page.pageNumber.trim().toLowerCase() : page.id;
-      const existingPage = latestPagesMap.get(key);
-
-      if (!existingPage) {
-        latestPagesMap.set(key, page);
-      } else {
-        const existingPlanSet = allowedPlanSets.find(ps => ps.id === existingPage.planSetId);
-        const currentPlanSet = allowedPlanSets.find(ps => ps.id === page.planSetId);
-
-        if (existingPlanSet && currentPlanSet) {
-          const isNewer = currentPlanSet.date && existingPlanSet.date 
-            ? (currentPlanSet.date > existingPlanSet.date || (currentPlanSet.date === existingPlanSet.date && currentPlanSet.createdAt > existingPlanSet.createdAt))
-            : currentPlanSet.createdAt > existingPlanSet.createdAt;
-
-          if (isNewer) {
-            latestPagesMap.set(key, page);
-          }
-        } else if (!existingPlanSet && currentPlanSet) {
-          latestPagesMap.set(key, page);
-        }
+      if (!page.pageNumber) return;
+      const numKey = page.pageNumber.trim().toLowerCase();
+      const currentLatest = latestPlanSetByPageNumber.get(numKey);
+      if (currentLatest === undefined) {
+        latestPlanSetByPageNumber.set(numKey, page.planSetId);
+        return;
+      }
+      if (currentLatest === page.planSetId) return;
+      const existingPlanSet = allowedPlanSets.find(ps => ps.id === currentLatest);
+      const currentPlanSet = allowedPlanSets.find(ps => ps.id === page.planSetId);
+      if (existingPlanSet && currentPlanSet) {
+        const isNewer = currentPlanSet.date && existingPlanSet.date
+          ? (currentPlanSet.date > existingPlanSet.date || (currentPlanSet.date === existingPlanSet.date && currentPlanSet.createdAt > existingPlanSet.createdAt))
+          : currentPlanSet.createdAt > existingPlanSet.createdAt;
+        if (isNewer) latestPlanSetByPageNumber.set(numKey, page.planSetId);
+      } else if (!existingPlanSet && currentPlanSet) {
+        latestPlanSetByPageNumber.set(numKey, page.planSetId);
       }
     });
 
+    const visiblePages = candidatePages.filter(page => {
+      if (!page.pageNumber) return true;
+      const numKey = page.pageNumber.trim().toLowerCase();
+      return latestPlanSetByPageNumber.get(numKey) === page.planSetId;
+    });
+
     const searchLower = searchTerm.toLowerCase();
-    return Array.from(latestPagesMap.values()).filter(page => {
-      const matchesSearch = page.name.toLowerCase().includes(searchLower) || 
+    return visiblePages.filter(page => {
+      const matchesSearch = page.name.toLowerCase().includes(searchLower) ||
                             (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
                             (page.description && page.description.toLowerCase().includes(searchLower)) ||
                             (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
