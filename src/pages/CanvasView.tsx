@@ -736,7 +736,10 @@ const CanvasViewInner: React.FC = () => {
 
   const handleStandardScaleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
-    if (val === 'custom' || val === '') {
+    if (val === '') return;
+    if (val === 'custom') {
+      setCalibratingRegionId(null);
+      setCurrentTool('scale');
       return;
     }
     const scale = STANDARD_SCALES.find(s => s.label === val);
