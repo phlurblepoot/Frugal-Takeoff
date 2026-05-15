@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
+import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
 import { useCollaboration } from '../context/CollaborationContext';
@@ -585,6 +586,16 @@ export const ProjectView: React.FC = () => {
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
   const [useExistingPlanSet, setUseExistingPlanSet] = useState(false);
   const [targetPlanSetId, setTargetPlanSetId] = useState('');
+
+  // Upload-failures modal state (mirrors NewProject.tsx) — keeps source File
+  // objects so the user can retry missing pages from the existing flow.
+  const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([]);
+  const [uploadFilesByName, setUploadFilesByName] = useState<Map<string, File>>(new Map());
+  const [uploadTotals, setUploadTotals] = useState({ processed: 0, expected: 0 });
+  const [showUploadFailuresModal, setShowUploadFailuresModal] = useState(false);
+  const [isRetryingUpload, setIsRetryingUpload] = useState(false);
+  const [retryProgress, setRetryProgress] = useState({ status: '', current: 0, total: 0, fileName: '' });
+  const [retryPlanSetId, setRetryPlanSetId] = useState<string>('');
   const [searchParams, setSearchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   const setSearchTerm = (term: string) => {
@@ -977,25 +988,15 @@ export const ProjectView: React.FC = () => {
         }
       }
 
-      if (failures.length > 0 || totalProcessed !== totalExpected) {
-        const byFile = new Map<string, typeof failures>();
-        failures.forEach(f => {
-          const arr = byFile.get(f.fileName) ?? [];
-          arr.push(f);
-          byFile.set(f.fileName, arr);
-        });
-        const lines: string[] = [];
-        byFile.forEach((arr, name) => {
-          const fileLevel = arr.find(a => a.pageNum == null);
-          const pageNums = arr.filter(a => a.pageNum != null).map(a => a.pageNum).join(', ');
-          if (fileLevel) lines.push(`• ${name}: ${fileLevel.reason}`);
-          if (pageNums) lines.push(`• ${name}: failed pages ${pageNums}`);
-        });
-        alert(
-          `${totalProcessed} of ${totalExpected} page${totalExpected === 1 ? '' : 's'} were imported successfully.\n\n` +
-          `Some pages could not be processed:\n${lines.join('\n')}\n\n` +
-          `You can continue with the pages that imported, then re-upload the file to retry the rest.`
-        );
+      const hasFailures = failures.length > 0 || totalProcessed !== totalExpected;
+      if (hasFailures) {
+        const filesByName = new Map<string, File>();
+        for (const f of newPlanSetFiles) filesByName.set(f.name, f);
+        setUploadFilesByName(filesByName);
+        setUploadFailures(failures);
+        setUploadTotals({ processed: totalProcessed, expected: totalExpected });
+        setRetryPlanSetId(planSetId);
+        setShowUploadFailuresModal(true);
       }
 
       if (totalProcessed === 0) {
@@ -1013,6 +1014,200 @@ export const ProjectView: React.FC = () => {
     } finally {
       setIsAddingPages(false);
       setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
+    }
+  };
+
+  // Re-render and re-import each failure in the modal. Same per-page logic
+  // as the original upload, with page-level failures using the pageNums
+  // filter and file-level failures re-running the full file.
+  const handleRetryFailedPages = async () => {
+    if (!project || uploadFailures.length === 0 || !retryPlanSetId) return;
+    setIsRetryingUpload(true);
+    setRetryProgress({ status: '', current: 0, total: 0, fileName: '' });
+
+    try {
+      const freshProject = await getProject(project.id);
+      if (!freshProject) throw new Error('Project not found');
+      let workingProject: Project = freshProject;
+
+      const existingPageNums = new Map<string, string>();
+      for (const pg of workingProject.pages) {
+        if (pg.pageNumber?.trim()) {
+          existingPageNums.set(pg.pageNumber.trim().toLowerCase(), pg.pageNumber.trim());
+        }
+      }
+
+      const byFile = new Map<string, { pageNums: number[]; allPages: boolean }>();
+      for (const f of uploadFailures) {
+        const entry = byFile.get(f.fileName) ?? { pageNums: [], allPages: false };
+        if (f.pageNum == null) entry.allPages = true;
+        else entry.pageNums.push(f.pageNum);
+        byFile.set(f.fileName, entry);
+      }
+
+      const remainingFailures: UploadFailure[] = [];
+      const newPendingPages: any[] = [];
+      const newThumbnails: Record<string, string> = {};
+      let newlyProcessed = 0;
+      let nextPageNum = (workingProject.pages.length || 0) + 1;
+
+      for (const [fileName, info] of byFile) {
+        const file = uploadFilesByName.get(fileName);
+        if (!file) {
+          if (info.allPages) {
+            remainingFailures.push({ fileName, pageNum: null, reason: 'Source file no longer available for retry' });
+          }
+          for (const p of info.pageNums) {
+            remainingFailures.push({ fileName, pageNum: p, reason: 'Source file no longer available for retry' });
+          }
+          continue;
+        }
+
+        const pageNumsArg = info.allPages ? undefined : info.pageNums;
+        const requestedCount = info.allPages ? 0 : info.pageNums.length;
+        const succeeded = new Set<number>();
+        let yielded = 0;
+        let expectedFromGenerator = 0;
+
+        try {
+          const generator = loadPdfPagesGenerator(file, (status, current, total) => {
+            if (info.allPages && total > 0) expectedFromGenerator = total;
+            setRetryProgress({
+              status,
+              current,
+              total: info.allPages ? total : requestedCount,
+              fileName,
+            });
+          }, pageNumsArg);
+
+          for await (const pageData of generator) {
+            yielded++;
+
+            if (pageData.error) {
+              remainingFailures.push({ fileName, pageNum: pageData.pageNum, reason: pageData.error });
+              continue;
+            }
+
+            try {
+              const imageId = uuidv4();
+              const thumbnailId = uuidv4();
+              await saveImage(imageId, pageData.dataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              newThumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
+              const normNum = detected.pageNumber.trim().toLowerCase();
+              const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
+                ? existingPageNums.get(normNum)!
+                : undefined;
+
+              const newPage = {
+                id: uuidv4(),
+                name: detected.pageNumber && detected.description
+                  ? `${detected.pageNumber} - ${detected.description}`
+                  : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${nextPageNum}`,
+                pageNumber: detected.pageNumber,
+                description: detected.description,
+                imageId,
+                thumbnailId,
+                imageWidth: pageData.width,
+                imageHeight: pageData.height,
+                extractedText: pageData.extractedText,
+                revisionOf,
+              };
+
+              newPendingPages.push(newPage);
+
+              const newProjectPage = {
+                id: newPage.id,
+                name: newPage.name,
+                pageNumber: newPage.pageNumber,
+                description: newPage.description,
+                imageId: newPage.imageId,
+                thumbnailId: newPage.thumbnailId,
+                imageWidth: newPage.imageWidth,
+                imageHeight: newPage.imageHeight,
+                extractedText: newPage.extractedText,
+                measurements: [],
+                scaleConfig: null,
+                planSetId: retryPlanSetId,
+              };
+
+              workingProject = {
+                ...workingProject,
+                pages: [...workingProject.pages, newProjectPage],
+              };
+
+              nextPageNum++;
+              newlyProcessed++;
+              succeeded.add(pageData.pageNum);
+            } catch (saveErr) {
+              remainingFailures.push({
+                fileName,
+                pageNum: pageData.pageNum,
+                reason: String((saveErr as any)?.message || saveErr),
+              });
+            }
+          }
+        } catch (genErr) {
+          remainingFailures.push({
+            fileName,
+            pageNum: null,
+            reason: `Retry aborted: ${String((genErr as any)?.message || genErr)}`,
+          });
+          if (!info.allPages) {
+            for (const p of info.pageNums) {
+              if (!succeeded.has(p)) {
+                remainingFailures.push({ fileName, pageNum: p, reason: 'Page was never reached during retry' });
+              }
+            }
+          }
+          continue;
+        }
+
+        if (!info.allPages) {
+          for (const p of info.pageNums) {
+            const alreadyRecorded = remainingFailures.some(f => f.fileName === fileName && f.pageNum === p);
+            if (!succeeded.has(p) && !alreadyRecorded) {
+              remainingFailures.push({ fileName, pageNum: p, reason: 'Page was not produced during retry' });
+            }
+          }
+        } else if (expectedFromGenerator > yielded) {
+          for (let p = yielded + 1; p <= expectedFromGenerator; p++) {
+            remainingFailures.push({ fileName, pageNum: p, reason: 'Page was never reached during retry' });
+          }
+        }
+      }
+
+      try {
+        await saveProject(workingProject);
+        setProject(workingProject);
+      } catch (saveErr) {
+        remainingFailures.push({
+          fileName: '(project save)',
+          pageNum: null,
+          reason: `Could not save retried pages: ${String((saveErr as any)?.message || saveErr)}`,
+        });
+      }
+
+      if (newPendingPages.length > 0) {
+        setPendingPages(prev => [...prev, ...newPendingPages]);
+        setPendingThumbnails(prev => ({ ...prev, ...newThumbnails }));
+        if (addPagesStep !== 'name_pages') setAddPagesStep('name_pages');
+      }
+
+      setUploadFailures(remainingFailures);
+      setUploadTotals(prev => ({ processed: prev.processed + newlyProcessed, expected: prev.expected }));
+
+      if (remainingFailures.length === 0) {
+        setShowUploadFailuresModal(false);
+      }
+    } catch (err) {
+      console.error('Retry failed', err);
+      alert(`Retry failed: ${(err as any)?.message || err}`);
+    } finally {
+      setIsRetryingUpload(false);
+      setRetryProgress({ status: '', current: 0, total: 0, fileName: '' });
     }
   };
 
@@ -4495,6 +4690,21 @@ export const ProjectView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <UploadFailuresModal
+        open={showUploadFailuresModal}
+        failures={uploadFailures}
+        totalProcessed={uploadTotals.processed}
+        totalExpected={uploadTotals.expected}
+        isRetrying={isRetryingUpload}
+        retryStatus={retryProgress.status}
+        retryCurrent={retryProgress.current}
+        retryTotal={retryProgress.total}
+        retryFileName={retryProgress.fileName}
+        canRetry={uploadFilesByName.size > 0}
+        onRetry={handleRetryFailedPages}
+        onClose={() => setShowUploadFailuresModal(false)}
+      />
     </div>
   );
 };
