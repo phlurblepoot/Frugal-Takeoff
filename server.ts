@@ -543,6 +543,34 @@ async function startServer() {
     }
   });
 
+  // Raw-binary upload for files that would otherwise need to be base64-encoded
+  // and JSON-stringified in the browser (e.g. source PDFs in the vector
+  // pipeline). The client streams the Blob directly; we base64-encode here so
+  // the storage format and the existing /api/images/:id/raw read path remain
+  // identical to the JSON-based saveImage path.
+  app.post(
+    "/api/files/:id",
+    express.raw({ limit: "100mb", type: () => true }),
+    authenticateToken,
+    (req, res) => {
+      try {
+        const id = req.params.id;
+        const body = req.body as Buffer;
+        if (!Buffer.isBuffer(body) || body.length === 0) {
+          return res.status(400).json({ error: "Empty body" });
+        }
+        const contentType = (req.get("Content-Type") || "application/octet-stream").split(";")[0].trim();
+        const dataUrl = `data:${contentType};base64,${body.toString("base64")}`;
+        const stmt = db.prepare("INSERT OR REPLACE INTO images (id, data) VALUES (?, ?)");
+        stmt.run(id, dataUrl);
+        res.json({ success: true });
+      } catch (error) {
+        console.error("Error saving file:", error);
+        res.status(500).json({ error: "Failed to save file" });
+      }
+    }
+  );
+
   app.get("/api/templates", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM templates');

@@ -3,7 +3,7 @@ import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { createProject, saveProject, getProject, saveImage, saveFile, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
+import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
 import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
@@ -109,14 +109,6 @@ export const NewProject: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const readFileAsDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length > 0) {
@@ -193,18 +185,20 @@ export const NewProject: React.FC = () => {
         const file = files[i];
         setProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: files.length }));
 
-        // Upload the raw PDF once per file. Every ProjectPage extracted from this
-        // file points at this single sourcePdfFileId — the canvas renders the
-        // matching page on demand and printouts copy the original vectors, so we
-        // never need a full-size raster of the page.
+        // Upload the raw PDF once per file. The File is streamed directly to
+        // the server — we never materialize a base64 dataUrl in the browser,
+        // which previously OOM'd Chrome for plan-set–sized PDFs. Every
+        // ProjectPage extracted from this file points at this single
+        // sourcePdfFileId, so the canvas can render pages on demand and
+        // printouts can copy the original vectors.
         let sourcePdfFileId: string | undefined;
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
             setProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
-            const pdfDataUrl = await readFileAsDataUrl(file);
             sourcePdfFileId = uuidv4();
-            await saveFile(sourcePdfFileId, pdfDataUrl);
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
           } catch (pdfErr) {
             console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
             sourcePdfFileId = undefined;
@@ -414,9 +408,9 @@ export const NewProject: React.FC = () => {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
-            const pdfDataUrl = await readFileAsDataUrl(file);
             sourcePdfFileId = uuidv4();
-            await saveFile(sourcePdfFileId, pdfDataUrl);
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
           } catch (pdfErr) {
             console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
             sourcePdfFileId = undefined;

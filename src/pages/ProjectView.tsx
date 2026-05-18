@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { v4 as uuidv4 } from 'uuid';
@@ -988,22 +988,17 @@ export const ProjectView: React.FC = () => {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
 
-        // Upload the source PDF once for this file so every page extracted from
-        // it can point back at vector source (see NewProject.handleProcessFiles
-        // for the same pattern).
+        // Upload the source PDF once for this file. Stream the File directly
+        // to the server instead of materializing a base64 dataUrl in the
+        // browser — see NewProject.handleProcessFiles for the same pattern.
         let sourcePdfFileId: string | undefined;
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
             setAddProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
-            const pdfDataUrl = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result as string);
-              reader.onerror = () => reject(reader.error);
-              reader.readAsDataURL(file);
-            });
             sourcePdfFileId = uuidv4();
-            await saveFile(sourcePdfFileId, pdfDataUrl);
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
           } catch (pdfErr) {
             console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
             sourcePdfFileId = undefined;
