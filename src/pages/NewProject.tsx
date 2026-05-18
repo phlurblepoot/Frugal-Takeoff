@@ -29,6 +29,8 @@ const PdfPagePreview: React.FC<{
 }> = ({ sourcePdfUrl, sourcePdfPageNum, fallbackUrl, alt, className, onLoadedSrc }) => {
   const [src, setSrc] = useState<string | undefined>(fallbackUrl);
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('[PdfPagePreview] effect', { sourcePdfUrl, sourcePdfPageNum, hasFallback: !!fallbackUrl, fallbackPrefix: fallbackUrl?.slice(0, 40) });
     if (!sourcePdfUrl || !sourcePdfPageNum) {
       setSrc(fallbackUrl);
       if (fallbackUrl) onLoadedSrc?.(fallbackUrl);
@@ -51,11 +53,13 @@ const PdfPagePreview: React.FC<{
         await page.render({ canvasContext: ctx, viewport } as any).promise;
         if (cancelled) return;
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        // eslint-disable-next-line no-console
+        console.log('[PdfPagePreview] rendered', { w: canvas.width, h: canvas.height, dataUrlPrefix: dataUrl.slice(0, 30), dataUrlLen: dataUrl.length });
         setSrc(dataUrl);
         onLoadedSrc?.(dataUrl);
         proxy.destroy().catch(() => {});
       } catch (err) {
-        console.error('PdfPagePreview render failed', err);
+        console.error('[PdfPagePreview] render failed', err);
         if (!cancelled && fallbackUrl) setSrc(fallbackUrl);
       }
     })();
@@ -63,7 +67,18 @@ const PdfPagePreview: React.FC<{
   }, [sourcePdfUrl, sourcePdfPageNum, fallbackUrl]);
 
   if (!src) return null;
-  return <img src={src} alt={alt} className={className} draggable={false} />;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      draggable={false}
+      onError={(e) => {
+        // eslint-disable-next-line no-console
+        console.error('[PdfPagePreview] <img> failed to load', { srcPrefix: (e.currentTarget as HTMLImageElement).src.slice(0, 80), srcLen: (e.currentTarget as HTMLImageElement).src.length });
+      }}
+    />
+  );
 };
 
 interface PendingPage {
