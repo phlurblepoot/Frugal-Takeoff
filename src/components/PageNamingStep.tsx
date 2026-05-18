@@ -261,7 +261,15 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
 
         <div className="p-4 sm:p-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            {pendingPages.map((page, index) => (
+            {pendingPages.map((page, index) => {
+              // Look up under thumbnailId first (new uploads + the
+              // add-pages-to-existing-project flow), then fall back to
+              // imageId (the "rename existing pages" flow keys the dict
+              // by the page's imageId because that's the stable ID it
+              // already had on the project).
+              const thumbSrc =
+                pendingThumbnails[page.thumbnailId] || pendingThumbnails[page.imageId];
+              return (
               <div
                 key={page.id}
                 className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300"
@@ -270,9 +278,9 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
                   onClick={() => setPreviewPageId(page.id)}
                 >
-                  {pendingThumbnails[page.thumbnailId] ? (
+                  {thumbSrc ? (
                     <img
-                      src={pendingThumbnails[page.thumbnailId]}
+                      src={thumbSrc}
                       alt={`Page ${index + 1}`}
                       className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                     />
@@ -346,7 +354,8 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
