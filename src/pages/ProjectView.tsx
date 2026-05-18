@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
@@ -578,6 +578,11 @@ export const ProjectView: React.FC = () => {
 
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(new Set());
+  // Pages-tab layout: grid is the default (thumbnail-first browsing), list is
+  // better when descriptions matter more than the visual since the grid cell
+  // truncates them. Persisted per-user via getUserPreferences (see the load
+  // effect that hydrates other preferences).
+  const [pagesViewMode, setPagesViewMode] = useState<'grid' | 'list'>('grid');
   const pagesScrollRef = useRef<HTMLDivElement>(null);
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
@@ -647,8 +652,15 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-includeSignature']    != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
       if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
       if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the pages-tab view mode separately from the proposal prefs (it's
+  // a UI preference, not part of proposal generation).
+  useEffect(() => {
+    saveUserPreferences({ 'pages-viewMode': pagesViewMode }).catch(() => {});
+  }, [pagesViewMode]);
 
   // Auto-save whenever any persistent pref changes (localStorage + server)
   useEffect(() => {
@@ -3005,10 +3017,51 @@ export const ProjectView: React.FC = () => {
                   placeholder="Search pages and text..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
+                  onKeyDown={(e) => { if (e.key === 'Escape' && searchTerm) setSearchTerm(''); }}
+                  className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
                 />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    title="Clear search (Esc)"
+                    aria-label="Clear search"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-700 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+                {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
+                <div className="flex items-center gap-0.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg p-0.5 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setPagesViewMode('grid')}
+                    title="Grid view"
+                    aria-pressed={pagesViewMode === 'grid'}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      pagesViewMode === 'grid'
+                        ? 'bg-accent-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <LayoutGrid size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPagesViewMode('list')}
+                    title="List view"
+                    aria-pressed={pagesViewMode === 'list'}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      pagesViewMode === 'list'
+                        ? 'bg-accent-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <List size={16} />
+                  </button>
+                </div>
                 {selectedPageIds.size > 0 && (
                   <>
                     <button
@@ -3074,6 +3127,128 @@ export const ProjectView: React.FC = () => {
                     Add your first page
                   </button>
                 )}
+              </div>
+            ) : pagesViewMode === 'list' ? (
+              <div className="flex flex-col gap-2">
+                {filteredPages.map((page) => {
+                  const isPageSelected = selectedPageIds.has(page.id);
+                  const isEditing = editingPageId === page.id;
+                  const matchIdx = searchTerm && page.extractedText
+                    ? page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase())
+                    : -1;
+                  const showSnippet = matchIdx >= 0 && !page.name.toLowerCase().includes(searchTerm.toLowerCase());
+                  return (
+                    <Link
+                      key={page.id}
+                      to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                      state={{ pageIds: filteredPages.map(p => p.id) }}
+                      className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
+                        isPageSelected
+                          ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
+                      }`}
+                    >
+                      <div className="relative w-32 h-24 flex-shrink-0 bg-slate-100 dark:bg-slate-700 border-r border-slate-200 dark:border-slate-600 overflow-hidden">
+                        <img
+                          src={getImageUrl(page.thumbnailId || page.imageId)}
+                          alt={page.name}
+                          className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity"
+                          referrerPolicy="no-referrer"
+                        />
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedPageIds(prev => {
+                              const next = new Set(prev);
+                              if (next.has(page.id)) next.delete(page.id);
+                              else next.add(page.id);
+                              return next;
+                            });
+                          }}
+                          className={`absolute top-1.5 left-1.5 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
+                            isPageSelected
+                              ? 'bg-accent-600 border-accent-600 opacity-100'
+                              : 'bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100'
+                          }`}
+                          title={isPageSelected ? 'Deselect' : 'Select'}
+                        >
+                          {isPageSelected && <Check size={12} className="text-white" />}
+                        </button>
+                      </div>
+                      <div className="flex-1 min-w-0 p-3 flex flex-col justify-center gap-1">
+                        {isEditing ? (
+                          <div className="flex flex-col sm:flex-row gap-2" onClick={e => e.preventDefault()}>
+                            <input
+                              type="text"
+                              value={editingPageNumber}
+                              onChange={(e) => setEditingPageNumber(e.target.value)}
+                              className="sm:w-32 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              placeholder="Number"
+                              autoFocus
+                              onClick={e => e.stopPropagation()}
+                            />
+                            <input
+                              type="text"
+                              value={editingPageDescription}
+                              onChange={(e) => setEditingPageDescription(e.target.value)}
+                              className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              placeholder="Description"
+                              onClick={e => e.stopPropagation()}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') handleSaveRenamePage(e as any, page.id);
+                                if (e.key === 'Escape') handleCancelRenamePage(e as any);
+                              }}
+                            />
+                            <div className="flex gap-1">
+                              <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <Check size={14} /> Save
+                              </button>
+                              <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <X size={14} /> Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+                                {page.name}
+                              </h3>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                {page.measurements.length} highlights
+                                {page.pageNumber && page.name !== page.pageNumber && (
+                                  <span className="ml-2 text-slate-400">·  {page.pageNumber}</span>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                              <button
+                                onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                title="Copy share link"
+                              >
+                                <LinkIcon size={14} />
+                              </button>
+                              <button
+                                onClick={(e) => handleStartRenamePage(e, page)}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                title="Rename"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {showSnippet && (
+                          <div className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-900/40 px-2 py-1 rounded border border-slate-100 dark:border-slate-700 italic line-clamp-1">
+                            ...{page.extractedText!.substring(Math.max(0, matchIdx - 30), matchIdx + searchTerm.length + 30)}...
+                          </div>
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
