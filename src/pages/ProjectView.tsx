@@ -553,6 +553,25 @@ function getProposalPrefsKey(): string {
   }
 }
 
+// Renders `text` with the first case-insensitive occurrence of `term` wrapped
+// in <mark> so search hits visibly pop out of page titles and snippets. No
+// match → text renders unchanged. Multi-occurrence highlighting is overkill
+// for page titles (one match is enough) and we keep snippets short anyway.
+const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term }) => {
+  if (!term) return <>{text}</>;
+  const idx = text.toLowerCase().indexOf(term.toLowerCase());
+  if (idx < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-yellow-200 dark:bg-yellow-600/40 text-inherit rounded px-0.5">
+        {text.slice(idx, idx + term.length)}
+      </mark>
+      {text.slice(idx + term.length)}
+    </>
+  );
+};
+
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
   const { setPageName } = useCollaboration();
@@ -583,6 +602,16 @@ export const ProjectView: React.FC = () => {
   // truncates them. Persisted per-user via getUserPreferences (see the load
   // effect that hydrates other preferences).
   const [pagesViewMode, setPagesViewMode] = useState<'grid' | 'list'>('grid');
+  // Sort order for the pages list. Numeric sort by pageNumber is the default
+  // (matches typical drawing-set conventions: A-101 before A-201 etc.).
+  // Persisted per-user under 'pages-sortMode'.
+  type PagesSortMode = 'pageNumber' | 'name' | 'highlightsDesc';
+  const [pagesSortMode, setPagesSortMode] = useState<PagesSortMode>('pageNumber');
+  // Right-click context menu for page tiles/rows. Stored as viewport coords
+  // so the menu renders correctly regardless of the underlying page card's
+  // position. Cleared on any outside click or Escape.
+  const [pageContextMenu, setPageContextMenu] = useState<{ pageId: string; x: number; y: number } | null>(null);
+  const pageSearchInputRef = useRef<HTMLInputElement>(null);
   const pagesScrollRef = useRef<HTMLDivElement>(null);
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
@@ -653,14 +682,50 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
       if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
       if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
+      const sort = prefs['pages-sortMode'];
+      if (sort === 'pageNumber' || sort === 'name' || sort === 'highlightsDesc') setPagesSortMode(sort);
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist the pages-tab view mode separately from the proposal prefs (it's
-  // a UI preference, not part of proposal generation).
+  // Persist the pages-tab view mode + sort separately from the proposal
+  // prefs — these are UI preferences, not part of proposal generation.
   useEffect(() => {
-    saveUserPreferences({ 'pages-viewMode': pagesViewMode }).catch(() => {});
-  }, [pagesViewMode]);
+    saveUserPreferences({ 'pages-viewMode': pagesViewMode, 'pages-sortMode': pagesSortMode }).catch(() => {});
+  }, [pagesViewMode, pagesSortMode]);
+
+  // Keyboard shortcut: "/" focuses the search box (GitHub-style). Skip if the
+  // user is already typing into something — we don't want to clobber an in-
+  // progress rename or note. Also skip when the Pages tab isn't active since
+  // there's no search input on screen to focus.
+  useEffect(() => {
+    if (activeTab !== 'pages') return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+      }
+      e.preventDefault();
+      pageSearchInputRef.current?.focus();
+      pageSearchInputRef.current?.select();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeTab]);
+
+  // Close the page-card context menu on outside click or Escape.
+  useEffect(() => {
+    if (!pageContextMenu) return;
+    const onClick = () => setPageContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPageContextMenu(null); };
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [pageContextMenu]);
 
   // Auto-save whenever any persistent pref changes (localStorage + server)
   useEffect(() => {
@@ -2304,6 +2369,27 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  // Permanently removes a page from the project. Confirmation is via the
+  // browser's native confirm dialog — a single irreversible action doesn't
+  // warrant a full modal, and the wording makes the consequences clear.
+  // Orphaned image rows are intentionally left in storage; cleanup would
+  // need to verify no other page (across plan-set revisions) references
+  // the same imageId / thumbnailId / sourcePdfFileId.
+  const handleDeletePage = async (page: { id: string; name?: string; pageNumber?: string }) => {
+    if (!project) return;
+    const label = page.pageNumber || page.name || 'this page';
+    if (!window.confirm(`Delete ${label}? Any measurements on it will be lost.`)) return;
+    const updated = { ...project, pages: project.pages.filter(p => p.id !== page.id) };
+    await saveProject(updated);
+    setProject(updated);
+    setSelectedPageIds(prev => {
+      if (!prev.has(page.id)) return prev;
+      const next = new Set(prev);
+      next.delete(page.id);
+      return next;
+    });
+  };
+
   const handleShareSelectedPages = async () => {
     if (!project || selectedPageIds.size === 0) return;
     try {
@@ -2606,11 +2692,14 @@ export const ProjectView: React.FC = () => {
     return 'text-slate-500';
   };
 
-  const filteredPages = useMemo(() => {
+  // Pages that are visible at the current plan-set selection after
+  // revision-dedup, *before* search filtering. Exposed separately so the
+  // search-result badge can show "X of Y matches" (Y = visiblePages.length).
+  const visiblePages = useMemo(() => {
     if (!project) return [];
 
     let allowedPlanSets = project.planSets || [];
-    
+
     if (selectedPlanSetId) {
       const selectedPlanSet = allowedPlanSets.find(ps => ps.id === selectedPlanSetId);
       if (selectedPlanSet) {
@@ -2655,25 +2744,41 @@ export const ProjectView: React.FC = () => {
       }
     });
 
-    const visiblePages = candidatePages.filter(page => {
+    return candidatePages.filter(page => {
       if (!page.pageNumber) return true;
       const numKey = page.pageNumber.trim().toLowerCase();
       return latestPlanSetByPageNumber.get(numKey) === page.planSetId;
     });
+  }, [project, selectedPlanSetId]);
 
+  const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
-    return visiblePages.filter(page => {
-      const matchesSearch = page.name.toLowerCase().includes(searchLower) ||
-                            (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
-                            (page.description && page.description.toLowerCase().includes(searchLower)) ||
-                            (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
-      return matchesSearch;
-    }).sort((a, b) => {
-      const nameA = a.pageNumber || a.name || '';
-      const nameB = b.pageNumber || b.name || '';
-      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-  }, [project, selectedPlanSetId, searchTerm]);
+    const matched = searchLower
+      ? visiblePages.filter(page =>
+          page.name.toLowerCase().includes(searchLower) ||
+          (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
+          (page.description && page.description.toLowerCase().includes(searchLower)) ||
+          (page.extractedText && page.extractedText.toLowerCase().includes(searchLower)),
+        )
+      : visiblePages;
+
+    const sorted = [...matched];
+    if (pagesSortMode === 'name') {
+      sorted.sort((a, b) =>
+        (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }),
+      );
+    } else if (pagesSortMode === 'highlightsDesc') {
+      sorted.sort((a, b) => b.measurements.length - a.measurements.length);
+    } else {
+      // Default: numeric sort by pageNumber (drawing-set convention).
+      sorted.sort((a, b) => {
+        const nameA = a.pageNumber || a.name || '';
+        const nameB = b.pageNumber || b.name || '';
+        return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+      });
+    }
+    return sorted;
+  }, [visiblePages, searchTerm, pagesSortMode]);
 
   const handleSaveProjectName = async () => {
     if (!project || !editProjectName.trim()) return;
@@ -3010,29 +3115,49 @@ export const ProjectView: React.FC = () => {
         {activeTab === 'pages' ? (
           <div className="space-y-6">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-              <div className="relative flex-1 w-full max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="text"
-                  placeholder="Search pages and text..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Escape' && searchTerm) setSearchTerm(''); }}
-                  className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
-                />
+              <div className="flex-1 w-full max-w-md flex flex-col gap-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    ref={pageSearchInputRef}
+                    type="text"
+                    placeholder="Search pages and text...  ( / )"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape' && searchTerm) setSearchTerm(''); }}
+                    className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
+                  />
+                  {searchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm('')}
+                      title="Clear search (Esc)"
+                      aria-label="Clear search"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
                 {searchTerm && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchTerm('')}
-                    title="Clear search (Esc)"
-                    aria-label="Clear search"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-700 transition-colors"
-                  >
-                    <X size={14} />
-                  </button>
+                  <div className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                    {filteredPages.length === 0
+                      ? `No matches in ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`
+                      : `${filteredPages.length} of ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`}
+                  </div>
                 )}
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+                <select
+                  value={pagesSortMode}
+                  onChange={(e) => setPagesSortMode(e.target.value as PagesSortMode)}
+                  title="Sort order"
+                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
+                >
+                  <option value="pageNumber">Page number</option>
+                  <option value="name">Name</option>
+                  <option value="highlightsDesc">Most highlights</option>
+                </select>
                 {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
                 <div className="flex items-center gap-0.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg p-0.5 shadow-sm">
                   <button
@@ -3142,6 +3267,10 @@ export const ProjectView: React.FC = () => {
                       key={page.id}
                       to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                       state={{ pageIds: filteredPages.map(p => p.id) }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
+                      }}
                       className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
                         isPageSelected
                           ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
@@ -3213,7 +3342,7 @@ export const ProjectView: React.FC = () => {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                               <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
-                                {page.name}
+                                <HighlightedText text={page.name} term={searchTerm} />
                               </h3>
                               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                                 {page.measurements.length} highlights
@@ -3242,7 +3371,10 @@ export const ProjectView: React.FC = () => {
                         )}
                         {showSnippet && (
                           <div className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-900/40 px-2 py-1 rounded border border-slate-100 dark:border-slate-700 italic line-clamp-1">
-                            ...{page.extractedText!.substring(Math.max(0, matchIdx - 30), matchIdx + searchTerm.length + 30)}...
+                            ...<HighlightedText
+                              text={page.extractedText!.substring(Math.max(0, matchIdx - 30), matchIdx + searchTerm.length + 30)}
+                              term={searchTerm}
+                            />...
                           </div>
                         )}
                       </div>
@@ -3259,6 +3391,10 @@ export const ProjectView: React.FC = () => {
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
+                    }}
                     className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
                       isPageSelected
                         ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
@@ -3335,7 +3471,9 @@ export const ProjectView: React.FC = () => {
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">{page.name}</h3>
+                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">
+                              <HighlightedText text={page.name} term={searchTerm} />
+                            </h3>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
@@ -3358,7 +3496,10 @@ export const ProjectView: React.FC = () => {
                         </p>
                         {searchTerm && page.extractedText && page.extractedText.toLowerCase().includes(searchTerm.toLowerCase()) && !page.name.toLowerCase().includes(searchTerm.toLowerCase()) && (
                           <div className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-100 line-clamp-2 italic">
-                            ...{page.extractedText.substring(Math.max(0, page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) - 30), page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) + searchTerm.length + 30)}...
+                            ...<HighlightedText
+                              text={page.extractedText.substring(Math.max(0, page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) - 30), page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) + searchTerm.length + 30)}
+                              term={searchTerm}
+                            />...
                           </div>
                         )}
                       </div>
@@ -3368,6 +3509,52 @@ export const ProjectView: React.FC = () => {
                 })}
               </div>
             )}
+            {pageContextMenu && (() => {
+              const ctxPage = filteredPages.find(p => p.id === pageContextMenu.pageId)
+                ?? project.pages.find(p => p.id === pageContextMenu.pageId);
+              if (!ctxPage) return null;
+              const pageHref = `/project/${project.id}/page/${ctxPage.id}`;
+              return (
+                <div
+                  className="fixed z-50 min-w-[180px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl py-1 text-sm"
+                  style={{ left: pageContextMenu.x, top: pageContextMenu.y }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    onClick={() => { setPageContextMenu(null); navigate(pageHref); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Eye size={14} /> Open
+                  </button>
+                  <button
+                    onClick={() => { setPageContextMenu(null); window.open(pageHref, '_blank', 'noopener'); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <LinkIcon size={14} /> Open in new tab
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <button
+                    onClick={() => { setPageContextMenu(null); handleSharePage(ctxPage as any); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <LinkIcon size={14} /> Copy share link
+                  </button>
+                  <button
+                    onClick={(e) => { setPageContextMenu(null); handleStartRenamePage(e as any, ctxPage); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Edit2 size={14} /> Rename
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <button
+                    onClick={() => { setPageContextMenu(null); handleDeletePage(ctxPage); }}
+                    className="w-full text-left px-3 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                  >
+                    <Trash2 size={14} /> Delete page
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         ) : activeTab === 'takeoffs' ? (
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
