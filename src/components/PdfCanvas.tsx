@@ -131,27 +131,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   // `pdfImage` instead. `image` (used by the existing code below) resolves to
   // whichever one is current — that lets the Konva background, zoom-fit logic,
   // and search effect stay agnostic to the source.
-  const [legacyImage, legacyStatus] = useImage(imageUrl);
+  const [legacyImage] = useImage(imageUrl);
   const [pdfImage, setPdfImage] = useState<HTMLCanvasElement | null>(null);
   const image = pdfImage ?? legacyImage;
-
-  // Temporary diagnostic — remove once the empty-canvas bug is solved. Tracks
-  // which background source the canvas resolved to on each significant change
-  // so console logs from a stuck session reveal where the pipeline breaks.
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[PdfCanvas] sources', {
-      imageUrl,
-      sourcePdfUrl,
-      sourcePdfPageNum,
-      legacyStatus,
-      hasLegacyImage: !!legacyImage,
-      hasPdfImage: !!pdfImage,
-      imageType: image ? (image instanceof HTMLCanvasElement ? 'canvas' : 'img') : 'none',
-      imageWidth,
-      imageHeight,
-    });
-  }, [imageUrl, sourcePdfUrl, sourcePdfPageNum, legacyImage, pdfImage, legacyStatus]);
 
   // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
   // rendered on demand into an offscreen canvas at a resolution that tracks
@@ -298,19 +280,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
       setPdfImage(null);
       lastRenderScaleRef.current = 0;
-      // eslint-disable-next-line no-console
-      console.log('[PdfCanvas] vector load: skipped (no sourcePdfUrl/pageNum)');
       return;
     }
     let cancelled = false;
-    // eslint-disable-next-line no-console
-    console.log('[PdfCanvas] vector load: starting', { sourcePdfUrl, sourcePdfPageNum });
     (async () => {
       try {
         const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
-        // eslint-disable-next-line no-console
-        console.log('[PdfCanvas] vector load: got proxy, numPages=', proxy.numPages);
         const page = await proxy.getPage(sourcePdfPageNum);
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
         pdfProxyRef.current = proxy;
@@ -327,12 +303,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         await renderTaskRef.current.promise;
         if (cancelled) return;
         lastRenderScaleRef.current = 2.0;
-        // eslint-disable-next-line no-console
-        console.log('[PdfCanvas] vector load: rendered', canvas.width, '×', canvas.height);
         setPdfImage(canvas);
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
-          console.error('[PdfCanvas] vector load failed', err);
+          console.error('Failed to load source PDF', err);
         }
       }
     })();
@@ -343,40 +317,50 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   }, [sourcePdfUrl, sourcePdfPageNum]);
 
   // Re-render at higher resolution when the user zooms in. Debounced so a
-  // single drag through many zoom levels only fires once at the end. The same
-  // canvas object is reused — we just update its pixels and ask Konva to redraw,
-  // so `pdfImage` state (and therefore the fit-to-screen effect) doesn't flap.
+  // single drag through many zoom levels only fires once at the end. We render
+  // into a *new* canvas and swap it in atomically — never mutate the canvas
+  // that's currently on screen, otherwise the page visibly blanks for the
+  // duration of the render. The maximum scale is intentionally modest (≤4×)
+  // so the backing store stays small enough that a single render doesn't
+  // block the main thread long enough to look like a freeze.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current) return;
     if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     rerenderTimerRef.current = setTimeout(async () => {
       const page = pdfPageRef.current;
-      const canvas = pdfImage;
-      if (!page || !canvas) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const targetScale = Math.max(2.0, Math.min(8.0, 2.0 * stageScale * dpr));
-      // Skip if the requested scale isn't materially different from the current one.
+      if (!page) return;
+      // Cap the contribution of devicePixelRatio so HiDPI screens don't push
+      // the render scale to memory-heavy territory at moderate zoom levels.
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const targetScale = Math.max(2.0, Math.min(4.0, 2.0 * stageScale * dpr));
       const prev = lastRenderScaleRef.current;
-      if (prev > 0 && Math.abs(targetScale - prev) / prev < 0.15) return;
+      if (prev > 0 && Math.abs(targetScale - prev) / prev < 0.20) return;
       if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
       try {
         const viewport = page.getViewport({ scale: targetScale });
-        canvas.width = Math.round(viewport.width);
-        canvas.height = Math.round(viewport.height);
-        const ctx = canvas.getContext('2d')!;
+        const nextCanvas = document.createElement('canvas');
+        nextCanvas.width = Math.round(viewport.width);
+        nextCanvas.height = Math.round(viewport.height);
+        const ctx = nextCanvas.getContext('2d')!;
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
         renderTaskRef.current = page.render({ canvasContext: ctx, viewport } as any);
         await renderTaskRef.current.promise;
         lastRenderScaleRef.current = targetScale;
-        // Force Konva to repaint the layer with the now-updated canvas pixels.
-        stageRef.current?.batchDraw();
+        // Swap in the new canvas. Drop the previous backing store so the
+        // browser can reclaim the memory immediately instead of waiting for GC.
+        const prevCanvas = pdfImage;
+        setPdfImage(nextCanvas);
+        if (prevCanvas && prevCanvas !== nextCanvas) {
+          prevCanvas.width = 0;
+          prevCanvas.height = 0;
+        }
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
           console.error('PDF page re-render failed', err);
         }
       }
-    }, 200);
+    }, 250);
     return () => {
       if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     };
