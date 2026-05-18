@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
@@ -612,6 +612,11 @@ export const ProjectView: React.FC = () => {
   // position. Cleared on any outside click or Escape.
   const [pageContextMenu, setPageContextMenu] = useState<{ pageId: string; x: number; y: number } | null>(null);
   const pageSearchInputRef = useRef<HTMLInputElement>(null);
+  // Per-user, per-project favorites. Stored in userPreferences under
+  // `pages-favorites-{projectId}` as a JSON array; loaded on project mount
+  // and saved on every toggle. Favorited pages sort to the top of the page
+  // list inside whatever sort mode is active.
+  const [favoritePageIds, setFavoritePageIds] = useState<Set<string>>(new Set());
   const pagesScrollRef = useRef<HTMLDivElement>(null);
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
@@ -920,6 +925,38 @@ export const ProjectView: React.FC = () => {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
+
+  // Load this user's favorited page ids for the current project. Stored as a
+  // JSON-encoded array under `pages-favorites-{projectId}` in user prefs.
+  useEffect(() => {
+    if (!project?.id) {
+      setFavoritePageIds(new Set());
+      return;
+    }
+    const key = `pages-favorites-${project.id}`;
+    getUserPreferences().then(prefs => {
+      const raw = prefs[key];
+      if (!raw) { setFavoritePageIds(new Set()); return; }
+      try {
+        const ids = JSON.parse(raw);
+        if (Array.isArray(ids)) setFavoritePageIds(new Set(ids.filter((s): s is string => typeof s === 'string')));
+      } catch { /* malformed — ignore and start empty */ }
+    }).catch(() => { /* offline: empty set */ });
+  }, [project?.id]);
+
+  // Toggles `pageId` in the favorites set and persists. Optimistic — the
+  // local set updates immediately so the star re-renders without waiting on
+  // the server round-trip, and the persistence call is fire-and-forget.
+  const toggleFavorite = (pageId: string) => {
+    if (!project?.id) return;
+    setFavoritePageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(pageId)) next.delete(pageId);
+      else next.add(pageId);
+      saveUserPreferences({ [`pages-favorites-${project.id}`]: JSON.stringify([...next]) }).catch(() => {});
+      return next;
+    });
+  };
 
   const loadTemplates = async () => {
     const data = await getTemplates();
@@ -2768,11 +2805,18 @@ export const ProjectView: React.FC = () => {
       : visiblePages;
 
     const sorted = [...matched];
+    // Favorites always group at the top, then the chosen sort order applies
+    // inside both the favorites and non-favorites groups. This is a stable
+    // pre-step before the sort below, hence the staged partition.
+    const isFav = (p: ProjectPage) => favoritePageIds.has(p.id);
+    // Comparator for the active sort mode. Favorites then ride on top of
+    // this via favSort below.
+    let baseCmp: (a: ProjectPage, b: ProjectPage) => number;
     if (pagesSortMode === 'description') {
       // Pages without a description sink to the bottom so the meaningful
       // entries stay grouped; among those with one, tie-break by pageNumber
       // so two "Floor Plan" pages still come out in drawing-set order.
-      sorted.sort((a, b) => {
+      baseCmp = (a, b) => {
         const da = (a.description || '').trim();
         const db = (b.description || '').trim();
         if (!da && !db) return 0;
@@ -2781,19 +2825,26 @@ export const ProjectView: React.FC = () => {
         const cmp = da.localeCompare(db, undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return cmp;
         return (a.pageNumber || '').localeCompare(b.pageNumber || '', undefined, { numeric: true, sensitivity: 'base' });
-      });
+      };
     } else if (pagesSortMode === 'highlightsDesc') {
-      sorted.sort((a, b) => b.measurements.length - a.measurements.length);
+      baseCmp = (a, b) => b.measurements.length - a.measurements.length;
     } else {
       // Default: numeric sort by pageNumber (drawing-set convention).
-      sorted.sort((a, b) => {
+      baseCmp = (a, b) => {
         const nameA = a.pageNumber || a.name || '';
         const nameB = b.pageNumber || b.name || '';
         return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-      });
+      };
     }
+    // Favorites always sort to the top; the active sort applies inside the
+    // favorites group and inside the non-favorites group.
+    sorted.sort((a, b) => {
+      const fa = isFav(a), fb = isFav(b);
+      if (fa !== fb) return fa ? -1 : 1;
+      return baseCmp(a, b);
+    });
     return sorted;
-  }, [visiblePages, searchTerm, pagesSortMode]);
+  }, [visiblePages, searchTerm, pagesSortMode, favoritePageIds]);
 
   const handleSaveProjectName = async () => {
     if (!project || !editProjectName.trim()) return;
@@ -3273,6 +3324,7 @@ export const ProjectView: React.FC = () => {
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
                   const isEditing = editingPageId === page.id;
+                  const isFavorite = favoritePageIds.has(page.id);
                   const matchIdx = searchTerm && page.extractedText
                     ? page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase())
                     : -1;
@@ -3366,17 +3418,32 @@ export const ProjectView: React.FC = () => {
                                 )}
                               </p>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <button
+                                onClick={(e) => { e.preventDefault(); toggleFavorite(page.id); }}
+                                title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                                aria-pressed={isFavorite}
+                                className={`p-1 rounded transition-opacity ${
+                                  isFavorite
+                                    ? 'opacity-100'
+                                    : 'opacity-0 group-hover:opacity-100 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+                                }`}
+                              >
+                                <Star
+                                  size={14}
+                                  className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-400 hover:text-amber-500'}
+                                />
+                              </button>
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
                                 title="Copy share link"
                               >
                                 <LinkIcon size={14} />
                               </button>
                               <button
                                 onClick={(e) => handleStartRenamePage(e, page)}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
                                 title="Rename"
                               >
                                 <Edit2 size={14} />
@@ -3401,6 +3468,7 @@ export const ProjectView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
+                  const isFavorite = favoritePageIds.has(page.id);
                   return (
                   <Link
                     key={page.id}
@@ -3442,6 +3510,21 @@ export const ProjectView: React.FC = () => {
                         title={isPageSelected ? 'Deselect' : 'Select'}
                       >
                         {isPageSelected && <Check size={14} className="text-white" />}
+                      </button>
+                      <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(page.id); }}
+                        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                        aria-pressed={isFavorite}
+                        className={`absolute top-2 right-2 p-1 rounded-md transition-all ${
+                          isFavorite
+                            ? 'bg-white/80 opacity-100'
+                            : 'bg-white/0 opacity-0 group-hover:opacity-100 group-hover:bg-white/80'
+                        }`}
+                      >
+                        <Star
+                          size={16}
+                          className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
+                        />
                       </button>
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
@@ -3548,6 +3631,13 @@ export const ProjectView: React.FC = () => {
                     <LinkIcon size={14} /> Open in new tab
                   </button>
                   <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <button
+                    onClick={() => { setPageContextMenu(null); toggleFavorite(ctxPage.id); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Star size={14} className={favoritePageIds.has(ctxPage.id) ? 'text-amber-500 fill-amber-400' : ''} />
+                    {favoritePageIds.has(ctxPage.id) ? 'Remove from favorites' : 'Add to favorites'}
+                  </button>
                   <button
                     onClick={() => { setPageContextMenu(null); handleSharePage(ctxPage as any); }}
                     className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
