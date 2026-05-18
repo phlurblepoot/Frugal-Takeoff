@@ -605,7 +605,7 @@ export const ProjectView: React.FC = () => {
   // Sort order for the pages list. Numeric sort by pageNumber is the default
   // (matches typical drawing-set conventions: A-101 before A-201 etc.).
   // Persisted per-user under 'pages-sortMode'.
-  type PagesSortMode = 'pageNumber' | 'name' | 'highlightsDesc';
+  type PagesSortMode = 'pageNumber' | 'description' | 'highlightsDesc';
   const [pagesSortMode, setPagesSortMode] = useState<PagesSortMode>('pageNumber');
   // Right-click context menu for page tiles/rows. Stored as viewport coords
   // so the menu renders correctly regardless of the underlying page card's
@@ -683,7 +683,12 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
       if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
       const sort = prefs['pages-sortMode'];
-      if (sort === 'pageNumber' || sort === 'name' || sort === 'highlightsDesc') setPagesSortMode(sort);
+      // 'name' was an earlier option that effectively duplicated pageNumber
+      // sort (the auto-built name string is prefixed by the page number, so
+      // it dominated the order). Anyone who picked it back then is promoted
+      // to description sort, which is what the option was meant to do.
+      if (sort === 'pageNumber' || sort === 'description' || sort === 'highlightsDesc') setPagesSortMode(sort);
+      else if (sort === 'name') setPagesSortMode('description');
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2763,10 +2768,20 @@ export const ProjectView: React.FC = () => {
       : visiblePages;
 
     const sorted = [...matched];
-    if (pagesSortMode === 'name') {
-      sorted.sort((a, b) =>
-        (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }),
-      );
+    if (pagesSortMode === 'description') {
+      // Pages without a description sink to the bottom so the meaningful
+      // entries stay grouped; among those with one, tie-break by pageNumber
+      // so two "Floor Plan" pages still come out in drawing-set order.
+      sorted.sort((a, b) => {
+        const da = (a.description || '').trim();
+        const db = (b.description || '').trim();
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        const cmp = da.localeCompare(db, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+        return (a.pageNumber || '').localeCompare(b.pageNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
     } else if (pagesSortMode === 'highlightsDesc') {
       sorted.sort((a, b) => b.measurements.length - a.measurements.length);
     } else {
@@ -3155,7 +3170,7 @@ export const ProjectView: React.FC = () => {
                   className="text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
                 >
                   <option value="pageNumber">Page number</option>
-                  <option value="name">Name</option>
+                  <option value="description">Description</option>
                   <option value="highlightsDesc">Most highlights</option>
                 </select>
                 {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
