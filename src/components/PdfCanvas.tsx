@@ -131,9 +131,27 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   // `pdfImage` instead. `image` (used by the existing code below) resolves to
   // whichever one is current — that lets the Konva background, zoom-fit logic,
   // and search effect stay agnostic to the source.
-  const [legacyImage] = useImage(imageUrl);
+  const [legacyImage, legacyStatus] = useImage(imageUrl);
   const [pdfImage, setPdfImage] = useState<HTMLCanvasElement | null>(null);
   const image = pdfImage ?? legacyImage;
+
+  // Temporary diagnostic — remove once the empty-canvas bug is solved. Tracks
+  // which background source the canvas resolved to on each significant change
+  // so console logs from a stuck session reveal where the pipeline breaks.
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('[PdfCanvas] sources', {
+      imageUrl,
+      sourcePdfUrl,
+      sourcePdfPageNum,
+      legacyStatus,
+      hasLegacyImage: !!legacyImage,
+      hasPdfImage: !!pdfImage,
+      imageType: image ? (image instanceof HTMLCanvasElement ? 'canvas' : 'img') : 'none',
+      imageWidth,
+      imageHeight,
+    });
+  }, [imageUrl, sourcePdfUrl, sourcePdfPageNum, legacyImage, pdfImage, legacyStatus]);
 
   // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
   // rendered on demand into an offscreen canvas at a resolution that tracks
@@ -280,13 +298,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
       setPdfImage(null);
       lastRenderScaleRef.current = 0;
+      // eslint-disable-next-line no-console
+      console.log('[PdfCanvas] vector load: skipped (no sourcePdfUrl/pageNum)');
       return;
     }
     let cancelled = false;
+    // eslint-disable-next-line no-console
+    console.log('[PdfCanvas] vector load: starting', { sourcePdfUrl, sourcePdfPageNum });
     (async () => {
       try {
         const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        // eslint-disable-next-line no-console
+        console.log('[PdfCanvas] vector load: got proxy, numPages=', proxy.numPages);
         const page = await proxy.getPage(sourcePdfPageNum);
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
         pdfProxyRef.current = proxy;
@@ -303,10 +327,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         await renderTaskRef.current.promise;
         if (cancelled) return;
         lastRenderScaleRef.current = 2.0;
+        // eslint-disable-next-line no-console
+        console.log('[PdfCanvas] vector load: rendered', canvas.width, '×', canvas.height);
         setPdfImage(canvas);
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
-          console.error('Failed to load source PDF', err);
+          console.error('[PdfCanvas] vector load failed', err);
         }
       }
     })();
