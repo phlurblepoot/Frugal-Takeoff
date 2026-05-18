@@ -1,9 +1,82 @@
 import React, { useState, useRef } from 'react';
 import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { getImageUrl } from '../utils/store';
 import { PdfPagePreview } from './PdfPagePreview';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
+// Pulls embedded text out of a rectangular region of a PDF page. Coordinates
+// are scaled into the same 2.0× viewport space the user's selection rectangle
+// lives in (the rectangle is stored as 0–100 percentages of the displayed
+// image, and our PdfPagePreview renders at scale=2.0). Any text item whose
+// bounding box overlaps the region is included in document order. Returns ''
+// when the region has no embedded text — caller falls back to OCR for image-
+// only content (scanned drawings, vector-art labels that aren't real text).
+async function extractTextFromVectorRegion(
+  page: any,
+  region: { x: number; y: number; width: number; height: number },
+): Promise<string> {
+  const viewport = page.getViewport({ scale: 2.0 });
+  const regionLeft = (region.x / 100) * viewport.width;
+  const regionTop = (region.y / 100) * viewport.height;
+  const regionRight = regionLeft + (region.width / 100) * viewport.width;
+  const regionBottom = regionTop + (region.height / 100) * viewport.height;
+
+  const textContent = await page.getTextContent();
+  const matched: string[] = [];
+  for (const item of textContent.items as any[]) {
+    const str: string = item.str ?? '';
+    if (!str) continue;
+    const tx = item.transform?.[4] ?? 0;
+    const ty = item.transform?.[5] ?? 0;
+    const w = item.width ?? 0;
+    // height isn't always populated; fall back to the transform's d component
+    // (font size for non-rotated text) which pdf.js always sets.
+    const h = item.height || Math.abs(item.transform?.[3] ?? item.transform?.[0] ?? 12);
+
+    // Text baseline lives at (tx, ty) in PDF coords (Y-up). Glyph top is at
+    // ty + h. convertToViewportPoint handles page rotation + Y-flip into
+    // screen-space coords, so we just take min/max afterwards.
+    const [vx0, vy0] = viewport.convertToViewportPoint(tx, ty);
+    const [vx1, vy1] = viewport.convertToViewportPoint(tx + w, ty + h);
+    const itemLeft = Math.min(vx0, vx1);
+    const itemRight = Math.max(vx0, vx1);
+    const itemTop = Math.min(vy0, vy1);
+    const itemBottom = Math.max(vy0, vy1);
+
+    // Any overlap counts as inside — the user's selection rectangle is loose
+    // by nature, and a strict containment test rejects items that protrude a
+    // pixel or two beyond the box.
+    if (itemRight < regionLeft || itemLeft > regionRight) continue;
+    if (itemBottom < regionTop || itemTop > regionBottom) continue;
+    matched.push(str);
+  }
+  return matched.join(' ').trim();
+}
+
+// Render a vector PDF page to a JPEG data URL for OCR fallback. Used only
+// when extractTextFromVectorRegion returns nothing (image-only pages).
+async function renderPdfPageToDataUrl(page: any): Promise<string> {
+  const viewport = page.getViewport({ scale: 2.0 });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport } as any).promise;
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  // Drop the canvas backing store explicitly so a multi-page "extract all"
+  // doesn't accumulate ~10 MB per page until GC catches up.
+  canvas.width = 0;
+  canvas.height = 0;
+  return dataUrl;
+}
 
 // Shared "name pages" UI used by both the new-project upload flow and the
 // add-pages-to-existing-project flow. Owns the preview modal, OCR-region
@@ -100,11 +173,23 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
     setPanOffset({ x: 0, y: 0 });
   };
 
-  // ── OCR ───────────────────────────────────────────────────────────────────
+  // ── Extraction ────────────────────────────────────────────────────────────
+  // Two paths, in this preference order, per page:
+  //   1. Vector path: read embedded text from the source PDF inside the
+  //      selection region. This is what makes "A5.0" come back as "A5.0"
+  //      rather than the OCR misread "AS.0" — we're reading the same bytes
+  //      that CAD wrote, not pixels.
+  //   2. OCR fallback: only spun up when (a) the page has no source PDF
+  //      (legacy projects) or (b) the region has no embedded text at all
+  //      (scanned drawings, vector-art labels that aren't real text). For
+  //      vector pages we render the page to a JPEG on demand so the OCR
+  //      crop is full-resolution — fixes "extract all pages" producing
+  //      gibberish on non-previewed pages, which were previously being
+  //      cropped from the 400px thumbnail.
   const handleExtractText = async (applyToAll: boolean) => {
     if (!previewPageId || !extractionRect || !extractionType) return;
-    const page = pendingPages.find(p => p.id === previewPageId);
-    if (!page) return;
+    const previewedPage = pendingPages.find(p => p.id === previewPageId);
+    if (!previewedPage) return;
 
     const mode = extractionType;
     const region = { ...extractionRect };
@@ -112,18 +197,58 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       mode === 'pageNumber' ? cleanSheetNumber(t) : cleanDescriptionText(t);
 
     setIsExtracting(true);
+
+    // Cache PDF proxies + per-page render data URLs so a multi-page extract
+    // doesn't reload the same file (or re-render the same page) repeatedly.
+    const proxyCache = new Map<string, any>();
+    const renderCache = new Map<string, string>(); // key: `${fileId}#${pageNum}`
+    const getProxy = async (fileId: string) => {
+      let p = proxyCache.get(fileId);
+      if (!p) {
+        p = await pdfjsLib.getDocument({ url: getImageUrl(fileId) }).promise;
+        proxyCache.set(fileId, p);
+      }
+      return p;
+    };
+
+    // Lazy Tesseract worker: many extracts hit the vector path and never
+    // need this, so we don't pay the worker-startup tax up front.
     let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
-    try {
+    const getWorker = async () => {
+      if (worker) return worker;
       worker = await createWorker('eng', 1, {
         langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
       });
       await worker.setParameters(ocrParamsFor(mode));
+      return worker;
+    };
 
-      // Use the URL the preview modal already loaded for the active page —
-      // vector pages render via pdfjs and store the resolved data URL there.
-      // For other pages in apply-to-all, fall back to the legacy image URL,
-      // then the thumbnail.
+    try {
       const recognizePage = async (p: NamingStepPage): Promise<string> => {
+        // Vector path: try embedded text first; render+OCR is the fallback.
+        if (p.sourcePdfFileId && p.sourcePdfPageNum) {
+          try {
+            const proxy = await getProxy(p.sourcePdfFileId);
+            const pdfPage = await proxy.getPage(p.sourcePdfPageNum);
+            const text = await extractTextFromVectorRegion(pdfPage, region);
+            if (text) return cleanValue(text);
+            const cacheKey = `${p.sourcePdfFileId}#${p.sourcePdfPageNum}`;
+            let rendered = renderCache.get(cacheKey);
+            if (!rendered) {
+              rendered = await renderPdfPageToDataUrl(pdfPage);
+              renderCache.set(cacheKey, rendered);
+            }
+            const cropUrl = await buildOcrCrop(rendered, region);
+            const w = await getWorker();
+            const { data: { text: ocrText } } = await w.recognize(cropUrl);
+            return cleanValue(ocrText || '');
+          } catch (err) {
+            console.warn('Vector text extract failed; falling back to raster', err);
+          }
+        }
+        // Legacy raster path. Reuse the preview modal's already-loaded image
+        // for the active page when possible; otherwise the stored full-size
+        // raster URL; thumbnail only as a last resort.
         const srcUrl =
           p.id === previewPageId && previewImageSrc
             ? previewImageSrc
@@ -131,8 +256,9 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             ? getImageUrl(p.imageId)
             : pendingThumbnails[p.thumbnailId];
         if (!srcUrl) return '';
-        const cropDataUrl = await buildOcrCrop(srcUrl, region);
-        const { data: { text } } = await worker!.recognize(cropDataUrl);
+        const cropUrl = await buildOcrCrop(srcUrl, region);
+        const w = await getWorker();
+        const { data: { text } } = await w.recognize(cropUrl);
         return cleanValue(text || '');
       };
 
@@ -150,17 +276,22 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         }
         setPendingPages(updated);
       } else {
-        const value = await recognizePage(page);
+        const value = await recognizePage(previewedPage);
         updateField(previewPageId, mode, value);
       }
 
       setExtractionRect(null);
       setExtractionType(null);
     } catch (error) {
-      console.error('OCR Error:', error);
+      console.error('Extraction error:', error);
       alert('Failed to extract text. Please try again.');
     } finally {
-      if (worker) await worker.terminate();
+      if (worker) {
+        try { await worker.terminate(); } catch { /* noop */ }
+      }
+      for (const p of proxyCache.values()) {
+        try { await p.destroy(); } catch { /* noop */ }
+      }
       setIsExtracting(false);
     }
   };
