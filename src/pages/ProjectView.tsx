@@ -6,6 +6,11 @@ import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, sa
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { PageNamingStep } from '../components/PageNamingStep';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -762,6 +767,78 @@ export const ProjectView: React.FC = () => {
     }
   }, [location.state]);
 
+  // Backfill the search text cache from each page's source PDF. Vector pages
+  // uploaded under earlier code paths may have OCR-derived extractedText
+  // (less accurate) or none at all; pull text directly out of the PDF's
+  // embedded text layer instead. Each page is marked searchTextIndexed=true
+  // once handled, so this is a one-shot per page — subsequent project opens
+  // are zero-cost. Pages without a source PDF are skipped (legacy projects
+  // have no vector source to read from). Errors per page are swallowed; the
+  // worst case is we just keep the existing extractedText for that page.
+  useEffect(() => {
+    if (!project) return;
+    const needsReindex = project.pages.filter(
+      p => p.sourcePdfFileId && p.sourcePdfPageNum && !p.searchTextIndexed,
+    );
+    if (needsReindex.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const proxyCache = new Map<string, any>();
+      const extractedByPageId = new Map<string, string>();
+      try {
+        for (const page of needsReindex) {
+          if (cancelled) break;
+          try {
+            let proxy = proxyCache.get(page.sourcePdfFileId!);
+            if (!proxy) {
+              proxy = await pdfjsLib.getDocument({ url: getImageUrl(page.sourcePdfFileId!) }).promise;
+              proxyCache.set(page.sourcePdfFileId!, proxy);
+            }
+            const pdfPage = await proxy.getPage(page.sourcePdfPageNum!);
+            const textContent = await pdfPage.getTextContent();
+            const text = (textContent.items as any[])
+              .map(item => (item.str ?? '').trim())
+              .filter(Boolean)
+              .join(' ');
+            extractedByPageId.set(page.id, text);
+          } catch (e) {
+            console.warn(`Failed to reindex page ${page.id} from source PDF`, e);
+          }
+        }
+      } finally {
+        for (const p of proxyCache.values()) {
+          try { await p.destroy(); } catch { /* noop */ }
+        }
+      }
+
+      if (cancelled || extractedByPageId.size === 0) return;
+
+      setProject(prev => {
+        if (!prev) return prev;
+        const updatedPages = prev.pages.map(pg => {
+          if (!extractedByPageId.has(pg.id)) return pg;
+          const text = extractedByPageId.get(pg.id)!;
+          // Keep the previous extractedText if the vector layer returned
+          // nothing — likely an image-only page where the OCR fallback at
+          // upload time produced a better string than the empty vector
+          // result would.
+          return {
+            ...pg,
+            extractedText: text || pg.extractedText,
+            searchTextIndexed: true,
+          };
+        });
+        const updated = { ...prev, pages: updatedPages };
+        saveProject(updated).catch(e => console.warn('Failed to save reindexed project', e));
+        return updated;
+      });
+    })();
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
+
   const loadTemplates = async () => {
     const data = await getTemplates();
     setTemplates(data);
@@ -1043,6 +1120,7 @@ export const ProjectView: React.FC = () => {
                 imageHeight: pageData.height,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -1060,6 +1138,7 @@ export const ProjectView: React.FC = () => {
                 imageHeight: newPage.imageHeight,
                 sourcePdfFileId: newPage.sourcePdfFileId,
                 sourcePdfPageNum: newPage.sourcePdfPageNum,
+                searchTextIndexed: !!newPage.sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -1273,6 +1352,7 @@ export const ProjectView: React.FC = () => {
                 imageHeight: pageData.height,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -1290,6 +1370,7 @@ export const ProjectView: React.FC = () => {
                 imageHeight: newPage.imageHeight,
                 sourcePdfFileId: newPage.sourcePdfFileId,
                 sourcePdfPageNum: newPage.sourcePdfPageNum,
+                searchTextIndexed: !!newPage.sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,

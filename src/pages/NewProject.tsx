@@ -20,6 +20,7 @@ interface PendingPage {
   imageHeight: number;
   sourcePdfFileId?: string;
   sourcePdfPageNum?: number;
+  searchTextIndexed?: boolean;
   extractedText?: string;
 }
 
@@ -244,6 +245,7 @@ export const NewProject: React.FC = () => {
                 imageHeight: pageData.height,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
               };
 
@@ -260,6 +262,7 @@ export const NewProject: React.FC = () => {
                 imageHeight: newPage.imageHeight,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -456,6 +459,7 @@ export const NewProject: React.FC = () => {
                 imageHeight: pageData.height,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
               };
 
@@ -471,6 +475,7 @@ export const NewProject: React.FC = () => {
                 imageHeight: newPage.imageHeight,
                 sourcePdfFileId,
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -583,6 +588,7 @@ export const NewProject: React.FC = () => {
           imageHeight: p.imageHeight,
           sourcePdfFileId: existing?.sourcePdfFileId ?? p.sourcePdfFileId,
           sourcePdfPageNum: existing?.sourcePdfPageNum ?? p.sourcePdfPageNum,
+          searchTextIndexed: existing?.searchTextIndexed ?? !!(existing?.sourcePdfFileId ?? p.sourcePdfFileId),
           extractedText: p.extractedText,
           measurements: existing?.measurements ?? [],
           scaleConfig: existing?.scaleConfig ?? null,

@@ -107,6 +107,11 @@ export interface ProjectPage {
   // Multiple ProjectPages from one upload share the same sourcePdfFileId.
   sourcePdfFileId?: string;
   sourcePdfPageNum?: number; // 1-based index within sourcePdfFileId
+  // True once extractedText has been populated from the source PDF's
+  // embedded text layer (vs. OCR or upload-time guess). ProjectView's mount
+  // effect reindexes any vector page where this flag isn't set, so future
+  // search hits use the real text the PDF was written with.
+  searchTextIndexed?: boolean;
   measurements: Measurement[];
   scaleConfig: ScaleConfig | null;
   planSetId?: string; // Optional for backwards compatibility
