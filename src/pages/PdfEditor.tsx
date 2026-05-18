@@ -52,7 +52,9 @@ interface Signature {
 }
 
 interface RenderedPage {
-  dataUrl: string;
+  // Full-page JPEG; legacy field kept optional so persisted tabs from older builds still load.
+  // New tabs leave this undefined — pages are rendered on-demand from the live PDFDocumentProxy.
+  dataUrl?: string;
   thumbUrl: string;
   width: number;
   height: number;
@@ -241,6 +243,96 @@ const ImageAnnotationNode: React.FC<{
   );
 };
 
+// ── PdfPageCanvas ─────────────────────────────────────────────────────────────
+// Renders a single PDF page from a live PDFDocumentProxy directly into a canvas
+// at the current display zoom, so text and vectors stay crisp at every zoom level
+// (no intermediate JPEG cache). Uses IntersectionObserver so off-screen pages of
+// long documents don't render until they scroll into view.
+
+const PdfPageCanvas: React.FC<{
+  pdfProxy: any;        // pdfjsLib.PDFDocumentProxy (typed as any to keep this file free of pdfjs type imports)
+  pageIndex: number;    // 0-based
+  displayWidth: number; // CSS pixels
+  displayHeight: number;
+}> = ({ pdfProxy, pageIndex, displayWidth, displayHeight }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => setVisible(entry.isIntersecting),
+      { rootMargin: '600px 0px 600px 0px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!pdfProxy || !visible || displayWidth <= 0 || displayHeight <= 0) return;
+    let cancelled = false;
+    let renderTask: { cancel: () => void; promise: Promise<void> } | null = null;
+    let page: any = null;
+    (async () => {
+      try {
+        page = await pdfProxy.getPage(pageIndex + 1);
+        if (cancelled) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        // Cap DPR so very high-DPI screens don't blow up memory on big pages.
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        // Natural viewport at scale=1; derive the scale needed to hit displayWidth in CSS px.
+        const naturalVp = page.getViewport({ scale: 1 });
+        const cssScale = displayWidth / naturalVp.width;
+        const renderVp = page.getViewport({ scale: cssScale * dpr });
+        canvas.width = Math.max(1, Math.round(renderVp.width));
+        canvas.height = Math.max(1, Math.round(renderVp.height));
+        canvas.style.width = `${displayWidth}px`;
+        canvas.style.height = `${displayHeight}px`;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        renderTask = page.render({ canvasContext: ctx, viewport: renderVp });
+        await renderTask!.promise;
+      } catch (e: any) {
+        if (e?.name !== 'RenderingCancelledException') {
+          // Page may have been removed (deletePage) before the proxy refreshed — silent.
+          // eslint-disable-next-line no-console
+          if (!String(e?.message || '').includes('Page index')) console.error(e);
+        }
+      } finally {
+        if (page) { try { page.cleanup(); } catch { /* noop */ } }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (renderTask) { try { renderTask.cancel(); } catch { /* noop */ } }
+    };
+  }, [pdfProxy, pageIndex, displayWidth, displayHeight, visible]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        position: 'absolute', top: 0, left: 0,
+        width: displayWidth, height: displayHeight,
+        pointerEvents: 'none',
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'absolute', top: 0, left: 0,
+          width: displayWidth, height: displayHeight,
+          display: 'block', userSelect: 'none',
+        }}
+      />
+    </div>
+  );
+};
+
 // ── PdfEditor ─────────────────────────────────────────────────────────────────
 
 export const PdfEditor: React.FC = () => {
@@ -278,6 +370,13 @@ export const PdfEditor: React.FC = () => {
 
   const idbRef = useRef<IDBDatabase | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Live PDFDocumentProxy used by PdfPageCanvas for on-demand vector rendering.
+  // proxyForBytesRef tracks which ArrayBuffer the current proxy was built from,
+  // so openPdf can hand off a proxy it just built (avoiding a redundant reload).
+  const [pdfProxy, setPdfProxy] = useState<any>(null);
+  const pdfProxyRef = useRef<any>(null);
+  const proxyForBytesRef = useRef<ArrayBuffer | null>(null);
 
   // Focus textarea whenever editingText changes
   useEffect(() => {
@@ -551,6 +650,64 @@ export const PdfEditor: React.FC = () => {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [annotations, tabs, activeTabId, saveStateToIDB]);
 
+  // Keep the live PDFDocumentProxy in sync with pdfBytes. openPdf may pre-populate
+  // the ref so the first render reuses the proxy it already built; otherwise (e.g.
+  // after deletePage / reorderPages / importPages mutate pdfBytes, or on tab switch),
+  // load a fresh proxy from the new bytes and destroy the previous one.
+  useEffect(() => {
+    if (!pdfBytes) {
+      if (pdfProxyRef.current) {
+        pdfProxyRef.current.destroy().catch(() => {});
+        pdfProxyRef.current = null;
+        proxyForBytesRef.current = null;
+        setPdfProxy(null);
+      }
+      return;
+    }
+    if (proxyForBytesRef.current === pdfBytes && pdfProxyRef.current) {
+      // openPdf (or a previous run) already built a proxy for these exact bytes.
+      if (pdfProxy !== pdfProxyRef.current) setPdfProxy(pdfProxyRef.current);
+      return;
+    }
+    let cancelled = false;
+    let createdProxy: any = null;
+    (async () => {
+      try {
+        const data = new Uint8Array(pdfBytes.slice(0));
+        const proxy = await pdfjsLib.getDocument({ data }).promise;
+        if (cancelled) {
+          proxy.destroy().catch(() => {});
+          return;
+        }
+        createdProxy = proxy;
+        if (pdfProxyRef.current && pdfProxyRef.current !== proxy) {
+          pdfProxyRef.current.destroy().catch(() => {});
+        }
+        pdfProxyRef.current = proxy;
+        proxyForBytesRef.current = pdfBytes;
+        setPdfProxy(proxy);
+      } catch (err) {
+        console.error('Failed to load PDF proxy', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // If this effect's proxy never became the active one, dispose it.
+      if (createdProxy && pdfProxyRef.current !== createdProxy) {
+        createdProxy.destroy().catch(() => {});
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfBytes]);
+
+  // Destroy the active proxy on unmount.
+  useEffect(() => () => {
+    if (pdfProxyRef.current) {
+      pdfProxyRef.current.destroy().catch(() => {});
+      pdfProxyRef.current = null;
+    }
+  }, []);
+
   // ── Tab management ────────────────────────────────────────────────────────────
 
   const saveCurrentTabState = useCallback((tabId: string) => {
@@ -631,31 +788,41 @@ export const PdfEditor: React.FC = () => {
 
   const openPdf = async (file: File, currentTabId: string | null, currentTabs: TabSnapshot[], source?: PrintoutSource) => {
     setLoading(true);
-    setLoadMsg('Rendering pages…');
+    setLoadMsg('Loading PDF…');
 
     const buf = await file.arrayBuffer();
-    const objectUrl = URL.createObjectURL(file);
-    const pdf = await pdfjsLib.getDocument({ url: objectUrl }).promise;
+    // pdf.js may detach the buffer it's given; pass an independent copy so `buf`
+    // stays usable for pdf-lib / IndexedDB / etc.
+    const pdfData = new Uint8Array(buf.slice(0));
+    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
     const pages: RenderedPage[] = [];
-    const canvas = document.createElement('canvas');
     const thumbCanvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
+    const renderCanvas = document.createElement('canvas');
     const thumbCtx = thumbCanvas.getContext('2d')!;
+    const renderCtx = renderCanvas.getContext('2d')!;
     const THUMB_W = 148;
 
+    // Render each page once at 2.0× to produce a thumbnail and capture the
+    // page's "base" dimensions (kept at scale=2.0 so existing annotation coords
+    // continue to work unchanged). The full-page raster is NOT cached — pages
+    // are rendered on-demand by PdfPageCanvas from the live proxy below.
     for (let i = 1; i <= pdf.numPages; i++) {
-      setLoadMsg(`Rendering page ${i} of ${pdf.numPages}…`);
+      setLoadMsg(`Preparing page ${i} of ${pdf.numPages}…`);
       const page = await pdf.getPage(i);
       const vp = page.getViewport({ scale: 2.0 });
-      canvas.width = vp.width; canvas.height = vp.height;
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
-      await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
-      // Generate thumbnail
       const thumbH = Math.round(THUMB_W * vp.height / vp.width);
+      // Render at thumbnail resolution directly — much cheaper than rendering full-size
+      // and then downscaling, which was the previous approach.
+      const thumbScale = THUMB_W / page.getViewport({ scale: 1 }).width;
+      const thumbVp = page.getViewport({ scale: thumbScale });
+      renderCanvas.width = Math.round(thumbVp.width);
+      renderCanvas.height = Math.round(thumbVp.height);
+      renderCtx.fillStyle = '#ffffff';
+      renderCtx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
+      await page.render({ canvasContext: renderCtx, viewport: thumbVp } as any).promise;
       thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
-      thumbCtx.drawImage(canvas, 0, 0, THUMB_W, thumbH);
+      thumbCtx.drawImage(renderCanvas, 0, 0, THUMB_W, thumbH);
       pages.push({
-        dataUrl: canvas.toDataURL('image/jpeg', 0.92),
         thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
         width: vp.width, height: vp.height,
         rotation: vp.rotation,
@@ -663,9 +830,16 @@ export const PdfEditor: React.FC = () => {
       page.cleanup();
     }
 
-    await pdf.destroy();
-    URL.revokeObjectURL(objectUrl);
-    canvas.width = 0; canvas.height = 0; thumbCanvas.width = 0; thumbCanvas.height = 0;
+    // Keep `pdf` alive — hand it to the proxy lifecycle so the on-demand renderer
+    // reuses it instead of reloading the same bytes a second time.
+    if (pdfProxyRef.current && pdfProxyRef.current !== pdf) {
+      pdfProxyRef.current.destroy().catch(() => {});
+    }
+    pdfProxyRef.current = pdf;
+    proxyForBytesRef.current = buf;
+    setPdfProxy(pdf);
+    renderCanvas.width = 0; renderCanvas.height = 0;
+    thumbCanvas.width = 0; thumbCanvas.height = 0;
 
     const newTabId = uid();
     const newTab: TabSnapshot = {
@@ -1122,29 +1296,32 @@ export const PdfEditor: React.FC = () => {
     try {
       if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
         const buf = await file.arrayBuffer();
-        const objectUrl = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
-        const pdf = await pdfjsLib.getDocument({ url: objectUrl }).promise;
+        const pdfData = new Uint8Array(buf.slice(0));
+        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
         const ctx = renderCanvas.getContext('2d')!;
         const thumbCtx = thumbCanvas.getContext('2d')!;
         for (let i = 1; i <= pdf.numPages; i++) {
-          setLoadMsg(`Rendering imported page ${i} of ${pdf.numPages}…`);
+          setLoadMsg(`Preparing imported page ${i} of ${pdf.numPages}…`);
           const page = await pdf.getPage(i);
           const vp = page.getViewport({ scale: 2.0 });
-          renderCanvas.width = vp.width; renderCanvas.height = vp.height;
-          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, vp.width, vp.height);
-          await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
+          // Render at thumbnail resolution only; full-page rendering is on-demand.
+          const thumbScale = THUMB_W / page.getViewport({ scale: 1 }).width;
+          const thumbVp = page.getViewport({ scale: thumbScale });
+          renderCanvas.width = Math.round(thumbVp.width);
+          renderCanvas.height = Math.round(thumbVp.height);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
+          await page.render({ canvasContext: ctx, viewport: thumbVp } as any).promise;
           const thumbH = Math.round(THUMB_W * vp.height / vp.width);
           thumbCanvas.width = THUMB_W; thumbCanvas.height = thumbH;
           thumbCtx.drawImage(renderCanvas, 0, 0, THUMB_W, thumbH);
           newPages.push({
-            dataUrl: renderCanvas.toDataURL('image/jpeg', 0.92),
             thumbUrl: thumbCanvas.toDataURL('image/jpeg', 0.75),
             width: vp.width, height: vp.height, rotation: vp.rotation,
           });
           page.cleanup();
         }
         await pdf.destroy();
-        URL.revokeObjectURL(objectUrl);
         if (pdfBytes) {
           const existingDoc = await PDFDocument.load(pdfBytes);
           const newDoc = await PDFDocument.load(buf);
@@ -1831,16 +2008,30 @@ export const PdfEditor: React.FC = () => {
             style={{ position: 'relative', width: displayW, height: displayH }}
             className="shadow-xl rounded-sm flex-shrink-0 bg-white"
           >
-            {/* PDF page image — non-interactive background */}
-            <img
-              src={page.dataUrl}
-              alt={`Page ${pageIndex + 1}`}
-              draggable={false}
-              style={{
-                position: 'absolute', top: 0, left: 0,
-                width: displayW, height: displayH,
-                display: 'block', userSelect: 'none', pointerEvents: 'none',
-              }}
+            {/* Fallback raster for legacy persisted tabs / image-imported pages.
+                Sits underneath the live canvas so it shows through until the
+                on-demand render paints — and stays as the visible content if no
+                proxy can render this page (e.g. images appended before pdfBytes
+                was rebuilt). */}
+            {page.dataUrl && (
+              <img
+                src={page.dataUrl}
+                alt={`Page ${pageIndex + 1}`}
+                draggable={false}
+                style={{
+                  position: 'absolute', top: 0, left: 0,
+                  width: displayW, height: displayH,
+                  display: 'block', userSelect: 'none', pointerEvents: 'none',
+                }}
+              />
+            )}
+
+            {/* Live vector render from the PDFDocumentProxy — crisp at every zoom. */}
+            <PdfPageCanvas
+              pdfProxy={pdfProxy}
+              pageIndex={pageIndex}
+              displayWidth={displayW}
+              displayHeight={displayH}
             />
 
             {/* Konva annotation layer — scaleX/Y maps annotation coords to display coords */}
