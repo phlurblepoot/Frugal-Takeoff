@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
@@ -7,6 +7,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -50,6 +55,21 @@ interface PdfCanvasProps {
   legendWidth?: number;
   onUpdateLegend?: (updates: { position?: { x: number, y: number }, scale?: number, scaleX?: number, scaleY?: number, fontSize?: number, width?: number }) => void;
   searchTerm?: string;
+  /**
+   * Vector source for the page. When set, the canvas renders this PDF page
+   * directly via pdf.js (crisp at every zoom) and uses its embedded text for
+   * search. When omitted, the legacy `imageUrl` raster path is used.
+   */
+  sourcePdfUrl?: string;
+  sourcePdfPageNum?: number;
+  /**
+   * Other pages in the same project that this page can link to. Any text on
+   * the current page whose string matches one of these page numbers becomes
+   * a clickable hotspot in pan mode. Vector-only — legacy raster pages have
+   * no text positions to detect references against.
+   */
+  linkablePages?: Array<{ pageId: string; pageNumber: string }>;
+  onPageReferenceClick?: (pageId: string) => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onCopy?: () => void;
@@ -103,6 +123,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   legendWidth,
   onUpdateLegend,
   searchTerm,
+  sourcePdfUrl,
+  sourcePdfPageNum,
+  linkablePages,
+  onPageReferenceClick,
   onUndo,
   onRedo,
   onCopy,
@@ -113,7 +137,23 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onClearMultiSelect,
   isMultiSelectMode = false,
 }) => {
-  const [image] = useImage(imageUrl);
+  // `useImage` is the legacy raster path; new vector-source pages populate
+  // `pdfImage` instead. `image` (used by the existing code below) resolves to
+  // whichever one is current — that lets the Konva background, zoom-fit logic,
+  // and search effect stay agnostic to the source.
+  const [legacyImage] = useImage(imageUrl);
+  const [pdfImage, setPdfImage] = useState<HTMLCanvasElement | null>(null);
+  const image = pdfImage ?? legacyImage;
+
+  // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
+  // rendered on demand into an offscreen canvas at a resolution that tracks
+  // the current stage zoom, then handed to Konva as the background image.
+  const pdfProxyRef = useRef<any>(null);
+  const pdfPageRef = useRef<any>(null);
+  const lastRenderScaleRef = useRef<number>(0);
+  const renderTaskRef = useRef<any>(null);
+  const rerenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const stageRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -150,6 +190,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [resumingSegmentIdx, setResumingSegmentIdx] = useState<number>(-1);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  // Bounding boxes of text on this page that reference other pages in the
+  // project — populated from the source PDF's text layer after the page
+  // loads. Clicking one in pan mode navigates to that page.
+  const [pageRefs, setPageRefs] = useState<Array<{ pageId: string; x: number; y: number; width: number; height: number }>>([]);
+  const [hoveredRefIdx, setHoveredRefIdx] = useState<number | null>(null);
 
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
@@ -217,25 +262,252 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     };
   }, [contextMenu]);
 
-  // Fit image to screen initially
+  // Fit image to screen initially. didFitRef guarantees this runs only on the
+  // first frame the background appears — without it, every pdf.js re-render
+  // (which can swap `image` references during zoom) would reset the view.
+  const didFitRef = useRef(false);
   useEffect(() => {
+    if (didFitRef.current) return;
     if (image && dimensions.width > 0 && dimensions.height > 0) {
       const scaleX = dimensions.width / imageWidth;
       const scaleY = dimensions.height / imageHeight;
       const initialScale = Math.min(scaleX, scaleY) * 0.9; // 90% of screen
-      
+
       setStageScale(initialScale);
       setStagePos({
         x: (dimensions.width - imageWidth * initialScale) / 2,
         y: (dimensions.height - imageHeight * initialScale) / 2,
       });
+      didFitRef.current = true;
     }
   }, [image, dimensions, imageWidth, imageHeight]);
+
+  // ── Vector PDF page loading + on-demand rendering ────────────────────────────
+  // Load the source PDF & target page once per (url, pageNum). The proxy lives
+  // for the lifetime of this PdfCanvas instance — the parent remounts via
+  // `key={page.id}` on navigation, so cleanup is bounded.
+  useEffect(() => {
+    if (!sourcePdfUrl || !sourcePdfPageNum) {
+      pdfPageRef.current = null;
+      if (pdfProxyRef.current) {
+        pdfProxyRef.current.destroy().catch(() => {});
+        pdfProxyRef.current = null;
+      }
+      setPdfImage(null);
+      lastRenderScaleRef.current = 0;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
+        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        const page = await proxy.getPage(sourcePdfPageNum);
+        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        pdfProxyRef.current = proxy;
+        pdfPageRef.current = page;
+        // Initial render at base scale (2.0× matches imageWidth/imageHeight).
+        const canvas = document.createElement('canvas');
+        const viewport = page.getViewport({ scale: 2.0 });
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport } as any);
+        await renderTaskRef.current.promise;
+        if (cancelled) return;
+        lastRenderScaleRef.current = 2.0;
+        setPdfImage(canvas);
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error('Failed to load source PDF', err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
+    };
+  }, [sourcePdfUrl, sourcePdfPageNum]);
+
+  // Normalize page numbers once so the text-item match below is a simple
+  // map lookup. Trim + uppercase keeps it forgiving but avoids the false
+  // positives a full substring match would cause (e.g. matching "A1" inside
+  // "DETAIL A1 OF SHEET").
+  const normalizedPageMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!linkablePages) return m;
+    for (const p of linkablePages) {
+      const key = (p.pageNumber || '').trim().toUpperCase();
+      if (key && !m.has(key)) m.set(key, p.pageId);
+    }
+    return m;
+  }, [linkablePages]);
+
+  // Detect cross-page references on this page. Runs once the page proxy is
+  // loaded (signalled by pdfImage becoming non-null) and whenever the set of
+  // linkable pages changes. Reuses the cached pdfPageRef — no extra PDF
+  // round-trip. Vector pages only; legacy raster pages skip silently.
+  useEffect(() => {
+    if (!pdfImage || !pdfPageRef.current || normalizedPageMap.size === 0) {
+      setPageRefs([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfPage = pdfPageRef.current;
+        const viewport = pdfPage.getViewport({ scale: 2.0 });
+        const textContent = await pdfPage.getTextContent();
+        if (cancelled) return;
+        const refs: Array<{ pageId: string; x: number; y: number; width: number; height: number }> = [];
+        for (const item of textContent.items as any[]) {
+          const str: string = (item.str ?? '').trim();
+          if (!str) continue;
+          const key = str.toUpperCase();
+          const targetId = normalizedPageMap.get(key);
+          if (!targetId) continue;
+          const tx = item.transform?.[4] ?? 0;
+          const ty = item.transform?.[5] ?? 0;
+          const w = item.width ?? 0;
+          const h = item.height || Math.abs(item.transform?.[3] ?? item.transform?.[0] ?? 12);
+          const [vx0, vy0] = viewport.convertToViewportPoint(tx, ty);
+          const [vx1, vy1] = viewport.convertToViewportPoint(tx + w, ty + h);
+          refs.push({
+            pageId: targetId,
+            x: Math.min(vx0, vx1),
+            y: Math.min(vy0, vy1),
+            width: Math.abs(vx1 - vx0),
+            height: Math.abs(vy1 - vy0),
+          });
+        }
+        if (!cancelled) setPageRefs(refs);
+      } catch (e) {
+        console.warn('Failed to detect page references', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfImage, normalizedPageMap]);
+
+  // Re-render at higher resolution when the user zooms in. Debounced so a
+  // single drag through many zoom levels only fires once at the end. We render
+  // into a *new* canvas and swap it in atomically — never mutate the canvas
+  // that's currently on screen, otherwise the page visibly blanks for the
+  // duration of the render. The maximum scale is intentionally modest (≤4×)
+  // so the backing store stays small enough that a single render doesn't
+  // block the main thread long enough to look like a freeze.
+  useEffect(() => {
+    if (!pdfImage || !pdfPageRef.current) return;
+    if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
+    rerenderTimerRef.current = setTimeout(async () => {
+      const page = pdfPageRef.current;
+      if (!page) return;
+      // Cap the contribution of devicePixelRatio so HiDPI screens don't push
+      // the render scale to memory-heavy territory at moderate zoom levels.
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const targetScale = Math.max(2.0, Math.min(4.0, 2.0 * stageScale * dpr));
+      const prev = lastRenderScaleRef.current;
+      if (prev > 0 && Math.abs(targetScale - prev) / prev < 0.20) return;
+      if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
+      try {
+        const viewport = page.getViewport({ scale: targetScale });
+        const nextCanvas = document.createElement('canvas');
+        nextCanvas.width = Math.round(viewport.width);
+        nextCanvas.height = Math.round(viewport.height);
+        const ctx = nextCanvas.getContext('2d')!;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport } as any);
+        await renderTaskRef.current.promise;
+        lastRenderScaleRef.current = targetScale;
+        // Swap in the new canvas. Drop the previous backing store so the
+        // browser can reclaim the memory immediately instead of waiting for GC.
+        const prevCanvas = pdfImage;
+        setPdfImage(nextCanvas);
+        if (prevCanvas && prevCanvas !== nextCanvas) {
+          prevCanvas.width = 0;
+          prevCanvas.height = 0;
+        }
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error('PDF page re-render failed', err);
+        }
+      }
+    }, 250);
+    return () => {
+      if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
+    };
+  }, [stageScale, pdfImage]);
+
+  // Cleanup on unmount.
+  useEffect(() => () => {
+    if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
+    if (pdfProxyRef.current) {
+      pdfProxyRef.current.destroy().catch(() => {});
+      pdfProxyRef.current = null;
+    }
+    pdfPageRef.current = null;
+  }, []);
 
   useEffect(() => {
     let isActive = true;
     const runSearch = async () => {
-      if (!searchTerm || !imageUrl) {
+      if (!searchTerm) {
+        setSearchHighlights([]);
+        return;
+      }
+      const lowerSearchTerm = searchTerm.toLowerCase();
+      const searchWords = lowerSearchTerm.split(/\s+/).filter(Boolean);
+      if (searchWords.length === 0) {
+        setSearchHighlights([]);
+        return;
+      }
+
+      // Vector path: use embedded text positions from pdf.js — instant and
+      // exact, no OCR worker needed. Items are matched in their entirety
+      // (each text item is typically a single word or short run), which keeps
+      // the bounding box reliable without splitting glyph-by-glyph.
+      const page = pdfPageRef.current;
+      if (page) {
+        setIsSearching(true);
+        try {
+          const viewport = page.getViewport({ scale: 2.0 });
+          const textContent = await page.getTextContent();
+          if (!isActive) return;
+          const highlights: { x0: number; y0: number; x1: number; y1: number }[] = [];
+          for (const item of textContent.items as any[]) {
+            const str: string = (item.str || '').toLowerCase();
+            if (!str) continue;
+            if (!searchWords.some(sw => str.includes(sw))) continue;
+            // PDF coords: transform = [a, b, c, d, e, f]; (e, f) is the baseline origin.
+            // Use viewport.convertToViewportPoint to map to the same canvas coord space
+            // that measurements live in (imageWidth × imageHeight at scale 2.0).
+            const tx = item.transform?.[4] ?? 0;
+            const ty = item.transform?.[5] ?? 0;
+            const w = item.width ?? 0;
+            const h = item.height ?? Math.abs(item.transform?.[3] ?? 12);
+            const [vx0, vy0] = viewport.convertToViewportPoint(tx, ty);
+            const [vx1, vy1] = viewport.convertToViewportPoint(tx + w, ty + h);
+            highlights.push({
+              x0: Math.min(vx0, vx1),
+              y0: Math.min(vy0, vy1),
+              x1: Math.max(vx0, vx1),
+              y1: Math.max(vy0, vy1),
+            });
+          }
+          if (isActive) setSearchHighlights(highlights);
+        } catch (err) {
+          console.error('Vector search failed:', err);
+        } finally {
+          if (isActive) setIsSearching(false);
+        }
+        return;
+      }
+
+      // Legacy raster path: OCR the page image. Only used for projects that
+      // predate the vector pipeline and don't have a source PDF stored.
+      if (!imageUrl) {
         setSearchHighlights([]);
         return;
       }
@@ -250,14 +522,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         const data = ret?.data;
         const words = data?.words || [];
 
-        const lowerSearchTerm = searchTerm.toLowerCase();
-        const searchWords = lowerSearchTerm.split(/\s+/).filter(Boolean);
-
         const highlights = words
           .filter(w => {
             const wordText = w?.text?.toLowerCase() || '';
-            // Match if the word contains any of the search words
-            // This handles cases where the OCR word has punctuation attached
             return searchWords.some(sw => wordText.includes(sw));
           })
           .map(w => w.bbox);
@@ -275,7 +542,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => {
       isActive = false;
     };
-  }, [searchTerm, imageUrl]);
+  }, [searchTerm, imageUrl, pdfImage]);
 
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
@@ -1771,6 +2038,51 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 cornerRadius={2 / stageScale}
               />
             ))}
+            {pageRefs.map((ref, i) => {
+              const isHover = hoveredRefIdx === i;
+              const interactive = currentTool === 'pan';
+              // Small padding makes the hit area + visual a bit larger than
+              // the raw glyph bbox, which is usually flush against the
+              // letters. Section-marker page numbers are typically tiny, so
+              // a few px of slack helps both hover-targeting and visibility.
+              const pad = Math.max(2, 4 / stageScale);
+              return (
+                <Rect
+                  key={`pageref-${i}`}
+                  x={ref.x - pad}
+                  y={ref.y - pad}
+                  width={ref.width + pad * 2}
+                  height={ref.height + pad * 2}
+                  fill={isHover ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.08)'}
+                  stroke="rgba(59, 130, 246, 0.7)"
+                  strokeWidth={(isHover ? 2 : 1) / stageScale}
+                  cornerRadius={3 / stageScale}
+                  listening={interactive}
+                  onClick={(e) => {
+                    e.cancelBubble = true;
+                    onPageReferenceClick?.(ref.pageId);
+                  }}
+                  onTap={(e) => {
+                    e.cancelBubble = true;
+                    onPageReferenceClick?.(ref.pageId);
+                  }}
+                  onMouseEnter={(e) => {
+                    setHoveredRefIdx(i);
+                    const stage = e.target.getStage();
+                    if (stage) stage.container().style.cursor = 'pointer';
+                  }}
+                  onMouseLeave={(e) => {
+                    setHoveredRefIdx(null);
+                    const stage = e.target.getStage();
+                    if (stage) {
+                      // Restore whatever cursor the surrounding tool wants.
+                      stage.container().style.cursor =
+                        currentTool === 'pan' ? 'grab' : 'crosshair';
+                    }
+                  }}
+                />
+              );
+            })}
             {renderRegions()}
             {renderMeasurements()}
             {renderActiveDrawing()}

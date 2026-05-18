@@ -16,6 +16,28 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2',
+    date: 'May 18, 2026',
+    changes: [
+      'Vector PDF pipeline (project pages): uploaded PDFs are now kept in storage and used as the source for the canvas, printouts, and search. Pages on the canvas render directly from the original PDF on demand and re-render at higher resolution when you zoom in — no more blurry stretched JPEGs at high zoom. Printouts copy the original vector page and stamp measurements / legend on top with pdf-lib, so the exported PDF is a fraction of the previous size and stays crisp at any zoom (measurement labels, legend text, and lines are real vector content now).',
+      'Vector PDF pipeline (PDF editor): the standalone editor also stopped storing rasterised pages — it renders each visible page on demand from a live pdf.js document. Sharper text at every zoom, much smaller IndexedDB footprint, and the cached-page JPEG bug that produced fuzzy zooms is gone.',
+      'Upload: the source PDF is streamed to the server as binary instead of being base64-encoded in the browser, fixing the out-of-memory crashes large plan sets used to trigger on the new-project upload step.',
+      'Upload: OCR only runs on pages that genuinely need it. Text-bearing PDFs (CAD output) get their sheet number / description / search text from the embedded text layer directly, which is both faster and accurate to the character. Image-only or scanned PDFs still fall back to Tesseract.',
+      'Page-number / description extraction: drawing a region in the preview modal now pulls text out of the PDF\'s embedded text layer first and only falls back to OCR when the region is image-only. Codes like "A5.0" come back as "A5.0", not the old OCR misread "AS.0".',
+      '"Extract All Pages" no longer produces gibberish on non-previewed pages. For vector pages it reads the embedded text per page; for image-only pages it renders the full page at full resolution before OCRing the crop, instead of cropping a 400 px thumbnail.',
+      'Page-naming preview: the modal now renders the original PDF page at full quality through pdf.js instead of zooming a small thumbnail. Same modal is shared between new-project upload and the add-pages-to-existing-project flow, so any future fix to either one lands in both at once.',
+      'Project search: the cached page text used by the search bar is backfilled from each page\'s source PDF on first open, replacing the upload-era OCR string with the real embedded text. One-shot per page; legacy projects without a source PDF keep working with their existing text.',
+      'Canvas: cross-page references are now clickable. If a page\'s embedded text contains another sheet\'s page number (e.g. an "A5.0" inside an elevation\'s section marker), it appears as a faint blue hotspot — pan-mode click takes you to that page. In any other tool the hotspot stays visible as an indicator but doesn\'t intercept clicks, so it can\'t hijack a measurement.',
+      'Project page UI: the search bar has a clear button on the right that appears once you type, and pressing Esc inside the box also clears. A "X of Y pages" badge sits below the input while a term is active. Matched substrings in titles and snippets are highlighted in yellow.',
+      'Project page UI: press / anywhere on the Pages tab to focus the search box (skipped if you\'re already typing into a different input).',
+      'Project page UI: new sort dropdown — Page number (default, numeric), Description (descriptions without one sink to the bottom), or Most highlights first. Choice is persisted per user.',
+      'Project page UI: new grid / list view toggle. List view shows a small fixed thumbnail and the full page name with no truncation, so long descriptions stay readable. Also persisted per user.',
+      'Project page UI: right-click a page tile or row for a context menu with Open, Open in new tab, Add/Remove favorite, Copy share link, Rename, and Delete page.',
+      'Project page UI: pages can be marked as favorites with the star button on the tile or the context menu. Favorites are per-user, per-project, and always sort to the top inside whichever sort mode is active so the sheets you revisit most are one glance away.',
+      'Printouts on legacy projects continue to work — pages without a source PDF transparently fall back to embedding the stored raster as before. No data migration required to adopt this release.',
+    ],
+  },
+  {
     version: '1.0.9',
     date: 'May 13, 2026',
     changes: [

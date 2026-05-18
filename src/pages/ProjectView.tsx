@@ -1,14 +1,19 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
-import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
+import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
+import { PageNamingStep } from '../components/PageNamingStep';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
@@ -175,69 +180,193 @@ const CustomCostRow: React.FC<{
   );
 };
 
-// Renders one blueprint page (background + highlighted measurements + legend) to a JPEG
-// data URL. Used by both handlePrint and the proposal "append highlights" option so the
-// two paths always produce identical output.
-async function renderPageToDataUrl(
-  page: ProjectPage,
+// Converts a data URL (e.g. "data:application/pdf;base64,...") to a fresh Uint8Array.
+function dataUrlToUint8Array(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bin = atob(base64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+// Hex "#rrggbb" → 0-1 RGB components for pdf-lib's rgb(). Defaults gracefully.
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return { r: 0.231, g: 0.510, b: 0.965 };
+  const n = parseInt(m[1], 16);
+  return { r: ((n >> 16) & 0xff) / 255, g: ((n >> 8) & 0xff) / 255, b: (n & 0xff) / 255 };
+}
+
+// Builds the highlighted-plans PDF. For vector-source pages it copies the
+// original PDF page (preserving all native vectors and text) and stamps
+// measurements + legend on top as pdf-lib drawing primitives — output is
+// fully vector, dramatically smaller and crisp at any zoom. Legacy pages
+// without a sourcePdfFileId fall back to embedding the rasterized JPEG.
+async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
-  scale = 1.0,
-  jpegQuality = 0.80,
-): Promise<string | null> {
-  const canvas = document.createElement('canvas');
-  canvas.width  = Math.round(page.imageWidth  * scale);
-  canvas.height = Math.round(page.imageHeight * scale);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
+  _quality: HighlightQuality = 'standard',
+  onProgress?: (msg: string) => void,
+): Promise<ArrayBuffer | null> {
+  const pagesToPrint = project.pages.filter(page =>
+    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+  );
+  if (pagesToPrint.length === 0) return null;
 
-  // Background image
-  const img = new Image();
-  img.src = getImageUrl(page.imageId);
-  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
 
-  // Scale ctx so all measurement/legend coords (in original image-space) render correctly
-  ctx.save();
-  ctx.scale(scale, scale);
+  const outDoc = await PDFDocument.create();
+  const font = await outDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
-  // Measurements
-  page.measurements.forEach(m => {
-    if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
-    if (!m.points || m.points.length === 0) return; // skip empty measurements
-    const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
-    const color = takeoff?.color || m.color || '#3b82f6';
-    ctx.strokeStyle = color;
-    ctx.fillStyle = `${color}40`;
-    ctx.lineWidth = m.type === 'length' ? 8 : 3;
-    if (m.type === 'count') {
-      const p = m.points[0];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
-      ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
-      ctx.stroke();
-    } else {
-      // Draw the primary segment plus any additional segments, with arcs expanded.
+  // Cache source PDFs so multi-page documents only round-trip once.
+  const sourceDocs = new Map<string, any>();
+  const loadSourceDoc = async (fileId: string): Promise<any | null> => {
+    if (sourceDocs.has(fileId)) return sourceDocs.get(fileId);
+    try {
+      const dataUrl = await getFile(fileId);
+      if (!dataUrl) return null;
+      const bytes = dataUrlToUint8Array(dataUrl);
+      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      sourceDocs.set(fileId, doc);
+      return doc;
+    } catch (e) {
+      console.warn('Failed to load source PDF', fileId, e);
+      sourceDocs.set(fileId, null);
+      return null;
+    }
+  };
+
+  for (let i = 0; i < pagesToPrint.length; i++) {
+    onProgress?.(`Adding page ${i + 1} of ${pagesToPrint.length}…`);
+    const page = pagesToPrint[i];
+
+    // Build the destination page. Two paths:
+    //   • Vector: copy the original PDF page so its native content (text,
+    //     vectors, embedded images) survives. The measurements layer needs to
+    //     scale from the project's 2.0× coord space down to PDF points (×0.5).
+    //   • Legacy: a blank page sized to the stored raster dimensions, with
+    //     that raster embedded as a full-page JPEG. Measurements are drawn
+    //     in their native 1:1 coord space.
+    let outPage: any = null;
+    let scaleFactor = 1.0;
+    let pageWidth = page.imageWidth;
+    let pageHeight = page.imageHeight;
+    let rotation = 0;
+
+    if (page.sourcePdfFileId && page.sourcePdfPageNum) {
+      const srcDoc = await loadSourceDoc(page.sourcePdfFileId);
+      if (srcDoc) {
+        try {
+          const idx = page.sourcePdfPageNum - 1;
+          if (idx >= 0 && idx < srcDoc.getPageCount()) {
+            const [copied] = await outDoc.copyPages(srcDoc, [idx]);
+            outDoc.addPage(copied);
+            outPage = copied;
+            rotation = copied.getRotation().angle;
+            pageWidth = copied.getWidth();
+            pageHeight = copied.getHeight();
+            scaleFactor = 0.5; // imageWidth = 2.0 × natural PDF points
+          }
+        } catch (e) {
+          console.warn(`Failed to copy source page ${page.sourcePdfPageNum} of ${page.sourcePdfFileId}`, e);
+        }
+      }
+    }
+
+    if (!outPage) {
+      // Legacy raster fallback.
+      pageWidth = page.imageWidth;
+      pageHeight = page.imageHeight;
+      scaleFactor = 1.0;
+      outPage = outDoc.addPage([pageWidth, pageHeight]);
+      if (page.imageId) {
+        try {
+          const dataUrl = await getImage(page.imageId);
+          if (dataUrl) {
+            const imgBytes = dataUrlToUint8Array(dataUrl);
+            const isPng = dataUrl.startsWith('data:image/png');
+            const embedded = isPng ? await outDoc.embedPng(imgBytes) : await outDoc.embedJpg(imgBytes);
+            outPage.drawImage(embedded, { x: 0, y: 0, width: pageWidth, height: pageHeight });
+          }
+        } catch (e) {
+          console.warn('Failed to embed legacy page image', e);
+        }
+      }
+    }
+
+    if (rotation !== 0) {
+      // Vector overlay isn't rotation-aware yet. Skip overlay on rotated pages
+      // rather than putting marks in the wrong place. The underlying page still
+      // appears in the output PDF correctly.
+      console.warn(`Page "${page.name}" has /Rotate=${rotation}° — measurement overlay skipped on this page.`);
+      continue;
+    }
+
+    // ── Vector overlay: measurements ────────────────────────────────────────
+    // SVG path origin is top-left with Y-down (pdf-lib flips to PDF Y-up when
+    // drawn at y=pageHeight). All measurement coords are scaled into PDF
+    // points first so the drawSvgPath origin maps cleanly.
+    const sf = scaleFactor;
+    const pdfX = (mx: number) => mx * sf;
+    const pdfY = (my: number) => pageHeight - my * sf; // for non-SVG primitives (Y-up)
+
+    for (const m of page.measurements) {
+      if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
+      if (!m.points || m.points.length === 0) continue;
+      const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
+      const colorHex = takeoff?.color || m.color || '#3b82f6';
+      const c = hexToRgb(colorHex);
+      const stroke = m.type === 'length' ? 8 * sf : 3 * sf;
+
+      if (m.type === 'count') {
+        const p = m.points[0];
+        const cx = pdfX(p.x);
+        const cy = pdfY(p.y);
+        outPage.drawCircle({
+          x: cx, y: cy,
+          size: 12 * sf,
+          color: rgb(c.r, c.g, c.b),
+          opacity: 0.25,
+          borderColor: rgb(c.r, c.g, c.b),
+          borderWidth: stroke,
+        });
+        // White cross on top.
+        const armCss = 6 * sf;
+        outPage.drawLine({
+          start: { x: cx - armCss, y: cy }, end: { x: cx + armCss, y: cy },
+          thickness: 2 * sf, color: rgb(1, 1, 1),
+        });
+        outPage.drawLine({
+          start: { x: cx, y: cy - armCss }, end: { x: cx, y: cy + armCss },
+          thickness: 2 * sf, color: rgb(1, 1, 1),
+        });
+        continue;
+      }
+
+      // Polyline / polygon for length & area, with arcs expanded.
       const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
         { points: m.points, arcMidIndices: m.arcMidIndices },
         ...(m.segments ?? []),
       ];
-      allSegs.forEach(seg => {
-        if (!seg.points || seg.points.length === 0) return;
+      for (const seg of allSegs) {
+        if (!seg.points || seg.points.length === 0) continue;
         const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
-        ctx.beginPath();
-        ctx.moveTo(dispPts[0].x, dispPts[0].y);
-        for (let j = 1; j < dispPts.length; j++) ctx.lineTo(dispPts[j].x, dispPts[j].y);
-        if (m.type === 'area') { ctx.closePath(); ctx.fill(); }
-        ctx.stroke();
-      });
-      // Label is anchored to the primary segment.
+        if (dispPts.length < 2) continue;
+        const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
+        for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
+        if (m.type === 'area') cmds.push('Z');
+        const path = cmds.join(' ');
+        outPage.drawSvgPath(path, {
+          x: 0, y: pageHeight,
+          borderColor: rgb(c.r, c.g, c.b),
+          borderWidth: stroke,
+          color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
+          opacity: m.type === 'area' ? 0.25 : undefined,
+        });
+      }
+
+      // Label centered on the primary segment.
       let centerX = 0, centerY = 0;
       if (m.type === 'length') {
         const midIdx = Math.floor((m.points.length - 1) / 2);
@@ -254,155 +383,155 @@ async function renderPageToDataUrl(
       if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
       else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
       else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
+
       if (text) {
-        ctx.font = '14px sans-serif';
-        const textWidth = ctx.measureText(text).width;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.fillRect(centerX - textWidth / 2 - 4, centerY - 18, textWidth + 8, 24);
-        ctx.fillStyle = '#000';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, centerX, centerY);
+        const fontSize = 14 * sf;
+        const textWidth = font.widthOfTextAtSize(text, fontSize);
+        const bgX = pdfX(centerX) - textWidth / 2 - 4 * sf;
+        const bgY = pdfY(centerY) - fontSize * 0.7;
+        outPage.drawRectangle({
+          x: bgX, y: bgY,
+          width: textWidth + 8 * sf,
+          height: fontSize * 1.4,
+          color: rgb(1, 1, 1),
+          opacity: 0.8,
+        });
+        outPage.drawText(text, {
+          x: pdfX(centerX) - textWidth / 2,
+          y: pdfY(centerY) - fontSize * 0.3,
+          size: fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        });
       }
     }
-  });
 
-  // Legend
-  if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
-    const legendItems: { color: string; name: string; total: string }[] = [];
-    project.takeoffs.forEach(takeoff => {
-      let totalRealValue = 0;
-      let hasMeasurements = false;
-      page.measurements.filter(m => m.takeoffId === takeoff.id).forEach(m => {
-        if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
-        hasMeasurements = true;
-        let currentScale = page.scaleConfig;
-        if (page.isMultiRegion && m.regionId) {
-          const region = page.scaleRegions?.find(r => r.id === m.regionId);
-          if (region?.scaleConfig) currentScale = region.scaleConfig;
+    // ── Vector overlay: legend ──────────────────────────────────────────────
+    if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
+      const legendItems: { color: string; name: string; total: string }[] = [];
+      for (const takeoff of project.takeoffs) {
+        let totalRealValue = 0;
+        let hasMeasurements = false;
+        for (const m of page.measurements.filter(m => m.takeoffId === takeoff.id)) {
+          if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
+          hasMeasurements = true;
+          let currentScale = page.scaleConfig;
+          if (page.isMultiRegion && m.regionId) {
+            const region = page.scaleRegions?.find(r => r.id === m.regionId);
+            if (region?.scaleConfig) currentScale = region.scaleConfig;
+          }
+          const allMPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
+          let pixelValue = 0;
+          if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
+          else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
+          if (pixelValue > 0) {
+            const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+            const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+            const sourceUnit = currentScale?.unit || 'ft';
+            if (takeoff.type === 'count') totalRealValue += realValue;
+            else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+          }
         }
-        const allMPtsLegend = [m.points, ...(m.segments ?? []).map(s => s.points)];
-        let pixelValue = 0;
-        if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
-        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
-        else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
-        if (pixelValue > 0) {
-          const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+        if (hasMeasurements) {
           const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
-          const sourceUnit = currentScale?.unit || 'ft';
-          if (takeoff.type === 'count') totalRealValue += realValue;
-          else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+          const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
+          const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
+          legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
         }
-      });
-      if (hasMeasurements) {
-        const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
-        const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
-        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
-        legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
       }
-    });
-    if (legendItems.length > 0) {
-      const fontSize = page.legendFontSize || 24;
-      const padding = fontSize * 0.9;
-      const itemHeight = fontSize * 1.7;
-      const colorBoxSize = fontSize;
-      const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
-      const width = page.legendWidth || 500;
-      const headerH = padding * 2 + fontSize * 1.4;
-      const height = headerH + legendItems.length * itemHeight + padding;
-      const pos = page.legendPosition || { x: 20, y: 20 };
-      ctx.save();
-      ctx.translate(pos.x, pos.y);
-      // Outer card with shadow
-      ctx.shadowColor = 'rgba(0,0,0,0.12)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 4;
-      ctx.fillStyle = 'white';
-      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 8); ctx.fill();
-      ctx.shadowColor = 'transparent';
-      ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.stroke();
-      // Header background
-      ctx.fillStyle = '#f1f5f9';
-      ctx.beginPath(); ctx.roundRect(0, 0, width, headerH, [8, 8, 0, 0]); ctx.fill();
-      // Title
-      ctx.fillStyle = '#1e293b';
-      ctx.font = `bold ${fontSize + 2}px sans-serif`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('Legend', padding, padding * 0.8);
-      // Separator
-      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, headerH); ctx.lineTo(width, headerH); ctx.stroke();
-      // Items
-      legendItems.forEach((item, index) => {
-        const rowY = headerH + padding * 0.5 + index * itemHeight;
-        const boxY = rowY + Math.round((itemHeight - colorBoxSize) / 2);
-        const textY = rowY + Math.round((itemHeight - fontSize) / 2);
-        ctx.fillStyle = item.color;
-        ctx.beginPath(); ctx.roundRect(padding, boxY, colorBoxSize, colorBoxSize, 4); ctx.fill();
-        ctx.fillStyle = '#334155';
-        ctx.font = `${fontSize}px sans-serif`;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-        let nameText = item.name;
-        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
-        if (ctx.measureText(nameText).width > maxNameWidth) {
-          while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) nameText = nameText.slice(0, -1);
-          nameText += '...';
-        }
-        ctx.fillText(nameText, padding + textOffsetX, textY);
-        if (page.showLegendTotals !== false) {
-          ctx.fillStyle = '#0f172a';
-          ctx.font = `bold ${fontSize}px sans-serif`;
-          ctx.textAlign = 'right';
-          ctx.fillText(item.total, width - padding, textY);
-        }
-      });
-      ctx.restore();
+
+      if (legendItems.length > 0) {
+        const fontSize = (page.legendFontSize || 24) * sf;
+        const padding = fontSize * 0.9;
+        const itemHeight = fontSize * 1.7;
+        const colorBoxSize = fontSize;
+        const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
+        const width = (page.legendWidth || 500) * sf;
+        const headerH = padding * 2 + fontSize * 1.4;
+        const height = headerH + legendItems.length * itemHeight + padding;
+        const pos = page.legendPosition || { x: 20, y: 20 };
+        const legendX = pdfX(pos.x);
+        const legendTopY = pdfY(pos.y); // PDF y of the top edge of the legend card
+
+        // Card background + 1px border (no rounded corners — pdf-lib's drawRectangle
+        // doesn't support radii, and the rest of the printout already uses sharp
+        // rectangles for measurement labels).
+        outPage.drawRectangle({
+          x: legendX, y: legendTopY - height,
+          width, height,
+          color: rgb(1, 1, 1),
+          borderColor: rgb(0.792, 0.835, 0.882), // #cbd5e1
+          borderWidth: 1 * sf,
+        });
+        // Header band.
+        outPage.drawRectangle({
+          x: legendX, y: legendTopY - headerH,
+          width, height: headerH,
+          color: rgb(0.945, 0.961, 0.976), // #f1f5f9
+        });
+        // Header text.
+        outPage.drawText('Legend', {
+          x: legendX + padding,
+          y: legendTopY - padding * 0.8 - (fontSize + 2),
+          size: fontSize + 2,
+          font: fontBold,
+          color: rgb(0.118, 0.161, 0.231), // #1e293b
+        });
+
+        legendItems.forEach((item, index) => {
+          const rowTop = legendTopY - (headerH + padding * 0.5 + index * itemHeight);
+          const boxBottom = rowTop - itemHeight + (itemHeight - colorBoxSize) / 2;
+          const textBaseline = rowTop - itemHeight + (itemHeight - fontSize) / 2;
+
+          // Color swatch.
+          const swatch = hexToRgb(item.color);
+          outPage.drawRectangle({
+            x: legendX + padding, y: boxBottom,
+            width: colorBoxSize, height: colorBoxSize,
+            color: rgb(swatch.r, swatch.g, swatch.b),
+          });
+
+          // Name — truncate with "…" if it would overlap the totals column.
+          const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
+          let nameText = item.name;
+          while (nameText.length > 0 && font.widthOfTextAtSize(nameText + '...', fontSize) > maxNameWidth) {
+            nameText = nameText.slice(0, -1);
+          }
+          if (nameText.length < item.name.length) nameText += '...';
+
+          outPage.drawText(nameText, {
+            x: legendX + padding + textOffsetX,
+            y: textBaseline,
+            size: fontSize,
+            font,
+            color: rgb(0.2, 0.255, 0.333), // #334155
+          });
+
+          if (page.showLegendTotals !== false && item.total) {
+            const totalWidth = fontBold.widthOfTextAtSize(item.total, fontSize);
+            outPage.drawText(item.total, {
+              x: legendX + width - padding - totalWidth,
+              y: textBaseline,
+              size: fontSize,
+              font: fontBold,
+              color: rgb(0.059, 0.090, 0.165), // #0f172a
+            });
+          }
+        });
+
+        // `degrees` is imported above but only needed if we ever stamp rotated
+        // text; silence the unused-variable warning by referencing it once.
+        void degrees;
+      }
     }
   }
 
-  ctx.restore();
-  return canvas.toDataURL('image/jpeg', jpegQuality);
-}
-
-// Builds the highlighted-plans PDF using the exact same logic as the Print button.
-// Returns the PDF as an ArrayBuffer so it can be saved directly or merged into another PDF.
-async function buildHighlightsPdf(
-  project: Project,
-  selectedTakeoffIds: Set<string>,
-  quality: HighlightQuality = 'standard',
-  onProgress?: (msg: string) => void,
-): Promise<ArrayBuffer | null> {
-  const preset = HIGHLIGHT_QUALITY_PRESETS[quality];
-  const pagesToPrint = project.pages.filter(page =>
-    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
-  );
-  if (pagesToPrint.length === 0) return null;
-
-  const getPageScale = (w: number, h: number) =>
-    preset.maxDim === Infinity ? 1.0 : Math.min(1.0, preset.maxDim / Math.max(w, h));
-
-  const firstScale = getPageScale(pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight);
-  const pdf = new jsPDF({
-    orientation: 'landscape',
-    unit: 'px',
-    format: [
-      Math.round(pagesToPrint[0].imageWidth  * firstScale),
-      Math.round(pagesToPrint[0].imageHeight * firstScale),
-    ],
-  });
-
-  for (let i = 0; i < pagesToPrint.length; i++) {
-    onProgress?.(`Rendering page ${i + 1} of ${pagesToPrint.length}…`);
-    const page = pagesToPrint[i];
-    const sc = getPageScale(page.imageWidth, page.imageHeight);
-    const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds, sc, preset.jpegQuality);
-    if (!dataUrl) continue;
-    const pw = Math.round(page.imageWidth  * sc);
-    const ph = Math.round(page.imageHeight * sc);
-    if (i > 0) pdf.addPage([pw, ph], 'landscape');
-    pdf.setPage(i + 1);
-    pdf.addImage(dataUrl, 'JPEG', 0, 0, pw, ph);
-  }
-
-  return pdf.output('arraybuffer') as ArrayBuffer;
+  const out = await outDoc.save();
+  // pdf-lib returns a Uint8Array; turn it into an ArrayBuffer for the existing
+  // saveFile path.
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
 }
 
 // ── Highlight quality presets ────────────────────────────────────────────────
@@ -423,6 +552,25 @@ function getProposalPrefsKey(): string {
     return 'proposal-prefs-default';
   }
 }
+
+// Renders `text` with the first case-insensitive occurrence of `term` wrapped
+// in <mark> so search hits visibly pop out of page titles and snippets. No
+// match → text renders unchanged. Multi-occurrence highlighting is overkill
+// for page titles (one match is enough) and we keep snippets short anyway.
+const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term }) => {
+  if (!term) return <>{text}</>;
+  const idx = text.toLowerCase().indexOf(term.toLowerCase());
+  if (idx < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-yellow-200 dark:bg-yellow-600/40 text-inherit rounded px-0.5">
+        {text.slice(idx, idx + term.length)}
+      </mark>
+      {text.slice(idx + term.length)}
+    </>
+  );
+};
 
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
@@ -449,6 +597,26 @@ export const ProjectView: React.FC = () => {
 
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(new Set());
+  // Pages-tab layout: grid is the default (thumbnail-first browsing), list is
+  // better when descriptions matter more than the visual since the grid cell
+  // truncates them. Persisted per-user via getUserPreferences (see the load
+  // effect that hydrates other preferences).
+  const [pagesViewMode, setPagesViewMode] = useState<'grid' | 'list'>('grid');
+  // Sort order for the pages list. Numeric sort by pageNumber is the default
+  // (matches typical drawing-set conventions: A-101 before A-201 etc.).
+  // Persisted per-user under 'pages-sortMode'.
+  type PagesSortMode = 'pageNumber' | 'description' | 'highlightsDesc';
+  const [pagesSortMode, setPagesSortMode] = useState<PagesSortMode>('pageNumber');
+  // Right-click context menu for page tiles/rows. Stored as viewport coords
+  // so the menu renders correctly regardless of the underlying page card's
+  // position. Cleared on any outside click or Escape.
+  const [pageContextMenu, setPageContextMenu] = useState<{ pageId: string; x: number; y: number } | null>(null);
+  const pageSearchInputRef = useRef<HTMLInputElement>(null);
+  // Per-user, per-project favorites. Stored in userPreferences under
+  // `pages-favorites-{projectId}` as a JSON array; loaded on project mount
+  // and saved on every toggle. Favorited pages sort to the top of the page
+  // list inside whatever sort mode is active.
+  const [favoritePageIds, setFavoritePageIds] = useState<Set<string>>(new Set());
   const pagesScrollRef = useRef<HTMLDivElement>(null);
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
@@ -518,8 +686,56 @@ export const ProjectView: React.FC = () => {
       if (prefs['proposal-includeSignature']    != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
       if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
       if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
+      const sort = prefs['pages-sortMode'];
+      // 'name' was an earlier option that effectively duplicated pageNumber
+      // sort (the auto-built name string is prefixed by the page number, so
+      // it dominated the order). Anyone who picked it back then is promoted
+      // to description sort, which is what the option was meant to do.
+      if (sort === 'pageNumber' || sort === 'description' || sort === 'highlightsDesc') setPagesSortMode(sort);
+      else if (sort === 'name') setPagesSortMode('description');
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the pages-tab view mode + sort separately from the proposal
+  // prefs — these are UI preferences, not part of proposal generation.
+  useEffect(() => {
+    saveUserPreferences({ 'pages-viewMode': pagesViewMode, 'pages-sortMode': pagesSortMode }).catch(() => {});
+  }, [pagesViewMode, pagesSortMode]);
+
+  // Keyboard shortcut: "/" focuses the search box (GitHub-style). Skip if the
+  // user is already typing into something — we don't want to clobber an in-
+  // progress rename or note. Also skip when the Pages tab isn't active since
+  // there's no search input on screen to focus.
+  useEffect(() => {
+    if (activeTab !== 'pages') return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+      }
+      e.preventDefault();
+      pageSearchInputRef.current?.focus();
+      pageSearchInputRef.current?.select();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeTab]);
+
+  // Close the page-card context menu on outside click or Escape.
+  useEffect(() => {
+    if (!pageContextMenu) return;
+    const onClick = () => setPageContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPageContextMenu(null); };
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [pageContextMenu]);
 
   // Auto-save whenever any persistent pref changes (localStorage + server)
   useEffect(() => {
@@ -568,19 +784,6 @@ export const ProjectView: React.FC = () => {
   const [isNamingExistingPages, setIsNamingExistingPages] = useState(false);
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
-  const [previewPageId, setPreviewPageId] = useState<string | null>(null);
-  const [isExtracting, setIsExtracting] = useState(false);
-  const [extractionRect, setExtractionRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
-  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
-  const [interactionMode, setInteractionMode] = useState<'draw' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | null>(null);
-  const [initialRect, setInitialRect] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [newPlanSetName, setNewPlanSetName] = useState('');
   const [newPlanSetDate, setNewPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
@@ -650,6 +853,110 @@ export const ProjectView: React.FC = () => {
       setActiveTab(location.state.activeTab);
     }
   }, [location.state]);
+
+  // Backfill the search text cache from each page's source PDF. Vector pages
+  // uploaded under earlier code paths may have OCR-derived extractedText
+  // (less accurate) or none at all; pull text directly out of the PDF's
+  // embedded text layer instead. Each page is marked searchTextIndexed=true
+  // once handled, so this is a one-shot per page — subsequent project opens
+  // are zero-cost. Pages without a source PDF are skipped (legacy projects
+  // have no vector source to read from). Errors per page are swallowed; the
+  // worst case is we just keep the existing extractedText for that page.
+  useEffect(() => {
+    if (!project) return;
+    const needsReindex = project.pages.filter(
+      p => p.sourcePdfFileId && p.sourcePdfPageNum && !p.searchTextIndexed,
+    );
+    if (needsReindex.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const proxyCache = new Map<string, any>();
+      const extractedByPageId = new Map<string, string>();
+      try {
+        for (const page of needsReindex) {
+          if (cancelled) break;
+          try {
+            let proxy = proxyCache.get(page.sourcePdfFileId!);
+            if (!proxy) {
+              proxy = await pdfjsLib.getDocument({ url: getImageUrl(page.sourcePdfFileId!) }).promise;
+              proxyCache.set(page.sourcePdfFileId!, proxy);
+            }
+            const pdfPage = await proxy.getPage(page.sourcePdfPageNum!);
+            const textContent = await pdfPage.getTextContent();
+            const text = (textContent.items as any[])
+              .map(item => (item.str ?? '').trim())
+              .filter(Boolean)
+              .join(' ');
+            extractedByPageId.set(page.id, text);
+          } catch (e) {
+            console.warn(`Failed to reindex page ${page.id} from source PDF`, e);
+          }
+        }
+      } finally {
+        for (const p of proxyCache.values()) {
+          try { await p.destroy(); } catch { /* noop */ }
+        }
+      }
+
+      if (cancelled || extractedByPageId.size === 0) return;
+
+      setProject(prev => {
+        if (!prev) return prev;
+        const updatedPages = prev.pages.map(pg => {
+          if (!extractedByPageId.has(pg.id)) return pg;
+          const text = extractedByPageId.get(pg.id)!;
+          // Keep the previous extractedText if the vector layer returned
+          // nothing — likely an image-only page where the OCR fallback at
+          // upload time produced a better string than the empty vector
+          // result would.
+          return {
+            ...pg,
+            extractedText: text || pg.extractedText,
+            searchTextIndexed: true,
+          };
+        });
+        const updated = { ...prev, pages: updatedPages };
+        saveProject(updated).catch(e => console.warn('Failed to save reindexed project', e));
+        return updated;
+      });
+    })();
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
+
+  // Load this user's favorited page ids for the current project. Stored as a
+  // JSON-encoded array under `pages-favorites-{projectId}` in user prefs.
+  useEffect(() => {
+    if (!project?.id) {
+      setFavoritePageIds(new Set());
+      return;
+    }
+    const key = `pages-favorites-${project.id}`;
+    getUserPreferences().then(prefs => {
+      const raw = prefs[key];
+      if (!raw) { setFavoritePageIds(new Set()); return; }
+      try {
+        const ids = JSON.parse(raw);
+        if (Array.isArray(ids)) setFavoritePageIds(new Set(ids.filter((s): s is string => typeof s === 'string')));
+      } catch { /* malformed — ignore and start empty */ }
+    }).catch(() => { /* offline: empty set */ });
+  }, [project?.id]);
+
+  // Toggles `pageId` in the favorites set and persists. Optimistic — the
+  // local set updates immediately so the star re-renders without waiting on
+  // the server round-trip, and the persistence call is fire-and-forget.
+  const toggleFavorite = (pageId: string) => {
+    if (!project?.id) return;
+    setFavoritePageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(pageId)) next.delete(pageId);
+      else next.add(pageId);
+      saveUserPreferences({ [`pages-favorites-${project.id}`]: JSON.stringify([...next]) }).catch(() => {});
+      return next;
+    });
+  };
 
   const loadTemplates = async () => {
     const data = await getTemplates();
@@ -864,6 +1171,23 @@ export const ProjectView: React.FC = () => {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
 
+        // Upload the source PDF once for this file. Stream the File directly
+        // to the server instead of materializing a base64 dataUrl in the
+        // browser — see NewProject.handleProcessFiles for the same pattern.
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            setAddProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
+            sourcePdfFileId = uuidv4();
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+          } catch (pdfErr) {
+            console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         let fileExpected = 0;
         let fileYielded = 0;
 
@@ -871,7 +1195,7 @@ export const ProjectView: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setAddProgress(prev => ({ ...prev, status, current, total }));
-          });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -884,11 +1208,17 @@ export const ProjectView: React.FC = () => {
             setAddProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              thumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+              }
+              // Thumbnails are keyed by `thumbnailId` (always set) so naming-step
+              // lookups work uniformly for vector and legacy pages.
+              thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
               const normNum = detected.pageNumber.trim().toLowerCase();
@@ -907,6 +1237,9 @@ export const ProjectView: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -922,6 +1255,9 @@ export const ProjectView: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId: newPage.sourcePdfFileId,
+                sourcePdfPageNum: newPage.sourcePdfPageNum,
+                searchTextIndexed: !!newPage.sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -1063,6 +1399,23 @@ export const ProjectView: React.FC = () => {
           continue;
         }
 
+        // Re-upload the source PDF for this retry so the recovered pages take
+        // the vector pipeline like NewProject.handleProcessFiles does. Without
+        // this, retried vector pages end up with no imageId AND no
+        // sourcePdfFileId, so the canvas has nothing to render.
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            sourcePdfFileId = uuidv4();
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+          } catch (pdfErr) {
+            console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         const pageNumsArg = info.allPages ? undefined : info.pageNums;
         const requestedCount = info.allPages ? 0 : info.pageNums.length;
         const succeeded = new Set<number>();
@@ -1078,7 +1431,7 @@ export const ProjectView: React.FC = () => {
               total: info.allPages ? total : requestedCount,
               fileName,
             });
-          }, pageNumsArg);
+          }, pageNumsArg, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             yielded++;
@@ -1089,11 +1442,15 @@ export const ProjectView: React.FC = () => {
             }
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              newThumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+              }
+              newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
               const normNum = detected.pageNumber.trim().toLowerCase();
@@ -1112,6 +1469,9 @@ export const ProjectView: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -1127,6 +1487,9 @@ export const ProjectView: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId: newPage.sourcePdfFileId,
+                sourcePdfPageNum: newPage.sourcePdfPageNum,
+                searchTextIndexed: !!newPage.sourcePdfFileId,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -2048,6 +2411,27 @@ export const ProjectView: React.FC = () => {
     }
   };
 
+  // Permanently removes a page from the project. Confirmation is via the
+  // browser's native confirm dialog — a single irreversible action doesn't
+  // warrant a full modal, and the wording makes the consequences clear.
+  // Orphaned image rows are intentionally left in storage; cleanup would
+  // need to verify no other page (across plan-set revisions) references
+  // the same imageId / thumbnailId / sourcePdfFileId.
+  const handleDeletePage = async (page: { id: string; name?: string; pageNumber?: string }) => {
+    if (!project) return;
+    const label = page.pageNumber || page.name || 'this page';
+    if (!window.confirm(`Delete ${label}? Any measurements on it will be lost.`)) return;
+    const updated = { ...project, pages: project.pages.filter(p => p.id !== page.id) };
+    await saveProject(updated);
+    setProject(updated);
+    setSelectedPageIds(prev => {
+      if (!prev.has(page.id)) return prev;
+      const next = new Set(prev);
+      next.delete(page.id);
+      return next;
+    });
+  };
+
   const handleShareSelectedPages = async () => {
     if (!project || selectedPageIds.size === 0) return;
     try {
@@ -2152,74 +2536,6 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const updatePendingPageField = (id: string, field: string, value: string) => {
-    setPendingPages(prev => prev.map(p => {
-      if (p.id === id) {
-        const updated = { ...p, [field]: value };
-        // Auto-update name based on number and description
-        if (field === 'pageNumber' || field === 'description') {
-          const num = field === 'pageNumber' ? value : (p.pageNumber || '');
-          const desc = field === 'description' ? value : (p.description || '');
-          updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
-        }
-        return updated;
-      }
-      return p;
-    }));
-  };
-
-  const handleExtractText = async (applyToAll: boolean) => {
-    if (!previewPageId || !extractionRect || !extractionType) return;
-
-    const page = pendingPages.find(p => p.id === previewPageId);
-    if (!page) return;
-
-    const mode = extractionType;
-    const region = { ...extractionRect };
-    const cleanValue = (t: string) => (mode === 'pageNumber' ? cleanSheetNumber(t) : cleanDescriptionText(t));
-
-    setIsExtracting(true);
-    let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
-    try {
-      worker = await createWorker('eng', 1, {
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0_best',
-      });
-      await worker.setParameters(ocrParamsFor(mode));
-
-      const recognizePage = async (targetPage: any): Promise<string> => {
-        const cropDataUrl = await buildOcrCrop(getImageUrl(targetPage.imageId), region);
-        const { data: { text } } = await worker!.recognize(cropDataUrl);
-        return cleanValue(text || '');
-      };
-
-      if (applyToAll) {
-        const updatedPages = [...pendingPages];
-        for (let i = 0; i < updatedPages.length; i++) {
-          const value = await recognizePage(updatedPages[i]);
-          const num = mode === 'pageNumber' ? value : (updatedPages[i].pageNumber || '');
-          const desc = mode === 'description' ? value : (updatedPages[i].description || '');
-          updatedPages[i] = {
-            ...updatedPages[i],
-            [mode]: value,
-            name: num && desc ? `${num} - ${desc}` : (num || desc || updatedPages[i].name),
-          };
-        }
-        setPendingPages(updatedPages);
-      } else {
-        const value = await recognizePage(page);
-        updatePendingPageField(previewPageId, mode, value);
-      }
-
-      setExtractionRect(null);
-      setExtractionType(null);
-    } catch (error) {
-      console.error('Extraction error:', error);
-      alert('Failed to extract text. Please try again.');
-    } finally {
-      if (worker) await worker.terminate();
-      setIsExtracting(false);
-    }
-  };
 
   // Calculate totals for takeoffs across all pages
   const getTakeoffTotals = () => {
@@ -2418,11 +2734,14 @@ export const ProjectView: React.FC = () => {
     return 'text-slate-500';
   };
 
-  const filteredPages = useMemo(() => {
+  // Pages that are visible at the current plan-set selection after
+  // revision-dedup, *before* search filtering. Exposed separately so the
+  // search-result badge can show "X of Y matches" (Y = visiblePages.length).
+  const visiblePages = useMemo(() => {
     if (!project) return [];
 
     let allowedPlanSets = project.planSets || [];
-    
+
     if (selectedPlanSetId) {
       const selectedPlanSet = allowedPlanSets.find(ps => ps.id === selectedPlanSetId);
       if (selectedPlanSet) {
@@ -2467,25 +2786,65 @@ export const ProjectView: React.FC = () => {
       }
     });
 
-    const visiblePages = candidatePages.filter(page => {
+    return candidatePages.filter(page => {
       if (!page.pageNumber) return true;
       const numKey = page.pageNumber.trim().toLowerCase();
       return latestPlanSetByPageNumber.get(numKey) === page.planSetId;
     });
+  }, [project, selectedPlanSetId]);
 
+  const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
-    return visiblePages.filter(page => {
-      const matchesSearch = page.name.toLowerCase().includes(searchLower) ||
-                            (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
-                            (page.description && page.description.toLowerCase().includes(searchLower)) ||
-                            (page.extractedText && page.extractedText.toLowerCase().includes(searchLower));
-      return matchesSearch;
-    }).sort((a, b) => {
-      const nameA = a.pageNumber || a.name || '';
-      const nameB = b.pageNumber || b.name || '';
-      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    const matched = searchLower
+      ? visiblePages.filter(page =>
+          page.name.toLowerCase().includes(searchLower) ||
+          (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
+          (page.description && page.description.toLowerCase().includes(searchLower)) ||
+          (page.extractedText && page.extractedText.toLowerCase().includes(searchLower)),
+        )
+      : visiblePages;
+
+    const sorted = [...matched];
+    // Favorites always group at the top, then the chosen sort order applies
+    // inside both the favorites and non-favorites groups. This is a stable
+    // pre-step before the sort below, hence the staged partition.
+    const isFav = (p: ProjectPage) => favoritePageIds.has(p.id);
+    // Comparator for the active sort mode. Favorites then ride on top of
+    // this via favSort below.
+    let baseCmp: (a: ProjectPage, b: ProjectPage) => number;
+    if (pagesSortMode === 'description') {
+      // Pages without a description sink to the bottom so the meaningful
+      // entries stay grouped; among those with one, tie-break by pageNumber
+      // so two "Floor Plan" pages still come out in drawing-set order.
+      baseCmp = (a, b) => {
+        const da = (a.description || '').trim();
+        const db = (b.description || '').trim();
+        if (!da && !db) return 0;
+        if (!da) return 1;
+        if (!db) return -1;
+        const cmp = da.localeCompare(db, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+        return (a.pageNumber || '').localeCompare(b.pageNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+      };
+    } else if (pagesSortMode === 'highlightsDesc') {
+      baseCmp = (a, b) => b.measurements.length - a.measurements.length;
+    } else {
+      // Default: numeric sort by pageNumber (drawing-set convention).
+      baseCmp = (a, b) => {
+        const nameA = a.pageNumber || a.name || '';
+        const nameB = b.pageNumber || b.name || '';
+        return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+      };
+    }
+    // Favorites always sort to the top; the active sort applies inside the
+    // favorites group and inside the non-favorites group.
+    sorted.sort((a, b) => {
+      const fa = isFav(a), fb = isFav(b);
+      if (fa !== fb) return fa ? -1 : 1;
+      return baseCmp(a, b);
     });
-  }, [project, selectedPlanSetId, searchTerm]);
+    return sorted;
+  }, [visiblePages, searchTerm, pagesSortMode, favoritePageIds]);
 
   const handleSaveProjectName = async () => {
     if (!project || !editProjectName.trim()) return;
@@ -2822,17 +3181,78 @@ export const ProjectView: React.FC = () => {
         {activeTab === 'pages' ? (
           <div className="space-y-6">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-              <div className="relative flex-1 w-full max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="text"
-                  placeholder="Search pages and text..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
-                />
+              <div className="flex-1 w-full max-w-md flex flex-col gap-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    ref={pageSearchInputRef}
+                    type="text"
+                    placeholder="Search pages and text...  ( / )"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape' && searchTerm) setSearchTerm(''); }}
+                    className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
+                  />
+                  {searchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm('')}
+                      title="Clear search (Esc)"
+                      aria-label="Clear search"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                {searchTerm && (
+                  <div className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                    {filteredPages.length === 0
+                      ? `No matches in ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`
+                      : `${filteredPages.length} of ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`}
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap gap-2 w-full lg:w-auto">
+                <select
+                  value={pagesSortMode}
+                  onChange={(e) => setPagesSortMode(e.target.value as PagesSortMode)}
+                  title="Sort order"
+                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
+                >
+                  <option value="pageNumber">Page number</option>
+                  <option value="description">Description</option>
+                  <option value="highlightsDesc">Most highlights</option>
+                </select>
+                {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
+                <div className="flex items-center gap-0.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg p-0.5 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setPagesViewMode('grid')}
+                    title="Grid view"
+                    aria-pressed={pagesViewMode === 'grid'}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      pagesViewMode === 'grid'
+                        ? 'bg-accent-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <LayoutGrid size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPagesViewMode('list')}
+                    title="List view"
+                    aria-pressed={pagesViewMode === 'list'}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      pagesViewMode === 'list'
+                        ? 'bg-accent-600 text-white'
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    <List size={16} />
+                  </button>
+                </div>
                 {selectedPageIds.size > 0 && (
                   <>
                     <button
@@ -2899,15 +3319,165 @@ export const ProjectView: React.FC = () => {
                   </button>
                 )}
               </div>
+            ) : pagesViewMode === 'list' ? (
+              <div className="flex flex-col gap-2">
+                {filteredPages.map((page) => {
+                  const isPageSelected = selectedPageIds.has(page.id);
+                  const isEditing = editingPageId === page.id;
+                  const isFavorite = favoritePageIds.has(page.id);
+                  const matchIdx = searchTerm && page.extractedText
+                    ? page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase())
+                    : -1;
+                  const showSnippet = matchIdx >= 0 && !page.name.toLowerCase().includes(searchTerm.toLowerCase());
+                  return (
+                    <Link
+                      key={page.id}
+                      to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                      state={{ pageIds: filteredPages.map(p => p.id) }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
+                      }}
+                      className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
+                        isPageSelected
+                          ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
+                      }`}
+                    >
+                      <div className="relative w-32 h-24 flex-shrink-0 bg-slate-100 dark:bg-slate-700 border-r border-slate-200 dark:border-slate-600 overflow-hidden">
+                        <img
+                          src={getImageUrl(page.thumbnailId || page.imageId)}
+                          alt={page.name}
+                          className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity"
+                          referrerPolicy="no-referrer"
+                        />
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedPageIds(prev => {
+                              const next = new Set(prev);
+                              if (next.has(page.id)) next.delete(page.id);
+                              else next.add(page.id);
+                              return next;
+                            });
+                          }}
+                          className={`absolute top-1.5 left-1.5 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
+                            isPageSelected
+                              ? 'bg-accent-600 border-accent-600 opacity-100'
+                              : 'bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100'
+                          }`}
+                          title={isPageSelected ? 'Deselect' : 'Select'}
+                        >
+                          {isPageSelected && <Check size={12} className="text-white" />}
+                        </button>
+                      </div>
+                      <div className="flex-1 min-w-0 p-3 flex flex-col justify-center gap-1">
+                        {isEditing ? (
+                          <div className="flex flex-col sm:flex-row gap-2" onClick={e => e.preventDefault()}>
+                            <input
+                              type="text"
+                              value={editingPageNumber}
+                              onChange={(e) => setEditingPageNumber(e.target.value)}
+                              className="sm:w-32 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              placeholder="Number"
+                              autoFocus
+                              onClick={e => e.stopPropagation()}
+                            />
+                            <input
+                              type="text"
+                              value={editingPageDescription}
+                              onChange={(e) => setEditingPageDescription(e.target.value)}
+                              className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              placeholder="Description"
+                              onClick={e => e.stopPropagation()}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') handleSaveRenamePage(e as any, page.id);
+                                if (e.key === 'Escape') handleCancelRenamePage(e as any);
+                              }}
+                            />
+                            <div className="flex gap-1">
+                              <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <Check size={14} /> Save
+                              </button>
+                              <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                                <X size={14} /> Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+                                <HighlightedText text={page.name} term={searchTerm} />
+                              </h3>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                {page.measurements.length} highlights
+                                {page.pageNumber && page.name !== page.pageNumber && (
+                                  <span className="ml-2 text-slate-400">·  {page.pageNumber}</span>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              <button
+                                onClick={(e) => { e.preventDefault(); toggleFavorite(page.id); }}
+                                title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                                aria-pressed={isFavorite}
+                                className={`p-1 rounded transition-opacity ${
+                                  isFavorite
+                                    ? 'opacity-100'
+                                    : 'opacity-0 group-hover:opacity-100 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+                                }`}
+                              >
+                                <Star
+                                  size={14}
+                                  className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-400 hover:text-amber-500'}
+                                />
+                              </button>
+                              <button
+                                onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Copy share link"
+                              >
+                                <LinkIcon size={14} />
+                              </button>
+                              <button
+                                onClick={(e) => handleStartRenamePage(e, page)}
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Rename"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {showSnippet && (
+                          <div className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-900/40 px-2 py-1 rounded border border-slate-100 dark:border-slate-700 italic line-clamp-1">
+                            ...<HighlightedText
+                              text={page.extractedText!.substring(Math.max(0, matchIdx - 30), matchIdx + searchTerm.length + 30)}
+                              term={searchTerm}
+                            />...
+                          </div>
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
+                  const isFavorite = favoritePageIds.has(page.id);
                   return (
                   <Link
                     key={page.id}
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
+                    }}
                     className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
                       isPageSelected
                         ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
@@ -2940,6 +3510,21 @@ export const ProjectView: React.FC = () => {
                         title={isPageSelected ? 'Deselect' : 'Select'}
                       >
                         {isPageSelected && <Check size={14} className="text-white" />}
+                      </button>
+                      <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleFavorite(page.id); }}
+                        title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                        aria-pressed={isFavorite}
+                        className={`absolute top-2 right-2 p-1 rounded-md transition-all ${
+                          isFavorite
+                            ? 'bg-white/80 opacity-100'
+                            : 'bg-white/0 opacity-0 group-hover:opacity-100 group-hover:bg-white/80'
+                        }`}
+                      >
+                        <Star
+                          size={16}
+                          className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
+                        />
                       </button>
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
@@ -2984,7 +3569,9 @@ export const ProjectView: React.FC = () => {
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">{page.name}</h3>
+                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">
+                              <HighlightedText text={page.name} term={searchTerm} />
+                            </h3>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
@@ -3007,7 +3594,10 @@ export const ProjectView: React.FC = () => {
                         </p>
                         {searchTerm && page.extractedText && page.extractedText.toLowerCase().includes(searchTerm.toLowerCase()) && !page.name.toLowerCase().includes(searchTerm.toLowerCase()) && (
                           <div className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-100 line-clamp-2 italic">
-                            ...{page.extractedText.substring(Math.max(0, page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) - 30), page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) + searchTerm.length + 30)}...
+                            ...<HighlightedText
+                              text={page.extractedText.substring(Math.max(0, page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) - 30), page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) + searchTerm.length + 30)}
+                              term={searchTerm}
+                            />...
                           </div>
                         )}
                       </div>
@@ -3017,6 +3607,59 @@ export const ProjectView: React.FC = () => {
                 })}
               </div>
             )}
+            {pageContextMenu && (() => {
+              const ctxPage = filteredPages.find(p => p.id === pageContextMenu.pageId)
+                ?? project.pages.find(p => p.id === pageContextMenu.pageId);
+              if (!ctxPage) return null;
+              const pageHref = `/project/${project.id}/page/${ctxPage.id}`;
+              return (
+                <div
+                  className="fixed z-50 min-w-[180px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl py-1 text-sm"
+                  style={{ left: pageContextMenu.x, top: pageContextMenu.y }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    onClick={() => { setPageContextMenu(null); navigate(pageHref); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Eye size={14} /> Open
+                  </button>
+                  <button
+                    onClick={() => { setPageContextMenu(null); window.open(pageHref, '_blank', 'noopener'); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <LinkIcon size={14} /> Open in new tab
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <button
+                    onClick={() => { setPageContextMenu(null); toggleFavorite(ctxPage.id); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Star size={14} className={favoritePageIds.has(ctxPage.id) ? 'text-amber-500 fill-amber-400' : ''} />
+                    {favoritePageIds.has(ctxPage.id) ? 'Remove from favorites' : 'Add to favorites'}
+                  </button>
+                  <button
+                    onClick={() => { setPageContextMenu(null); handleSharePage(ctxPage as any); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <LinkIcon size={14} /> Copy share link
+                  </button>
+                  <button
+                    onClick={(e) => { setPageContextMenu(null); handleStartRenamePage(e as any, ctxPage); }}
+                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  >
+                    <Edit2 size={14} /> Rename
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <button
+                    onClick={() => { setPageContextMenu(null); handleDeletePage(ctxPage); }}
+                    className="w-full text-left px-3 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+                  >
+                    <Trash2 size={14} /> Delete page
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         ) : activeTab === 'takeoffs' ? (
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
@@ -4067,423 +4710,17 @@ export const ProjectView: React.FC = () => {
                 </div>
               </form>
             ) : (
-              <div className="flex flex-col overflow-hidden">
-                <div className="p-6 overflow-y-auto">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {pendingPages.map((page, index) => (
-                      <div key={page.id} className="bg-white rounded-2xl border-2 border-slate-100 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300">
-                        {/* Thumbnail Section */}
-                        <div 
-                          className="h-48 bg-slate-100 relative flex-shrink-0 border-b border-slate-100 cursor-pointer overflow-hidden group"
-                          onClick={() => setPreviewPageId(page.id)}
-                        >
-                          {pendingThumbnails[page.imageId] ? (
-                            <img 
-                              src={pendingThumbnails[page.imageId]} 
-                              alt={`Page ${index + 1}`}
-                              className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-400">
-                              <Loader2 size={32} className="animate-spin" />
-                            </div>
-                          )}
-                          
-                          {/* Hover Overlay */}
-                          <div className="absolute inset-0 bg-accent-600/0 group-hover:bg-accent-600/40 transition-all duration-300 flex flex-col items-center justify-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white opacity-0 group-hover:opacity-100 scale-50 group-hover:scale-100 transition-all duration-300">
-                              <Eye size={24} />
-                            </div>
-                            <span className="text-white text-[10px] font-black uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0">
-                              Click to Preview
-                            </span>
-                          </div>
-
-                          {/* Page Badge */}
-                          <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
-                            PAGE {index + 1}
-                          </div>
-                          {/* Revision badge */}
-                          {page.revisionOf && (
-                            <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[9px] font-black px-2 py-1.5 rounded-lg shadow-sm">
-                              REVISION
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Input Section */}
-                        <div className="p-5 space-y-5">
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between px-1">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Page Number</label>
-                              {page.pageNumber && <Check size={12} className="text-green-500" />}
-                            </div>
-                            <div className="relative">
-                              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                                <Hash size={14} />
-                              </div>
-                              <input
-                                type="text"
-                                value={page.pageNumber || ''}
-                                onChange={(e) => updatePendingPageField(page.id, 'pageNumber', e.target.value)}
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
-                                placeholder="e.g. A-101"
-                              />
-                            </div>
-                            {page.revisionOf && (
-                              <p className="text-[10px] text-amber-600 font-medium px-1">
-                                Replaces existing page {page.revisionOf} — measurements on the previous version will be hidden when this set is active
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between px-1">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Description</label>
-                              {page.description && <Check size={12} className="text-green-500" />}
-                            </div>
-                            <div className="relative">
-                              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                                <FileText size={14} />
-                              </div>
-                              <input
-                                type="text"
-                                value={page.description || ''}
-                                onChange={(e) => updatePendingPageField(page.id, 'description', e.target.value)}
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal"
-                                placeholder="e.g. Floor Plan"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
-                  {isNamingExistingPages ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowAddPagesModal(false);
-                        setIsNamingExistingPages(false);
-                        setPendingPages([]);
-                        setPendingThumbnails({});
-                      }}
-                      disabled={isAddingPages}
-                      className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium"
-                    >
-                      <X size={16} />
-                      Cancel
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setAddPagesStep('details')}
-                      disabled={isAddingPages}
-                      className="inline-flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium"
-                    >
-                      <ArrowLeft size={16} />
-                      Back
-                    </button>
-                  )}
-                  <button
-                    onClick={handleConfirmAddPages}
-                    disabled={isAddingPages}
-                    className="flex items-center gap-2 px-6 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
-                  >
-                    {isAddingPages ? (
-                      <><Loader2 size={16} className="animate-spin" /> Saving...</>
-                    ) : (
-                      <><Check size={16} /> {isNamingExistingPages ? 'Save Changes' : 'Add Pages'}</>
-                    )}
-                  </button>
-                </div>
-              </div>
+              <PageNamingStep
+                pendingPages={pendingPages}
+                setPendingPages={setPendingPages}
+                pendingThumbnails={pendingThumbnails}
+                onConfirm={handleConfirmAddPages}
+                isConfirming={isAddingPages}
+                confirmLabel={isNamingExistingPages ? 'Save Changes' : 'Add Pages'}
+                title="Name Pages"
+                subtitle="Review and rename the imported pages."
+              />
             )}
-          </div>
-        </div>
-      )}
-      {previewPageId && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[70] p-4 sm:p-8">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={() => setPreviewPageId(null)}
-                  className="p-2 hover:bg-slate-200 rounded-full transition-colors"
-                >
-                  <ArrowLeft size={20} />
-                </button>
-                <h3 className="font-bold text-slate-900">Page Preview & Extraction</h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 mr-2">
-                  <button 
-                    onClick={() => setZoom(prev => Math.max(1, prev - 0.5))}
-                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
-                    title="Zoom Out"
-                  >
-                    <ZoomOut size={16} />
-                  </button>
-                  <span className="text-xs font-bold text-slate-500 w-12 text-center">{Math.round(zoom * 100)}%</span>
-                  <button 
-                    onClick={() => setZoom(prev => Math.min(5, prev + 0.5))}
-                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors"
-                    title="Zoom In"
-                  >
-                    <ZoomIn size={16} />
-                  </button>
-                  <button 
-                    onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
-                    className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition-colors ml-1 border-l border-slate-100"
-                    title="Reset Zoom"
-                  >
-                    <Maximize size={16} />
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => setExtractionType('pageNumber')}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'pageNumber' ? 'bg-accent-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-accent-300'}`}
-                >
-                  Extract Number
-                </button>
-                <button
-                  onClick={() => setExtractionType('description')}
-                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${extractionType === 'description' ? 'bg-accent-600 text-white shadow-md' : 'bg-white text-slate-600 border border-slate-200 hover:border-accent-300'}`}
-                >
-                  Extract Description
-                </button>
-                <div className="w-px h-6 bg-slate-200 mx-2" />
-                <button 
-                  onClick={() => setPreviewPageId(null)}
-                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-            
-            <div
-              className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${isPanning ? 'cursor-grabbing' : extractionType ? 'cursor-crosshair' : zoom > 1 ? 'cursor-grab' : 'cursor-default'}`}
-              onWheel={(e) => {
-                e.preventDefault();
-                const zoomDirection = e.deltaY > 0 ? -1 : 1;
-                const zoomFactor = 1.15;
-                const newZoom = Math.min(5, Math.max(1, zoomDirection > 0 ? zoom * zoomFactor : zoom / zoomFactor));
-                if (newZoom === zoom) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const mouseX = e.clientX - (rect.left + rect.width / 2);
-                const mouseY = e.clientY - (rect.top + rect.height / 2);
-                const scaleRatio = newZoom / zoom;
-                const nextOffset = newZoom === 1
-                  ? { x: 0, y: 0 }
-                  : { x: mouseX - (mouseX - panOffset.x) * scaleRatio, y: mouseY - (mouseY - panOffset.y) * scaleRatio };
-                setPanOffset(nextOffset);
-                setZoom(newZoom);
-              }}
-              onMouseDown={(e) => {
-                // Middle mouse button pans, regardless of zoom level or extraction mode.
-                if (e.button === 1) {
-                  e.preventDefault();
-                  setIsPanning(true);
-                  setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
-                }
-              }}
-              onMouseMove={(e) => {
-                if (isPanning) {
-                  setPanOffset({
-                    x: e.clientX - panStart.x,
-                    y: e.clientY - panStart.y
-                  });
-                  return;
-                }
-
-                const rect = imageContainerRef.current?.getBoundingClientRect();
-                if (!rect) return;
-
-                if (interactionMode === 'move' && initialRect && selectionStart) {
-                  const dx = ((e.clientX - selectionStart.x) / rect.width) * 100;
-                  const dy = ((e.clientY - selectionStart.y) / rect.height) * 100;
-                  setExtractionRect({
-                    ...initialRect,
-                    x: Math.max(0, Math.min(100 - initialRect.width, initialRect.x + dx)),
-                    y: Math.max(0, Math.min(100 - initialRect.height, initialRect.y + dy))
-                  });
-                  return;
-                }
-
-                if (interactionMode && interactionMode.startsWith('resize-') && initialRect && selectionStart) {
-                  // The opposite corner stays anchored; only the dragged edges move.
-                  const anchorX = interactionMode.includes('w') ? initialRect.x + initialRect.width : initialRect.x;
-                  const anchorY = interactionMode.includes('n') ? initialRect.y + initialRect.height : initialRect.y;
-                  const cursorX = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-                  const cursorY = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-
-                  let { x: newX, y: newY, width: newW, height: newH } = initialRect;
-                  if (interactionMode.includes('w') || interactionMode.includes('e')) {
-                    newX = Math.min(cursorX, anchorX);
-                    newW = Math.max(0.5, Math.abs(cursorX - anchorX));
-                  }
-                  if (interactionMode.includes('n') || interactionMode.includes('s')) {
-                    newY = Math.min(cursorY, anchorY);
-                    newH = Math.max(0.5, Math.abs(cursorY - anchorY));
-                  }
-                  setExtractionRect({ x: newX, y: newY, width: newW, height: newH });
-                  return;
-                }
-
-                if (isSelecting && selectionStart && interactionMode === 'draw') {
-                  const clientX = Math.max(rect.left, Math.min(rect.right, e.clientX));
-                  const clientY = Math.max(rect.top, Math.min(rect.bottom, e.clientY));
-
-                  const x = ((clientX - rect.left) / rect.width) * 100;
-                  const y = ((clientY - rect.top) / rect.height) * 100;
-
-                  setExtractionRect({
-                    x: Math.min(x, selectionStart.x),
-                    y: Math.min(y, selectionStart.y),
-                    width: Math.abs(x - selectionStart.x),
-                    height: Math.abs(y - selectionStart.y)
-                  });
-                }
-              }}
-              onMouseUp={() => {
-                setIsSelecting(false);
-                setIsPanning(false);
-                setInteractionMode(null);
-              }}
-              onMouseLeave={() => {
-                setIsSelecting(false);
-                setIsPanning(false);
-                setInteractionMode(null);
-              }}
-            >
-              <div
-                ref={imageContainerRef}
-                className="relative transition-transform duration-200 ease-out"
-                style={{
-                  transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-                  transformOrigin: 'center center'
-                }}
-                onMouseDown={(e) => {
-                  if (e.button !== 0) return;
-                  if (zoom > 1 && !extractionType) {
-                    setIsPanning(true);
-                    setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
-                    return;
-                  }
-                  if (!extractionType) return;
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const x = ((e.clientX - rect.left) / rect.width) * 100;
-                  const y = ((e.clientY - rect.top) / rect.height) * 100;
-                  setIsSelecting(true);
-                  setInteractionMode('draw');
-                  setSelectionStart({ x, y });
-                  setExtractionRect({ x, y, width: 0, height: 0 });
-                }}
-              >
-                <img
-                  src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')}
-                  alt="Preview"
-                  className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
-                  draggable={false}
-                />
-                {extractionRect && (
-                  <div
-                    className="absolute border-accent-500 bg-accent-500/10 cursor-move pointer-events-auto"
-                    style={{
-                      left: `${extractionRect.x}%`,
-                      top: `${extractionRect.y}%`,
-                      width: `${extractionRect.width}%`,
-                      height: `${extractionRect.height}%`,
-                      borderStyle: 'solid',
-                      borderWidth: `${1 / zoom}px`,
-                    }}
-                    onMouseDown={(e) => {
-                      if (e.button !== 0) return;
-                      e.stopPropagation();
-                      setInteractionMode('move');
-                      setSelectionStart({ x: e.clientX, y: e.clientY });
-                      setInitialRect({ ...extractionRect });
-                    }}
-                  >
-                    {([
-                      { mode: 'resize-nw', pos: 'top-0 left-0', tx: '-50%', ty: '-50%', cursor: 'nwse-resize' },
-                      { mode: 'resize-ne', pos: 'top-0 right-0', tx: '50%', ty: '-50%', cursor: 'nesw-resize' },
-                      { mode: 'resize-sw', pos: 'bottom-0 left-0', tx: '-50%', ty: '50%', cursor: 'nesw-resize' },
-                      { mode: 'resize-se', pos: 'bottom-0 right-0', tx: '50%', ty: '50%', cursor: 'nwse-resize' },
-                    ] as const).map(h => (
-                      <div
-                        key={h.mode}
-                        className={`absolute ${h.pos} flex items-center justify-center`}
-                        style={{ width: 22, height: 22, transform: `translate(${h.tx}, ${h.ty}) scale(${1 / zoom})`, cursor: h.cursor }}
-                        onMouseDown={(e) => {
-                          if (e.button !== 0) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setInteractionMode(h.mode);
-                          setSelectionStart({ x: e.clientX, y: e.clientY });
-                          setInitialRect({ ...extractionRect });
-                        }}
-                      >
-                        <div className="w-2.5 h-2.5 rounded-[2px] bg-white border border-accent-600 shadow" />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!extractionType && zoom === 1 && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="bg-black/60 text-white px-6 py-3 rounded-xl backdrop-blur-md text-sm font-medium text-center">
-                      Pick "Extract Number" or "Extract Description", then drag a box around the text.<br />
-                      <span className="text-white/70 text-xs">Scroll to zoom · middle-mouse drag to pan</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                {extractionRect ? (
-                  <>
-                    <div className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" />
-                    Area selected. Ready to extract {extractionType === 'pageNumber' ? 'page number' : 'description'}.
-                  </>
-                ) : (
-                  <>
-                    <div className="w-2 h-2 rounded-full bg-slate-300" />
-                    Select an area to extract text.
-                  </>
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setExtractionRect(null)}
-                  disabled={!extractionRect}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
-                >
-                  Clear Selection
-                </button>
-                <button
-                  onClick={() => handleExtractText(false)}
-                  disabled={isExtracting || !extractionRect}
-                  className="px-6 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-all flex items-center gap-2 disabled:opacity-50"
-                >
-                  {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-                  Extract Current
-                </button>
-                <button
-                  onClick={() => handleExtractText(true)}
-                  disabled={isExtracting || !extractionRect}
-                  className="px-6 py-2 bg-accent-600 text-white rounded-lg text-sm font-bold hover:bg-accent-700 transition-all flex items-center gap-2 shadow-lg shadow-accent-200 disabled:opacity-50"
-                >
-                  {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-                  Extract All Pages
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}

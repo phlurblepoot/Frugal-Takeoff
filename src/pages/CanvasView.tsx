@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
 import { useToast } from '../components/Toast';
@@ -651,15 +651,18 @@ const CanvasViewInner: React.FC = () => {
       navigate('/');
       return;
     }
-    
+
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
       navigate(`/project/${pId}`);
       return;
     }
-    
-    const imgUrl = getImageUrl(pg.imageId);
-    
+
+    // Vector pages reference the source PDF and have no rasterized imageId;
+    // legacy pages have imageId only. We pass the appropriate URL down — the
+    // canvas decides which path to use based on which one is set.
+    const imgUrl = pg.imageId ? getImageUrl(pg.imageId) : '';
+
     setProject(proj);
     setPage(pg);
     setImageUrl(imgUrl);
@@ -688,6 +691,22 @@ const CanvasViewInner: React.FC = () => {
     setPage(updatedPage);
     setProject(updatedProject);
     await saveProject(updatedProject);
+  };
+
+  // Other pages in the project that this page can reference. Filters out
+  // the current page (no self-links) and pages without a pageNumber set.
+  // PdfCanvas matches text on the page against this list to surface
+  // clickable hotspots over section markers, key plan callouts, etc.
+  const linkablePages = useMemo(() => {
+    if (!project || !page) return [];
+    return project.pages
+      .filter(p => p.id !== page.id && p.pageNumber && p.pageNumber.trim())
+      .map(p => ({ pageId: p.id, pageNumber: p.pageNumber!.trim() }));
+  }, [project, page?.id]);
+
+  const handlePageReferenceClick = (targetPageId: string) => {
+    if (!project) return;
+    navigate(`/project/${project.id}/page/${targetPageId}`);
   };
 
   const handleSetScale = (pixelDistance: number) => {
@@ -1135,7 +1154,11 @@ const CanvasViewInner: React.FC = () => {
     setEditingTakeoff(null);
   };
 
-  if (isLoading || !project || !page || !imageUrl) {
+  // Vector pages have no legacy imageUrl, so don't require one — we still need
+  // the page itself though, which carries either imageId (legacy) or
+  // sourcePdfFileId (vector).
+  const hasBackgroundSource = !!(imageUrl || page?.sourcePdfFileId);
+  if (isLoading || !project || !page || !hasBackgroundSource) {
     return (
       <div className="flex h-screen w-full bg-slate-50 items-center justify-center">
         <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
@@ -1966,9 +1989,13 @@ const CanvasViewInner: React.FC = () => {
 
           <PdfCanvas
             key={page.id}
-            imageUrl={imageUrl}
+            imageUrl={imageUrl || ''}
             imageWidth={page.imageWidth}
             imageHeight={page.imageHeight}
+            sourcePdfUrl={page.sourcePdfFileId ? getImageUrl(page.sourcePdfFileId) : undefined}
+            sourcePdfPageNum={page.sourcePdfPageNum}
+            linkablePages={linkablePages}
+            onPageReferenceClick={handlePageReferenceClick}
             currentTool={currentTool}
             searchTerm={searchTerm}
             scaleConfig={page.scaleConfig}

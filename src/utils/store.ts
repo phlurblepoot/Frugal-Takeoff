@@ -156,6 +156,24 @@ export const getImage = async (id: string): Promise<string | null> => {
 
 export const saveFile = saveImage;
 export const getFile = getImage;
+
+// Streams a Blob/File to the server without going through a base64 dataUrl,
+// avoiding the ~4× in-browser memory blowup that base64 + JSON.stringify
+// produce for large PDFs (which can OOM Chrome on plan-set uploads). The
+// server base64-encodes once before storing so the file appears in the same
+// images table and the existing /api/images/:id/raw read path works unchanged.
+export const saveBinaryFile = async (id: string, blob: Blob): Promise<void> => {
+  const headers: Record<string, string> = {
+    'Content-Type': blob.type || 'application/octet-stream',
+    ...getAuthHeaders(),
+  };
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    headers,
+    body: blob,
+  }, { timeoutMs: 300_000 });
+  await handleResponse(res);
+};
 export const deleteFile = async (id: string): Promise<void> => {
   // Image deletion is handled by project deletion in this simple version
 };
