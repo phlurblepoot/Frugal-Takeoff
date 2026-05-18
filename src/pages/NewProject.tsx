@@ -18,6 +18,8 @@ interface PendingPage {
   thumbnailId: string;
   imageWidth: number;
   imageHeight: number;
+  sourcePdfFileId?: string;
+  sourcePdfPageNum?: number;
   extractedText?: string;
 }
 
@@ -236,12 +238,10 @@ export const NewProject: React.FC = () => {
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
                 await saveImage(imageId, pageData.dataUrl);
-                thumbnails[imageId] = pageData.thumbnailDataUrl;
-              } else {
-                // Vector-source pages still need a key for the thumbnail map used by
-                // the naming step — use thumbnailId, which is unique per page.
-                thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
               }
+              // Thumbnails are keyed by `thumbnailId` (always set) so the naming
+              // UI can look them up uniformly for vector and legacy pages.
+              thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
               const newPage: PendingPage = {
@@ -255,6 +255,8 @@ export const NewProject: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: pageData.extractedText,
               };
 
@@ -450,10 +452,8 @@ export const NewProject: React.FC = () => {
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
                 await saveImage(imageId, pageData.dataUrl);
-                newThumbnails[imageId] = pageData.thumbnailDataUrl;
-              } else {
-                newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
               }
+              newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
               const newPage: PendingPage = {
@@ -467,6 +467,8 @@ export const NewProject: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: pageData.extractedText,
               };
 
@@ -577,6 +579,12 @@ export const NewProject: React.FC = () => {
       const updatedServerPages = [...project.pages];
       pendingPages.forEach(p => {
         const idx = updatedServerPages.findIndex(pp => pp.id === p.id);
+        // Prefer the vector-source pointers that the server-side page already
+        // carries (set at upload time) — they live on the project, not on the
+        // PendingPage in state, so a rebuild from `p` alone would drop them.
+        // Fall back to what PendingPage has in case anything reaches this path
+        // before the server save lands.
+        const existing = idx !== -1 ? updatedServerPages[idx] : undefined;
         const merged: ProjectPage = {
           id: p.id,
           name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
@@ -586,9 +594,11 @@ export const NewProject: React.FC = () => {
           thumbnailId: p.thumbnailId,
           imageWidth: p.imageWidth,
           imageHeight: p.imageHeight,
+          sourcePdfFileId: existing?.sourcePdfFileId ?? p.sourcePdfFileId,
+          sourcePdfPageNum: existing?.sourcePdfPageNum ?? p.sourcePdfPageNum,
           extractedText: p.extractedText,
-          measurements: idx !== -1 ? updatedServerPages[idx].measurements : [],
-          scaleConfig: idx !== -1 ? updatedServerPages[idx].scaleConfig : null,
+          measurements: existing?.measurements ?? [],
+          scaleConfig: existing?.scaleConfig ?? null,
           planSetId,
         };
         if (idx !== -1) updatedServerPages[idx] = merged;
@@ -734,9 +744,9 @@ export const NewProject: React.FC = () => {
                       className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
                       onClick={() => setPreviewPageId(page.id)}
                     >
-                      {pageThumbnails[page.imageId] ? (
-                        <img 
-                          src={pageThumbnails[page.imageId]} 
+                      {pageThumbnails[page.thumbnailId] ? (
+                        <img
+                          src={pageThumbnails[page.thumbnailId]}
                           alt={`Page ${index + 1}`}
                           className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                         />
@@ -984,12 +994,24 @@ export const NewProject: React.FC = () => {
                     setExtractionRect({ x, y, width: 0, height: 0 });
                   }}
                 >
-                  <img
-                    src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')}
-                    alt="Preview"
-                    className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
-                    draggable={false}
-                  />
+                  {(() => {
+                    // Vector pages have no full-size raster on the server; show the
+                    // thumbnail (always present) instead. OCR-region extraction is
+                    // less useful for vector pages anyway because the embedded
+                    // text was already pulled out by getTextContent() on upload.
+                    const previewPage = pendingPages.find(p => p.id === previewPageId);
+                    const previewSrc = previewPage?.imageId
+                      ? getImageUrl(previewPage.imageId)
+                      : (previewPage ? pageThumbnails[previewPage.thumbnailId] : undefined);
+                    return (
+                      <img
+                        src={previewSrc}
+                        alt="Preview"
+                        className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
+                        draggable={false}
+                      />
+                    );
+                  })()}
                   {extractionRect && (
                     <div
                       className="absolute border-accent-500 bg-accent-500/10 cursor-move pointer-events-auto"
