@@ -6,80 +6,9 @@ import { Project, ProjectPage } from '../types';
 import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
 import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-// @ts-ignore
-import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
-// Renders one page of a stored PDF into a data URL so the page-naming preview
-// modal can show the original quality vector content (not just the small
-// thumbnail). Falls back to the thumbnail/legacy image when no source PDF is
-// available. The rendered data URL feeds the existing OCR-region extraction
-// pipeline unchanged — buildOcrCrop just needs a loadable URL.
-const PdfPagePreview: React.FC<{
-  sourcePdfUrl?: string;
-  sourcePdfPageNum?: number;
-  fallbackUrl?: string;
-  alt: string;
-  className: string;
-  onLoadedSrc?: (src: string) => void;
-}> = ({ sourcePdfUrl, sourcePdfPageNum, fallbackUrl, alt, className, onLoadedSrc }) => {
-  const [src, setSrc] = useState<string | undefined>(fallbackUrl);
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[PdfPagePreview] effect', { sourcePdfUrl, sourcePdfPageNum, hasFallback: !!fallbackUrl, fallbackPrefix: fallbackUrl?.slice(0, 40) });
-    if (!sourcePdfUrl || !sourcePdfPageNum) {
-      setSrc(fallbackUrl);
-      if (fallbackUrl) onLoadedSrc?.(fallbackUrl);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
-        const page = await proxy.getPage(sourcePdfPageNum);
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
-        const viewport = page.getViewport({ scale: 2.0 });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(viewport.width);
-        canvas.height = Math.round(viewport.height);
-        const ctx = canvas.getContext('2d')!;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: ctx, viewport } as any).promise;
-        if (cancelled) return;
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        // eslint-disable-next-line no-console
-        console.log('[PdfPagePreview] rendered', { w: canvas.width, h: canvas.height, dataUrlPrefix: dataUrl.slice(0, 30), dataUrlLen: dataUrl.length });
-        setSrc(dataUrl);
-        onLoadedSrc?.(dataUrl);
-        proxy.destroy().catch(() => {});
-      } catch (err) {
-        console.error('[PdfPagePreview] render failed', err);
-        if (!cancelled && fallbackUrl) setSrc(fallbackUrl);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [sourcePdfUrl, sourcePdfPageNum, fallbackUrl]);
-
-  if (!src) return null;
-  return (
-    <img
-      src={src}
-      alt={alt}
-      className={className}
-      draggable={false}
-      onError={(e) => {
-        // eslint-disable-next-line no-console
-        console.error('[PdfPagePreview] <img> failed to load', { srcPrefix: (e.currentTarget as HTMLImageElement).src.slice(0, 80), srcLen: (e.currentTarget as HTMLImageElement).src.length });
-      }}
-    />
-  );
-};
+import { PdfPagePreview } from '../components/PdfPagePreview';
 
 interface PendingPage {
   id: string;

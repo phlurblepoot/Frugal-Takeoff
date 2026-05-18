@@ -5,6 +5,7 @@ import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, Cu
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
+import { PdfPagePreview } from '../components/PdfPagePreview';
 import { v4 as uuidv4 } from 'uuid';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -693,6 +694,7 @@ export const ProjectView: React.FC = () => {
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
+  const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionRect, setExtractionRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
@@ -1032,10 +1034,10 @@ export const ProjectView: React.FC = () => {
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
                 await saveImage(imageId, pageData.dataUrl);
-                thumbnails[imageId] = pageData.thumbnailDataUrl;
-              } else {
-                thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
               }
+              // Thumbnails are keyed by `thumbnailId` (always set) so naming-step
+              // lookups work uniformly for vector and legacy pages.
+              thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
               const normNum = detected.pageNumber.trim().toLowerCase();
@@ -1054,6 +1056,8 @@ export const ProjectView: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -1069,8 +1073,8 @@ export const ProjectView: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
-                sourcePdfFileId,
-                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
+                sourcePdfFileId: newPage.sourcePdfFileId,
+                sourcePdfPageNum: newPage.sourcePdfPageNum,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -1212,6 +1216,23 @@ export const ProjectView: React.FC = () => {
           continue;
         }
 
+        // Re-upload the source PDF for this retry so the recovered pages take
+        // the vector pipeline like NewProject.handleProcessFiles does. Without
+        // this, retried vector pages end up with no imageId AND no
+        // sourcePdfFileId, so the canvas has nothing to render.
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            sourcePdfFileId = uuidv4();
+            const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
+            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+          } catch (pdfErr) {
+            console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         const pageNumsArg = info.allPages ? undefined : info.pageNums;
         const requestedCount = info.allPages ? 0 : info.pageNums.length;
         const succeeded = new Set<number>();
@@ -1227,7 +1248,7 @@ export const ProjectView: React.FC = () => {
               total: info.allPages ? total : requestedCount,
               fileName,
             });
-          }, pageNumsArg);
+          }, pageNumsArg, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             yielded++;
@@ -1238,11 +1259,15 @@ export const ProjectView: React.FC = () => {
             }
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              newThumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+              }
+              newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
               const normNum = detected.pageNumber.trim().toLowerCase();
@@ -1261,6 +1286,8 @@ export const ProjectView: React.FC = () => {
                 thumbnailId,
                 imageWidth: pageData.width,
                 imageHeight: pageData.height,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: pageData.extractedText,
                 revisionOf,
               };
@@ -1276,6 +1303,8 @@ export const ProjectView: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId: newPage.sourcePdfFileId,
+                sourcePdfPageNum: newPage.sourcePdfPageNum,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -2335,8 +2364,14 @@ export const ProjectView: React.FC = () => {
       });
       await worker.setParameters(ocrParamsFor(mode));
 
+      // Use the URL the preview modal already loaded when we have it (vector
+      // pages render via pdfjs, legacy pages serve the stored raster).
       const recognizePage = async (targetPage: any): Promise<string> => {
-        const cropDataUrl = await buildOcrCrop(getImageUrl(targetPage.imageId), region);
+        const srcUrl = (targetPage.id === previewPageId && previewImageSrc)
+          ? previewImageSrc
+          : (targetPage.imageId ? getImageUrl(targetPage.imageId) : pendingThumbnails[targetPage.thumbnailId]);
+        if (!srcUrl) return '';
+        const cropDataUrl = await buildOcrCrop(srcUrl, region);
         const { data: { text } } = await worker!.recognize(cropDataUrl);
         return cleanValue(text || '');
       };
@@ -4226,9 +4261,9 @@ export const ProjectView: React.FC = () => {
                           className="h-48 bg-slate-100 relative flex-shrink-0 border-b border-slate-100 cursor-pointer overflow-hidden group"
                           onClick={() => setPreviewPageId(page.id)}
                         >
-                          {pendingThumbnails[page.imageId] ? (
-                            <img 
-                              src={pendingThumbnails[page.imageId]} 
+                          {pendingThumbnails[page.thumbnailId] ? (
+                            <img
+                              src={pendingThumbnails[page.thumbnailId]}
                               alt={`Page ${index + 1}`}
                               className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                             />
@@ -4533,12 +4568,25 @@ export const ProjectView: React.FC = () => {
                   setExtractionRect({ x, y, width: 0, height: 0 });
                 }}
               >
-                <img
-                  src={getImageUrl(pendingPages.find(p => p.id === previewPageId)?.imageId || '')}
-                  alt="Preview"
-                  className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
-                  draggable={false}
-                />
+                {(() => {
+                  // Vector pages re-render the source PDF at full quality via
+                  // pdf.js; legacy pages fall back to their stored raster.
+                  // The resolved URL is also handed to OCR-region extraction.
+                  const previewPage = pendingPages.find(p => p.id === previewPageId);
+                  if (!previewPage) return null;
+                  return (
+                    <PdfPagePreview
+                      sourcePdfUrl={previewPage.sourcePdfFileId ? getImageUrl(previewPage.sourcePdfFileId) : undefined}
+                      sourcePdfPageNum={previewPage.sourcePdfPageNum}
+                      fallbackUrl={previewPage.imageId
+                        ? getImageUrl(previewPage.imageId)
+                        : pendingThumbnails[previewPage.thumbnailId]}
+                      alt="Preview"
+                      className="max-w-full max-h-[80vh] object-contain select-none shadow-2xl"
+                      onLoadedSrc={setPreviewImageSrc}
+                    />
+                  );
+                })()}
                 {extractionRect && (
                   <div
                     className="absolute border-accent-500 bg-accent-500/10 cursor-move pointer-events-auto"
