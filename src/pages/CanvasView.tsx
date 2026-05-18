@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
 import { useToast } from '../components/Toast';
@@ -691,6 +691,22 @@ const CanvasViewInner: React.FC = () => {
     setPage(updatedPage);
     setProject(updatedProject);
     await saveProject(updatedProject);
+  };
+
+  // Other pages in the project that this page can reference. Filters out
+  // the current page (no self-links) and pages without a pageNumber set.
+  // PdfCanvas matches text on the page against this list to surface
+  // clickable hotspots over section markers, key plan callouts, etc.
+  const linkablePages = useMemo(() => {
+    if (!project || !page) return [];
+    return project.pages
+      .filter(p => p.id !== page.id && p.pageNumber && p.pageNumber.trim())
+      .map(p => ({ pageId: p.id, pageNumber: p.pageNumber!.trim() }));
+  }, [project, page?.id]);
+
+  const handlePageReferenceClick = (targetPageId: string) => {
+    if (!project) return;
+    navigate(`/project/${project.id}/page/${targetPageId}`);
   };
 
   const handleSetScale = (pixelDistance: number) => {
@@ -1978,6 +1994,8 @@ const CanvasViewInner: React.FC = () => {
             imageHeight={page.imageHeight}
             sourcePdfUrl={page.sourcePdfFileId ? getImageUrl(page.sourcePdfFileId) : undefined}
             sourcePdfPageNum={page.sourcePdfPageNum}
+            linkablePages={linkablePages}
+            onPageReferenceClick={handlePageReferenceClick}
             currentTool={currentTool}
             searchTerm={searchTerm}
             scaleConfig={page.scaleConfig}

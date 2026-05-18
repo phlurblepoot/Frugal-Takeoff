@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
@@ -62,6 +62,14 @@ interface PdfCanvasProps {
    */
   sourcePdfUrl?: string;
   sourcePdfPageNum?: number;
+  /**
+   * Other pages in the same project that this page can link to. Any text on
+   * the current page whose string matches one of these page numbers becomes
+   * a clickable hotspot in pan mode. Vector-only — legacy raster pages have
+   * no text positions to detect references against.
+   */
+  linkablePages?: Array<{ pageId: string; pageNumber: string }>;
+  onPageReferenceClick?: (pageId: string) => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onCopy?: () => void;
@@ -117,6 +125,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   searchTerm,
   sourcePdfUrl,
   sourcePdfPageNum,
+  linkablePages,
+  onPageReferenceClick,
   onUndo,
   onRedo,
   onCopy,
@@ -180,6 +190,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [resumingSegmentIdx, setResumingSegmentIdx] = useState<number>(-1);
   const [searchHighlights, setSearchHighlights] = useState<{x0: number, y0: number, x1: number, y1: number}[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  // Bounding boxes of text on this page that reference other pages in the
+  // project — populated from the source PDF's text layer after the page
+  // loads. Clicking one in pan mode navigates to that page.
+  const [pageRefs, setPageRefs] = useState<Array<{ pageId: string; x: number; y: number; width: number; height: number }>>([]);
+  const [hoveredRefIdx, setHoveredRefIdx] = useState<number | null>(null);
 
   const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
@@ -315,6 +330,65 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
     };
   }, [sourcePdfUrl, sourcePdfPageNum]);
+
+  // Normalize page numbers once so the text-item match below is a simple
+  // map lookup. Trim + uppercase keeps it forgiving but avoids the false
+  // positives a full substring match would cause (e.g. matching "A1" inside
+  // "DETAIL A1 OF SHEET").
+  const normalizedPageMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!linkablePages) return m;
+    for (const p of linkablePages) {
+      const key = (p.pageNumber || '').trim().toUpperCase();
+      if (key && !m.has(key)) m.set(key, p.pageId);
+    }
+    return m;
+  }, [linkablePages]);
+
+  // Detect cross-page references on this page. Runs once the page proxy is
+  // loaded (signalled by pdfImage becoming non-null) and whenever the set of
+  // linkable pages changes. Reuses the cached pdfPageRef — no extra PDF
+  // round-trip. Vector pages only; legacy raster pages skip silently.
+  useEffect(() => {
+    if (!pdfImage || !pdfPageRef.current || normalizedPageMap.size === 0) {
+      setPageRefs([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfPage = pdfPageRef.current;
+        const viewport = pdfPage.getViewport({ scale: 2.0 });
+        const textContent = await pdfPage.getTextContent();
+        if (cancelled) return;
+        const refs: Array<{ pageId: string; x: number; y: number; width: number; height: number }> = [];
+        for (const item of textContent.items as any[]) {
+          const str: string = (item.str ?? '').trim();
+          if (!str) continue;
+          const key = str.toUpperCase();
+          const targetId = normalizedPageMap.get(key);
+          if (!targetId) continue;
+          const tx = item.transform?.[4] ?? 0;
+          const ty = item.transform?.[5] ?? 0;
+          const w = item.width ?? 0;
+          const h = item.height || Math.abs(item.transform?.[3] ?? item.transform?.[0] ?? 12);
+          const [vx0, vy0] = viewport.convertToViewportPoint(tx, ty);
+          const [vx1, vy1] = viewport.convertToViewportPoint(tx + w, ty + h);
+          refs.push({
+            pageId: targetId,
+            x: Math.min(vx0, vx1),
+            y: Math.min(vy0, vy1),
+            width: Math.abs(vx1 - vx0),
+            height: Math.abs(vy1 - vy0),
+          });
+        }
+        if (!cancelled) setPageRefs(refs);
+      } catch (e) {
+        console.warn('Failed to detect page references', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfImage, normalizedPageMap]);
 
   // Re-render at higher resolution when the user zooms in. Debounced so a
   // single drag through many zoom levels only fires once at the end. We render
@@ -1964,6 +2038,51 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 cornerRadius={2 / stageScale}
               />
             ))}
+            {pageRefs.map((ref, i) => {
+              const isHover = hoveredRefIdx === i;
+              const interactive = currentTool === 'pan';
+              // Small padding makes the hit area + visual a bit larger than
+              // the raw glyph bbox, which is usually flush against the
+              // letters. Section-marker page numbers are typically tiny, so
+              // a few px of slack helps both hover-targeting and visibility.
+              const pad = Math.max(2, 4 / stageScale);
+              return (
+                <Rect
+                  key={`pageref-${i}`}
+                  x={ref.x - pad}
+                  y={ref.y - pad}
+                  width={ref.width + pad * 2}
+                  height={ref.height + pad * 2}
+                  fill={isHover ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.08)'}
+                  stroke="rgba(59, 130, 246, 0.7)"
+                  strokeWidth={(isHover ? 2 : 1) / stageScale}
+                  cornerRadius={3 / stageScale}
+                  listening={interactive}
+                  onClick={(e) => {
+                    e.cancelBubble = true;
+                    onPageReferenceClick?.(ref.pageId);
+                  }}
+                  onTap={(e) => {
+                    e.cancelBubble = true;
+                    onPageReferenceClick?.(ref.pageId);
+                  }}
+                  onMouseEnter={(e) => {
+                    setHoveredRefIdx(i);
+                    const stage = e.target.getStage();
+                    if (stage) stage.container().style.cursor = 'pointer';
+                  }}
+                  onMouseLeave={(e) => {
+                    setHoveredRefIdx(null);
+                    const stage = e.target.getStage();
+                    if (stage) {
+                      // Restore whatever cursor the surrounding tool wants.
+                      stage.container().style.cursor =
+                        currentTool === 'pan' ? 'grab' : 'crosshair';
+                    }
+                  }}
+                />
+              );
+            })}
             {renderRegions()}
             {renderMeasurements()}
             {renderActiveDrawing()}
