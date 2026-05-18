@@ -67,6 +67,8 @@ import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export interface PdfPageImage {
+  // Legacy field — only populated when callers explicitly opt in via includeFullPageRaster.
+  // The vector pipeline leaves this empty; pages are rendered on demand from the source PDF.
   dataUrl: string;
   thumbnailDataUrl: string;
   width: number;
@@ -256,11 +258,18 @@ export function detectPageInfo(
   };
 }
 
+export interface LoadPdfPagesOptions {
+  /** When true, also rasterize each page to a JPEG dataUrl (legacy path). Defaults to false. */
+  includeFullPageRaster?: boolean;
+}
+
 export const loadPdfPagesGenerator = async function*(
   file: File,
   onProgress?: (status: string, pageNum: number, totalPages: number) => void,
-  pageNums?: number[]
+  pageNums?: number[],
+  options: LoadPdfPagesOptions = {}
 ): AsyncGenerator<PdfPageImage, void, unknown> {
+  const includeFullPageRaster = options.includeFullPageRaster ?? false;
   const fileUrl = URL.createObjectURL(file);
   const getPdfDoc = () => pdfjsLib.getDocument({
     url: fileUrl,
@@ -299,16 +308,16 @@ export const loadPdfPagesGenerator = async function*(
   const renderOnePage = async (i: number): Promise<PdfPageImage> => {
     const page = await pdf.getPage(i);
 
+    // Base viewport at 2.0× — this is the coordinate space measurements are stored
+    // in (matches the legacy raster dimensions exactly), so a page's width / height
+    // stay stable whether the consumer asks for the raster or not.
     const scale = 2.0;
     const viewport = page.getViewport({ scale });
 
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-    context.fillStyle = 'white';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
-
+    // Text extraction runs without rasterizing. For text-based PDFs this is the
+    // accurate path; for image-based PDFs we still need OCR, which requires a
+    // canvas — so render at thumbnail resolution in that case (the OCR canvas is
+    // discarded after recognition).
     if (onProgress) onProgress('reading the text', i, totalPages);
     let extractedText = '';
     try {
@@ -318,8 +327,18 @@ export const loadPdfPagesGenerator = async function*(
       console.warn('Could not extract text from page', e);
     }
 
-    // Fallback to OCR when no embedded text is available (image-based PDFs).
-    if (!extractedText || extractedText.trim().length < 5) {
+    const needsOcr = !extractedText || extractedText.trim().length < 5;
+    const needsFullRender = includeFullPageRaster || needsOcr;
+
+    if (needsFullRender) {
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport, intent: 'print' } as any).promise;
+    }
+
+    if (needsOcr) {
       if (onProgress) onProgress('reading the text', i, totalPages);
       try {
         if (!tesseractWorker) {
@@ -346,12 +365,21 @@ export const loadPdfPagesGenerator = async function*(
       suggestedName = pageLabels[i - 1];
     }
 
+    // Thumbnail is always produced — needed for the page list UI.
     const thumbScale = 400 / Math.max(viewport.width, viewport.height);
     thumbCanvas.width = viewport.width * thumbScale;
     thumbCanvas.height = viewport.height * thumbScale;
-    thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    if (needsFullRender) {
+      thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+    } else {
+      // Render the page once directly at thumbnail resolution.
+      const thumbVp = page.getViewport({ scale: scale * thumbScale });
+      thumbCtx.fillStyle = 'white';
+      thumbCtx.fillRect(0, 0, thumbCanvas.width, thumbCanvas.height);
+      await page.render({ canvasContext: thumbCtx, viewport: thumbVp, intent: 'print' } as any).promise;
+    }
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    const dataUrl = includeFullPageRaster ? canvas.toDataURL('image/jpeg', 0.6) : '';
     const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
 
     page.cleanup();

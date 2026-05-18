@@ -3,7 +3,7 @@ import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { createProject, saveProject, getProject, saveImage, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
+import { createProject, saveProject, getProject, saveImage, saveFile, getImage, getImageUrl, deleteBid, getAllProjects, getBids } from '../utils/store';
 import { loadPdfPagesGenerator, detectPageInfo, buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { createWorker } from 'tesseract.js';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
@@ -109,6 +109,14 @@ export const NewProject: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length > 0) {
@@ -185,14 +193,35 @@ export const NewProject: React.FC = () => {
         const file = files[i];
         setProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: files.length }));
 
+        // Upload the raw PDF once per file. Every ProjectPage extracted from this
+        // file points at this single sourcePdfFileId — the canvas renders the
+        // matching page on demand and printouts copy the original vectors, so we
+        // never need a full-size raster of the page.
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            setProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
+            const pdfDataUrl = await readFileAsDataUrl(file);
+            sourcePdfFileId = uuidv4();
+            await saveFile(sourcePdfFileId, pdfDataUrl);
+          } catch (pdfErr) {
+            console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         let fileExpected = 0;
         let fileYielded = 0;
 
         try {
+          // When we already have the source PDF stored, the per-page raster is
+          // unnecessary — skip it entirely. Without a source PDF (storage error or
+          // a non-PDF source) we fall back to the legacy raster path.
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setProgress(prev => ({ ...prev, status, current, total }));
-          });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -205,11 +234,20 @@ export const NewProject: React.FC = () => {
             setProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              thumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              // Legacy raster path: only used when we couldn't store the source PDF.
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+                thumbnails[imageId] = pageData.thumbnailDataUrl;
+              } else {
+                // Vector-source pages still need a key for the thumbnail map used by
+                // the naming step — use thumbnailId, which is unique per page.
+                thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
+              }
 
               const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
               const newPage: PendingPage = {
@@ -237,6 +275,8 @@ export const NewProject: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,
@@ -366,6 +406,23 @@ export const NewProject: React.FC = () => {
           continue;
         }
 
+        // Re-upload the source PDF for this retry. Retries are rare and storage
+        // is cheap; pages from any successful run that already have a source
+        // PDF stored will continue using their own — only newly recovered pages
+        // here will point at this fresh one.
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            const pdfDataUrl = await readFileAsDataUrl(file);
+            sourcePdfFileId = uuidv4();
+            await saveFile(sourcePdfFileId, pdfDataUrl);
+          } catch (pdfErr) {
+            console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         const pageNumsArg = info.allPages ? undefined : info.pageNums;
         const requestedCount = info.allPages ? 0 : info.pageNums.length;
         const succeeded = new Set<number>();
@@ -381,7 +438,7 @@ export const NewProject: React.FC = () => {
               total: info.allPages ? total : requestedCount,
               fileName,
             });
-          }, pageNumsArg);
+          }, pageNumsArg, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             yielded++;
@@ -392,11 +449,17 @@ export const NewProject: React.FC = () => {
             }
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              newThumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+                newThumbnails[imageId] = pageData.thumbnailDataUrl;
+              } else {
+                newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
+              }
 
               const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
               const newPage: PendingPage = {
@@ -423,6 +486,8 @@ export const NewProject: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,

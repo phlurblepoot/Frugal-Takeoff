@@ -95,10 +95,18 @@ export interface ProjectPage {
   name: string;
   pageNumber?: string;
   description?: string;
-  imageId: string; // Reference to the image stored separately
-  thumbnailId?: string; // Reference to the smaller thumbnail image
+  // Legacy raster-page reference. Pages uploaded under the old pipeline have an
+  // imageId pointing at a full-size JPEG; new uploads leave these empty and use
+  // sourcePdfFileId + sourcePdfPageNum instead so the original vectors survive.
+  imageId: string;
+  thumbnailId?: string;
   imageWidth: number;
   imageHeight: number;
+  // Vector source for the page. When sourcePdfFileId is set, the canvas renders
+  // this PDF page on demand via pdf.js and printouts copy its vectors via pdf-lib.
+  // Multiple ProjectPages from one upload share the same sourcePdfFileId.
+  sourcePdfFileId?: string;
+  sourcePdfPageNum?: number; // 1-based index within sourcePdfFileId
   measurements: Measurement[];
   scaleConfig: ScaleConfig | null;
   planSetId?: string; // Optional for backwards compatibility

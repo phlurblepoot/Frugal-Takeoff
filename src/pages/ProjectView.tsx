@@ -175,69 +175,193 @@ const CustomCostRow: React.FC<{
   );
 };
 
-// Renders one blueprint page (background + highlighted measurements + legend) to a JPEG
-// data URL. Used by both handlePrint and the proposal "append highlights" option so the
-// two paths always produce identical output.
-async function renderPageToDataUrl(
-  page: ProjectPage,
+// Converts a data URL (e.g. "data:application/pdf;base64,...") to a fresh Uint8Array.
+function dataUrlToUint8Array(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bin = atob(base64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+// Hex "#rrggbb" → 0-1 RGB components for pdf-lib's rgb(). Defaults gracefully.
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return { r: 0.231, g: 0.510, b: 0.965 };
+  const n = parseInt(m[1], 16);
+  return { r: ((n >> 16) & 0xff) / 255, g: ((n >> 8) & 0xff) / 255, b: (n & 0xff) / 255 };
+}
+
+// Builds the highlighted-plans PDF. For vector-source pages it copies the
+// original PDF page (preserving all native vectors and text) and stamps
+// measurements + legend on top as pdf-lib drawing primitives — output is
+// fully vector, dramatically smaller and crisp at any zoom. Legacy pages
+// without a sourcePdfFileId fall back to embedding the rasterized JPEG.
+async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
-  scale = 1.0,
-  jpegQuality = 0.80,
-): Promise<string | null> {
-  const canvas = document.createElement('canvas');
-  canvas.width  = Math.round(page.imageWidth  * scale);
-  canvas.height = Math.round(page.imageHeight * scale);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
+  _quality: HighlightQuality = 'standard',
+  onProgress?: (msg: string) => void,
+): Promise<ArrayBuffer | null> {
+  const pagesToPrint = project.pages.filter(page =>
+    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+  );
+  if (pagesToPrint.length === 0) return null;
 
-  // Background image
-  const img = new Image();
-  img.src = getImageUrl(page.imageId);
-  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
 
-  // Scale ctx so all measurement/legend coords (in original image-space) render correctly
-  ctx.save();
-  ctx.scale(scale, scale);
+  const outDoc = await PDFDocument.create();
+  const font = await outDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await outDoc.embedFont(StandardFonts.HelveticaBold);
 
-  // Measurements
-  page.measurements.forEach(m => {
-    if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
-    if (!m.points || m.points.length === 0) return; // skip empty measurements
-    const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
-    const color = takeoff?.color || m.color || '#3b82f6';
-    ctx.strokeStyle = color;
-    ctx.fillStyle = `${color}40`;
-    ctx.lineWidth = m.type === 'length' ? 8 : 3;
-    if (m.type === 'count') {
-      const p = m.points[0];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y);
-      ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6);
-      ctx.stroke();
-    } else {
-      // Draw the primary segment plus any additional segments, with arcs expanded.
+  // Cache source PDFs so multi-page documents only round-trip once.
+  const sourceDocs = new Map<string, any>();
+  const loadSourceDoc = async (fileId: string): Promise<any | null> => {
+    if (sourceDocs.has(fileId)) return sourceDocs.get(fileId);
+    try {
+      const dataUrl = await getFile(fileId);
+      if (!dataUrl) return null;
+      const bytes = dataUrlToUint8Array(dataUrl);
+      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      sourceDocs.set(fileId, doc);
+      return doc;
+    } catch (e) {
+      console.warn('Failed to load source PDF', fileId, e);
+      sourceDocs.set(fileId, null);
+      return null;
+    }
+  };
+
+  for (let i = 0; i < pagesToPrint.length; i++) {
+    onProgress?.(`Adding page ${i + 1} of ${pagesToPrint.length}…`);
+    const page = pagesToPrint[i];
+
+    // Build the destination page. Two paths:
+    //   • Vector: copy the original PDF page so its native content (text,
+    //     vectors, embedded images) survives. The measurements layer needs to
+    //     scale from the project's 2.0× coord space down to PDF points (×0.5).
+    //   • Legacy: a blank page sized to the stored raster dimensions, with
+    //     that raster embedded as a full-page JPEG. Measurements are drawn
+    //     in their native 1:1 coord space.
+    let outPage: any = null;
+    let scaleFactor = 1.0;
+    let pageWidth = page.imageWidth;
+    let pageHeight = page.imageHeight;
+    let rotation = 0;
+
+    if (page.sourcePdfFileId && page.sourcePdfPageNum) {
+      const srcDoc = await loadSourceDoc(page.sourcePdfFileId);
+      if (srcDoc) {
+        try {
+          const idx = page.sourcePdfPageNum - 1;
+          if (idx >= 0 && idx < srcDoc.getPageCount()) {
+            const [copied] = await outDoc.copyPages(srcDoc, [idx]);
+            outDoc.addPage(copied);
+            outPage = copied;
+            rotation = copied.getRotation().angle;
+            pageWidth = copied.getWidth();
+            pageHeight = copied.getHeight();
+            scaleFactor = 0.5; // imageWidth = 2.0 × natural PDF points
+          }
+        } catch (e) {
+          console.warn(`Failed to copy source page ${page.sourcePdfPageNum} of ${page.sourcePdfFileId}`, e);
+        }
+      }
+    }
+
+    if (!outPage) {
+      // Legacy raster fallback.
+      pageWidth = page.imageWidth;
+      pageHeight = page.imageHeight;
+      scaleFactor = 1.0;
+      outPage = outDoc.addPage([pageWidth, pageHeight]);
+      if (page.imageId) {
+        try {
+          const dataUrl = await getImage(page.imageId);
+          if (dataUrl) {
+            const imgBytes = dataUrlToUint8Array(dataUrl);
+            const isPng = dataUrl.startsWith('data:image/png');
+            const embedded = isPng ? await outDoc.embedPng(imgBytes) : await outDoc.embedJpg(imgBytes);
+            outPage.drawImage(embedded, { x: 0, y: 0, width: pageWidth, height: pageHeight });
+          }
+        } catch (e) {
+          console.warn('Failed to embed legacy page image', e);
+        }
+      }
+    }
+
+    if (rotation !== 0) {
+      // Vector overlay isn't rotation-aware yet. Skip overlay on rotated pages
+      // rather than putting marks in the wrong place. The underlying page still
+      // appears in the output PDF correctly.
+      console.warn(`Page "${page.name}" has /Rotate=${rotation}° — measurement overlay skipped on this page.`);
+      continue;
+    }
+
+    // ── Vector overlay: measurements ────────────────────────────────────────
+    // SVG path origin is top-left with Y-down (pdf-lib flips to PDF Y-up when
+    // drawn at y=pageHeight). All measurement coords are scaled into PDF
+    // points first so the drawSvgPath origin maps cleanly.
+    const sf = scaleFactor;
+    const pdfX = (mx: number) => mx * sf;
+    const pdfY = (my: number) => pageHeight - my * sf; // for non-SVG primitives (Y-up)
+
+    for (const m of page.measurements) {
+      if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
+      if (!m.points || m.points.length === 0) continue;
+      const takeoff = project.takeoffs.find(t => t.id === m.takeoffId);
+      const colorHex = takeoff?.color || m.color || '#3b82f6';
+      const c = hexToRgb(colorHex);
+      const stroke = m.type === 'length' ? 8 * sf : 3 * sf;
+
+      if (m.type === 'count') {
+        const p = m.points[0];
+        const cx = pdfX(p.x);
+        const cy = pdfY(p.y);
+        outPage.drawCircle({
+          x: cx, y: cy,
+          size: 12 * sf,
+          color: rgb(c.r, c.g, c.b),
+          opacity: 0.25,
+          borderColor: rgb(c.r, c.g, c.b),
+          borderWidth: stroke,
+        });
+        // White cross on top.
+        const armCss = 6 * sf;
+        outPage.drawLine({
+          start: { x: cx - armCss, y: cy }, end: { x: cx + armCss, y: cy },
+          thickness: 2 * sf, color: rgb(1, 1, 1),
+        });
+        outPage.drawLine({
+          start: { x: cx, y: cy - armCss }, end: { x: cx, y: cy + armCss },
+          thickness: 2 * sf, color: rgb(1, 1, 1),
+        });
+        continue;
+      }
+
+      // Polyline / polygon for length & area, with arcs expanded.
       const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
         { points: m.points, arcMidIndices: m.arcMidIndices },
         ...(m.segments ?? []),
       ];
-      allSegs.forEach(seg => {
-        if (!seg.points || seg.points.length === 0) return;
+      for (const seg of allSegs) {
+        if (!seg.points || seg.points.length === 0) continue;
         const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
-        ctx.beginPath();
-        ctx.moveTo(dispPts[0].x, dispPts[0].y);
-        for (let j = 1; j < dispPts.length; j++) ctx.lineTo(dispPts[j].x, dispPts[j].y);
-        if (m.type === 'area') { ctx.closePath(); ctx.fill(); }
-        ctx.stroke();
-      });
-      // Label is anchored to the primary segment.
+        if (dispPts.length < 2) continue;
+        const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
+        for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
+        if (m.type === 'area') cmds.push('Z');
+        const path = cmds.join(' ');
+        outPage.drawSvgPath(path, {
+          x: 0, y: pageHeight,
+          borderColor: rgb(c.r, c.g, c.b),
+          borderWidth: stroke,
+          color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
+          opacity: m.type === 'area' ? 0.25 : undefined,
+        });
+      }
+
+      // Label centered on the primary segment.
       let centerX = 0, centerY = 0;
       if (m.type === 'length') {
         const midIdx = Math.floor((m.points.length - 1) / 2);
@@ -254,155 +378,155 @@ async function renderPageToDataUrl(
       if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
       else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
       else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
+
       if (text) {
-        ctx.font = '14px sans-serif';
-        const textWidth = ctx.measureText(text).width;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.fillRect(centerX - textWidth / 2 - 4, centerY - 18, textWidth + 8, 24);
-        ctx.fillStyle = '#000';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, centerX, centerY);
+        const fontSize = 14 * sf;
+        const textWidth = font.widthOfTextAtSize(text, fontSize);
+        const bgX = pdfX(centerX) - textWidth / 2 - 4 * sf;
+        const bgY = pdfY(centerY) - fontSize * 0.7;
+        outPage.drawRectangle({
+          x: bgX, y: bgY,
+          width: textWidth + 8 * sf,
+          height: fontSize * 1.4,
+          color: rgb(1, 1, 1),
+          opacity: 0.8,
+        });
+        outPage.drawText(text, {
+          x: pdfX(centerX) - textWidth / 2,
+          y: pdfY(centerY) - fontSize * 0.3,
+          size: fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        });
       }
     }
-  });
 
-  // Legend
-  if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
-    const legendItems: { color: string; name: string; total: string }[] = [];
-    project.takeoffs.forEach(takeoff => {
-      let totalRealValue = 0;
-      let hasMeasurements = false;
-      page.measurements.filter(m => m.takeoffId === takeoff.id).forEach(m => {
-        if (!selectedTakeoffIds.has(m.takeoffId || '')) return;
-        hasMeasurements = true;
-        let currentScale = page.scaleConfig;
-        if (page.isMultiRegion && m.regionId) {
-          const region = page.scaleRegions?.find(r => r.id === m.regionId);
-          if (region?.scaleConfig) currentScale = region.scaleConfig;
+    // ── Vector overlay: legend ──────────────────────────────────────────────
+    if ((page.showLegend ?? project.legendOnAllPages) && project.takeoffs.length > 0) {
+      const legendItems: { color: string; name: string; total: string }[] = [];
+      for (const takeoff of project.takeoffs) {
+        let totalRealValue = 0;
+        let hasMeasurements = false;
+        for (const m of page.measurements.filter(m => m.takeoffId === takeoff.id)) {
+          if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
+          hasMeasurements = true;
+          let currentScale = page.scaleConfig;
+          if (page.isMultiRegion && m.regionId) {
+            const region = page.scaleRegions?.find(r => r.id === m.regionId);
+            if (region?.scaleConfig) currentScale = region.scaleConfig;
+          }
+          const allMPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
+          let pixelValue = 0;
+          if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
+          else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
+          if (pixelValue > 0) {
+            const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+            const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
+            const sourceUnit = currentScale?.unit || 'ft';
+            if (takeoff.type === 'count') totalRealValue += realValue;
+            else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+          }
         }
-        const allMPtsLegend = [m.points, ...(m.segments ?? []).map(s => s.points)];
-        let pixelValue = 0;
-        if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-        else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
-        else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPtsLegend.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
-        else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
-        if (pixelValue > 0) {
-          const realValue = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+        if (hasMeasurements) {
           const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
-          const sourceUnit = currentScale?.unit || 'ft';
-          if (takeoff.type === 'count') totalRealValue += realValue;
-          else totalRealValue += convertUnit(realValue, sourceUnit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+          const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
+          const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
+          legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
         }
-      });
-      if (hasMeasurements) {
-        const targetUnit = takeoff.unit || page.scaleConfig?.unit || 'ft';
-        const unitLabel = ` ${UNIT_LABELS[takeoff.type as keyof typeof UNIT_LABELS]?.[targetUnit] || targetUnit}`;
-        const formattedTotal = takeoff.type === 'count' ? Math.round(totalRealValue).toString() : totalRealValue.toFixed(2);
-        legendItems.push({ color: takeoff.color, name: takeoff.name, total: page.showLegendTotals !== false ? `${formattedTotal}${unitLabel}` : '' });
       }
-    });
-    if (legendItems.length > 0) {
-      const fontSize = page.legendFontSize || 24;
-      const padding = fontSize * 0.9;
-      const itemHeight = fontSize * 1.7;
-      const colorBoxSize = fontSize;
-      const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
-      const width = page.legendWidth || 500;
-      const headerH = padding * 2 + fontSize * 1.4;
-      const height = headerH + legendItems.length * itemHeight + padding;
-      const pos = page.legendPosition || { x: 20, y: 20 };
-      ctx.save();
-      ctx.translate(pos.x, pos.y);
-      // Outer card with shadow
-      ctx.shadowColor = 'rgba(0,0,0,0.12)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 4;
-      ctx.fillStyle = 'white';
-      ctx.beginPath(); ctx.roundRect(0, 0, width, height, 8); ctx.fill();
-      ctx.shadowColor = 'transparent';
-      ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1; ctx.stroke();
-      // Header background
-      ctx.fillStyle = '#f1f5f9';
-      ctx.beginPath(); ctx.roundRect(0, 0, width, headerH, [8, 8, 0, 0]); ctx.fill();
-      // Title
-      ctx.fillStyle = '#1e293b';
-      ctx.font = `bold ${fontSize + 2}px sans-serif`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('Legend', padding, padding * 0.8);
-      // Separator
-      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, headerH); ctx.lineTo(width, headerH); ctx.stroke();
-      // Items
-      legendItems.forEach((item, index) => {
-        const rowY = headerH + padding * 0.5 + index * itemHeight;
-        const boxY = rowY + Math.round((itemHeight - colorBoxSize) / 2);
-        const textY = rowY + Math.round((itemHeight - fontSize) / 2);
-        ctx.fillStyle = item.color;
-        ctx.beginPath(); ctx.roundRect(padding, boxY, colorBoxSize, colorBoxSize, 4); ctx.fill();
-        ctx.fillStyle = '#334155';
-        ctx.font = `${fontSize}px sans-serif`;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-        let nameText = item.name;
-        const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
-        if (ctx.measureText(nameText).width > maxNameWidth) {
-          while (nameText.length > 0 && ctx.measureText(nameText + '...').width > maxNameWidth) nameText = nameText.slice(0, -1);
-          nameText += '...';
-        }
-        ctx.fillText(nameText, padding + textOffsetX, textY);
-        if (page.showLegendTotals !== false) {
-          ctx.fillStyle = '#0f172a';
-          ctx.font = `bold ${fontSize}px sans-serif`;
-          ctx.textAlign = 'right';
-          ctx.fillText(item.total, width - padding, textY);
-        }
-      });
-      ctx.restore();
+
+      if (legendItems.length > 0) {
+        const fontSize = (page.legendFontSize || 24) * sf;
+        const padding = fontSize * 0.9;
+        const itemHeight = fontSize * 1.7;
+        const colorBoxSize = fontSize;
+        const textOffsetX = colorBoxSize + Math.round(fontSize * 0.5);
+        const width = (page.legendWidth || 500) * sf;
+        const headerH = padding * 2 + fontSize * 1.4;
+        const height = headerH + legendItems.length * itemHeight + padding;
+        const pos = page.legendPosition || { x: 20, y: 20 };
+        const legendX = pdfX(pos.x);
+        const legendTopY = pdfY(pos.y); // PDF y of the top edge of the legend card
+
+        // Card background + 1px border (no rounded corners — pdf-lib's drawRectangle
+        // doesn't support radii, and the rest of the printout already uses sharp
+        // rectangles for measurement labels).
+        outPage.drawRectangle({
+          x: legendX, y: legendTopY - height,
+          width, height,
+          color: rgb(1, 1, 1),
+          borderColor: rgb(0.792, 0.835, 0.882), // #cbd5e1
+          borderWidth: 1 * sf,
+        });
+        // Header band.
+        outPage.drawRectangle({
+          x: legendX, y: legendTopY - headerH,
+          width, height: headerH,
+          color: rgb(0.945, 0.961, 0.976), // #f1f5f9
+        });
+        // Header text.
+        outPage.drawText('Legend', {
+          x: legendX + padding,
+          y: legendTopY - padding * 0.8 - (fontSize + 2),
+          size: fontSize + 2,
+          font: fontBold,
+          color: rgb(0.118, 0.161, 0.231), // #1e293b
+        });
+
+        legendItems.forEach((item, index) => {
+          const rowTop = legendTopY - (headerH + padding * 0.5 + index * itemHeight);
+          const boxBottom = rowTop - itemHeight + (itemHeight - colorBoxSize) / 2;
+          const textBaseline = rowTop - itemHeight + (itemHeight - fontSize) / 2;
+
+          // Color swatch.
+          const swatch = hexToRgb(item.color);
+          outPage.drawRectangle({
+            x: legendX + padding, y: boxBottom,
+            width: colorBoxSize, height: colorBoxSize,
+            color: rgb(swatch.r, swatch.g, swatch.b),
+          });
+
+          // Name — truncate with "…" if it would overlap the totals column.
+          const maxNameWidth = width - padding * 2 - textOffsetX - (page.showLegendTotals !== false ? fontSize * 8 : 0);
+          let nameText = item.name;
+          while (nameText.length > 0 && font.widthOfTextAtSize(nameText + '...', fontSize) > maxNameWidth) {
+            nameText = nameText.slice(0, -1);
+          }
+          if (nameText.length < item.name.length) nameText += '...';
+
+          outPage.drawText(nameText, {
+            x: legendX + padding + textOffsetX,
+            y: textBaseline,
+            size: fontSize,
+            font,
+            color: rgb(0.2, 0.255, 0.333), // #334155
+          });
+
+          if (page.showLegendTotals !== false && item.total) {
+            const totalWidth = fontBold.widthOfTextAtSize(item.total, fontSize);
+            outPage.drawText(item.total, {
+              x: legendX + width - padding - totalWidth,
+              y: textBaseline,
+              size: fontSize,
+              font: fontBold,
+              color: rgb(0.059, 0.090, 0.165), // #0f172a
+            });
+          }
+        });
+
+        // `degrees` is imported above but only needed if we ever stamp rotated
+        // text; silence the unused-variable warning by referencing it once.
+        void degrees;
+      }
     }
   }
 
-  ctx.restore();
-  return canvas.toDataURL('image/jpeg', jpegQuality);
-}
-
-// Builds the highlighted-plans PDF using the exact same logic as the Print button.
-// Returns the PDF as an ArrayBuffer so it can be saved directly or merged into another PDF.
-async function buildHighlightsPdf(
-  project: Project,
-  selectedTakeoffIds: Set<string>,
-  quality: HighlightQuality = 'standard',
-  onProgress?: (msg: string) => void,
-): Promise<ArrayBuffer | null> {
-  const preset = HIGHLIGHT_QUALITY_PRESETS[quality];
-  const pagesToPrint = project.pages.filter(page =>
-    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
-  );
-  if (pagesToPrint.length === 0) return null;
-
-  const getPageScale = (w: number, h: number) =>
-    preset.maxDim === Infinity ? 1.0 : Math.min(1.0, preset.maxDim / Math.max(w, h));
-
-  const firstScale = getPageScale(pagesToPrint[0].imageWidth, pagesToPrint[0].imageHeight);
-  const pdf = new jsPDF({
-    orientation: 'landscape',
-    unit: 'px',
-    format: [
-      Math.round(pagesToPrint[0].imageWidth  * firstScale),
-      Math.round(pagesToPrint[0].imageHeight * firstScale),
-    ],
-  });
-
-  for (let i = 0; i < pagesToPrint.length; i++) {
-    onProgress?.(`Rendering page ${i + 1} of ${pagesToPrint.length}…`);
-    const page = pagesToPrint[i];
-    const sc = getPageScale(page.imageWidth, page.imageHeight);
-    const dataUrl = await renderPageToDataUrl(page, project, selectedTakeoffIds, sc, preset.jpegQuality);
-    if (!dataUrl) continue;
-    const pw = Math.round(page.imageWidth  * sc);
-    const ph = Math.round(page.imageHeight * sc);
-    if (i > 0) pdf.addPage([pw, ph], 'landscape');
-    pdf.setPage(i + 1);
-    pdf.addImage(dataUrl, 'JPEG', 0, 0, pw, ph);
-  }
-
-  return pdf.output('arraybuffer') as ArrayBuffer;
+  const out = await outDoc.save();
+  // pdf-lib returns a Uint8Array; turn it into an ArrayBuffer for the existing
+  // saveFile path.
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
 }
 
 // ── Highlight quality presets ────────────────────────────────────────────────
@@ -864,6 +988,28 @@ export const ProjectView: React.FC = () => {
         const file = newPlanSetFiles[i];
         setAddProgress(prev => ({ ...prev, currentFile: i + 1, totalFiles: newPlanSetFiles.length }));
 
+        // Upload the source PDF once for this file so every page extracted from
+        // it can point back at vector source (see NewProject.handleProcessFiles
+        // for the same pattern).
+        let sourcePdfFileId: string | undefined;
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            setAddProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
+            const pdfDataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(file);
+            });
+            sourcePdfFileId = uuidv4();
+            await saveFile(sourcePdfFileId, pdfDataUrl);
+          } catch (pdfErr) {
+            console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
+            sourcePdfFileId = undefined;
+          }
+        }
+
         let fileExpected = 0;
         let fileYielded = 0;
 
@@ -871,7 +1017,7 @@ export const ProjectView: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setAddProgress(prev => ({ ...prev, status, current, total }));
-          });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -884,11 +1030,17 @@ export const ProjectView: React.FC = () => {
             setAddProgress(prev => ({ ...prev, status: 'uploading', current: pageData.pageNum, total: prev.total }));
 
             try {
-              const imageId = uuidv4();
               const thumbnailId = uuidv4();
-              await saveImage(imageId, pageData.dataUrl);
               await saveImage(thumbnailId, pageData.thumbnailDataUrl);
-              thumbnails[imageId] = pageData.thumbnailDataUrl;
+
+              let imageId = '';
+              if (!sourcePdfFileId && pageData.dataUrl) {
+                imageId = uuidv4();
+                await saveImage(imageId, pageData.dataUrl);
+                thumbnails[imageId] = pageData.thumbnailDataUrl;
+              } else {
+                thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
+              }
 
               const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
               const normNum = detected.pageNumber.trim().toLowerCase();
@@ -922,6 +1074,8 @@ export const ProjectView: React.FC = () => {
                 thumbnailId: newPage.thumbnailId,
                 imageWidth: newPage.imageWidth,
                 imageHeight: newPage.imageHeight,
+                sourcePdfFileId,
+                sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 extractedText: newPage.extractedText,
                 measurements: [],
                 scaleConfig: null,

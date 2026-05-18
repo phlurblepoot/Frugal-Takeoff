@@ -651,15 +651,18 @@ const CanvasViewInner: React.FC = () => {
       navigate('/');
       return;
     }
-    
+
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
       navigate(`/project/${pId}`);
       return;
     }
-    
-    const imgUrl = getImageUrl(pg.imageId);
-    
+
+    // Vector pages reference the source PDF and have no rasterized imageId;
+    // legacy pages have imageId only. We pass the appropriate URL down — the
+    // canvas decides which path to use based on which one is set.
+    const imgUrl = pg.imageId ? getImageUrl(pg.imageId) : '';
+
     setProject(proj);
     setPage(pg);
     setImageUrl(imgUrl);
@@ -1135,7 +1138,11 @@ const CanvasViewInner: React.FC = () => {
     setEditingTakeoff(null);
   };
 
-  if (isLoading || !project || !page || !imageUrl) {
+  // Vector pages have no legacy imageUrl, so don't require one — we still need
+  // the page itself though, which carries either imageId (legacy) or
+  // sourcePdfFileId (vector).
+  const hasBackgroundSource = !!(imageUrl || page?.sourcePdfFileId);
+  if (isLoading || !project || !page || !hasBackgroundSource) {
     return (
       <div className="flex h-screen w-full bg-slate-50 items-center justify-center">
         <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
@@ -1966,9 +1973,11 @@ const CanvasViewInner: React.FC = () => {
 
           <PdfCanvas
             key={page.id}
-            imageUrl={imageUrl}
+            imageUrl={imageUrl || ''}
             imageWidth={page.imageWidth}
             imageHeight={page.imageHeight}
+            sourcePdfUrl={page.sourcePdfFileId ? getImageUrl(page.sourcePdfFileId) : undefined}
+            sourcePdfPageNum={page.sourcePdfPageNum}
             currentTool={currentTool}
             searchTerm={searchTerm}
             scaleConfig={page.scaleConfig}
