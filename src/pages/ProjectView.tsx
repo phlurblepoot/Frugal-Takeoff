@@ -3871,56 +3871,157 @@ export const ProjectView: React.FC = () => {
                             <tr>
                               <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
                                 <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
-                                  {takeoff.pageBreakdown.map(pb => {
-                                    const pageKey = `${takeoff.id}__${pb.pageId}`;
-                                    const isPageExpanded = !!expandedTakeoffPages[pageKey];
-                                    return (
-                                      <div key={pb.pageId}>
-                                        <div className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
-                                          <div className="flex items-center gap-2 min-w-0">
-                                            <button
-                                              type="button"
-                                              onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
-                                              className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
-                                              title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
-                                            >
-                                              <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
-                                                <ChevronRight size={14} className="text-slate-400" />
+                                  {(() => {
+                                    const allocateSubsetCost = (subsetValue: number) => {
+                                      if (takeoff.isAdvancedCost && takeoff.customCosts) {
+                                        return takeoff.customCosts.reduce((sum, item) => {
+                                          switch (item.type) {
+                                            case 'flat':
+                                              return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                                            case 'yield':
+                                              return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
+                                            case 'unit':
+                                              return sum + subsetValue * (item.costPerUnit || 0);
+                                            case 'amount_per_units':
+                                              return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
+                                            default:
+                                              return sum;
+                                          }
+                                        }, 0);
+                                      }
+                                      return calculateTakeoffTotalCost(takeoff, subsetValue);
+                                    };
+                                    const allocateSubsetDetails = (subsetValue: number) => {
+                                      if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
+                                      return takeoff.customCosts.map(item => {
+                                        let cost = 0;
+                                        let quantity: number | undefined;
+                                        switch (item.type) {
+                                          case 'flat':
+                                            cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                                            break;
+                                          case 'yield':
+                                            if (item.yield && item.yield > 0) {
+                                              quantity = subsetValue / item.yield;
+                                              cost = quantity * (item.cost || 0);
+                                            }
+                                            break;
+                                          case 'unit':
+                                            cost = subsetValue * (item.costPerUnit || 0);
+                                            break;
+                                          case 'amount_per_units':
+                                            if (item.perUnits && item.perUnits > 0) {
+                                              quantity = subsetValue / item.perUnits;
+                                              cost = quantity * (item.amount || 0);
+                                            }
+                                            break;
+                                        }
+                                        return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
+                                      });
+                                    };
+                                    return takeoff.pageBreakdown.map(pb => {
+                                      const pageKey = `${takeoff.id}__${pb.pageId}`;
+                                      const isPageExpanded = !!expandedTakeoffPages[pageKey];
+                                      const pageTotalCost = allocateSubsetCost(pb.realValue);
+                                      const pageCostDetails = allocateSubsetDetails(pb.realValue);
+                                      return (
+                                        <div key={pb.pageId}>
+                                          <div className="py-3 pl-8 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <button
+                                                type="button"
+                                                onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
+                                                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+                                                title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
+                                              >
+                                                <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
+                                                  <ChevronRight size={14} className="text-slate-400" />
+                                                </div>
+                                              </button>
+                                              <Link
+                                                to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                                                state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
+                                                className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2 min-w-0"
+                                              >
+                                                <FileImage size={14} className="text-slate-400 shrink-0" />
+                                                <span className="truncate">{pb.pageName}</span>
+                                              </Link>
+                                            </div>
+                                            <div className="text-right text-sm font-bold text-slate-700 dark:text-slate-300">
+                                              {pb.realValue > 0 ? formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                                            </div>
+                                            <div className="text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
+                                              {takeoff.isAdvancedCost ? (
+                                                <div className="flex flex-col items-end">
+                                                  <span className="text-accent-600 dark:text-accent-400 font-semibold">${(pageTotalCost / (pb.realValue || 1)).toFixed(2)}</span>
+                                                  <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
+                                                </div>
+                                              ) : (
+                                                takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
+                                              )}
+                                            </div>
+                                            <div className="text-right">
+                                              <div className="flex flex-col items-end">
+                                                <span className="text-sm font-bold text-accent-600 dark:text-accent-400">
+                                                  {pageTotalCost > 0 ? `$${roundUpTo100(pageTotalCost).toLocaleString()}` : '-'}
+                                                </span>
+                                                {takeoff.isAdvancedCost && pageCostDetails.map((d, i) => (
+                                                  <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                                                    {d.quantity !== undefined && d.quantity > 0
+                                                      ? `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} of ${d.name}`
+                                                      : `${d.name}: $${(d.costValue || 0).toFixed(2)}`}
+                                                  </span>
+                                                ))}
                                               </div>
-                                            </button>
-                                            <Link
-                                              to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                                              state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
-                                              className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2 min-w-0"
-                                            >
-                                              <FileImage size={14} className="text-slate-400 shrink-0" />
-                                              <span className="truncate">{pb.pageName}</span>
-                                            </Link>
+                                            </div>
                                           </div>
-                                          <span className="text-sm font-bold text-slate-700 dark:text-slate-300 shrink-0 ml-4">
-                                            {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                                          </span>
+                                          {isPageExpanded && (
+                                            <div className="bg-white/60 dark:bg-slate-900/40 border-t border-slate-100 dark:border-slate-700/60 divide-y divide-slate-100/80 dark:divide-slate-700/60">
+                                              {pb.measurements.map(meas => {
+                                                const measTotalCost = allocateSubsetCost(meas.realValue);
+                                                const measCostDetails = allocateSubsetDetails(meas.realValue);
+                                                return (
+                                                  <div key={meas.id} className="py-2 pl-16 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start text-xs">
+                                                    <span className="text-slate-600 dark:text-slate-300 truncate">{meas.name || 'Measurement'}</span>
+                                                    <div className="text-right font-semibold text-slate-700 dark:text-slate-300">
+                                                      {meas.realValue > 0 ? formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                                                    </div>
+                                                    <div className="text-right text-slate-600 dark:text-slate-400 font-medium">
+                                                      {takeoff.isAdvancedCost ? (
+                                                        <div className="flex flex-col items-end">
+                                                          <span className="text-accent-600 dark:text-accent-400 font-semibold">${(measTotalCost / (meas.realValue || 1)).toFixed(2)}</span>
+                                                          <span className="text-[9px] text-slate-400 uppercase">Avg / Unit</span>
+                                                        </div>
+                                                      ) : (
+                                                        takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
+                                                      )}
+                                                    </div>
+                                                    <div className="text-right">
+                                                      <div className="flex flex-col items-end">
+                                                        <span className="font-semibold text-accent-600 dark:text-accent-400">
+                                                          {measTotalCost > 0 ? `$${roundUpTo100(measTotalCost).toLocaleString()}` : '-'}
+                                                        </span>
+                                                        {takeoff.isAdvancedCost && measCostDetails.map((d, i) => (
+                                                          <span key={i} className="text-[9px] text-slate-500 dark:text-slate-400 font-normal">
+                                                            {d.quantity !== undefined && d.quantity > 0
+                                                              ? `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} of ${d.name}`
+                                                              : `${d.name}: $${(d.costValue || 0).toFixed(2)}`}
+                                                          </span>
+                                                        ))}
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })}
+                                              {pb.measurements.length === 0 && (
+                                                <div className="py-2 pl-16 text-xs text-slate-400 italic">No measurements.</div>
+                                              )}
+                                            </div>
+                                          )}
                                         </div>
-                                        {isPageExpanded && (
-                                          <div className="bg-white/60 dark:bg-slate-900/40 border-t border-slate-100 dark:border-slate-700/60 divide-y divide-slate-100/80 dark:divide-slate-700/60">
-                                            {pb.measurements.map(meas => (
-                                              <div key={meas.id} className="py-2 pl-16 pr-12 flex justify-between items-center text-xs">
-                                                <span className="text-slate-600 dark:text-slate-300 truncate">
-                                                  {meas.name || 'Measurement'}
-                                                </span>
-                                                <span className="font-semibold text-slate-700 dark:text-slate-300 shrink-0 ml-4">
-                                                  {formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                                                </span>
-                                              </div>
-                                            ))}
-                                            {pb.measurements.length === 0 && (
-                                              <div className="py-2 pl-16 text-xs text-slate-400 italic">No measurements.</div>
-                                            )}
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
+                                      );
+                                    });
+                                  })()}
                                   {takeoff.pageBreakdown.length === 0 && (
                                     <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
                                   )}
@@ -4025,15 +4126,106 @@ export const ProjectView: React.FC = () => {
                         </div>
                       </button>
 
-                      {expandedTakeoffs[takeoff.id] && (
-                        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
-                          {takeoff.pageBreakdown.map(pb => {
-                            const pageKey = `${takeoff.id}__${pb.pageId}`;
-                            const isPageExpanded = !!expandedTakeoffPages[pageKey];
-                            return (
-                              <div key={pb.pageId} className="py-2">
-                                <div className="flex justify-between items-center text-xs gap-2">
-                                  <div className="flex items-center gap-2 min-w-0">
+                      {expandedTakeoffs[takeoff.id] && (() => {
+                        const allocateSubsetCost = (subsetValue: number) => {
+                          if (takeoff.isAdvancedCost && takeoff.customCosts) {
+                            return takeoff.customCosts.reduce((sum, item) => {
+                              switch (item.type) {
+                                case 'flat':
+                                  return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                                case 'yield':
+                                  return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
+                                case 'unit':
+                                  return sum + subsetValue * (item.costPerUnit || 0);
+                                case 'amount_per_units':
+                                  return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
+                                default:
+                                  return sum;
+                              }
+                            }, 0);
+                          }
+                          return calculateTakeoffTotalCost(takeoff, subsetValue);
+                        };
+                        const allocateSubsetDetails = (subsetValue: number) => {
+                          if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
+                          return takeoff.customCosts.map(item => {
+                            let cost = 0;
+                            let quantity: number | undefined;
+                            switch (item.type) {
+                              case 'flat':
+                                cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                                break;
+                              case 'yield':
+                                if (item.yield && item.yield > 0) {
+                                  quantity = subsetValue / item.yield;
+                                  cost = quantity * (item.cost || 0);
+                                }
+                                break;
+                              case 'unit':
+                                cost = subsetValue * (item.costPerUnit || 0);
+                                break;
+                              case 'amount_per_units':
+                                if (item.perUnits && item.perUnits > 0) {
+                                  quantity = subsetValue / item.perUnits;
+                                  cost = quantity * (item.amount || 0);
+                                }
+                                break;
+                            }
+                            return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
+                          });
+                        };
+                        const renderStats = (subsetValue: number, unit: string, small: boolean) => {
+                          const subsetCost = allocateSubsetCost(subsetValue);
+                          const subsetDetails = allocateSubsetDetails(subsetValue);
+                          return (
+                            <div className={`grid grid-cols-3 gap-2 ${small ? 'text-[10px]' : 'text-[11px]'}`}>
+                              <div>
+                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Qty</div>
+                                <div className="font-bold text-slate-700 dark:text-slate-200">
+                                  {subsetValue > 0 ? formatRealValue(subsetValue, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Unit Cost</div>
+                                <div className="font-semibold text-slate-700 dark:text-slate-200">
+                                  {takeoff.isAdvancedCost ? (
+                                    <span className="text-accent-600 dark:text-accent-400">${(subsetCost / (subsetValue || 1)).toFixed(2)}<span className="text-[9px] text-slate-400 ml-0.5">avg</span></span>
+                                  ) : (
+                                    takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Total</div>
+                                <div className="font-bold text-accent-600 dark:text-accent-400">
+                                  {subsetCost > 0 ? `$${roundUpTo100(subsetCost).toLocaleString()}` : '-'}
+                                </div>
+                              </div>
+                              {takeoff.isAdvancedCost && subsetDetails.length > 0 && (
+                                <div className="col-span-3 mt-1 pt-1 border-t border-slate-100 dark:border-slate-700/60 space-y-0.5">
+                                  {subsetDetails.map((d, i) => (
+                                    <div key={i} className="flex justify-between text-[9px] text-slate-500 dark:text-slate-400">
+                                      <span className="truncate">{d.name}</span>
+                                      <span className="shrink-0 ml-2">
+                                        {d.quantity !== undefined && d.quantity > 0
+                                          ? `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} · $${(d.costValue || 0).toFixed(2)}`
+                                          : `$${(d.costValue || 0).toFixed(2)}`}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        };
+                        return (
+                          <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+                            {takeoff.pageBreakdown.map(pb => {
+                              const pageKey = `${takeoff.id}__${pb.pageId}`;
+                              const isPageExpanded = !!expandedTakeoffPages[pageKey];
+                              return (
+                                <div key={pb.pageId} className="py-3">
+                                  <div className="flex items-center gap-2 mb-2 text-xs">
                                     <button
                                       type="button"
                                       onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
@@ -4046,37 +4238,33 @@ export const ProjectView: React.FC = () => {
                                     </button>
                                     <Link
                                       to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                                      className="text-accent-600 dark:text-accent-400 font-medium truncate"
+                                      className="text-accent-600 dark:text-accent-400 font-semibold truncate"
                                     >
                                       {pb.pageName}
                                     </Link>
                                   </div>
-                                  <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">
-                                    {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                                  </span>
+                                  {renderStats(pb.realValue, pb.unit, false)}
+                                  {isPageExpanded && (
+                                    <div className="mt-2 ml-5 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-2">
+                                      {pb.measurements.map(meas => (
+                                        <div key={meas.id}>
+                                          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-medium truncate mb-1">
+                                            {meas.name || 'Measurement'}
+                                          </div>
+                                          {renderStats(meas.realValue, meas.unit, true)}
+                                        </div>
+                                      ))}
+                                      {pb.measurements.length === 0 && (
+                                        <div className="text-[11px] text-slate-400 italic">No measurements.</div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                                {isPageExpanded && (
-                                  <div className="mt-1 ml-5 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-1">
-                                    {pb.measurements.map(meas => (
-                                      <div key={meas.id} className="flex justify-between items-center text-[11px] gap-2">
-                                        <span className="text-slate-600 dark:text-slate-300 truncate">
-                                          {meas.name || 'Measurement'}
-                                        </span>
-                                        <span className="font-semibold text-slate-700 dark:text-slate-300 shrink-0">
-                                          {formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                                        </span>
-                                      </div>
-                                    ))}
-                                    {pb.measurements.length === 0 && (
-                                      <div className="text-[11px] text-slate-400 italic">No measurements.</div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 };
