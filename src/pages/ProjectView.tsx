@@ -1680,28 +1680,71 @@ export const ProjectView: React.FC = () => {
       }
 
       const addTakeoffRows = (takeoff: typeof selectedTakeoffs[0]) => {
-        const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
-        const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
+        const allocateSubsetCost = (subsetValue: number) => {
+          if (takeoff.isAdvancedCost && takeoff.customCosts) {
+            return takeoff.customCosts.reduce((sum, item) => {
+              switch (item.type) {
+                case 'flat':
+                  return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                case 'yield':
+                  return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
+                case 'unit':
+                  return sum + subsetValue * (item.costPerUnit || 0);
+                case 'amount_per_units':
+                  return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
+                default:
+                  return sum;
+              }
+            }, 0);
+          }
+          return calculateTakeoffTotalCost(takeoff, subsetValue);
+        };
+        const allocateSubsetDetails = (subsetValue: number) => {
+          if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
+          return takeoff.customCosts.map(item => {
+            let cost = 0;
+            let quantity: number | undefined;
+            switch (item.type) {
+              case 'flat':
+                cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
+                break;
+              case 'yield':
+                if (item.yield && item.yield > 0) {
+                  quantity = subsetValue / item.yield;
+                  cost = quantity * (item.cost || 0);
+                }
+                break;
+              case 'unit':
+                cost = subsetValue * (item.costPerUnit || 0);
+                break;
+              case 'amount_per_units':
+                if (item.perUnits && item.perUnits > 0) {
+                  quantity = subsetValue / item.perUnits;
+                  cost = quantity * (item.amount || 0);
+                }
+                break;
+            }
+            return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
+          });
+        };
 
-        const qtyFormatted = takeoff.totalRealValue > 0
-          ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false)
+        const formatQty = (value: number, unit: string | undefined) => value > 0
+          ? formatRealValue(value, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false)
           : '-';
 
-        let unitCost: string;
-        if (takeoff.isAdvancedCost) {
-          unitCost = totalCost > 0 ? `$${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)} avg/unit` : '-';
-        } else {
-          unitCost = takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-';
-        }
+        const buildUnitCost = (subsetValue: number, subsetCost: number) => {
+          if (takeoff.isAdvancedCost) {
+            return subsetCost > 0 ? `$${(subsetCost / (subsetValue || 1)).toFixed(2)} avg/unit` : '-';
+          }
+          return takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-';
+        };
 
-        const totalCostFormatted = totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-';
-
-        // Main takeoff row
-        rows.push([takeoff.name, takeoff.type, qtyFormatted, unitCost, totalCostFormatted]);
-
-        // Advanced pricing detail sub-rows
-        if (takeoff.isAdvancedCost && costDetails.length > 0) {
-          costDetails.forEach(d => {
+        const addAdvancedDetailRows = (
+          details: ReturnType<typeof allocateSubsetDetails>,
+          subsetQtyFormatted: string,
+          indent: string,
+        ) => {
+          details.forEach(d => {
             if (d.quantity !== undefined && d.quantity > 0) {
               const itemUnitCost = d.type === 'yield'
                 ? `$${(d.cost || 0).toFixed(2)}/unit`
@@ -1709,25 +1752,74 @@ export const ProjectView: React.FC = () => {
                   ? `$${(d.amount || 0).toFixed(2)}/unit`
                   : '';
               rows.push([
-                `  └ ${d.name}`,
+                `${indent}└ ${d.name}`,
                 '',
                 `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'}`,
                 itemUnitCost,
-                `$${d.costValue.toFixed(2)}`
+                `$${d.costValue.toFixed(2)}`,
               ]);
             } else if (d.type === 'flat') {
-              rows.push([`  └ ${d.name}`, '', 'flat', '', `$${d.costValue.toFixed(2)}`]);
+              rows.push([`${indent}└ ${d.name}`, '', 'flat (prorated)', '', `$${d.costValue.toFixed(2)}`]);
             } else if (d.type === 'unit') {
               rows.push([
-                `  └ ${d.name}`,
+                `${indent}└ ${d.name}`,
                 '',
-                qtyFormatted,
+                subsetQtyFormatted,
                 `$${(d.costPerUnit || 0).toFixed(2)}/unit`,
-                `$${d.costValue.toFixed(2)}`
+                `$${d.costValue.toFixed(2)}`,
               ]);
             }
           });
+        };
+
+        const totalCost = allocateSubsetCost(takeoff.totalRealValue);
+        const totalDetails = allocateSubsetDetails(takeoff.totalRealValue);
+        const qtyFormatted = formatQty(takeoff.totalRealValue, takeoff.unit);
+
+        // Main takeoff row
+        rows.push([takeoff.name, takeoff.type, qtyFormatted, buildUnitCost(takeoff.totalRealValue, totalCost), totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-']);
+
+        // Takeoff-level advanced pricing detail sub-rows
+        if (takeoff.isAdvancedCost && totalDetails.length > 0) {
+          addAdvancedDetailRows(totalDetails, qtyFormatted, '  ');
         }
+
+        // Page rows (and nested measurement rows)
+        takeoff.pageBreakdown.forEach(pb => {
+          const pageCost = allocateSubsetCost(pb.realValue);
+          const pageDetails = allocateSubsetDetails(pb.realValue);
+          const pageQtyFormatted = formatQty(pb.realValue, pb.unit);
+
+          rows.push([
+            `  └ ${pb.pageName}`,
+            '',
+            pageQtyFormatted,
+            buildUnitCost(pb.realValue, pageCost),
+            pageCost > 0 ? `$${roundUpTo100(pageCost).toLocaleString()}` : '-',
+          ]);
+
+          if (takeoff.isAdvancedCost && pageDetails.length > 0) {
+            addAdvancedDetailRows(pageDetails, pageQtyFormatted, '      ');
+          }
+
+          pb.measurements.forEach(meas => {
+            const measCost = allocateSubsetCost(meas.realValue);
+            const measDetails = allocateSubsetDetails(meas.realValue);
+            const measQtyFormatted = formatQty(meas.realValue, meas.unit);
+
+            rows.push([
+              `      • ${meas.name || 'Measurement'}`,
+              '',
+              measQtyFormatted,
+              buildUnitCost(meas.realValue, measCost),
+              measCost > 0 ? `$${roundUpTo100(measCost).toLocaleString()}` : '-',
+            ]);
+
+            if (takeoff.isAdvancedCost && measDetails.length > 0) {
+              addAdvancedDetailRows(measDetails, measQtyFormatted, '          ');
+            }
+          });
+        });
       };
 
       for (const pkg of packageOrder) {
@@ -1738,11 +1830,11 @@ export const ProjectView: React.FC = () => {
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws['!cols'] = [
-        { wch: 36 },
+        { wch: 48 },
         { wch: 10 },
+        { wch: 22 },
+        { wch: 22 },
         { wch: 18 },
-        { wch: 18 },
-        { wch: 16 },
       ];
 
       const wb = XLSX.utils.book_new();
