@@ -772,6 +772,7 @@ export const ProjectView: React.FC = () => {
   const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<any[]>([]);
 
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
+  const [expandedTakeoffPages, setExpandedTakeoffPages] = useState<Record<string, boolean>>({});
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingPageName, setEditingPageName] = useState('');
   const [editingPageNumber, setEditingPageNumber] = useState('');
@@ -1076,6 +1077,14 @@ export const ProjectView: React.FC = () => {
     setExpandedTakeoffs(prev => ({
       ...prev,
       [takeoffId]: !prev[takeoffId]
+    }));
+  };
+
+  const toggleTakeoffPageExpanded = (takeoffId: string, pageId: string) => {
+    const key = `${takeoffId}__${pageId}`;
+    setExpandedTakeoffPages(prev => ({
+      ...prev,
+      [key]: !prev[key]
     }));
   };
 
@@ -2546,15 +2555,16 @@ export const ProjectView: React.FC = () => {
     return project.takeoffs.map(takeoff => {
       let totalRealValue = 0;
       let displayUnit = takeoff.unit || '';
-      
-      const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string }[] = [];
+
+      const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string; measurements: { id: string; name: string; realValue: number; unit: string }[] }[] = [];
 
       pagesToCalculate.forEach(page => {
         const takeoffMeasurements = page.measurements.filter(m => m.takeoffId === takeoff.id);
-        
+
         if (takeoffMeasurements.length > 0) {
           let pageRealValue = 0;
           let pageUnit = '';
+          const measurementBreakdown: { id: string; name: string; realValue: number; unit: string }[] = [];
 
           takeoffMeasurements.forEach(m => {
             // Determine which scale to use
@@ -2566,9 +2576,12 @@ export const ProjectView: React.FC = () => {
               }
             }
 
+            let measurementRealValue = 0;
+            let measurementUnit = '';
+
             if (takeoff.type === 'count') {
-              pageRealValue += 1;
-              pageUnit = 'each';
+              measurementRealValue = 1;
+              measurementUnit = 'each';
             } else if (currentScale) {
               const allMPtsTotals = [m.points, ...(m.segments ?? []).map(s => s.points)];
               let pixelValue = 0;
@@ -2582,27 +2595,39 @@ export const ProjectView: React.FC = () => {
 
               if (pixelValue > 0) {
                 const realVal = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
-                
+
                 // Convert to a consistent unit
                 // If takeoff has a specific unit, use that. Otherwise use page scale unit.
                 const targetUnit = takeoff.unit || page.scaleConfig?.unit || currentScale.unit;
                 const convertedVal = convertUnit(realVal, currentScale.unit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
-                
-                pageRealValue += convertedVal;
-                pageUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
+
+                measurementRealValue = convertedVal;
+                measurementUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
               }
+            }
+
+            if (measurementRealValue > 0) {
+              pageRealValue += measurementRealValue;
+              pageUnit = measurementUnit;
+              measurementBreakdown.push({
+                id: m.id,
+                name: m.name,
+                realValue: measurementRealValue,
+                unit: measurementUnit,
+              });
             }
           });
 
           if (pageRealValue > 0) {
             totalRealValue += pageRealValue;
             if (!displayUnit) displayUnit = pageUnit;
-            
+
             pageBreakdown.push({
               pageId: page.id,
               pageName: page.name,
               realValue: pageRealValue,
-              unit: pageUnit
+              unit: pageUnit,
+              measurements: measurementBreakdown,
             });
           }
         }
@@ -3846,21 +3871,56 @@ export const ProjectView: React.FC = () => {
                             <tr>
                               <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
                                 <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
-                                  {takeoff.pageBreakdown.map(pb => (
-                                    <div key={pb.pageId} className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
-                                      <Link
-                                        to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                                        state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
-                                        className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2"
-                                      >
-                                        <FileImage size={14} className="text-slate-400" />
-                                        {pb.pageName}
-                                      </Link>
-                                      <span className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                                        {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                                      </span>
-                                    </div>
-                                  ))}
+                                  {takeoff.pageBreakdown.map(pb => {
+                                    const pageKey = `${takeoff.id}__${pb.pageId}`;
+                                    const isPageExpanded = !!expandedTakeoffPages[pageKey];
+                                    return (
+                                      <div key={pb.pageId}>
+                                        <div className="py-3 pl-8 pr-12 flex justify-between items-center hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
+                                              className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+                                              title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
+                                            >
+                                              <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
+                                                <ChevronRight size={14} className="text-slate-400" />
+                                              </div>
+                                            </button>
+                                            <Link
+                                              to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                                              state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
+                                              className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2 min-w-0"
+                                            >
+                                              <FileImage size={14} className="text-slate-400 shrink-0" />
+                                              <span className="truncate">{pb.pageName}</span>
+                                            </Link>
+                                          </div>
+                                          <span className="text-sm font-bold text-slate-700 dark:text-slate-300 shrink-0 ml-4">
+                                            {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                          </span>
+                                        </div>
+                                        {isPageExpanded && (
+                                          <div className="bg-white/60 dark:bg-slate-900/40 border-t border-slate-100 dark:border-slate-700/60 divide-y divide-slate-100/80 dark:divide-slate-700/60">
+                                            {pb.measurements.map(meas => (
+                                              <div key={meas.id} className="py-2 pl-16 pr-12 flex justify-between items-center text-xs">
+                                                <span className="text-slate-600 dark:text-slate-300 truncate">
+                                                  {meas.name || 'Measurement'}
+                                                </span>
+                                                <span className="font-semibold text-slate-700 dark:text-slate-300 shrink-0 ml-4">
+                                                  {formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                                </span>
+                                              </div>
+                                            ))}
+                                            {pb.measurements.length === 0 && (
+                                              <div className="py-2 pl-16 text-xs text-slate-400 italic">No measurements.</div>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                   {takeoff.pageBreakdown.length === 0 && (
                                     <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
                                   )}
@@ -3966,20 +4026,55 @@ export const ProjectView: React.FC = () => {
                       </button>
 
                       {expandedTakeoffs[takeoff.id] && (
-                        <div className="mt-3 space-y-2 pt-3 border-t border-slate-100 dark:border-slate-700">
-                          {takeoff.pageBreakdown.map(pb => (
-                            <div key={pb.pageId} className="flex justify-between items-center text-xs">
-                              <Link
-                                to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                                className="text-accent-600 dark:text-accent-400 font-medium"
-                              >
-                                {pb.pageName}
-                              </Link>
-                              <span className="font-bold text-slate-700 dark:text-slate-300">
-                                {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
-                              </span>
-                            </div>
-                          ))}
+                        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+                          {takeoff.pageBreakdown.map(pb => {
+                            const pageKey = `${takeoff.id}__${pb.pageId}`;
+                            const isPageExpanded = !!expandedTakeoffPages[pageKey];
+                            return (
+                              <div key={pb.pageId} className="py-2">
+                                <div className="flex justify-between items-center text-xs gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
+                                      className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+                                      title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
+                                    >
+                                      <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
+                                        <ChevronRight size={12} className="text-slate-400" />
+                                      </div>
+                                    </button>
+                                    <Link
+                                      to={`/project/${project.id}/page/${pb.pageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
+                                      className="text-accent-600 dark:text-accent-400 font-medium truncate"
+                                    >
+                                      {pb.pageName}
+                                    </Link>
+                                  </div>
+                                  <span className="font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                                    {formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                  </span>
+                                </div>
+                                {isPageExpanded && (
+                                  <div className="mt-1 ml-5 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-1">
+                                    {pb.measurements.map(meas => (
+                                      <div key={meas.id} className="flex justify-between items-center text-[11px] gap-2">
+                                        <span className="text-slate-600 dark:text-slate-300 truncate">
+                                          {meas.name || 'Measurement'}
+                                        </span>
+                                        <span className="font-semibold text-slate-700 dark:text-slate-300 shrink-0">
+                                          {formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {pb.measurements.length === 0 && (
+                                      <div className="text-[11px] text-slate-400 italic">No measurements.</div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
