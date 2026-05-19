@@ -231,7 +231,7 @@ export const NewProject: React.FC = () => {
               // UI can look them up uniformly for vector and legacy pages.
               thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
               const newPage: PendingPage = {
                 id: uuidv4(),
                 name: detected.pageNumber && detected.description
@@ -445,7 +445,7 @@ export const NewProject: React.FC = () => {
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
+              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
               const newPage: PendingPage = {
                 id: uuidv4(),
                 name: detected.pageNumber && detected.description

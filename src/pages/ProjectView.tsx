@@ -1220,7 +1220,7 @@ export const ProjectView: React.FC = () => {
               // lookups work uniformly for vector and legacy pages.
               thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText);
+              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
               const normNum = detected.pageNumber.trim().toLowerCase();
               const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
                 ? existingPageNums.get(normNum)!
@@ -1452,7 +1452,7 @@ export const ProjectView: React.FC = () => {
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText);
+              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
               const normNum = detected.pageNumber.trim().toLowerCase();
               const revisionOf = detected.pageNumber && existingPageNums.has(normNum)
                 ? existingPageNums.get(normNum)!
