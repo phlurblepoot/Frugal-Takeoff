@@ -537,6 +537,11 @@ export const ChecklistEditor: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [generateMsg, setGenerateMsg] = useState('');
   const [loading, setLoading] = useState(true);
+  // Captures any error from the checklists fetch so it's visible to the user
+  // (and to us via console) instead of being silently swallowed into an
+  // empty-state-looking UI when the server is reachable but returning
+  // something the client can't read.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -567,8 +572,22 @@ export const ChecklistEditor: React.FC = () => {
       // One-time migration from legacy local-only IDB to server storage
       await migrateFromLegacyIDB().catch(console.error);
 
-      // Load checklists from server
-      const loaded = await getChecklists().catch(() => [] as Checklist[]);
+      // Load checklists from server. Don't swallow errors — surface them so
+      // the user (and we) can see when the request fails for a real reason
+      // rather than landing in the "no checklist yet" empty state by default.
+      let loaded: Checklist[] = [];
+      try {
+        const raw = await getChecklists();
+        if (!Array.isArray(raw)) {
+          throw new Error(`Server returned ${typeof raw} instead of an array`);
+        }
+        loaded = raw as Checklist[];
+        setLoadError(null);
+      } catch (err: any) {
+        // eslint-disable-next-line no-console
+        console.error('[Checklists] Failed to load from server:', err);
+        setLoadError(err?.message || 'Unknown error');
+      }
       setChecklists(loaded);
 
       // Restore last active list from localStorage
@@ -1302,16 +1321,39 @@ export const ChecklistEditor: React.FC = () => {
               <p className="text-sm">Loading...</p>
             </div>
           ) : !active ? (
-            /* Empty state */
+            /* Empty state — or load-error state if the fetch failed. */
             <div className="flex-1 flex flex-col items-center justify-center gap-5 text-slate-400 dark:text-slate-500">
               <ClipboardList size={60} className="opacity-20" />
-              <p className="text-lg font-medium">No checklist yet</p>
-              <button
-                onClick={handleNew}
-                className="flex items-center gap-2 px-5 py-2.5 bg-accent-600 text-white rounded-xl hover:bg-accent-700 text-sm font-medium shadow-sm"
-              >
-                <Plus size={16} /> Create your first checklist
-              </button>
+              {loadError ? (
+                <>
+                  <p className="text-lg font-medium text-red-500 dark:text-red-400">Couldn't load your checklists</p>
+                  <p className="text-sm max-w-md text-center text-slate-500 dark:text-slate-400">
+                    {loadError}
+                  </p>
+                  <p className="text-xs max-w-md text-center text-slate-400 dark:text-slate-500">
+                    Your saved lists are still on the server — they're not gone.
+                    Check the browser DevTools Network tab for the request to
+                    <code className="font-mono mx-1">/api/checklists</code> for a more specific error,
+                    and try a hard refresh (Ctrl/Cmd+Shift+R).
+                  </p>
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 text-sm font-medium"
+                  >
+                    Reload
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-lg font-medium">No checklist yet</p>
+                  <button
+                    onClick={handleNew}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-accent-600 text-white rounded-xl hover:bg-accent-700 text-sm font-medium shadow-sm"
+                  >
+                    <Plus size={16} /> Create your first checklist
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <>
