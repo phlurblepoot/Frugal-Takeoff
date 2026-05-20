@@ -23,6 +23,24 @@ const DB_FILE = path.join(DATA_DIR, "app.db");
 
 let db: Database.Database;
 
+// Every file a project owns lives in the images table, keyed by an id that the
+// project JSON points at. Walk those references so storage usage can attribute
+// image bytes back to the project that uses them.
+function collectProjectImageIds(project: any): string[] {
+  const ids = new Set<string>();
+  const add = (v: any) => { if (typeof v === 'string' && v) ids.add(v); };
+  for (const p of project?.pages || []) {
+    add(p.imageId);
+    add(p.thumbnailId);
+    add(p.sourcePdfFileId);
+  }
+  for (const p of project?.printouts || []) add(p.fileId);
+  add(project?.proposalFileId);
+  const emails = [...(project?.email ? [project.email] : []), ...(project?.emails || [])];
+  for (const e of emails) for (const aid of e?.attachmentIds || []) add(aid);
+  return [...ids];
+}
+
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 }
@@ -494,6 +512,46 @@ async function startServer() {
     }
   });
 
+  app.get("/api/projects/:id/storage", authenticateToken, (req, res) => {
+    try {
+      const row = db.prepare('SELECT data FROM projects WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!row) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      let project: any = {};
+      try { project = JSON.parse(row.data); } catch { /* ignore */ }
+
+      const dataBytes = Buffer.byteLength(row.data, 'utf8');
+
+      const ids = collectProjectImageIds(project);
+      let imageBytes = 0;
+      let imageCount = 0;
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(', ');
+        const r = db.prepare(
+          `SELECT COUNT(*) as count, COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM images WHERE id IN (${placeholders})`
+        ).get(...ids) as { count: number; bytes: number };
+        imageBytes = r.bytes;
+        imageCount = r.count;
+      }
+
+      const noteRow = db.prepare(
+        'SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM notes WHERE projectId = ?'
+      ).get(req.params.id) as { bytes: number };
+
+      res.json({
+        totalBytes: dataBytes + imageBytes + noteRow.bytes,
+        dataBytes,
+        imageBytes,
+        noteBytes: noteRow.bytes,
+        imageCount,
+      });
+    } catch (error) {
+      console.error("Error computing project storage:", error);
+      res.status(500).json({ error: "Failed to compute project storage" });
+    }
+  });
+
   app.get("/api/images/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
@@ -719,6 +777,55 @@ async function startServer() {
     } catch (error) {
       console.error("Error saving settings:", error);
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // Storage usage — admin-only overview of how much disk space the app's data
+  // occupies, broken down by table and attributed per project.
+  app.get("/api/storage/stats", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      let databaseBytes = 0;
+      try { databaseBytes = fsSync.statSync(DB_FILE).size; } catch { /* ignore */ }
+
+      const sumLen = (table: string): number => {
+        try {
+          const r = db.prepare(
+            `SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM ${table}`
+          ).get() as { bytes: number };
+          return r.bytes;
+        } catch { return 0; }
+      };
+      const breakdown = {
+        images: sumLen('images'),
+        projects: sumLen('projects'),
+        templates: sumLen('templates'),
+        bids: sumLen('bids'),
+        notes: sumLen('notes'),
+        checklists: sumLen('checklists'),
+      };
+
+      const imageCount = (db.prepare('SELECT COUNT(*) as c FROM images').get() as { c: number }).c;
+
+      // id -> byte length, so each project's referenced images can be summed
+      // without pulling the (potentially huge) base64 payloads into memory.
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      const imgLen = new Map<string, number>();
+      for (const r of imgRows) imgLen.set(r.id, r.len);
+
+      const projRows = db.prepare('SELECT id, data FROM projects').all() as { id: string; data: string }[];
+      const projects = projRows.map(row => {
+        let project: any = {};
+        try { project = JSON.parse(row.data); } catch { /* ignore */ }
+        const dataBytes = Buffer.byteLength(row.data, 'utf8');
+        let imageBytes = 0;
+        for (const id of collectProjectImageIds(project)) imageBytes += imgLen.get(id) || 0;
+        return { id: row.id, name: project.name || 'Untitled', totalBytes: dataBytes + imageBytes };
+      }).sort((a, b) => b.totalBytes - a.totalBytes);
+
+      res.json({ databaseBytes, breakdown, imageCount, projectCount: projRows.length, projects });
+    } catch (error) {
+      console.error("Error computing storage stats:", error);
+      res.status(500).json({ error: "Failed to compute storage stats" });
     }
   });
 

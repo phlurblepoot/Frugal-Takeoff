@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { PageNamingStep } from '../components/PageNamingStep';
@@ -591,6 +591,7 @@ export const ProjectView: React.FC = () => {
   const [sendingProposal, setSendingProposal] = useState(false);
   const [expandedThreadKeys, setExpandedThreadKeys] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
+  const [projectStorage, setProjectStorage] = useState<ProjectStorage | null>(null);
   const [projectNote, setProjectNote] = useState<ProjectNote | null>(null);
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
@@ -854,6 +855,18 @@ export const ProjectView: React.FC = () => {
       setActiveTab(location.state.activeTab);
     }
   }, [location.state]);
+
+  // Per-project storage usage. Recomputed when the page/printout count changes
+  // (uploads and deletes are what actually move the number), since that's what
+  // the server attributes a project's image bytes from.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    getProjectStorage(projectId)
+      .then(s => { if (!cancelled) setProjectStorage(s); })
+      .catch(() => { if (!cancelled) setProjectStorage(null); });
+    return () => { cancelled = true; };
+  }, [projectId, project?.pages?.length, project?.printouts?.length]);
 
   // Backfill the search text cache from each page's source PDF. Vector pages
   // uploaded under earlier code paths may have OCR-derived extractedText
@@ -3207,7 +3220,7 @@ export const ProjectView: React.FC = () => {
                     <span className={`${getDueDateColor()} truncate`}>
                       Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
                     </span>
-                    <button 
+                    <button
                       onClick={() => {
                         setEditDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
                         setIsEditingDueDate(true);
@@ -3219,6 +3232,16 @@ export const ProjectView: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {projectStorage && (
+                <div
+                  className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0"
+                  title={`${formatBytes(projectStorage.imageBytes)} in ${projectStorage.imageCount} file${projectStorage.imageCount === 1 ? '' : 's'}, ${formatBytes(projectStorage.dataBytes)} project data, ${formatBytes(projectStorage.noteBytes)} notes`}
+                >
+                  <HardDrive size={14} className="text-slate-400 flex-shrink-0" />
+                  <span className="truncate">{formatBytes(projectStorage.totalBytes)} stored</span>
+                </div>
+              )}
             </div>
           </div>
           {project.planSets && project.planSets.length > 0 && (
