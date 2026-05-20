@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
@@ -153,6 +153,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const lastRenderScaleRef = useRef<number>(0);
   const renderTaskRef = useRef<any>(null);
   const rerenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRenderingRef = useRef(false);
 
   const stageRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -390,55 +391,91 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => { cancelled = true; };
   }, [pdfImage, normalizedPageMap]);
 
-  // Re-render at higher resolution when the user zooms in. Debounced so a
-  // single drag through many zoom levels only fires once at the end. We render
-  // into a *new* canvas and swap it in atomically — never mutate the canvas
-  // that's currently on screen, otherwise the page visibly blanks for the
-  // duration of the render. The maximum scale is intentionally modest (≤4×)
-  // so the backing store stays small enough that a single render doesn't
-  // block the main thread long enough to look like a freeze.
+  // Render the page into a fresh canvas sized for the *current* zoom and swap
+  // it in atomically — we never mutate the canvas that's on screen, otherwise
+  // the page visibly blanks for the duration of the render. Max scale is kept
+  // modest (≤4×) so the backing store stays small enough that a single render
+  // doesn't block the main thread long enough to look like a freeze.
+  //
+  // Renders are strictly serialized via `isRenderingRef`. pdf.js cancellation
+  // is asynchronous: starting a new render on the same page before the prior
+  // task's cancellation has settled lets two render intents collide on the
+  // worker, which on slow connections leaves the surviving render hung or
+  // blank — the page disappears and never recovers. So we cancel the previous
+  // task *and await its settlement* before starting the next one, and only one
+  // render is ever in flight. When it finishes we re-check the live zoom and
+  // render again if it moved, which guarantees the final zoom level is always
+  // rendered no matter how fast the user zoomed.
+  const renderPdfAtCurrentScale = useCallback(async () => {
+    const page = pdfPageRef.current;
+    if (!page || isRenderingRef.current) return;
+
+    // Cap the contribution of devicePixelRatio so HiDPI screens don't push the
+    // render scale to memory-heavy territory at moderate zoom levels.
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const targetScale = Math.max(2.0, Math.min(4.0, 2.0 * stageScaleRef.current * dpr));
+    const prev = lastRenderScaleRef.current;
+    if (prev > 0 && Math.abs(targetScale - prev) / prev < 0.20) return;
+
+    isRenderingRef.current = true;
+    let committed = false;
+    try {
+      // Tear down any prior task and wait for it to actually settle before
+      // touching the page again. The await swallows the cancellation rejection.
+      if (renderTaskRef.current) {
+        try { renderTaskRef.current.cancel(); } catch { /* noop */ }
+        try { await renderTaskRef.current.promise; } catch { /* cancelled */ }
+        renderTaskRef.current = null;
+      }
+
+      const viewport = page.getViewport({ scale: targetScale });
+      const nextCanvas = document.createElement('canvas');
+      nextCanvas.width = Math.round(viewport.width);
+      nextCanvas.height = Math.round(viewport.height);
+      const ctx = nextCanvas.getContext('2d')!;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
+
+      const task = page.render({ canvasContext: ctx, viewport } as any);
+      renderTaskRef.current = task;
+      await task.promise;
+      if (renderTaskRef.current === task) renderTaskRef.current = null;
+
+      lastRenderScaleRef.current = targetScale;
+      setPdfImage(nextCanvas);
+      committed = true;
+    } catch (err: any) {
+      if (err?.name !== 'RenderingCancelledException') {
+        console.error('PDF page re-render failed', err);
+      }
+    } finally {
+      isRenderingRef.current = false;
+    }
+
+    // The zoom may have moved while we were rendering. Re-check against the
+    // live scale and render again if needed — this is what lets the page catch
+    // up to the final zoom level after rapid zooming instead of getting stuck
+    // on a stale frame. Only chain off a successful commit so a hard render
+    // failure can't spin in a tight retry loop.
+    if (!committed) return;
+    const settledScale = Math.max(2.0, Math.min(4.0, 2.0 * stageScaleRef.current * dpr));
+    const settledPrev = lastRenderScaleRef.current;
+    if (!(settledPrev > 0 && Math.abs(settledScale - settledPrev) / settledPrev < 0.20)) {
+      void renderPdfAtCurrentScale();
+    }
+  }, []);
+
+  // Debounced so a single drag through many zoom levels only kicks off once the
+  // user pauses. The renderer itself reads the live scale, so a render queued
+  // here always targets wherever the zoom ended up.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current) return;
     if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
-    rerenderTimerRef.current = setTimeout(async () => {
-      const page = pdfPageRef.current;
-      if (!page) return;
-      // Cap the contribution of devicePixelRatio so HiDPI screens don't push
-      // the render scale to memory-heavy territory at moderate zoom levels.
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      const targetScale = Math.max(2.0, Math.min(4.0, 2.0 * stageScale * dpr));
-      const prev = lastRenderScaleRef.current;
-      if (prev > 0 && Math.abs(targetScale - prev) / prev < 0.20) return;
-      if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
-      try {
-        const viewport = page.getViewport({ scale: targetScale });
-        const nextCanvas = document.createElement('canvas');
-        nextCanvas.width = Math.round(viewport.width);
-        nextCanvas.height = Math.round(viewport.height);
-        const ctx = nextCanvas.getContext('2d')!;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, nextCanvas.width, nextCanvas.height);
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport } as any);
-        await renderTaskRef.current.promise;
-        lastRenderScaleRef.current = targetScale;
-        // Swap in the new canvas. Drop the previous backing store so the
-        // browser can reclaim the memory immediately instead of waiting for GC.
-        const prevCanvas = pdfImage;
-        setPdfImage(nextCanvas);
-        if (prevCanvas && prevCanvas !== nextCanvas) {
-          prevCanvas.width = 0;
-          prevCanvas.height = 0;
-        }
-      } catch (err: any) {
-        if (err?.name !== 'RenderingCancelledException') {
-          console.error('PDF page re-render failed', err);
-        }
-      }
-    }, 250);
+    rerenderTimerRef.current = setTimeout(() => { void renderPdfAtCurrentScale(); }, 250);
     return () => {
       if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     };
-  }, [stageScale, pdfImage]);
+  }, [stageScale, pdfImage, renderPdfAtCurrentScale]);
 
   // Cleanup on unmount.
   useEffect(() => () => {
