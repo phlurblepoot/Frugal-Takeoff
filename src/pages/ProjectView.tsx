@@ -7,6 +7,8 @@ import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, form
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
 import { PlanSetManager } from '../components/PlanSetManager';
+import { PlanSetRevisions } from '../components/PlanSetRevisions';
+import { PlanSetCompare } from '../components/PlanSetCompare';
 import { PageNamingStep } from '../components/PageNamingStep';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -3674,6 +3676,15 @@ export const ProjectView: React.FC = () => {
                         >
                           {isPageSelected && <Check size={12} className="text-white" />}
                         </button>
+                        {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                            title="View revision history"
+                            className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                          >
+                            Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                          </button>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0 p-3 flex flex-col justify-center gap-1">
                         {isEditing ? (
@@ -3829,6 +3840,15 @@ export const ProjectView: React.FC = () => {
                           className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
                         />
                       </button>
+                      {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                          title="View revision history"
+                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                        >
+                          Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                        </button>
+                      )}
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
                       <div>
@@ -3953,6 +3973,37 @@ export const ProjectView: React.FC = () => {
                   >
                     <Edit2 size={14} /> Rename
                   </button>
+                  {(() => {
+                    const key = sheetKey(ctxPage);
+                    const revs = key ? (revisionModel.revisionsBySheet.get(key) || []) : [];
+                    if (revs.length < 2) return null;
+                    const idx = revs.findIndex(p => p.id === ctxPage.id);
+                    const hasPrior = idx > 0 && revs[idx - 1].measurements.length > 0;
+                    return (
+                      <>
+                        <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                        <button
+                          onClick={() => { setPageContextMenu(null); setShowRevisionsForPageId(ctxPage.id); }}
+                          className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                        >
+                          <History size={14} /> Revision history
+                        </button>
+                        {hasPrior && (
+                          <button
+                            onClick={async () => {
+                              setPageContextMenu(null);
+                              const n = await handleCopyMeasurementsForward(ctxPage.id);
+                              if (n > 0) toast(`Copied ${n} measurement${n === 1 ? '' : 's'} from the previous revision`, { type: 'success' });
+                              else if (n === 0) toast('No measurements to copy from the previous revision', { type: 'info' });
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                          >
+                            <Copy size={14} /> Copy measurements from previous revision
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                   <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
                   <button
                     onClick={() => { setPageContextMenu(null); handleDeletePage(ctxPage); }}
@@ -5080,6 +5131,24 @@ export const ProjectView: React.FC = () => {
           onUpdate={handleUpdatePlanSet}
           onDelete={handleDeletePlanSet}
           onAddNew={() => { setShowManagePlanSets(false); setShowAddPagesModal(true); }}
+        />
+      )}
+
+      {showRevisionsForPageId && project && (
+        <PlanSetRevisions
+          project={project}
+          pageId={showRevisionsForPageId}
+          onClose={() => setShowRevisionsForPageId(null)}
+          onOpenPage={(pid) => { setShowRevisionsForPageId(null); navigate(`/project/${project.id}/page/${pid}`); }}
+          onCompare={() => { setComparePageId(showRevisionsForPageId); setShowRevisionsForPageId(null); }}
+        />
+      )}
+
+      {comparePageId && project && (
+        <PlanSetCompare
+          project={project}
+          pageId={comparePageId}
+          onClose={() => setComparePageId(null)}
         />
       )}
 
