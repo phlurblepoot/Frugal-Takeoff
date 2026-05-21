@@ -2711,15 +2711,18 @@ export const ProjectView: React.FC = () => {
 
       await saveProject(updatedProject);
       setProject(updatedProject);
-      
-      if (!isNamingExistingPages) {
+
+      const wasNewSet = !isNamingExistingPages;
+      const addedPageIds = pendingPages.map(p => p.id);
+
+      if (wasNewSet) {
         // Find the planSetId from the first pending page
         const planSetId = updatedProject.pages.find(p => p.id === pendingPages[0]?.id)?.planSetId;
         if (planSetId) {
           setSelectedPlanSetId(planSetId);
         }
       }
-      
+
       setShowAddPagesModal(false);
       setAddPagesStep('details');
       setIsNamingExistingPages(false);
@@ -2729,11 +2732,79 @@ export const ProjectView: React.FC = () => {
       setPendingThumbnails({});
       setUseExistingPlanSet(false);
       setTargetPlanSetId('');
+      setIsAddingPages(false);
+
+      // If any newly added sheet is a reissue of a sheet that already had
+      // measurements, offer to carry those measurements (and scale) forward so
+      // the takeoffs don't have to be redrawn.
+      if (wasNewSet) {
+        await maybeOfferCarryForward(updatedProject, addedPageIds);
+      }
     } catch (error) {
       console.error('Error adding pages:', error);
       toast('Failed to add pages.', { type: 'error' });
-    } finally {
       setIsAddingPages(false);
+    }
+  };
+
+  // Detects reissued sheets among the just-added pages and, with the user's
+  // confirmation, copies the previous revision's measurements + scale onto
+  // them in a single batched update.
+  const maybeOfferCarryForward = async (proj: Project, addedPageIds: string[]) => {
+    const model = computeRevisionModel(proj, '');
+    const added = new Set(addedPageIds);
+    const candidates: { targetId: string; source: ProjectPage }[] = [];
+    for (const pageId of addedPageIds) {
+      const target = proj.pages.find(p => p.id === pageId);
+      const key = target ? sheetKey(target) : null;
+      if (!target || !key || target.measurements.length > 0) continue;
+      const revs = model.revisionsBySheet.get(key) || [];
+      const idx = revs.findIndex(p => p.id === pageId);
+      // Walk back to the most recent earlier revision that actually has work on it.
+      let source: ProjectPage | undefined;
+      for (let j = idx - 1; j >= 0; j--) {
+        if (!added.has(revs[j].id) && revs[j].measurements.length > 0) { source = revs[j]; break; }
+      }
+      if (source) candidates.push({ targetId: pageId, source });
+    }
+    if (candidates.length === 0) return;
+
+    const totalM = candidates.reduce((a, c) => a + c.source.measurements.length, 0);
+    const ok = await confirm({
+      title: 'Carry over measurements?',
+      message: `${candidates.length} reissued sheet${candidates.length === 1 ? '' : 's'} had measurements on the previous revision. Copy ${totalM} measurement${totalM === 1 ? '' : 's'} (and scale calibration) onto the new revision${candidates.length === 1 ? '' : 's'}? You can adjust them afterward.`,
+      confirmLabel: 'Copy measurements',
+    });
+    if (!ok) return;
+
+    const carried = {
+      ...proj,
+      pages: proj.pages.map(p => {
+        const c = candidates.find(x => x.targetId === p.id);
+        if (!c) return p;
+        const copied = c.source.measurements.map(m => ({
+          ...m,
+          id: uuidv4(),
+          planSetId: p.planSetId,
+          segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
+        }));
+        return {
+          ...p,
+          measurements: [...p.measurements, ...copied],
+          scaleConfig: p.scaleConfig || c.source.scaleConfig,
+          scaleRegions: p.scaleRegions || c.source.scaleRegions,
+          isMultiRegion: p.isMultiRegion ?? c.source.isMultiRegion,
+        };
+      }),
+    };
+    const previous = proj;
+    setProject(carried);
+    try {
+      await saveProject(carried);
+      toast(`Copied ${totalM} measurement${totalM === 1 ? '' : 's'} onto ${candidates.length} sheet${candidates.length === 1 ? '' : 's'}`, { type: 'success' });
+    } catch {
+      setProject(previous);
+      toast('Failed to copy measurements forward', { type: 'error' });
     }
   };
 
