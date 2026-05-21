@@ -225,7 +225,7 @@ async function buildHighlightsPdf(
   );
   if (pagesToPrint.length === 0) return null;
 
-  const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
+  const { PDFDocument, StandardFonts, rgb, degrees, pushGraphicsState, popGraphicsState, concatTransformationMatrix } = await import('pdf-lib');
 
   const outDoc = await PDFDocument.create();
   const font = await outDoc.embedFont(StandardFonts.Helvetica);
@@ -307,21 +307,33 @@ async function buildHighlightsPdf(
       }
     }
 
-    if (rotation !== 0) {
-      // Vector overlay isn't rotation-aware yet. Skip overlay on rotated pages
-      // rather than putting marks in the wrong place. The underlying page still
-      // appears in the output PDF correctly.
-      console.warn(`Page "${page.name}" has /Rotate=${rotation}° — measurement overlay skipped on this page.`);
-      continue;
+    // Measurements are captured on the *displayed* page — pdf.js rasterizes the
+    // canvas via getViewport({ scale: 2.0 }), which honours /Rotate, so the
+    // coords live in the rotated, viewer-facing image space. The page we copied,
+    // however, exposes its *unrotated* content box (getWidth/getHeight ignore
+    // /Rotate). So we compose the overlay in displayed space and concat a
+    // transform matrix that maps it into the page's unrotated content space;
+    // the viewer's /Rotate then renders both the page and our marks together.
+    const rot = ((rotation % 360) + 360) % 360;
+    const swapsAxes = rot === 90 || rot === 270;
+    const dispH = swapsAxes ? pageWidth : pageHeight; // displayed (viewer) height in PDF points
+
+    // Maps a displayed-space point (Y-up) to unrotated content space.
+    let rotationMatrix: [number, number, number, number, number, number] | null = null;
+    if (rot === 90) rotationMatrix = [0, 1, -1, 0, pageWidth, 0];
+    else if (rot === 180) rotationMatrix = [-1, 0, 0, -1, pageWidth, pageHeight];
+    else if (rot === 270) rotationMatrix = [0, -1, 1, 0, 0, pageHeight];
+    if (rotationMatrix) {
+      outPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(...rotationMatrix));
     }
 
     // ── Vector overlay: measurements ────────────────────────────────────────
     // SVG path origin is top-left with Y-down (pdf-lib flips to PDF Y-up when
-    // drawn at y=pageHeight). All measurement coords are scaled into PDF
-    // points first so the drawSvgPath origin maps cleanly.
+    // drawn at y=dispH). All measurement coords are scaled into PDF points
+    // first so the drawSvgPath origin maps cleanly.
     const sf = scaleFactor;
     const pdfX = (mx: number) => mx * sf;
-    const pdfY = (my: number) => pageHeight - my * sf; // for non-SVG primitives (Y-up)
+    const pdfY = (my: number) => dispH - my * sf; // for non-SVG primitives (Y-up)
 
     for (const m of page.measurements) {
       if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
@@ -370,7 +382,7 @@ async function buildHighlightsPdf(
         if (m.type === 'area') cmds.push('Z');
         const path = cmds.join(' ');
         outPage.drawSvgPath(path, {
-          x: 0, y: pageHeight,
+          x: 0, y: dispH,
           borderColor: rgb(c.r, c.g, c.b),
           borderWidth: stroke,
           color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
@@ -537,6 +549,11 @@ async function buildHighlightsPdf(
         // text; silence the unused-variable warning by referencing it once.
         void degrees;
       }
+    }
+
+    // Balance the graphics-state push from the rotation transform above.
+    if (rotationMatrix) {
+      outPage.pushOperators(popGraphicsState());
     }
   }
 
