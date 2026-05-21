@@ -829,6 +829,82 @@ async function startServer() {
     }
   });
 
+  // Cross-project search powering the command palette. Scans projects (name /
+  // contractor / address), their pages (sheet number / name / description /
+  // extracted text), takeoffs, and bids. Results are capped per category so a
+  // broad query stays responsive.
+  app.get("/api/search", authenticateToken, (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim().toLowerCase();
+      if (q.length < 2) return res.json({ results: [] });
+
+      const results: any[] = [];
+      const projRows = db.prepare('SELECT data FROM projects').all() as { data: string }[];
+      const projects = projRows
+        .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+        .filter(Boolean) as any[];
+
+      let projHits = 0;
+      for (const p of projects) {
+        if (projHits >= 6) break;
+        const hay = [p.name, p.contractor, p.address].filter(Boolean).join(' ').toLowerCase();
+        if (hay.includes(q)) {
+          results.push({ type: 'project', id: `project:${p.id}`, title: p.name || 'Untitled', subtitle: p.contractor || p.address || '', projectId: p.id });
+          projHits++;
+        }
+      }
+
+      let pageHits = 0;
+      pageLoop: for (const p of projects) {
+        for (const pg of p.pages || []) {
+          if (pageHits >= 12) break pageLoop;
+          const num = (pg.pageNumber || '').toString();
+          const text = [num, pg.name, pg.description, pg.extractedText].filter(Boolean).join(' ').toLowerCase();
+          if (text.includes(q)) {
+            results.push({
+              type: 'page',
+              id: `page:${p.id}:${pg.id}`,
+              title: [num, pg.name].filter(Boolean).join(' — ') || 'Page',
+              subtitle: p.name || 'Untitled',
+              projectId: p.id,
+              pageId: pg.id,
+            });
+            pageHits++;
+          }
+        }
+      }
+
+      let takeoffHits = 0;
+      takeoffLoop: for (const p of projects) {
+        for (const t of p.takeoffs || []) {
+          if (takeoffHits >= 6) break takeoffLoop;
+          if ((t.name || '').toLowerCase().includes(q)) {
+            results.push({ type: 'takeoff', id: `takeoff:${p.id}:${t.id}`, title: t.name, subtitle: p.name || 'Untitled', projectId: p.id });
+            takeoffHits++;
+          }
+        }
+      }
+
+      const bidRows = db.prepare('SELECT data FROM bids').all() as { data: string }[];
+      let bidHits = 0;
+      for (const r of bidRows) {
+        if (bidHits >= 6) break;
+        let b: any;
+        try { b = JSON.parse(r.data); } catch { continue; }
+        const hay = [b.name, b.contractor, b.address].filter(Boolean).join(' ').toLowerCase();
+        if (hay.includes(q)) {
+          results.push({ type: 'bid', id: `bid:${b.id}`, title: b.name || b.contractor || 'Bid', subtitle: b.contractor || '', bidId: b.id });
+          bidHits++;
+        }
+      }
+
+      res.json({ results });
+    } catch (error) {
+      console.error("Error running search:", error);
+      res.status(500).json({ error: "Search failed" });
+    }
+  });
+
   // ── Sharing API ───────────────────────────────────────────────────────────────
 
   // Public: get share info (does not expose internal resourceId)

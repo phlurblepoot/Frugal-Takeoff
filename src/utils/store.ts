@@ -370,6 +370,25 @@ export const getShareInfo = async (shareId: string): Promise<{ type: string; nam
   return res.json();
 };
 
+// ── Global search (command palette) ──────────────────────────────────────────
+
+export interface SearchResult {
+  type: 'project' | 'page' | 'takeoff' | 'bid';
+  id: string;
+  title: string;
+  subtitle?: string;
+  projectId?: string;
+  pageId?: string;
+  bidId?: string;
+}
+
+export const searchAll = async (q: string): Promise<SearchResult[]> => {
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  const { results } = await res.json();
+  return results;
+};
+
 // ── Storage usage ───────────────────────────────────────────────────────────
 
 export interface StorageStats {
