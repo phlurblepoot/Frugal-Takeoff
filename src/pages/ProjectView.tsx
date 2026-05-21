@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
+import { PlanSetManager } from '../components/PlanSetManager';
 import { PageNamingStep } from '../components/PageNamingStep';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -799,6 +800,9 @@ export const ProjectView: React.FC = () => {
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
   const [useExistingPlanSet, setUseExistingPlanSet] = useState(false);
   const [targetPlanSetId, setTargetPlanSetId] = useState('');
+  const [showManagePlanSets, setShowManagePlanSets] = useState(false);
+  const [showRevisionsForPageId, setShowRevisionsForPageId] = useState<string | null>(null);
+  const [comparePageId, setComparePageId] = useState<string | null>(null);
 
   // Upload-failures modal state (mirrors NewProject.tsx) — keeps source File
   // objects so the user can retry missing pages from the existing flow.
@@ -835,6 +839,87 @@ export const ProjectView: React.FC = () => {
 
   const removeNewPlanSetFile = (indexToRemove: number) => {
     setNewPlanSetFiles(newPlanSetFiles.filter((_, index) => index !== indexToRemove));
+  };
+
+  // Rename / re-date a plan set in place. Optimistic with rollback.
+  const handleUpdatePlanSet = async (id: string, patch: { name?: string; date?: string }) => {
+    if (!project) return;
+    const previous = project;
+    const updated = {
+      ...project,
+      planSets: (project.planSets || []).map(ps => ps.id === id ? { ...ps, ...patch } : ps),
+    };
+    setProject(updated);
+    try {
+      await saveProject(updated);
+    } catch {
+      setProject(previous);
+      toast('Failed to update plan set', { type: 'error' });
+    }
+  };
+
+  // Delete a plan set and every page that belongs to it. Destructive, so it's
+  // gated behind a confirm. Measurements on those pages go with them.
+  const handleDeletePlanSet = async (id: string) => {
+    if (!project) return;
+    const set = (project.planSets || []).find(ps => ps.id === id);
+    const pageCount = project.pages.filter(p => p.planSetId === id).length;
+    if (!await confirm({
+      title: 'Delete plan set',
+      message: `Delete "${set?.name || 'this plan set'}" and its ${pageCount} page${pageCount === 1 ? '' : 's'} (including any measurements on them)? This cannot be undone.`,
+      confirmLabel: 'Delete plan set',
+      tone: 'danger',
+    })) return;
+    const previous = project;
+    const updated = {
+      ...project,
+      planSets: (project.planSets || []).filter(ps => ps.id !== id),
+      pages: project.pages.filter(p => p.planSetId !== id),
+    };
+    setProject(updated);
+    if (selectedPlanSetId === id) setSelectedPlanSetId('');
+    try {
+      await saveProject(updated);
+      toast('Plan set deleted', { type: 'success' });
+    } catch {
+      setProject(previous);
+      toast('Failed to delete plan set', { type: 'error' });
+    }
+  };
+
+  // Copy the previous revision's measurements + scale onto a sheet's current
+  // revision so takeoffs don't have to be redrawn after a reissue.
+  const handleCopyMeasurementsForward = async (targetPageId: string): Promise<number> => {
+    if (!project) return 0;
+    const target = project.pages.find(p => p.id === targetPageId);
+    const key = target ? sheetKey(target) : null;
+    if (!target || !key) return 0;
+    const revs = revisionModel.revisionsBySheet.get(key) || [];
+    const idx = revs.findIndex(p => p.id === targetPageId);
+    const source = idx > 0 ? revs[idx - 1] : undefined;
+    if (!source || source.measurements.length === 0) return 0;
+    const copied = source.measurements.map(m => ({
+      ...m,
+      id: uuidv4(),
+      planSetId: target.planSetId,
+      segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
+    }));
+    const previous = project;
+    const updated = {
+      ...project,
+      pages: project.pages.map(p => p.id === targetPageId
+        ? { ...p, measurements: [...p.measurements, ...copied], scaleConfig: p.scaleConfig || source.scaleConfig, scaleRegions: p.scaleRegions || source.scaleRegions, isMultiRegion: p.isMultiRegion ?? source.isMultiRegion }
+        : p),
+    };
+    setProject(updated);
+    try {
+      await saveProject(updated);
+      return copied.length;
+    } catch {
+      setProject(previous);
+      toast('Failed to copy measurements', { type: 'error' });
+      return 0;
+    }
   };
 
   useEffect(() => {
@@ -3233,20 +3318,39 @@ export const ProjectView: React.FC = () => {
             </div>
           </div>
           {project.planSets && project.planSets.length > 0 && (
-            <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto mt-2 md:mt-0">
-              <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
-              <select
-                value={selectedPlanSetId}
-                onChange={(e) => setSelectedPlanSetId(e.target.value)}
-                className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full"
-              >
-                <option value="">All Plan Sets</option>
-                {project.planSets.map(ps => (
-                  <option key={ps.id} value={ps.id}>
-                    {ps.name} {ps.date ? `(${ps.date})` : ''}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-col items-stretch md:items-end gap-1.5 w-full md:w-auto mt-2 md:mt-0">
+              <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto">
+                <Layers size={15} className="text-accent-600 shrink-0" />
+                <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
+                <select
+                  value={selectedPlanSetId}
+                  onChange={(e) => setSelectedPlanSetId(e.target.value)}
+                  className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full md:min-w-[160px]"
+                >
+                  <option value="">Current (all sets)</option>
+                  {orderedPlanSets(project).slice().reverse().map(ps => (
+                    <option key={ps.id} value={ps.id}>
+                      {ps.name}{ps.date ? ` · ${ps.date}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setShowManagePlanSets(true)}
+                  aria-label="Manage plan sets"
+                  title="Manage plan sets"
+                  className="shrink-0 p-1 rounded-md text-slate-400 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Settings size={15} />
+                </button>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500 px-1">
+                {selectedPlanSetId ? (() => {
+                  const s = summarizePlanSet(project, selectedPlanSetId);
+                  return <span>Viewing as of this set · {s.newCount} new, {s.revisedCount} revised{s.total ? ` (${s.total} sheets reissued)` : ''}</span>;
+                })() : (
+                  <span>Showing the latest revision of each sheet · {visiblePages.length} sheet{visiblePages.length === 1 ? '' : 's'}</span>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -4894,6 +4998,18 @@ export const ProjectView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {showManagePlanSets && project && (
+        <PlanSetManager
+          project={project}
+          selectedPlanSetId={selectedPlanSetId}
+          onClose={() => setShowManagePlanSets(false)}
+          onSelect={setSelectedPlanSetId}
+          onUpdate={handleUpdatePlanSet}
+          onDelete={handleDeletePlanSet}
+          onAddNew={() => { setShowManagePlanSets(false); setShowAddPagesModal(true); }}
+        />
       )}
 
       {showAddPagesModal && (
