@@ -3076,12 +3076,14 @@ export const ProjectView: React.FC = () => {
                 />
                 <button
                   onClick={handleSaveProjectName}
+                  aria-label="Save project name"
                   className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                 >
                   <Check size={20} />
                 </button>
                 <button
                   onClick={() => setIsEditingProjectName(false)}
+                  aria-label="Cancel"
                   className="p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
                 >
                   <X size={20} />
@@ -3097,6 +3099,7 @@ export const ProjectView: React.FC = () => {
                   }}
                   className="p-1.5 text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-accent-50"
                   title="Edit project name"
+                  aria-label="Edit project name"
                 >
                   <Edit2 size={18} />
                 </button>

@@ -337,6 +337,16 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     return result;
   }, [projects, view, filterContractor, sortField, sortDirection]);
 
+  // Escape closes the dashboard's import / delete modals.
+  useEffect(() => {
+    if (!showImportModal && !projectToDelete) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setShowImportModal(false); setProjectToDelete(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showImportModal, projectToDelete]);
+
   const archivedCount = useMemo(() => projects.filter(p => p.archived).length, [projects]);
 
   // Recently opened projects that still exist and aren't archived.
@@ -657,14 +667,16 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                       className="px-2 py-1 text-sm border border-accent-500 rounded outline-none w-full"
                                       autoFocus
                                     />
-                                    <button 
+                                    <button
                                       onClick={() => handleRename(project)}
+                                      aria-label="Save name"
                                       className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
                                     >
                                       <Check size={16} />
                                     </button>
-                                    <button 
+                                    <button
                                       onClick={() => setEditingProjectId(null)}
+                                      aria-label="Cancel rename"
                                       className="p-1 text-slate-400 hover:bg-slate-50 rounded"
                                     >
                                       <X size={16} />
@@ -681,6 +693,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                         setEditingProjectId(project.id);
                                         setEditingProjectName(project.name);
                                       }}
+                                      aria-label="Rename project"
                                       className="p-1 text-slate-400 hover:text-accent-600 opacity-0 group-hover/name:opacity-100 transition-all"
                                     >
                                       <Edit2 size={12} />
@@ -1133,11 +1146,11 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
       {/* Import Email Modal */}
       {showImportModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-label="Import Email">
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
             <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Import Email</h3>
-              <button onClick={() => setShowImportModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
+              <button onClick={() => setShowImportModal(false)} aria-label="Close" className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
             </div>
             <div className="p-6 space-y-4">
               <p className="text-sm text-slate-500 dark:text-slate-400">Paste the details from the invitation email. The subject line will become the bid name.</p>
@@ -1171,7 +1184,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
       )}
 
       {projectToDelete && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-label="Delete Project">
           <div className="glass-card w-full max-w-md overflow-hidden p-6">
             <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Delete Project</h3>
             <p className="text-slate-600 dark:text-slate-300 mb-4">

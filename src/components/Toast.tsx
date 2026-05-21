@@ -60,7 +60,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               {t.type === 'error'   && <XCircle size={16} className="shrink-0" />}
               {t.type === 'info'    && <Info size={16} className="shrink-0" />}
               <span className="flex-1">{t.message}</span>
-              <button onClick={() => dismiss(t.id)} className="shrink-0 opacity-70 hover:opacity-100">
+              <button onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="shrink-0 opacity-70 hover:opacity-100">
                 <X size={14} />
               </button>
             </motion.div>

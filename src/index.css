@@ -91,3 +91,15 @@
 .dark body {
   color-scheme: dark;
 }
+
+/* ── Keyboard focus visibility ────────────────────────────────────────── */
+/* Show a clear focus ring for keyboard users without affecting mouse clicks
+   (which use :focus, not :focus-visible). */
+:focus-visible {
+  outline: 2px solid var(--color-accent-500);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+.dark :focus-visible {
+  outline-color: var(--color-accent-400);
+}
