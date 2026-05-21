@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
+import { useToast } from './Toast';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
@@ -137,6 +138,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onClearMultiSelect,
   isMultiSelectMode = false,
 }) => {
+  const { toast } = useToast();
   // `useImage` is the legacy raster path; new vector-source pages populate
   // `pdfImage` instead. `image` (used by the existing code below) resolves to
   // whichever one is current — that lets the Konva background, zoom-fit logic,
@@ -762,7 +764,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (isMultiRegion) {
         const region = scaleRegions.find(r => isPointInPolygon(pos, r.points));
         if (!region) {
-          alert('In multi-region mode, measurements must be started inside a defined region.');
+          toast('In multi-region mode, measurements must be started inside a defined region.', { type: 'warning' });
           return;
         }
         regionId = region.id;
@@ -781,7 +783,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (activePoints.length === 0 && isMultiRegion) {
         const region = scaleRegions.find(r => isPointInPolygon(pos, r.points));
         if (!region) {
-          alert('In multi-region mode, measurements must be started inside a defined region.');
+          toast('In multi-region mode, measurements must be started inside a defined region.', { type: 'warning' });
           return;
         }
       }

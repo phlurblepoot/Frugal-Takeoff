@@ -8,6 +8,7 @@ import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
+import { useToast } from '../components/Toast';
 
 interface PendingPage {
   id: string;
@@ -27,6 +28,7 @@ interface PendingPage {
 export const NewProject: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
   const [step, setStep] = useState<'details' | 'name_pages'>('details');
   const [name, setName] = useState(location.state?.initialName || '');
   const [contractor, setContractor] = useState(location.state?.initialContractor || '');
@@ -345,7 +347,7 @@ export const NewProject: React.FC = () => {
       setStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
-      alert('Failed to process PDF. Please try another file.');
+      toast('Failed to process PDF. Please try another file.', { type: 'error' });
     } finally {
       setIsProcessing(false);
     }
@@ -549,7 +551,7 @@ export const NewProject: React.FC = () => {
       }
     } catch (err) {
       console.error('Retry failed', err);
-      alert(`Retry failed: ${(err as any)?.message || err}`);
+      toast(`Retry failed: ${(err as any)?.message || err}`, { type: 'error' });
     } finally {
       setIsRetryingUpload(false);
       setRetryProgress({ status: '', current: 0, total: 0, fileName: '' });
@@ -623,7 +625,7 @@ export const NewProject: React.FC = () => {
       navigate(`/project/${projectId}`);
     } catch (error) {
       console.error('Error saving project:', error);
-      alert('Failed to save project.');
+      toast('Failed to save project.', { type: 'error' });
     } finally {
       setIsProcessing(false);
     }

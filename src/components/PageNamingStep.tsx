@@ -7,6 +7,7 @@ import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { getImageUrl } from '../utils/store';
 import { PdfPagePreview } from './PdfPagePreview';
+import { useToast } from './Toast';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -129,6 +130,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   title = 'Name Pages',
   subtitle = 'Review and rename the imported pages.',
 }) => {
+  const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
@@ -284,7 +286,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       setExtractionType(null);
     } catch (error) {
       console.error('Extraction error:', error);
-      alert('Failed to extract text. Please try again.');
+      toast('Failed to extract text. Please try again.', { type: 'error' });
     } finally {
       if (worker) {
         try { await worker.terminate(); } catch { /* noop */ }

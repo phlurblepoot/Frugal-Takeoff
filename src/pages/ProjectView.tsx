@@ -20,6 +20,9 @@ import { UploadFailuresModal, UploadFailure } from '../components/UploadFailures
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
 import { useCollaboration } from '../context/CollaborationContext';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useShareLink } from '../components/ShareLinkModal';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -575,6 +578,9 @@ const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term 
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
   const { setPageName } = useCollaboration();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const shareLink = useShareLink();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1106,7 +1112,7 @@ export const ProjectView: React.FC = () => {
     e.stopPropagation();
     
     if (activePages.includes(page.id)) {
-      alert("This page is currently being viewed by another user and cannot be renamed.");
+      toast('This page is currently being viewed by another user and cannot be renamed.', { type: 'warning' });
       return;
     }
     
@@ -1368,7 +1374,7 @@ export const ProjectView: React.FC = () => {
       setAddPagesStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
-      alert('Failed to process PDF. Please try another file.');
+      toast('Failed to process PDF. Please try another file.', { type: 'error' });
     } finally {
       setIsAddingPages(false);
       setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
@@ -1589,7 +1595,7 @@ export const ProjectView: React.FC = () => {
       }
     } catch (err) {
       console.error('Retry failed', err);
-      alert(`Retry failed: ${(err as any)?.message || err}`);
+      toast(`Retry failed: ${(err as any)?.message || err}`, { type: 'error' });
     } finally {
       setIsRetryingUpload(false);
       setRetryProgress({ status: '', current: 0, total: 0, fileName: '' });
@@ -1622,7 +1628,7 @@ export const ProjectView: React.FC = () => {
       );
 
       if (!pdfBuffer) {
-        alert('No pages found with the selected takeoffs.');
+        toast('No pages found with the selected takeoffs.', { type: 'warning' });
         setIsPrinting(false);
         setProgressMessage('');
         return;
@@ -1659,7 +1665,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF.');
+      toast('Failed to generate PDF.', { type: 'error' });
       setIsPrinting(false);
       setProgressMessage('');
     }
@@ -1884,7 +1890,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating Excel:', error);
-      alert('Failed to generate Excel.');
+      toast('Failed to generate Excel.', { type: 'error' });
       setIsExportingExcel(false);
     }
   };
@@ -2418,7 +2424,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating proposal:', error);
-      alert('Failed to generate proposal PDF.');
+      toast('Failed to generate proposal PDF.', { type: 'error' });
       setIsGeneratingProposal(false);
       setProgressMessage('');
     }
@@ -2493,48 +2499,41 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const copyShareUrl = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      alert(`Share link copied to clipboard:\n${url}`);
-    } catch {
-      // Clipboard API not available (non-HTTPS/non-localhost) — show the URL directly
-      window.prompt('Copy this share link (Ctrl+A, Ctrl+C):', url);
-    }
-  };
+  // Pops the share modal (copy button + QR code) for a freshly created link.
+  const showShareUrl = (url: string, title?: string) => shareLink(url, title);
 
   const handleSharePrintout = async (printout: Printout) => {
     try {
       const id = await createShare('printout', printout.fileId, printout.name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, printout.name);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
   const handleSharePage = async (page: { imageId: string; name?: string; description?: string }) => {
     try {
-      const id = await createShare('page', page.imageId, page.name || page.description || 'Page');
+      const name = page.name || page.description || 'Page';
+      const id = await createShare('page', page.imageId, name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, name);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
-  // Permanently removes a page from the project. Confirmation is via the
-  // browser's native confirm dialog — a single irreversible action doesn't
-  // warrant a full modal, and the wording makes the consequences clear.
-  // Orphaned image rows are intentionally left in storage; cleanup would
-  // need to verify no other page (across plan-set revisions) references
-  // the same imageId / thumbnailId / sourcePdfFileId.
+  // Permanently removes a page from the project.
+  // Orphaned image rows are intentionally left in storage; cleanup is handled
+  // separately by the admin storage-reclaim tool, which verifies no other page
+  // (across plan-set revisions) references the same imageId / thumbnailId /
+  // sourcePdfFileId before deleting.
   const handleDeletePage = async (page: { id: string; name?: string; pageNumber?: string }) => {
     if (!project) return;
     const label = page.pageNumber || page.name || 'this page';
-    if (!window.confirm(`Delete ${label}? Any measurements on it will be lost.`)) return;
+    if (!await confirm({ title: 'Delete page', message: `Delete ${label}? Any measurements on it will be lost.`, confirmLabel: 'Delete', tone: 'danger' })) return;
     const updated = { ...project, pages: project.pages.filter(p => p.id !== page.id) };
     await saveProject(updated);
     setProject(updated);
@@ -2558,7 +2557,7 @@ export const ProjectView: React.FC = () => {
         const pg = project.pages.find(p => p.id === pid);
         if (!pg) return;
         const id = await createShare('page', pg.imageId, pg.name || 'Page');
-        await copyShareUrl(`${host}/share/${id}`);
+        showShareUrl(`${host}/share/${id}`, pg.name || 'Page');
         return;
       }
 
@@ -2572,9 +2571,9 @@ export const ProjectView: React.FC = () => {
       // Deduplicate by sorted imageId list so the same selection reuses the existing share
       const resourceId = JSON.stringify(payload);
       const id = await createShare('pages', resourceId, project.name);
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, `${selectedPageIds.size} pages`);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
@@ -2644,7 +2643,7 @@ export const ProjectView: React.FC = () => {
       setTargetPlanSetId('');
     } catch (error) {
       console.error('Error adding pages:', error);
-      alert('Failed to add pages.');
+      toast('Failed to add pages.', { type: 'error' });
     } finally {
       setIsAddingPages(false);
     }
@@ -2986,7 +2985,7 @@ export const ProjectView: React.FC = () => {
       setIsEditingProjectName(false);
     } catch (error) {
       console.error('Failed to update project name:', error);
-      alert('Failed to update project name. Please try again.');
+      toast('Failed to update project name. Please try again.', { type: 'error' });
     }
   };
 
@@ -4614,7 +4613,7 @@ export const ProjectView: React.FC = () => {
                     setSendProposalFileId('');
                     setSendProposalMessage('');
                   } catch (e: any) {
-                    alert('Failed to send: ' + (e.message || 'Unknown error'));
+                    toast('Failed to send: ' + (e.message || 'Unknown error'), { type: 'error' });
                   } finally {
                     setSendingProposal(false);
                   }

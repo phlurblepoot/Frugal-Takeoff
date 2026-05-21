@@ -5,6 +5,8 @@ import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpC
 import { EmailAccount, SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 // ── Changelog data ────────────────────────────────────────────────────────────
 
@@ -705,6 +707,8 @@ const PROVIDER_GUIDE: ProviderInfo[] = [
 ];
 
 const EmailTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
   const [smtpSaving, setSmtpSaving] = useState(false);
   const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
@@ -739,8 +743,8 @@ const EmailTab: React.FC = () => {
 
   const handleSmtpSave = async () => {
     setSmtpSaving(true);
-    try { await saveSmtpSettings(smtp as Record<string, string>); alert('SMTP settings saved.'); }
-    catch { alert('Failed to save SMTP settings.'); }
+    try { await saveSmtpSettings(smtp as Record<string, string>); toast('SMTP settings saved.', { type: 'success' }); }
+    catch { toast('Failed to save SMTP settings.', { type: 'error' }); }
     finally { setSmtpSaving(false); }
   };
 
@@ -772,7 +776,7 @@ const EmailTab: React.FC = () => {
   };
 
   const handleDeleteAccount = async (id: string) => {
-    if (!confirm('Remove this email account?')) return;
+    if (!await confirm({ title: 'Remove email account', message: 'Remove this email account?', confirmLabel: 'Remove', tone: 'danger' })) return;
     await deleteEmailAccount(id);
     setAccounts(a => a.filter(x => x.id !== id));
   };
@@ -791,7 +795,7 @@ const EmailTab: React.FC = () => {
 
   const handleSavePollInterval = async () => {
     await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ 'email.pollIntervalMinutes': pollInterval }) });
-    alert('Polling interval saved. Restart the server for changes to take effect.');
+    toast('Polling interval saved. Restart the server for changes to take effect.', { type: 'success' });
   };
 
   const handlePollNow = async () => {
@@ -1189,6 +1193,7 @@ const StorageTab: React.FC = () => {
 type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'changelog';
 
 export const Settings: React.FC = () => {
+  const { toast } = useToast();
   const [serverSettings, setServerSettings] = useState<Record<string, string>>({
     appName: 'Takeoff Pro',
     logoUrl: '',
@@ -1230,9 +1235,9 @@ export const Settings: React.FC = () => {
     try {
       await saveSettings(serverSettings);
       if (serverSettings.appName) document.title = serverSettings.appName;
-      alert('Settings saved successfully');
+      toast('Settings saved successfully', { type: 'success' });
     } catch {
-      alert('Failed to save settings');
+      toast('Failed to save settings', { type: 'error' });
     } finally {
       setIsSaving(false);
     }

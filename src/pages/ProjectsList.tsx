@@ -6,6 +6,8 @@ import { Project, Bid, BidStatus } from '../types';
 import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 import { v4 as uuidv4 } from 'uuid';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
@@ -13,6 +15,8 @@ type Tab = 'projects' | 'templates' | 'bids' | 'users';
 
 export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = (searchParams.get('tab') as Tab) || 'projects';
   const setActiveTab = (tab: Tab) => {
@@ -109,7 +113,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
       setShowImportModal(false);
       setImportForm({ from: '', fromName: '', subject: '', body: '' });
     } catch (e: any) {
-      alert('Failed to import: ' + (e.message || 'Unknown error'));
+      toast('Failed to import: ' + (e.message || 'Unknown error'), { type: 'error' });
     } finally {
       setImportSaving(false);
     }
@@ -125,7 +129,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   };
 
   const handleDeleteBid = async (id: string) => {
-    if (!window.confirm('Delete this bid?')) return;
+    if (!await confirm({ title: 'Delete bid', message: 'Delete this bid?', confirmLabel: 'Delete', tone: 'danger' })) return;
     await deleteBid(id);
     setBids(prev => prev.filter(b => b.id !== id));
   };
@@ -164,7 +168,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     
     const hasActivePages = project.pages.some(page => activePages.includes(page.id));
     if (hasActivePages) {
-      alert("This project has pages that are currently being viewed by other users and cannot be deleted.");
+      toast('This project has pages that are currently being viewed by other users and cannot be deleted.', { type: 'warning' });
       return;
     }
     
