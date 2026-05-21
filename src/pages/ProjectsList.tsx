@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X, Mail, Upload, ChevronDown, ChevronUp, RefreshCw, FileText, ExternalLink } from 'lucide-react';
+import { Plus, FolderOpen, Trash2, Calendar, Building2, Filter, ArrowUpDown, ArrowUp, ArrowDown, Layout, MapPin, Users, Edit2, Check, X, Mail, Upload, ChevronDown, ChevronUp, RefreshCw, FileText, ExternalLink, Archive, ArchiveRestore, CheckSquare, Square, Clock } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Project, Bid, BidStatus } from '../types';
-import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid } from '../utils/store';
+import { getAllProjects, deleteProject, getActivePages, getBids, saveBid, updateBid, deleteBid, saveProject, importEmailAsBid, getRecentProjects } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../components/Toast';
@@ -42,6 +42,14 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     }
     setSearchParams(searchParams, { replace: true });
   };
+  const view = (searchParams.get('view') === 'archived' ? 'archived' : 'active') as 'active' | 'archived';
+  const setView = (v: 'active' | 'archived') => {
+    if (v === 'active') searchParams.delete('view');
+    else searchParams.set('view', v);
+    setSearchParams(searchParams, { replace: true });
+    setSelectedIds(new Set());
+  };
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [projects, setProjects] = useState<Project[]>([]);
   const [bids, setBids] = useState<Bid[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -194,6 +202,75 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     }
   };
 
+  const handleArchiveToggle = async (e: React.MouseEvent, project: Project) => {
+    e.stopPropagation();
+    const archived = !project.archived;
+    setProjects(prev => prev.map(p => p.id === project.id ? { ...p, archived } : p));
+    setSelectedIds(prev => { const n = new Set(prev); n.delete(project.id); return n; });
+    try {
+      await saveProject({ ...project, archived });
+      toast(archived ? 'Project archived' : 'Project restored', { type: 'success' });
+    } catch {
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, archived: project.archived } : p));
+      toast('Failed to update project', { type: 'error' });
+    }
+  };
+
+  const toggleSelect = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setSelectedIds(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => {
+      const allSelected = filteredAndSortedProjects.length > 0 && filteredAndSortedProjects.every(p => prev.has(p.id));
+      const n = new Set(prev);
+      filteredAndSortedProjects.forEach(p => allSelected ? n.delete(p.id) : n.add(p.id));
+      return n;
+    });
+  };
+
+  const handleBulkArchive = async () => {
+    const archived = view !== 'archived';
+    const targets = projects.filter(p => selectedIds.has(p.id));
+    if (targets.length === 0) return;
+    setProjects(prev => prev.map(p => selectedIds.has(p.id) ? { ...p, archived } : p));
+    clearSelection();
+    try {
+      await Promise.all(targets.map(p => saveProject({ ...p, archived })));
+      toast(`${targets.length} project${targets.length === 1 ? '' : 's'} ${archived ? 'archived' : 'restored'}`, { type: 'success' });
+    } catch {
+      toast('Some projects failed to update', { type: 'error' });
+      loadData();
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const targets = projects.filter(p => selectedIds.has(p.id));
+    if (targets.length === 0) return;
+    if (!await confirm({
+      title: 'Delete projects',
+      message: `Permanently delete ${targets.length} project${targets.length === 1 ? '' : 's'}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
+    setProjects(prev => prev.filter(p => !selectedIds.has(p.id)));
+    clearSelection();
+    try {
+      await Promise.all(targets.map(p => deleteProject(p.id)));
+      toast(`${targets.length} project${targets.length === 1 ? '' : 's'} deleted`, { type: 'success' });
+    } catch {
+      setProjects(prev => [...targets, ...prev]);
+      toast('Some projects failed to delete', { type: 'error' });
+    }
+  };
+
   const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
@@ -212,7 +289,7 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
   }, [projects]);
 
   const filteredAndSortedProjects = useMemo(() => {
-    let result = [...projects];
+    let result = projects.filter(p => view === 'archived' ? !!p.archived : !p.archived);
 
     if (filterContractor !== 'all') {
       result = result.filter(p => p.contractor === filterContractor);
@@ -258,7 +335,18 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
     });
 
     return result;
-  }, [projects, filterContractor, sortField, sortDirection]);
+  }, [projects, view, filterContractor, sortField, sortDirection]);
+
+  const archivedCount = useMemo(() => projects.filter(p => p.archived).length, [projects]);
+
+  // Recently opened projects that still exist and aren't archived.
+  const recentProjects = useMemo(() => {
+    const byId = new Map(projects.map(p => [p.id, p]));
+    return getRecentProjects()
+      .map(r => byId.get(r.id))
+      .filter((p): p is Project => !!p && !p.archived)
+      .slice(0, 6);
+  }, [projects]);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown size={14} className="text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity" />;
@@ -313,6 +401,23 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
             {activeTab === 'projects' && (
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                {(view === 'archived' || archivedCount > 0) && (
+                  <div className="flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1 shadow-sm">
+                    <button
+                      onClick={() => setView('active')}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'active' ? 'bg-accent-600 text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'}`}
+                    >
+                      Active
+                    </button>
+                    <button
+                      onClick={() => setView('archived')}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5 ${view === 'archived' ? 'bg-accent-600 text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'}`}
+                    >
+                      <Archive size={14} /> Archived
+                      {archivedCount > 0 && <span className={`text-[10px] rounded-full px-1.5 ${view === 'archived' ? 'bg-white/25' : 'bg-slate-100 dark:bg-slate-700'}`}>{archivedCount}</span>}
+                    </button>
+                  </div>
+                )}
                 <div className="flex-1 sm:flex-none flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm min-w-[200px]">
                   <input
                     type="text"
@@ -392,23 +497,56 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
             exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
           >
           <>
+            {!isLoading && view === 'active' && !searchTerm && filterContractor === 'all' && recentProjects.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center gap-2 mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <Clock size={14} /> Recently opened
+                </div>
+                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                  {recentProjects.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => navigate(`/project/${p.id}`)}
+                      className="shrink-0 flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm hover:border-accent-300 dark:hover:border-accent-700 hover:shadow transition-all max-w-[220px]"
+                    >
+                      <FolderOpen size={15} className="text-accent-500 shrink-0" />
+                      <span className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {isLoading ? (
               <div className="space-y-4">
                 <ProjectTableSkeleton />
                 <ProjectCardsSkeleton />
               </div>
-            ) : projects.length === 0 ? (
+            ) : filteredAndSortedProjects.length === 0 ? (
               <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
                 <FolderOpen size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-4" />
-                <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">No projects yet</h3>
-                <p className="text-slate-500 dark:text-slate-400 mb-6">Create your first project to start measuring blueprints.</p>
-                <Link
-                  to="/new"
-                  className="inline-flex items-center gap-2 bg-accent-50 text-accent-700 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-900/50 px-4 py-2 rounded-lg font-medium transition-colors"
-                >
-                  <Plus size={18} />
-                  Create Project
-                </Link>
+                {projects.length === 0 ? (
+                  <>
+                    <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">No projects yet</h3>
+                    <p className="text-slate-500 dark:text-slate-400 mb-6">Create your first project to start measuring blueprints.</p>
+                    <Link
+                      to="/new"
+                      className="inline-flex items-center gap-2 bg-accent-50 text-accent-700 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-900/50 px-4 py-2 rounded-lg font-medium transition-colors"
+                    >
+                      <Plus size={18} />
+                      Create Project
+                    </Link>
+                  </>
+                ) : view === 'archived' ? (
+                  <>
+                    <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">No archived projects</h3>
+                    <p className="text-slate-500 dark:text-slate-400">Projects you archive will appear here.</p>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100 mb-2">No matching projects</h3>
+                    <p className="text-slate-500 dark:text-slate-400">Try a different search or filter.</p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
@@ -418,6 +556,17 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+                          <th className="pl-6 pr-2 py-4 w-10">
+                            <button
+                              onClick={toggleSelectAll}
+                              aria-label={filteredAndSortedProjects.every(p => selectedIds.has(p.id)) ? 'Deselect all' : 'Select all'}
+                              className="text-slate-400 hover:text-accent-600 transition-colors align-middle"
+                            >
+                              {filteredAndSortedProjects.length > 0 && filteredAndSortedProjects.every(p => selectedIds.has(p.id))
+                                ? <CheckSquare size={18} className="text-accent-600" />
+                                : <Square size={18} />}
+                            </button>
+                          </th>
                           <th
                             className="px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer group hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                             onClick={() => handleSort('name')}
@@ -479,11 +628,20 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredAndSortedProjects.map((project) => (
-                          <tr 
+                          <tr
                             key={project.id}
                             onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                            className="hover:bg-accent-50/50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer group"
+                            className={`transition-colors cursor-pointer group ${selectedIds.has(project.id) ? 'bg-accent-50 dark:bg-accent-900/20' : 'hover:bg-accent-50/50 dark:hover:bg-slate-700/50'}`}
                           >
+                            <td className="pl-6 pr-2 py-4 w-10">
+                              <button
+                                onClick={(e) => toggleSelect(e, project.id)}
+                                aria-label={selectedIds.has(project.id) ? 'Deselect project' : 'Select project'}
+                                className="text-slate-400 hover:text-accent-600 transition-colors align-middle"
+                              >
+                                {selectedIds.has(project.id) ? <CheckSquare size={18} className="text-accent-600" /> : <Square size={18} />}
+                              </button>
+                            </td>
                             <td className="px-6 py-4">
                               <div className="flex flex-col gap-1">
                                 {editingProjectId === project.id ? (
@@ -592,7 +750,14 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                                 {project.pages.length}
                               </span>
                             </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-6 py-4 text-right whitespace-nowrap">
+                              <button
+                                onClick={(e) => handleArchiveToggle(e, project)}
+                                className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors opacity-0 group-hover:opacity-100"
+                                title={project.archived ? 'Restore project' : 'Archive project'}
+                              >
+                                {project.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+                              </button>
                               <button
                                 onClick={(e) => handleDeleteClick(e, project)}
                                 className="text-slate-400 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
@@ -617,16 +782,34 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.22, delay: Math.min(i * 0.04, 0.3) }}
                       onClick={() => navigate(`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`)}
-                      className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm active:bg-slate-50 dark:active:bg-slate-700 transition-colors"
+                      className={`rounded-xl border p-4 shadow-sm transition-colors ${selectedIds.has(project.id) ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-300 dark:border-accent-700' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 active:bg-slate-50 dark:active:bg-slate-700'}`}
                     >
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="font-bold text-slate-900 dark:text-white text-lg">{project.name}</div>
-                        <button
-                          onClick={(e) => handleDeleteClick(e, project)}
-                          className="text-slate-400 hover:text-red-500 p-1"
-                        >
-                          <Trash2 size={18} />
-                        </button>
+                      <div className="flex justify-between items-start mb-3 gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <button
+                            onClick={(e) => toggleSelect(e, project.id)}
+                            aria-label={selectedIds.has(project.id) ? 'Deselect project' : 'Select project'}
+                            className="text-slate-400 hover:text-accent-600 p-0.5 mt-1 shrink-0"
+                          >
+                            {selectedIds.has(project.id) ? <CheckSquare size={18} className="text-accent-600" /> : <Square size={18} />}
+                          </button>
+                          <div className="font-bold text-slate-900 dark:text-white text-lg min-w-0 break-words">{project.name}</div>
+                        </div>
+                        <div className="flex items-center shrink-0">
+                          <button
+                            onClick={(e) => handleArchiveToggle(e, project)}
+                            className="text-slate-400 hover:text-accent-600 p-1"
+                            title={project.archived ? 'Restore project' : 'Archive project'}
+                          >
+                            {project.archived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
+                          </button>
+                          <button
+                            onClick={(e) => handleDeleteClick(e, project)}
+                            className="text-slate-400 hover:text-red-500 p-1"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
                       </div>
                       
                       <div className="space-y-2 mb-4">
@@ -912,6 +1095,41 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
         )}
         </AnimatePresence>
       </div>
+
+      {/* Bulk action bar */}
+      <AnimatePresence>
+        {activeTab === 'projects' && selectedIds.size > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 24 }}
+            transition={{ duration: 0.18 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl shadow-2xl border border-slate-700 px-3 py-2"
+          >
+            <span className="px-2 text-sm font-medium">{selectedIds.size} selected</span>
+            <div className="w-px h-6 bg-slate-700" />
+            <button
+              onClick={handleBulkArchive}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium hover:bg-slate-700 transition-colors"
+            >
+              {view === 'archived' ? <><ArchiveRestore size={16} /> Restore</> : <><Archive size={16} /> Archive</>}
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-medium text-red-300 hover:bg-red-500/20 transition-colors"
+            >
+              <Trash2 size={16} /> Delete
+            </button>
+            <button
+              onClick={clearSelection}
+              aria-label="Clear selection"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Import Email Modal */}
       {showImportModal && (

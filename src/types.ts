@@ -192,6 +192,7 @@ export interface Project {
   submitted?: boolean;
   responded?: boolean;
   accepted?: boolean;
+  archived?: boolean;
   legendOnAllPages?: boolean;
   // Email thread the project was created from (moved from the bid pipeline on conversion)
   email?: BidEmail;

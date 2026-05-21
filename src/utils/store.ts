@@ -370,6 +370,23 @@ export const getShareInfo = async (shareId: string): Promise<{ type: string; nam
   return res.json();
 };
 
+// ── Recently opened projects (client-only, newest first) ─────────────────────
+
+export interface RecentProject { id: string; name: string; at: number; }
+const RECENTS_KEY = 'recentProjects';
+
+export const getRecentProjects = (): RecentProject[] => {
+  try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { return []; }
+};
+
+export const recordRecentProject = (id: string, name: string): void => {
+  try {
+    const list = getRecentProjects().filter(r => r.id !== id);
+    list.unshift({ id, name, at: Date.now() });
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch { /* ignore */ }
+};
+
 // ── Global search (command palette) ──────────────────────────────────────────
 
 export interface SearchResult {
