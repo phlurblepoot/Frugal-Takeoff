@@ -41,6 +41,38 @@ function collectProjectImageIds(project: any): string[] {
   return [...ids];
 }
 
+// Conservative reference collector for orphan detection: walks every JSON blob
+// (projects, bids, checklists, notes) and records every string value, plus any
+// id embedded in an /api/images/:id or /api/files/:id URL. An image is only an
+// orphan if its id appears in none of these, so in-use files are never flagged.
+function collectAllReferencedImageIds(): Set<string> {
+  const referenced = new Set<string>();
+  const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
+  const addString = (s: string) => {
+    referenced.add(s);
+    let m: RegExpExecArray | null;
+    urlRe.lastIndex = 0;
+    while ((m = urlRe.exec(s)) !== null) {
+      try { referenced.add(decodeURIComponent(m[1])); } catch { referenced.add(m[1]); }
+    }
+  };
+  const walk = (v: any) => {
+    if (v == null) return;
+    if (typeof v === 'string') { addString(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
+  };
+  for (const table of ['projects', 'bids', 'checklists', 'notes']) {
+    let rows: { data: string }[] = [];
+    try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
+    for (const r of rows) {
+      if (!r.data) continue;
+      try { walk(JSON.parse(r.data)); } catch { addString(r.data); }
+    }
+  }
+  return referenced;
+}
+
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 }
@@ -826,6 +858,46 @@ async function startServer() {
     } catch (error) {
       console.error("Error computing storage stats:", error);
       res.status(500).json({ error: "Failed to compute storage stats" });
+    }
+  });
+
+  // Orphaned files: rows in the images table that nothing references anymore
+  // (e.g. left behind by failed uploads or superseded plan-set revisions).
+  app.get("/api/storage/orphans", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const referenced = collectAllReferencedImageIds();
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      let count = 0;
+      let bytes = 0;
+      for (const r of imgRows) {
+        if (!referenced.has(r.id)) { count++; bytes += r.len; }
+      }
+      res.json({ count, bytes });
+    } catch (error) {
+      console.error("Error finding orphaned files:", error);
+      res.status(500).json({ error: "Failed to find orphaned files" });
+    }
+  });
+
+  app.post("/api/storage/orphans/cleanup", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      // Re-derive the orphan set here rather than trusting the client, so a
+      // file that became referenced since the GET can't be deleted out from
+      // under a project.
+      const referenced = collectAllReferencedImageIds();
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      const orphans = imgRows.filter(r => !referenced.has(r.id));
+      const bytesFreed = orphans.reduce((a, r) => a + r.len, 0);
+
+      db.transaction(() => {
+        const stmt = db.prepare('DELETE FROM images WHERE id = ?');
+        for (const o of orphans) stmt.run(o.id);
+      })();
+
+      res.json({ deleted: orphans.length, bytesFreed });
+    } catch (error) {
+      console.error("Error cleaning up orphaned files:", error);
+      res.status(500).json({ error: "Failed to clean up orphaned files" });
     }
   });
 

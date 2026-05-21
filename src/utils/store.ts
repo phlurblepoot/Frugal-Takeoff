@@ -419,6 +419,18 @@ export const getProjectStorage = async (id: string): Promise<ProjectStorage> => 
   return res.json();
 };
 
+export const getStorageOrphans = async (): Promise<{ count: number; bytes: number }> => {
+  const res = await fetch('/api/storage/orphans', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const cleanupStorageOrphans = async (): Promise<{ deleted: number; bytesFreed: number }> => {
+  const res = await fetch('/api/storage/orphans/cleanup', { method: 'POST', headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
 // Human-readable byte size, e.g. 1536 -> "1.5 KB".
 export const formatBytes = (bytes: number): string => {
   if (!bytes || bytes < 0) return '0 B';

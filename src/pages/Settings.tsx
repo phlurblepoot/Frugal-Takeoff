@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff, HardDrive } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff, HardDrive, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow, getStorageStats, formatBytes, StorageStats } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans } from '../utils/store';
 import { EmailAccount, SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
@@ -1055,7 +1055,11 @@ const ChangelogTab: React.FC = () => (
 );
 
 const StorageTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [stats, setStats] = useState<StorageStats | null>(null);
+  const [orphans, setOrphans] = useState<{ count: number; bytes: number } | null>(null);
+  const [cleaning, setCleaning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1063,7 +1067,9 @@ const StorageTab: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      setStats(await getStorageStats());
+      const [s, o] = await Promise.all([getStorageStats(), getStorageOrphans().catch(() => null)]);
+      setStats(s);
+      setOrphans(o);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load storage usage');
     } finally {
@@ -1072,6 +1078,27 @@ const StorageTab: React.FC = () => {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleCleanup = async () => {
+    if (!orphans || orphans.count === 0) return;
+    const ok = await confirm({
+      title: 'Reclaim space',
+      message: `Permanently delete ${orphans.count} unreferenced file${orphans.count === 1 ? '' : 's'} (${formatBytes(orphans.bytes)})? This cannot be undone.`,
+      confirmLabel: 'Delete files',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setCleaning(true);
+    try {
+      const { deleted, bytesFreed } = await cleanupStorageOrphans();
+      toast(`Reclaimed ${formatBytes(bytesFreed)} from ${deleted} file${deleted === 1 ? '' : 's'}`, { type: 'success' });
+      await load();
+    } catch {
+      toast('Failed to reclaim space', { type: 'error' });
+    } finally {
+      setCleaning(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -1158,6 +1185,36 @@ const StorageTab: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {orphans && (
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Sparkles size={18} className="text-accent-600" /> Reclaim Space
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Unreferenced files left behind by failed uploads or deleted pages and plan-set revisions.</p>
+          </div>
+          <div className="p-6 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex-1">
+              {orphans.count === 0 ? (
+                <p className="text-sm text-slate-600 dark:text-slate-300">No orphaned files — storage is clean.</p>
+              ) : (
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  <span className="font-bold text-slate-900 dark:text-white">{orphans.count.toLocaleString()}</span> orphaned file{orphans.count === 1 ? '' : 's'} taking up <span className="font-bold text-slate-900 dark:text-white">{formatBytes(orphans.bytes)}</span>.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleCleanup}
+              disabled={orphans.count === 0 || cleaning}
+              className="shrink-0 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2"
+            >
+              {cleaning ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              {cleaning ? 'Reclaiming…' : 'Reclaim space'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 dark:border-slate-700">
