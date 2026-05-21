@@ -23,6 +23,7 @@ import { useCollaboration } from '../context/CollaborationContext';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useShareLink } from '../components/ShareLinkModal';
+import { Skeleton } from '../components/Skeleton';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -2977,22 +2978,49 @@ export const ProjectView: React.FC = () => {
 
   const handleSaveProjectName = async () => {
     if (!project || !editProjectName.trim()) return;
-    
+
+    // Optimistic: show the new name right away and close the editor; roll back
+    // to the previous name if the save fails.
+    const previous = project;
+    const updatedProject = { ...project, name: editProjectName.trim() };
+    setProject(updatedProject);
+    setIsEditingProjectName(false);
     try {
-      const updatedProject = { ...project, name: editProjectName.trim() };
       await saveProject(updatedProject);
-      setProject(updatedProject);
-      setIsEditingProjectName(false);
     } catch (error) {
       console.error('Failed to update project name:', error);
+      setProject(previous);
       toast('Failed to update project name. Please try again.', { type: 'error' });
     }
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex justify-center items-center">
-        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
+        <div className="max-w-7xl mx-auto space-y-6">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-9 w-2/3 max-w-md" />
+          <div className="flex flex-wrap gap-3">
+            <Skeleton className="h-7 w-24 rounded-full" />
+            <Skeleton className="h-7 w-24 rounded-full" />
+            <Skeleton className="h-7 w-28 rounded-full" />
+          </div>
+          <div className="flex flex-wrap gap-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-4 w-40" />
+          </div>
+          <div className="flex gap-6 border-b border-slate-200 dark:border-slate-700 pb-px">
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-[3/4] w-full rounded-xl" />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }

@@ -8,6 +8,7 @@ import { TemplatesView } from './TemplatesView';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { ProjectTableSkeleton, ProjectCardsSkeleton } from '../components/Skeleton';
 
 type SortField = 'name' | 'contractor' | 'bidDueDate' | 'createdAt' | 'pages' | 'takeoffs';
 type SortDirection = 'asc' | 'desc';
@@ -178,9 +179,18 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
 
   const confirmDelete = async () => {
     if (projectToDelete && deleteConfirmationText.toLowerCase() === 'delete') {
-      await deleteProject(projectToDelete.id);
+      const removed = projectToDelete;
+      // Optimistic: drop it from the list immediately, restore on failure.
+      setProjects(prev => prev.filter(p => p.id !== removed.id));
       setProjectToDelete(null);
-      loadData();
+      setDeleteConfirmationText('');
+      try {
+        await deleteProject(removed.id);
+        toast('Project deleted', { type: 'success' });
+      } catch {
+        setProjects(prev => [removed, ...prev]);
+        toast('Failed to delete project', { type: 'error' });
+      }
     }
   };
 
@@ -383,8 +393,9 @@ export const ProjectsList: React.FC<{ appName: string; logoUrl: string }> = ({ a
           >
           <>
             {isLoading ? (
-              <div className="flex justify-center py-12">
-                <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
+              <div className="space-y-4">
+                <ProjectTableSkeleton />
+                <ProjectCardsSkeleton />
               </div>
             ) : projects.length === 0 ? (
               <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
