@@ -215,9 +215,13 @@ async function buildHighlightsPdf(
   selectedTakeoffIds: Set<string>,
   _quality: HighlightQuality = 'standard',
   onProgress?: (msg: string) => void,
+  currentPageIds?: Set<string>,
 ): Promise<ArrayBuffer | null> {
+  // Only print the current revision of each sheet; superseded pages with
+  // leftover measurements are excluded so printouts match the takeoff totals.
   const pagesToPrint = project.pages.filter(page =>
-    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || '')) &&
+    (!currentPageIds || currentPageIds.has(page.id))
   );
   if (pagesToPrint.length === 0) return null;
 
@@ -1715,6 +1719,7 @@ export const ProjectView: React.FC = () => {
         selectedTakeoffIds,
         highlightQuality,
         (msg) => setProgressMessage(msg),
+        revisionModel.currentPageIds,
       );
 
       if (!pdfBuffer) {
@@ -2462,6 +2467,7 @@ export const ProjectView: React.FC = () => {
           selectedTakeoffIds,
           highlightQuality,
           (msg) => setProgressMessage(msg),
+          revisionModel.currentPageIds,
         );
         const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
 
