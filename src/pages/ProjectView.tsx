@@ -5,6 +5,7 @@ import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, Cu
 import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
+import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
 import { PageNamingStep } from '../components/PageNamingStep';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -2652,11 +2653,21 @@ export const ProjectView: React.FC = () => {
   };
 
 
-  // Calculate totals for takeoffs across all pages
+  // Shared plan-set revision model: which pages are the current revision for
+  // the selected set, full per-sheet history, and supersession status. Drives
+  // the pages grid, takeoff totals, revision badges, and the compare view.
+  const revisionModel = useMemo(
+    () => computeRevisionModel(project, selectedPlanSetId),
+    [project, selectedPlanSetId],
+  );
+
+  // Calculate totals for takeoffs. Only the current revision of each sheet (for
+  // the selected plan set) counts, so measurements stranded on superseded
+  // sheets don't inflate the totals.
   const getTakeoffTotals = () => {
     if (!project) return [];
 
-    const pagesToCalculate = project.pages;
+    const pagesToCalculate = project.pages.filter(p => revisionModel.currentPageIds.has(p.id));
 
     return project.takeoffs.map(takeoff => {
       let totalRealValue = 0;
@@ -2868,61 +2879,7 @@ export const ProjectView: React.FC = () => {
   // Pages that are visible at the current plan-set selection after
   // revision-dedup, *before* search filtering. Exposed separately so the
   // search-result badge can show "X of Y matches" (Y = visiblePages.length).
-  const visiblePages = useMemo(() => {
-    if (!project) return [];
-
-    let allowedPlanSets = project.planSets || [];
-
-    if (selectedPlanSetId) {
-      const selectedPlanSet = allowedPlanSets.find(ps => ps.id === selectedPlanSetId);
-      if (selectedPlanSet) {
-        allowedPlanSets = allowedPlanSets.filter(ps => {
-          if (!ps.date || !selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
-          if (ps.date === selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
-          return ps.date < selectedPlanSet.date;
-        });
-      }
-    }
-
-    const allowedPlanSetIds = new Set(allowedPlanSets.map(ps => ps.id));
-
-    const candidatePages = project.pages.filter(page =>
-      !page.planSetId || allowedPlanSetIds.has(page.planSetId)
-    );
-
-    // Revision dedup: when the SAME pageNumber appears in multiple plan
-    // sets, only the latest plan set's pages are shown. Within a single
-    // plan set we never collapse pages — automatic page-number detection
-    // (filename / OCR) can give multiple pages the same number on initial
-    // upload, and those are distinct pages, not revisions of each other.
-    const latestPlanSetByPageNumber = new Map<string, string | undefined>();
-    candidatePages.forEach(page => {
-      if (!page.pageNumber) return;
-      const numKey = page.pageNumber.trim().toLowerCase();
-      const currentLatest = latestPlanSetByPageNumber.get(numKey);
-      if (currentLatest === undefined) {
-        latestPlanSetByPageNumber.set(numKey, page.planSetId);
-        return;
-      }
-      if (currentLatest === page.planSetId) return;
-      const existingPlanSet = allowedPlanSets.find(ps => ps.id === currentLatest);
-      const currentPlanSet = allowedPlanSets.find(ps => ps.id === page.planSetId);
-      if (existingPlanSet && currentPlanSet) {
-        const isNewer = currentPlanSet.date && existingPlanSet.date
-          ? (currentPlanSet.date > existingPlanSet.date || (currentPlanSet.date === existingPlanSet.date && currentPlanSet.createdAt > existingPlanSet.createdAt))
-          : currentPlanSet.createdAt > existingPlanSet.createdAt;
-        if (isNewer) latestPlanSetByPageNumber.set(numKey, page.planSetId);
-      } else if (!existingPlanSet && currentPlanSet) {
-        latestPlanSetByPageNumber.set(numKey, page.planSetId);
-      }
-    });
-
-    return candidatePages.filter(page => {
-      if (!page.pageNumber) return true;
-      const numKey = page.pageNumber.trim().toLowerCase();
-      return latestPlanSetByPageNumber.get(numKey) === page.planSetId;
-    });
-  }, [project, selectedPlanSetId]);
+  const visiblePages = revisionModel.visiblePages;
 
   const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
