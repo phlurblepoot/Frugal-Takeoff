@@ -18,6 +18,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.1',
+    date: 'May 21, 2026',
+    changes: [
+      'Printouts: takeoff highlights and the legend are back on rotated sheets. After the move to the vector printout pipeline, any page with PDF rotation — the landscape sheets common to plan sets — came out as the bare page with no measurements or legend, because the overlay step skipped rotated pages. The overlay is now composed in each page\'s displayed orientation and mapped into its content space, so highlights, measurement labels, and the legend land correctly on rotated and unrotated pages alike.',
+    ],
+  },
+  {
     version: '1.2',
     date: 'May 18, 2026',
     changes: [
