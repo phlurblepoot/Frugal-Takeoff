@@ -8,6 +8,9 @@ import {
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { saveFile, getFile, createShare, getSettings, getChecklists, saveChecklist, deleteChecklist } from '../utils/store';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useShareLink } from '../components/ShareLinkModal';
 
 // ─── IDB helpers ─────────────────────────────────────────────────────────────
 // The legacy 'checklist-db' stored everything locally. New code uses the server.
@@ -522,6 +525,9 @@ const ItemCard: React.FC<ItemCardProps> = ({
 
 export const ChecklistEditor: React.FC = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const shareLink = useShareLink();
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -658,7 +664,7 @@ export const ChecklistEditor: React.FC = () => {
   };
 
   const handleDeleteList = async (id: string) => {
-    if (!confirm('Delete this checklist and all its items?')) return;
+    if (!await confirm({ title: 'Delete checklist', message: 'Delete this checklist and all its items?', confirmLabel: 'Delete', tone: 'danger' })) return;
     const list = checklists.find(c => c.id === id);
     // Photos are stored in /api/images under their photo IDs; leave them for now
     // (the images endpoint has no delete in the current server design)
@@ -1090,15 +1096,6 @@ export const ChecklistEditor: React.FC = () => {
     a.click();
   };
 
-  const copyShareUrl = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      alert(`Share link copied to clipboard:\n${url}`);
-    } catch {
-      window.prompt('Copy this share link (Ctrl+A, Ctrl+C):', url);
-    }
-  };
-
   const handleSharePrintout = async (po: ChecklistPrintout) => {
     try {
       let fileId = po.fileId;
@@ -1116,9 +1113,9 @@ export const ChecklistEditor: React.FC = () => {
       const id = await createShare('printout', fileId, po.name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      await copyShareUrl(`${host}/share/${id}`);
+      shareLink(`${host}/share/${id}`, po.name);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 

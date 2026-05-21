@@ -1,10 +1,14 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, formatMeasurement, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100, expandArcPoints } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
+import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
+import { PlanSetManager } from '../components/PlanSetManager';
+import { PlanSetRevisions } from '../components/PlanSetRevisions';
+import { PlanSetCompare } from '../components/PlanSetCompare';
 import { PageNamingStep } from '../components/PageNamingStep';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -20,6 +24,10 @@ import { UploadFailuresModal, UploadFailure } from '../components/UploadFailures
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
 import { useCollaboration } from '../context/CollaborationContext';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useShareLink } from '../components/ShareLinkModal';
+import { Skeleton } from '../components/Skeleton';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -207,13 +215,17 @@ async function buildHighlightsPdf(
   selectedTakeoffIds: Set<string>,
   _quality: HighlightQuality = 'standard',
   onProgress?: (msg: string) => void,
+  currentPageIds?: Set<string>,
 ): Promise<ArrayBuffer | null> {
+  // Only print the current revision of each sheet; superseded pages with
+  // leftover measurements are excluded so printouts match the takeoff totals.
   const pagesToPrint = project.pages.filter(page =>
-    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || ''))
+    page.measurements.some(m => selectedTakeoffIds.has(m.takeoffId || '')) &&
+    (!currentPageIds || currentPageIds.has(page.id))
   );
   if (pagesToPrint.length === 0) return null;
 
-  const { PDFDocument, StandardFonts, rgb, degrees } = await import('pdf-lib');
+  const { PDFDocument, StandardFonts, rgb, degrees, pushGraphicsState, popGraphicsState, concatTransformationMatrix } = await import('pdf-lib');
 
   const outDoc = await PDFDocument.create();
   const font = await outDoc.embedFont(StandardFonts.Helvetica);
@@ -295,21 +307,33 @@ async function buildHighlightsPdf(
       }
     }
 
-    if (rotation !== 0) {
-      // Vector overlay isn't rotation-aware yet. Skip overlay on rotated pages
-      // rather than putting marks in the wrong place. The underlying page still
-      // appears in the output PDF correctly.
-      console.warn(`Page "${page.name}" has /Rotate=${rotation}° — measurement overlay skipped on this page.`);
-      continue;
+    // Measurements are captured on the *displayed* page — pdf.js rasterizes the
+    // canvas via getViewport({ scale: 2.0 }), which honours /Rotate, so the
+    // coords live in the rotated, viewer-facing image space. The page we copied,
+    // however, exposes its *unrotated* content box (getWidth/getHeight ignore
+    // /Rotate). So we compose the overlay in displayed space and concat a
+    // transform matrix that maps it into the page's unrotated content space;
+    // the viewer's /Rotate then renders both the page and our marks together.
+    const rot = ((rotation % 360) + 360) % 360;
+    const swapsAxes = rot === 90 || rot === 270;
+    const dispH = swapsAxes ? pageWidth : pageHeight; // displayed (viewer) height in PDF points
+
+    // Maps a displayed-space point (Y-up) to unrotated content space.
+    let rotationMatrix: [number, number, number, number, number, number] | null = null;
+    if (rot === 90) rotationMatrix = [0, 1, -1, 0, pageWidth, 0];
+    else if (rot === 180) rotationMatrix = [-1, 0, 0, -1, pageWidth, pageHeight];
+    else if (rot === 270) rotationMatrix = [0, -1, 1, 0, 0, pageHeight];
+    if (rotationMatrix) {
+      outPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(...rotationMatrix));
     }
 
     // ── Vector overlay: measurements ────────────────────────────────────────
     // SVG path origin is top-left with Y-down (pdf-lib flips to PDF Y-up when
-    // drawn at y=pageHeight). All measurement coords are scaled into PDF
-    // points first so the drawSvgPath origin maps cleanly.
+    // drawn at y=dispH). All measurement coords are scaled into PDF points
+    // first so the drawSvgPath origin maps cleanly.
     const sf = scaleFactor;
     const pdfX = (mx: number) => mx * sf;
-    const pdfY = (my: number) => pageHeight - my * sf; // for non-SVG primitives (Y-up)
+    const pdfY = (my: number) => dispH - my * sf; // for non-SVG primitives (Y-up)
 
     for (const m of page.measurements) {
       if (!selectedTakeoffIds.has(m.takeoffId || '')) continue;
@@ -358,7 +382,7 @@ async function buildHighlightsPdf(
         if (m.type === 'area') cmds.push('Z');
         const path = cmds.join(' ');
         outPage.drawSvgPath(path, {
-          x: 0, y: pageHeight,
+          x: 0, y: dispH,
           borderColor: rgb(c.r, c.g, c.b),
           borderWidth: stroke,
           color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
@@ -526,6 +550,11 @@ async function buildHighlightsPdf(
         void degrees;
       }
     }
+
+    // Balance the graphics-state push from the rotation transform above.
+    if (rotationMatrix) {
+      outPage.pushOperators(popGraphicsState());
+    }
   }
 
   const out = await outDoc.save();
@@ -575,6 +604,9 @@ const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term 
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
   const { setPageName } = useCollaboration();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const shareLink = useShareLink();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -591,6 +623,7 @@ export const ProjectView: React.FC = () => {
   const [sendingProposal, setSendingProposal] = useState(false);
   const [expandedThreadKeys, setExpandedThreadKeys] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
+  const [projectStorage, setProjectStorage] = useState<ProjectStorage | null>(null);
   const [projectNote, setProjectNote] = useState<ProjectNote | null>(null);
   const [showTakeoffModal, setShowTakeoffModal] = useState(false);
   const [templates, setTemplates] = useState<TakeoffTemplate[]>([]);
@@ -790,6 +823,9 @@ export const ProjectView: React.FC = () => {
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
   const [useExistingPlanSet, setUseExistingPlanSet] = useState(false);
   const [targetPlanSetId, setTargetPlanSetId] = useState('');
+  const [showManagePlanSets, setShowManagePlanSets] = useState(false);
+  const [showRevisionsForPageId, setShowRevisionsForPageId] = useState<string | null>(null);
+  const [comparePageId, setComparePageId] = useState<string | null>(null);
 
   // Upload-failures modal state (mirrors NewProject.tsx) — keeps source File
   // objects so the user can retry missing pages from the existing flow.
@@ -828,6 +864,87 @@ export const ProjectView: React.FC = () => {
     setNewPlanSetFiles(newPlanSetFiles.filter((_, index) => index !== indexToRemove));
   };
 
+  // Rename / re-date a plan set in place. Optimistic with rollback.
+  const handleUpdatePlanSet = async (id: string, patch: { name?: string; date?: string }) => {
+    if (!project) return;
+    const previous = project;
+    const updated = {
+      ...project,
+      planSets: (project.planSets || []).map(ps => ps.id === id ? { ...ps, ...patch } : ps),
+    };
+    setProject(updated);
+    try {
+      await saveProject(updated);
+    } catch {
+      setProject(previous);
+      toast('Failed to update plan set', { type: 'error' });
+    }
+  };
+
+  // Delete a plan set and every page that belongs to it. Destructive, so it's
+  // gated behind a confirm. Measurements on those pages go with them.
+  const handleDeletePlanSet = async (id: string) => {
+    if (!project) return;
+    const set = (project.planSets || []).find(ps => ps.id === id);
+    const pageCount = project.pages.filter(p => p.planSetId === id).length;
+    if (!await confirm({
+      title: 'Delete plan set',
+      message: `Delete "${set?.name || 'this plan set'}" and its ${pageCount} page${pageCount === 1 ? '' : 's'} (including any measurements on them)? This cannot be undone.`,
+      confirmLabel: 'Delete plan set',
+      tone: 'danger',
+    })) return;
+    const previous = project;
+    const updated = {
+      ...project,
+      planSets: (project.planSets || []).filter(ps => ps.id !== id),
+      pages: project.pages.filter(p => p.planSetId !== id),
+    };
+    setProject(updated);
+    if (selectedPlanSetId === id) setSelectedPlanSetId('');
+    try {
+      await saveProject(updated);
+      toast('Plan set deleted', { type: 'success' });
+    } catch {
+      setProject(previous);
+      toast('Failed to delete plan set', { type: 'error' });
+    }
+  };
+
+  // Copy the previous revision's measurements + scale onto a sheet's current
+  // revision so takeoffs don't have to be redrawn after a reissue.
+  const handleCopyMeasurementsForward = async (targetPageId: string): Promise<number> => {
+    if (!project) return 0;
+    const target = project.pages.find(p => p.id === targetPageId);
+    const key = target ? sheetKey(target) : null;
+    if (!target || !key) return 0;
+    const revs = revisionModel.revisionsBySheet.get(key) || [];
+    const idx = revs.findIndex(p => p.id === targetPageId);
+    const source = idx > 0 ? revs[idx - 1] : undefined;
+    if (!source || source.measurements.length === 0) return 0;
+    const copied = source.measurements.map(m => ({
+      ...m,
+      id: uuidv4(),
+      planSetId: target.planSetId,
+      segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
+    }));
+    const previous = project;
+    const updated = {
+      ...project,
+      pages: project.pages.map(p => p.id === targetPageId
+        ? { ...p, measurements: [...p.measurements, ...copied], scaleConfig: p.scaleConfig || source.scaleConfig, scaleRegions: p.scaleRegions || source.scaleRegions, isMultiRegion: p.isMultiRegion ?? source.isMultiRegion }
+        : p),
+    };
+    setProject(updated);
+    try {
+      await saveProject(updated);
+      return copied.length;
+    } catch {
+      setProject(previous);
+      toast('Failed to copy measurements', { type: 'error' });
+      return 0;
+    }
+  };
+
   useEffect(() => {
     if (projectId) {
       loadProject(projectId);
@@ -854,6 +971,18 @@ export const ProjectView: React.FC = () => {
       setActiveTab(location.state.activeTab);
     }
   }, [location.state]);
+
+  // Per-project storage usage. Recomputed when the page/printout count changes
+  // (uploads and deletes are what actually move the number), since that's what
+  // the server attributes a project's image bytes from.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    getProjectStorage(projectId)
+      .then(s => { if (!cancelled) setProjectStorage(s); })
+      .catch(() => { if (!cancelled) setProjectStorage(null); });
+    return () => { cancelled = true; };
+  }, [projectId, project?.pages?.length, project?.printouts?.length]);
 
   // Backfill the search text cache from each page's source PDF. Vector pages
   // uploaded under earlier code paths may have OCR-derived extractedText
@@ -972,11 +1101,12 @@ export const ProjectView: React.FC = () => {
       return;
     }
     setProject(data);
-    
+    recordRecentProject(data.id, data.name);
+
     if (data.planSets && data.planSets.length > 0) {
       setSelectedPlanSetId('');
     }
-    
+
     setIsLoading(false);
   };
 
@@ -1093,7 +1223,7 @@ export const ProjectView: React.FC = () => {
     e.stopPropagation();
     
     if (activePages.includes(page.id)) {
-      alert("This page is currently being viewed by another user and cannot be renamed.");
+      toast('This page is currently being viewed by another user and cannot be renamed.', { type: 'warning' });
       return;
     }
     
@@ -1355,7 +1485,7 @@ export const ProjectView: React.FC = () => {
       setAddPagesStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
-      alert('Failed to process PDF. Please try another file.');
+      toast('Failed to process PDF. Please try another file.', { type: 'error' });
     } finally {
       setIsAddingPages(false);
       setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
@@ -1576,7 +1706,7 @@ export const ProjectView: React.FC = () => {
       }
     } catch (err) {
       console.error('Retry failed', err);
-      alert(`Retry failed: ${(err as any)?.message || err}`);
+      toast(`Retry failed: ${(err as any)?.message || err}`, { type: 'error' });
     } finally {
       setIsRetryingUpload(false);
       setRetryProgress({ status: '', current: 0, total: 0, fileName: '' });
@@ -1606,10 +1736,11 @@ export const ProjectView: React.FC = () => {
         selectedTakeoffIds,
         highlightQuality,
         (msg) => setProgressMessage(msg),
+        revisionModel.currentPageIds,
       );
 
       if (!pdfBuffer) {
-        alert('No pages found with the selected takeoffs.');
+        toast('No pages found with the selected takeoffs.', { type: 'warning' });
         setIsPrinting(false);
         setProgressMessage('');
         return;
@@ -1646,7 +1777,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Failed to generate PDF.');
+      toast('Failed to generate PDF.', { type: 'error' });
       setIsPrinting(false);
       setProgressMessage('');
     }
@@ -1871,7 +2002,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating Excel:', error);
-      alert('Failed to generate Excel.');
+      toast('Failed to generate Excel.', { type: 'error' });
       setIsExportingExcel(false);
     }
   };
@@ -2353,6 +2484,7 @@ export const ProjectView: React.FC = () => {
           selectedTakeoffIds,
           highlightQuality,
           (msg) => setProgressMessage(msg),
+          revisionModel.currentPageIds,
         );
         const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
 
@@ -2405,7 +2537,7 @@ export const ProjectView: React.FC = () => {
       };
     } catch (error) {
       console.error('Error generating proposal:', error);
-      alert('Failed to generate proposal PDF.');
+      toast('Failed to generate proposal PDF.', { type: 'error' });
       setIsGeneratingProposal(false);
       setProgressMessage('');
     }
@@ -2480,48 +2612,41 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const copyShareUrl = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      alert(`Share link copied to clipboard:\n${url}`);
-    } catch {
-      // Clipboard API not available (non-HTTPS/non-localhost) — show the URL directly
-      window.prompt('Copy this share link (Ctrl+A, Ctrl+C):', url);
-    }
-  };
+  // Pops the share modal (copy button + QR code) for a freshly created link.
+  const showShareUrl = (url: string, title?: string) => shareLink(url, title);
 
   const handleSharePrintout = async (printout: Printout) => {
     try {
       const id = await createShare('printout', printout.fileId, printout.name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, printout.name);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
   const handleSharePage = async (page: { imageId: string; name?: string; description?: string }) => {
     try {
-      const id = await createShare('page', page.imageId, page.name || page.description || 'Page');
+      const name = page.name || page.description || 'Page';
+      const id = await createShare('page', page.imageId, name);
       const settings = await getSettings();
       const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, name);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
-  // Permanently removes a page from the project. Confirmation is via the
-  // browser's native confirm dialog — a single irreversible action doesn't
-  // warrant a full modal, and the wording makes the consequences clear.
-  // Orphaned image rows are intentionally left in storage; cleanup would
-  // need to verify no other page (across plan-set revisions) references
-  // the same imageId / thumbnailId / sourcePdfFileId.
+  // Permanently removes a page from the project.
+  // Orphaned image rows are intentionally left in storage; cleanup is handled
+  // separately by the admin storage-reclaim tool, which verifies no other page
+  // (across plan-set revisions) references the same imageId / thumbnailId /
+  // sourcePdfFileId before deleting.
   const handleDeletePage = async (page: { id: string; name?: string; pageNumber?: string }) => {
     if (!project) return;
     const label = page.pageNumber || page.name || 'this page';
-    if (!window.confirm(`Delete ${label}? Any measurements on it will be lost.`)) return;
+    if (!await confirm({ title: 'Delete page', message: `Delete ${label}? Any measurements on it will be lost.`, confirmLabel: 'Delete', tone: 'danger' })) return;
     const updated = { ...project, pages: project.pages.filter(p => p.id !== page.id) };
     await saveProject(updated);
     setProject(updated);
@@ -2545,7 +2670,7 @@ export const ProjectView: React.FC = () => {
         const pg = project.pages.find(p => p.id === pid);
         if (!pg) return;
         const id = await createShare('page', pg.imageId, pg.name || 'Page');
-        await copyShareUrl(`${host}/share/${id}`);
+        showShareUrl(`${host}/share/${id}`, pg.name || 'Page');
         return;
       }
 
@@ -2559,9 +2684,9 @@ export const ProjectView: React.FC = () => {
       // Deduplicate by sorted imageId list so the same selection reuses the existing share
       const resourceId = JSON.stringify(payload);
       const id = await createShare('pages', resourceId, project.name);
-      await copyShareUrl(`${host}/share/${id}`);
+      showShareUrl(`${host}/share/${id}`, `${selectedPageIds.size} pages`);
     } catch {
-      alert('Failed to create share link');
+      toast('Failed to create share link', { type: 'error' });
     }
   };
 
@@ -2611,15 +2736,18 @@ export const ProjectView: React.FC = () => {
 
       await saveProject(updatedProject);
       setProject(updatedProject);
-      
-      if (!isNamingExistingPages) {
+
+      const wasNewSet = !isNamingExistingPages;
+      const addedPageIds = pendingPages.map(p => p.id);
+
+      if (wasNewSet) {
         // Find the planSetId from the first pending page
         const planSetId = updatedProject.pages.find(p => p.id === pendingPages[0]?.id)?.planSetId;
         if (planSetId) {
           setSelectedPlanSetId(planSetId);
         }
       }
-      
+
       setShowAddPagesModal(false);
       setAddPagesStep('details');
       setIsNamingExistingPages(false);
@@ -2629,20 +2757,98 @@ export const ProjectView: React.FC = () => {
       setPendingThumbnails({});
       setUseExistingPlanSet(false);
       setTargetPlanSetId('');
+      setIsAddingPages(false);
+
+      // If any newly added sheet is a reissue of a sheet that already had
+      // measurements, offer to carry those measurements (and scale) forward so
+      // the takeoffs don't have to be redrawn.
+      if (wasNewSet) {
+        await maybeOfferCarryForward(updatedProject, addedPageIds);
+      }
     } catch (error) {
       console.error('Error adding pages:', error);
-      alert('Failed to add pages.');
-    } finally {
+      toast('Failed to add pages.', { type: 'error' });
       setIsAddingPages(false);
     }
   };
 
+  // Detects reissued sheets among the just-added pages and, with the user's
+  // confirmation, copies the previous revision's measurements + scale onto
+  // them in a single batched update.
+  const maybeOfferCarryForward = async (proj: Project, addedPageIds: string[]) => {
+    const model = computeRevisionModel(proj, '');
+    const added = new Set(addedPageIds);
+    const candidates: { targetId: string; source: ProjectPage }[] = [];
+    for (const pageId of addedPageIds) {
+      const target = proj.pages.find(p => p.id === pageId);
+      const key = target ? sheetKey(target) : null;
+      if (!target || !key || target.measurements.length > 0) continue;
+      const revs = model.revisionsBySheet.get(key) || [];
+      const idx = revs.findIndex(p => p.id === pageId);
+      // Walk back to the most recent earlier revision that actually has work on it.
+      let source: ProjectPage | undefined;
+      for (let j = idx - 1; j >= 0; j--) {
+        if (!added.has(revs[j].id) && revs[j].measurements.length > 0) { source = revs[j]; break; }
+      }
+      if (source) candidates.push({ targetId: pageId, source });
+    }
+    if (candidates.length === 0) return;
 
-  // Calculate totals for takeoffs across all pages
+    const totalM = candidates.reduce((a, c) => a + c.source.measurements.length, 0);
+    const ok = await confirm({
+      title: 'Carry over measurements?',
+      message: `${candidates.length} reissued sheet${candidates.length === 1 ? '' : 's'} had measurements on the previous revision. Copy ${totalM} measurement${totalM === 1 ? '' : 's'} (and scale calibration) onto the new revision${candidates.length === 1 ? '' : 's'}? You can adjust them afterward.`,
+      confirmLabel: 'Copy measurements',
+    });
+    if (!ok) return;
+
+    const carried = {
+      ...proj,
+      pages: proj.pages.map(p => {
+        const c = candidates.find(x => x.targetId === p.id);
+        if (!c) return p;
+        const copied = c.source.measurements.map(m => ({
+          ...m,
+          id: uuidv4(),
+          planSetId: p.planSetId,
+          segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
+        }));
+        return {
+          ...p,
+          measurements: [...p.measurements, ...copied],
+          scaleConfig: p.scaleConfig || c.source.scaleConfig,
+          scaleRegions: p.scaleRegions || c.source.scaleRegions,
+          isMultiRegion: p.isMultiRegion ?? c.source.isMultiRegion,
+        };
+      }),
+    };
+    const previous = proj;
+    setProject(carried);
+    try {
+      await saveProject(carried);
+      toast(`Copied ${totalM} measurement${totalM === 1 ? '' : 's'} onto ${candidates.length} sheet${candidates.length === 1 ? '' : 's'}`, { type: 'success' });
+    } catch {
+      setProject(previous);
+      toast('Failed to copy measurements forward', { type: 'error' });
+    }
+  };
+
+
+  // Shared plan-set revision model: which pages are the current revision for
+  // the selected set, full per-sheet history, and supersession status. Drives
+  // the pages grid, takeoff totals, revision badges, and the compare view.
+  const revisionModel = useMemo(
+    () => computeRevisionModel(project, selectedPlanSetId),
+    [project, selectedPlanSetId],
+  );
+
+  // Calculate totals for takeoffs. Only the current revision of each sheet (for
+  // the selected plan set) counts, so measurements stranded on superseded
+  // sheets don't inflate the totals.
   const getTakeoffTotals = () => {
     if (!project) return [];
 
-    const pagesToCalculate = project.pages;
+    const pagesToCalculate = project.pages.filter(p => revisionModel.currentPageIds.has(p.id));
 
     return project.takeoffs.map(takeoff => {
       let totalRealValue = 0;
@@ -2854,61 +3060,7 @@ export const ProjectView: React.FC = () => {
   // Pages that are visible at the current plan-set selection after
   // revision-dedup, *before* search filtering. Exposed separately so the
   // search-result badge can show "X of Y matches" (Y = visiblePages.length).
-  const visiblePages = useMemo(() => {
-    if (!project) return [];
-
-    let allowedPlanSets = project.planSets || [];
-
-    if (selectedPlanSetId) {
-      const selectedPlanSet = allowedPlanSets.find(ps => ps.id === selectedPlanSetId);
-      if (selectedPlanSet) {
-        allowedPlanSets = allowedPlanSets.filter(ps => {
-          if (!ps.date || !selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
-          if (ps.date === selectedPlanSet.date) return ps.createdAt <= selectedPlanSet.createdAt;
-          return ps.date < selectedPlanSet.date;
-        });
-      }
-    }
-
-    const allowedPlanSetIds = new Set(allowedPlanSets.map(ps => ps.id));
-
-    const candidatePages = project.pages.filter(page =>
-      !page.planSetId || allowedPlanSetIds.has(page.planSetId)
-    );
-
-    // Revision dedup: when the SAME pageNumber appears in multiple plan
-    // sets, only the latest plan set's pages are shown. Within a single
-    // plan set we never collapse pages — automatic page-number detection
-    // (filename / OCR) can give multiple pages the same number on initial
-    // upload, and those are distinct pages, not revisions of each other.
-    const latestPlanSetByPageNumber = new Map<string, string | undefined>();
-    candidatePages.forEach(page => {
-      if (!page.pageNumber) return;
-      const numKey = page.pageNumber.trim().toLowerCase();
-      const currentLatest = latestPlanSetByPageNumber.get(numKey);
-      if (currentLatest === undefined) {
-        latestPlanSetByPageNumber.set(numKey, page.planSetId);
-        return;
-      }
-      if (currentLatest === page.planSetId) return;
-      const existingPlanSet = allowedPlanSets.find(ps => ps.id === currentLatest);
-      const currentPlanSet = allowedPlanSets.find(ps => ps.id === page.planSetId);
-      if (existingPlanSet && currentPlanSet) {
-        const isNewer = currentPlanSet.date && existingPlanSet.date
-          ? (currentPlanSet.date > existingPlanSet.date || (currentPlanSet.date === existingPlanSet.date && currentPlanSet.createdAt > existingPlanSet.createdAt))
-          : currentPlanSet.createdAt > existingPlanSet.createdAt;
-        if (isNewer) latestPlanSetByPageNumber.set(numKey, page.planSetId);
-      } else if (!existingPlanSet && currentPlanSet) {
-        latestPlanSetByPageNumber.set(numKey, page.planSetId);
-      }
-    });
-
-    return candidatePages.filter(page => {
-      if (!page.pageNumber) return true;
-      const numKey = page.pageNumber.trim().toLowerCase();
-      return latestPlanSetByPageNumber.get(numKey) === page.planSetId;
-    });
-  }, [project, selectedPlanSetId]);
+  const visiblePages = revisionModel.visiblePages;
 
   const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
@@ -2965,22 +3117,49 @@ export const ProjectView: React.FC = () => {
 
   const handleSaveProjectName = async () => {
     if (!project || !editProjectName.trim()) return;
-    
+
+    // Optimistic: show the new name right away and close the editor; roll back
+    // to the previous name if the save fails.
+    const previous = project;
+    const updatedProject = { ...project, name: editProjectName.trim() };
+    setProject(updatedProject);
+    setIsEditingProjectName(false);
     try {
-      const updatedProject = { ...project, name: editProjectName.trim() };
       await saveProject(updatedProject);
-      setProject(updatedProject);
-      setIsEditingProjectName(false);
     } catch (error) {
       console.error('Failed to update project name:', error);
-      alert('Failed to update project name. Please try again.');
+      setProject(previous);
+      toast('Failed to update project name. Please try again.', { type: 'error' });
     }
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex justify-center items-center">
-        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
+        <div className="max-w-7xl mx-auto space-y-6">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-9 w-2/3 max-w-md" />
+          <div className="flex flex-wrap gap-3">
+            <Skeleton className="h-7 w-24 rounded-full" />
+            <Skeleton className="h-7 w-24 rounded-full" />
+            <Skeleton className="h-7 w-28 rounded-full" />
+          </div>
+          <div className="flex flex-wrap gap-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-4 w-40" />
+          </div>
+          <div className="flex gap-6 border-b border-slate-200 dark:border-slate-700 pb-px">
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-[3/4] w-full rounded-xl" />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -3035,12 +3214,14 @@ export const ProjectView: React.FC = () => {
                 />
                 <button
                   onClick={handleSaveProjectName}
+                  aria-label="Save project name"
                   className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                 >
                   <Check size={20} />
                 </button>
                 <button
                   onClick={() => setIsEditingProjectName(false)}
+                  aria-label="Cancel"
                   className="p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
                 >
                   <X size={20} />
@@ -3056,6 +3237,7 @@ export const ProjectView: React.FC = () => {
                   }}
                   className="p-1.5 text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-accent-50"
                   title="Edit project name"
+                  aria-label="Edit project name"
                 >
                   <Edit2 size={18} />
                 </button>
@@ -3207,7 +3389,7 @@ export const ProjectView: React.FC = () => {
                     <span className={`${getDueDateColor()} truncate`}>
                       Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
                     </span>
-                    <button 
+                    <button
                       onClick={() => {
                         setEditDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
                         setIsEditingDueDate(true);
@@ -3219,23 +3401,52 @@ export const ProjectView: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {projectStorage && (
+                <div
+                  className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0"
+                  title={`${formatBytes(projectStorage.imageBytes)} in ${projectStorage.imageCount} file${projectStorage.imageCount === 1 ? '' : 's'}, ${formatBytes(projectStorage.dataBytes)} project data, ${formatBytes(projectStorage.noteBytes)} notes`}
+                >
+                  <HardDrive size={14} className="text-slate-400 flex-shrink-0" />
+                  <span className="truncate">{formatBytes(projectStorage.totalBytes)} stored</span>
+                </div>
+              )}
             </div>
           </div>
           {project.planSets && project.planSets.length > 0 && (
-            <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto mt-2 md:mt-0">
-              <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
-              <select
-                value={selectedPlanSetId}
-                onChange={(e) => setSelectedPlanSetId(e.target.value)}
-                className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full"
-              >
-                <option value="">All Plan Sets</option>
-                {project.planSets.map(ps => (
-                  <option key={ps.id} value={ps.id}>
-                    {ps.name} {ps.date ? `(${ps.date})` : ''}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-col items-stretch md:items-end gap-1.5 w-full md:w-auto mt-2 md:mt-0">
+              <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto">
+                <Layers size={15} className="text-accent-600 shrink-0" />
+                <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
+                <select
+                  value={selectedPlanSetId}
+                  onChange={(e) => setSelectedPlanSetId(e.target.value)}
+                  className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full md:min-w-[160px]"
+                >
+                  <option value="">Current (all sets)</option>
+                  {orderedPlanSets(project).slice().reverse().map(ps => (
+                    <option key={ps.id} value={ps.id}>
+                      {ps.name}{ps.date ? ` · ${ps.date}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setShowManagePlanSets(true)}
+                  aria-label="Manage plan sets"
+                  title="Manage plan sets"
+                  className="shrink-0 p-1 rounded-md text-slate-400 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Settings size={15} />
+                </button>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500 px-1">
+                {selectedPlanSetId ? (() => {
+                  const s = summarizePlanSet(project, selectedPlanSetId);
+                  return <span>Viewing as of this set · {s.newCount} new, {s.revisedCount} revised{s.total ? ` (${s.total} sheets reissued)` : ''}</span>;
+                })() : (
+                  <span>Showing the latest revision of each sheet · {visiblePages.length} sheet{visiblePages.length === 1 ? '' : 's'}</span>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -3488,6 +3699,15 @@ export const ProjectView: React.FC = () => {
                         >
                           {isPageSelected && <Check size={12} className="text-white" />}
                         </button>
+                        {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                            title="View revision history"
+                            className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                          >
+                            Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                          </button>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0 p-3 flex flex-col justify-center gap-1">
                         {isEditing ? (
@@ -3643,6 +3863,15 @@ export const ProjectView: React.FC = () => {
                           className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
                         />
                       </button>
+                      {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                          title="View revision history"
+                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                        >
+                          Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                        </button>
+                      )}
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
                       <div>
@@ -3767,6 +3996,37 @@ export const ProjectView: React.FC = () => {
                   >
                     <Edit2 size={14} /> Rename
                   </button>
+                  {(() => {
+                    const key = sheetKey(ctxPage);
+                    const revs = key ? (revisionModel.revisionsBySheet.get(key) || []) : [];
+                    if (revs.length < 2) return null;
+                    const idx = revs.findIndex(p => p.id === ctxPage.id);
+                    const hasPrior = idx > 0 && revs[idx - 1].measurements.length > 0;
+                    return (
+                      <>
+                        <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                        <button
+                          onClick={() => { setPageContextMenu(null); setShowRevisionsForPageId(ctxPage.id); }}
+                          className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                        >
+                          <History size={14} /> Revision history
+                        </button>
+                        {hasPrior && (
+                          <button
+                            onClick={async () => {
+                              setPageContextMenu(null);
+                              const n = await handleCopyMeasurementsForward(ctxPage.id);
+                              if (n > 0) toast(`Copied ${n} measurement${n === 1 ? '' : 's'} from the previous revision`, { type: 'success' });
+                              else if (n === 0) toast('No measurements to copy from the previous revision', { type: 'info' });
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                          >
+                            <Copy size={14} /> Copy measurements from previous revision
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                   <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
                   <button
                     onClick={() => { setPageContextMenu(null); handleDeletePage(ctxPage); }}
@@ -4591,7 +4851,7 @@ export const ProjectView: React.FC = () => {
                     setSendProposalFileId('');
                     setSendProposalMessage('');
                   } catch (e: any) {
-                    alert('Failed to send: ' + (e.message || 'Unknown error'));
+                    toast('Failed to send: ' + (e.message || 'Unknown error'), { type: 'error' });
                   } finally {
                     setSendingProposal(false);
                   }
@@ -4883,6 +5143,36 @@ export const ProjectView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {showManagePlanSets && project && (
+        <PlanSetManager
+          project={project}
+          selectedPlanSetId={selectedPlanSetId}
+          onClose={() => setShowManagePlanSets(false)}
+          onSelect={setSelectedPlanSetId}
+          onUpdate={handleUpdatePlanSet}
+          onDelete={handleDeletePlanSet}
+          onAddNew={() => { setShowManagePlanSets(false); setShowAddPagesModal(true); }}
+        />
+      )}
+
+      {showRevisionsForPageId && project && (
+        <PlanSetRevisions
+          project={project}
+          pageId={showRevisionsForPageId}
+          onClose={() => setShowRevisionsForPageId(null)}
+          onOpenPage={(pid) => { setShowRevisionsForPageId(null); navigate(`/project/${project.id}/page/${pid}`); }}
+          onCompare={() => { setComparePageId(showRevisionsForPageId); setShowRevisionsForPageId(null); }}
+        />
+      )}
+
+      {comparePageId && project && (
+        <PlanSetCompare
+          project={project}
+          pageId={comparePageId}
+          onClose={() => setComparePageId(null)}
+        />
       )}
 
       {showAddPagesModal && (

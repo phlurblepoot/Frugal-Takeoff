@@ -23,6 +23,56 @@ const DB_FILE = path.join(DATA_DIR, "app.db");
 
 let db: Database.Database;
 
+// Every file a project owns lives in the images table, keyed by an id that the
+// project JSON points at. Walk those references so storage usage can attribute
+// image bytes back to the project that uses them.
+function collectProjectImageIds(project: any): string[] {
+  const ids = new Set<string>();
+  const add = (v: any) => { if (typeof v === 'string' && v) ids.add(v); };
+  for (const p of project?.pages || []) {
+    add(p.imageId);
+    add(p.thumbnailId);
+    add(p.sourcePdfFileId);
+  }
+  for (const p of project?.printouts || []) add(p.fileId);
+  add(project?.proposalFileId);
+  const emails = [...(project?.email ? [project.email] : []), ...(project?.emails || [])];
+  for (const e of emails) for (const aid of e?.attachmentIds || []) add(aid);
+  return [...ids];
+}
+
+// Conservative reference collector for orphan detection: walks every JSON blob
+// (projects, bids, checklists, notes) and records every string value, plus any
+// id embedded in an /api/images/:id or /api/files/:id URL. An image is only an
+// orphan if its id appears in none of these, so in-use files are never flagged.
+function collectAllReferencedImageIds(): Set<string> {
+  const referenced = new Set<string>();
+  const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
+  const addString = (s: string) => {
+    referenced.add(s);
+    let m: RegExpExecArray | null;
+    urlRe.lastIndex = 0;
+    while ((m = urlRe.exec(s)) !== null) {
+      try { referenced.add(decodeURIComponent(m[1])); } catch { referenced.add(m[1]); }
+    }
+  };
+  const walk = (v: any) => {
+    if (v == null) return;
+    if (typeof v === 'string') { addString(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
+  };
+  for (const table of ['projects', 'bids', 'checklists', 'notes']) {
+    let rows: { data: string }[] = [];
+    try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
+    for (const r of rows) {
+      if (!r.data) continue;
+      try { walk(JSON.parse(r.data)); } catch { addString(r.data); }
+    }
+  }
+  return referenced;
+}
+
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 }
@@ -494,6 +544,46 @@ async function startServer() {
     }
   });
 
+  app.get("/api/projects/:id/storage", authenticateToken, (req, res) => {
+    try {
+      const row = db.prepare('SELECT data FROM projects WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+      if (!row) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      let project: any = {};
+      try { project = JSON.parse(row.data); } catch { /* ignore */ }
+
+      const dataBytes = Buffer.byteLength(row.data, 'utf8');
+
+      const ids = collectProjectImageIds(project);
+      let imageBytes = 0;
+      let imageCount = 0;
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(', ');
+        const r = db.prepare(
+          `SELECT COUNT(*) as count, COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM images WHERE id IN (${placeholders})`
+        ).get(...ids) as { count: number; bytes: number };
+        imageBytes = r.bytes;
+        imageCount = r.count;
+      }
+
+      const noteRow = db.prepare(
+        'SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM notes WHERE projectId = ?'
+      ).get(req.params.id) as { bytes: number };
+
+      res.json({
+        totalBytes: dataBytes + imageBytes + noteRow.bytes,
+        dataBytes,
+        imageBytes,
+        noteBytes: noteRow.bytes,
+        imageCount,
+      });
+    } catch (error) {
+      console.error("Error computing project storage:", error);
+      res.status(500).json({ error: "Failed to compute project storage" });
+    }
+  });
+
   app.get("/api/images/:id", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
@@ -719,6 +809,171 @@ async function startServer() {
     } catch (error) {
       console.error("Error saving settings:", error);
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // Storage usage — admin-only overview of how much disk space the app's data
+  // occupies, broken down by table and attributed per project.
+  app.get("/api/storage/stats", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      let databaseBytes = 0;
+      try { databaseBytes = fsSync.statSync(DB_FILE).size; } catch { /* ignore */ }
+
+      const sumLen = (table: string): number => {
+        try {
+          const r = db.prepare(
+            `SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM ${table}`
+          ).get() as { bytes: number };
+          return r.bytes;
+        } catch { return 0; }
+      };
+      const breakdown = {
+        images: sumLen('images'),
+        projects: sumLen('projects'),
+        templates: sumLen('templates'),
+        bids: sumLen('bids'),
+        notes: sumLen('notes'),
+        checklists: sumLen('checklists'),
+      };
+
+      const imageCount = (db.prepare('SELECT COUNT(*) as c FROM images').get() as { c: number }).c;
+
+      // id -> byte length, so each project's referenced images can be summed
+      // without pulling the (potentially huge) base64 payloads into memory.
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      const imgLen = new Map<string, number>();
+      for (const r of imgRows) imgLen.set(r.id, r.len);
+
+      const projRows = db.prepare('SELECT id, data FROM projects').all() as { id: string; data: string }[];
+      const projects = projRows.map(row => {
+        let project: any = {};
+        try { project = JSON.parse(row.data); } catch { /* ignore */ }
+        const dataBytes = Buffer.byteLength(row.data, 'utf8');
+        let imageBytes = 0;
+        for (const id of collectProjectImageIds(project)) imageBytes += imgLen.get(id) || 0;
+        return { id: row.id, name: project.name || 'Untitled', totalBytes: dataBytes + imageBytes };
+      }).sort((a, b) => b.totalBytes - a.totalBytes);
+
+      res.json({ databaseBytes, breakdown, imageCount, projectCount: projRows.length, projects });
+    } catch (error) {
+      console.error("Error computing storage stats:", error);
+      res.status(500).json({ error: "Failed to compute storage stats" });
+    }
+  });
+
+  // Orphaned files: rows in the images table that nothing references anymore
+  // (e.g. left behind by failed uploads or superseded plan-set revisions).
+  app.get("/api/storage/orphans", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const referenced = collectAllReferencedImageIds();
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      let count = 0;
+      let bytes = 0;
+      for (const r of imgRows) {
+        if (!referenced.has(r.id)) { count++; bytes += r.len; }
+      }
+      res.json({ count, bytes });
+    } catch (error) {
+      console.error("Error finding orphaned files:", error);
+      res.status(500).json({ error: "Failed to find orphaned files" });
+    }
+  });
+
+  app.post("/api/storage/orphans/cleanup", authenticateToken, requireAdmin, (req, res) => {
+    try {
+      // Re-derive the orphan set here rather than trusting the client, so a
+      // file that became referenced since the GET can't be deleted out from
+      // under a project.
+      const referenced = collectAllReferencedImageIds();
+      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
+      const orphans = imgRows.filter(r => !referenced.has(r.id));
+      const bytesFreed = orphans.reduce((a, r) => a + r.len, 0);
+
+      db.transaction(() => {
+        const stmt = db.prepare('DELETE FROM images WHERE id = ?');
+        for (const o of orphans) stmt.run(o.id);
+      })();
+
+      res.json({ deleted: orphans.length, bytesFreed });
+    } catch (error) {
+      console.error("Error cleaning up orphaned files:", error);
+      res.status(500).json({ error: "Failed to clean up orphaned files" });
+    }
+  });
+
+  // Cross-project search powering the command palette. Scans projects (name /
+  // contractor / address), their pages (sheet number / name / description /
+  // extracted text), takeoffs, and bids. Results are capped per category so a
+  // broad query stays responsive.
+  app.get("/api/search", authenticateToken, (req, res) => {
+    try {
+      const q = String(req.query.q || '').trim().toLowerCase();
+      if (q.length < 2) return res.json({ results: [] });
+
+      const results: any[] = [];
+      const projRows = db.prepare('SELECT data FROM projects').all() as { data: string }[];
+      const projects = projRows
+        .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
+        .filter(Boolean) as any[];
+
+      let projHits = 0;
+      for (const p of projects) {
+        if (projHits >= 6) break;
+        const hay = [p.name, p.contractor, p.address].filter(Boolean).join(' ').toLowerCase();
+        if (hay.includes(q)) {
+          results.push({ type: 'project', id: `project:${p.id}`, title: p.name || 'Untitled', subtitle: p.contractor || p.address || '', projectId: p.id });
+          projHits++;
+        }
+      }
+
+      let pageHits = 0;
+      pageLoop: for (const p of projects) {
+        for (const pg of p.pages || []) {
+          if (pageHits >= 12) break pageLoop;
+          const num = (pg.pageNumber || '').toString();
+          const text = [num, pg.name, pg.description, pg.extractedText].filter(Boolean).join(' ').toLowerCase();
+          if (text.includes(q)) {
+            results.push({
+              type: 'page',
+              id: `page:${p.id}:${pg.id}`,
+              title: [num, pg.name].filter(Boolean).join(' — ') || 'Page',
+              subtitle: p.name || 'Untitled',
+              projectId: p.id,
+              pageId: pg.id,
+            });
+            pageHits++;
+          }
+        }
+      }
+
+      let takeoffHits = 0;
+      takeoffLoop: for (const p of projects) {
+        for (const t of p.takeoffs || []) {
+          if (takeoffHits >= 6) break takeoffLoop;
+          if ((t.name || '').toLowerCase().includes(q)) {
+            results.push({ type: 'takeoff', id: `takeoff:${p.id}:${t.id}`, title: t.name, subtitle: p.name || 'Untitled', projectId: p.id });
+            takeoffHits++;
+          }
+        }
+      }
+
+      const bidRows = db.prepare('SELECT data FROM bids').all() as { data: string }[];
+      let bidHits = 0;
+      for (const r of bidRows) {
+        if (bidHits >= 6) break;
+        let b: any;
+        try { b = JSON.parse(r.data); } catch { continue; }
+        const hay = [b.name, b.contractor, b.address].filter(Boolean).join(' ').toLowerCase();
+        if (hay.includes(q)) {
+          results.push({ type: 'bid', id: `bid:${b.id}`, title: b.name || b.contractor || 'Bid', subtitle: b.contractor || '', bidId: b.id });
+          bidHits++;
+        }
+      }
+
+      res.json({ results });
+    } catch (error) {
+      console.error("Error running search:", error);
+      res.status(500).json({ error: "Search failed" });
     }
   });
 

@@ -370,6 +370,93 @@ export const getShareInfo = async (shareId: string): Promise<{ type: string; nam
   return res.json();
 };
 
+// ── Recently opened projects (client-only, newest first) ─────────────────────
+
+export interface RecentProject { id: string; name: string; at: number; }
+const RECENTS_KEY = 'recentProjects';
+
+export const getRecentProjects = (): RecentProject[] => {
+  try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch { return []; }
+};
+
+export const recordRecentProject = (id: string, name: string): void => {
+  try {
+    const list = getRecentProjects().filter(r => r.id !== id);
+    list.unshift({ id, name, at: Date.now() });
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch { /* ignore */ }
+};
+
+// ── Global search (command palette) ──────────────────────────────────────────
+
+export interface SearchResult {
+  type: 'project' | 'page' | 'takeoff' | 'bid';
+  id: string;
+  title: string;
+  subtitle?: string;
+  projectId?: string;
+  pageId?: string;
+  bidId?: string;
+}
+
+export const searchAll = async (q: string): Promise<SearchResult[]> => {
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  const { results } = await res.json();
+  return results;
+};
+
+// ── Storage usage ───────────────────────────────────────────────────────────
+
+export interface StorageStats {
+  databaseBytes: number;
+  breakdown: { images: number; projects: number; templates: number; bids: number; notes: number; checklists: number };
+  imageCount: number;
+  projectCount: number;
+  projects: { id: string; name: string; totalBytes: number }[];
+}
+
+export interface ProjectStorage {
+  totalBytes: number;
+  dataBytes: number;
+  imageBytes: number;
+  noteBytes: number;
+  imageCount: number;
+}
+
+export const getStorageStats = async (): Promise<StorageStats> => {
+  const res = await fetch('/api/storage/stats', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getProjectStorage = async (id: string): Promise<ProjectStorage> => {
+  const res = await fetch(`/api/projects/${id}/storage`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getStorageOrphans = async (): Promise<{ count: number; bytes: number }> => {
+  const res = await fetch('/api/storage/orphans', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const cleanupStorageOrphans = async (): Promise<{ deleted: number; bytesFreed: number }> => {
+  const res = await fetch('/api/storage/orphans/cleanup', { method: 'POST', headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+// Human-readable byte size, e.g. 1536 -> "1.5 KB".
+export const formatBytes = (bytes: number): string => {
+  if (!bytes || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+};
+
 export const getChecklists = async (): Promise<any[]> => {
   const res = await fetch('/api/checklists', { headers: getAuthHeaders() });
   await handleResponse(res);

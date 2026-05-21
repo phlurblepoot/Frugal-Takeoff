@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, Trash2, Shield, User, Loader2 } from 'lucide-react';
 import { getAuthHeaders } from '../utils/store';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 interface UserData {
   id: string;
@@ -9,6 +11,8 @@ interface UserData {
 }
 
 export const UsersView: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [users, setUsers] = useState<UserData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -65,7 +69,7 @@ export const UsersView: React.FC = () => {
   };
 
   const handleDeleteUser = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this user?')) return;
+    if (!await confirm({ title: 'Delete user', message: 'Are you sure you want to delete this user?', confirmLabel: 'Delete', tone: 'danger' })) return;
 
     try {
       const res = await fetch(`/api/users/${id}`, {
@@ -80,7 +84,7 @@ export const UsersView: React.FC = () => {
 
       fetchUsers();
     } catch (err: any) {
-      alert(err.message);
+      toast(err.message, { type: 'error' });
     }
   };
 

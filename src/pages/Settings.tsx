@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff, HardDrive, Sparkles } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans } from '../utils/store';
 import { EmailAccount, SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 // ── Changelog data ────────────────────────────────────────────────────────────
 
@@ -15,6 +17,13 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '1.2.1',
+    date: 'May 21, 2026',
+    changes: [
+      'Printouts: takeoff highlights and the legend are back on rotated sheets. After the move to the vector printout pipeline, any page with PDF rotation — the landscape sheets common to plan sets — came out as the bare page with no measurements or legend, because the overlay step skipped rotated pages. The overlay is now composed in each page\'s displayed orientation and mapped into its content space, so highlights, measurement labels, and the legend land correctly on rotated and unrotated pages alike.',
+    ],
+  },
   {
     version: '1.2',
     date: 'May 18, 2026',
@@ -705,6 +714,8 @@ const PROVIDER_GUIDE: ProviderInfo[] = [
 ];
 
 const EmailTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
   const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
   const [smtpSaving, setSmtpSaving] = useState(false);
   const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
@@ -739,8 +750,8 @@ const EmailTab: React.FC = () => {
 
   const handleSmtpSave = async () => {
     setSmtpSaving(true);
-    try { await saveSmtpSettings(smtp as Record<string, string>); alert('SMTP settings saved.'); }
-    catch { alert('Failed to save SMTP settings.'); }
+    try { await saveSmtpSettings(smtp as Record<string, string>); toast('SMTP settings saved.', { type: 'success' }); }
+    catch { toast('Failed to save SMTP settings.', { type: 'error' }); }
     finally { setSmtpSaving(false); }
   };
 
@@ -772,7 +783,7 @@ const EmailTab: React.FC = () => {
   };
 
   const handleDeleteAccount = async (id: string) => {
-    if (!confirm('Remove this email account?')) return;
+    if (!await confirm({ title: 'Remove email account', message: 'Remove this email account?', confirmLabel: 'Remove', tone: 'danger' })) return;
     await deleteEmailAccount(id);
     setAccounts(a => a.filter(x => x.id !== id));
   };
@@ -791,7 +802,7 @@ const EmailTab: React.FC = () => {
 
   const handleSavePollInterval = async () => {
     await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ 'email.pollIntervalMinutes': pollInterval }) });
-    alert('Polling interval saved. Restart the server for changes to take effect.');
+    toast('Polling interval saved. Restart the server for changes to take effect.', { type: 'success' });
   };
 
   const handlePollNow = async () => {
@@ -1050,11 +1061,203 @@ const ChangelogTab: React.FC = () => (
   </div>
 );
 
+const StorageTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [stats, setStats] = useState<StorageStats | null>(null);
+  const [orphans, setOrphans] = useState<{ count: number; bytes: number } | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [s, o] = await Promise.all([getStorageStats(), getStorageOrphans().catch(() => null)]);
+      setStats(s);
+      setOrphans(o);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load storage usage');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCleanup = async () => {
+    if (!orphans || orphans.count === 0) return;
+    const ok = await confirm({
+      title: 'Reclaim space',
+      message: `Permanently delete ${orphans.count} unreferenced file${orphans.count === 1 ? '' : 's'} (${formatBytes(orphans.bytes)})? This cannot be undone.`,
+      confirmLabel: 'Delete files',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setCleaning(true);
+    try {
+      const { deleted, bytesFreed } = await cleanupStorageOrphans();
+      toast(`Reclaimed ${formatBytes(bytesFreed)} from ${deleted} file${deleted === 1 ? '' : 's'}`, { type: 'success' });
+      await load();
+    } catch {
+      toast('Failed to reclaim space', { type: 'error' });
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" />
+      </div>
+    );
+  }
+
+  if (error || !stats) {
+    return (
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm p-6">
+        <p className="text-sm text-red-500">{error || 'No data available.'}</p>
+        <button onClick={load} className="mt-4 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all flex items-center gap-2">
+          <RefreshCw size={16} /> Retry
+        </button>
+      </div>
+    );
+  }
+
+  const categories = [
+    { key: 'images', label: 'Files & Images', color: 'bg-accent-500' },
+    { key: 'projects', label: 'Projects', color: 'bg-blue-500' },
+    { key: 'notes', label: 'Notes', color: 'bg-amber-500' },
+    { key: 'bids', label: 'Bids', color: 'bg-emerald-500' },
+    { key: 'templates', label: 'Templates', color: 'bg-purple-500' },
+    { key: 'checklists', label: 'Checklists', color: 'bg-pink-500' },
+  ] as const;
+  const breakdownTotal = Object.values(stats.breakdown).reduce((a, b) => a + b, 0) || 1;
+  const maxProject = stats.projects[0]?.totalBytes || 1;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <HardDrive className="text-accent-600" size={22} />
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">Storage Usage</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">How much disk space the application's data occupies.</p>
+            </div>
+          </div>
+          <button onClick={load} title="Refresh" className="p-2 rounded-lg text-slate-400 hover:text-accent-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">
+            <RefreshCw size={18} />
+          </button>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
+            <div className="text-2xl font-bold text-slate-900 dark:text-white">{formatBytes(stats.databaseBytes)}</div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Database on disk</div>
+          </div>
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
+            <div className="text-2xl font-bold text-slate-900 dark:text-white">{stats.projectCount.toLocaleString()}</div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Projects</div>
+          </div>
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
+            <div className="text-2xl font-bold text-slate-900 dark:text-white">{stats.imageCount.toLocaleString()}</div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Stored files</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Breakdown by Type</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Content size stored in each part of the database.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+            {categories.map(c => {
+              const bytes = stats.breakdown[c.key];
+              if (!bytes) return null;
+              return <div key={c.key} className={c.color} style={{ width: `${(bytes / breakdownTotal) * 100}%` }} title={`${c.label}: ${formatBytes(bytes)}`} />;
+            })}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
+            {categories.map(c => (
+              <div key={c.key} className="flex items-center gap-3 text-sm">
+                <span className={`w-2.5 h-2.5 rounded-full ${c.color} shrink-0`} />
+                <span className="text-slate-600 dark:text-slate-300">{c.label}</span>
+                <span className="ml-auto font-medium text-slate-900 dark:text-white">{formatBytes(stats.breakdown[c.key])}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {orphans && (
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Sparkles size={18} className="text-accent-600" /> Reclaim Space
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Unreferenced files left behind by failed uploads or deleted pages and plan-set revisions.</p>
+          </div>
+          <div className="p-6 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="flex-1">
+              {orphans.count === 0 ? (
+                <p className="text-sm text-slate-600 dark:text-slate-300">No orphaned files — storage is clean.</p>
+              ) : (
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  <span className="font-bold text-slate-900 dark:text-white">{orphans.count.toLocaleString()}</span> orphaned file{orphans.count === 1 ? '' : 's'} taking up <span className="font-bold text-slate-900 dark:text-white">{formatBytes(orphans.bytes)}</span>.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleCleanup}
+              disabled={orphans.count === 0 || cleaning}
+              className="shrink-0 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2"
+            >
+              {cleaning ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              {cleaning ? 'Reclaiming…' : 'Reclaim space'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Usage by Project</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Projects ranked by total space used, including their files.</p>
+        </div>
+        <div className="p-6">
+          {stats.projects.length === 0 ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">No projects yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {stats.projects.map(p => (
+                <div key={p.id} className="space-y-1">
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <span className="truncate text-slate-700 dark:text-slate-300">{p.name}</span>
+                    <span className="font-medium text-slate-900 dark:text-white whitespace-nowrap">{formatBytes(p.totalBytes)}</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                    <div className="h-full rounded-full bg-accent-500" style={{ width: `${(p.totalBytes / maxProject) * 100}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'email' | 'users' | 'changelog';
+type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'changelog';
 
 export const Settings: React.FC = () => {
+  const { toast } = useToast();
   const [serverSettings, setServerSettings] = useState<Record<string, string>>({
     appName: 'Takeoff Pro',
     logoUrl: '',
@@ -1096,9 +1299,9 @@ export const Settings: React.FC = () => {
     try {
       await saveSettings(serverSettings);
       if (serverSettings.appName) document.title = serverSettings.appName;
-      alert('Settings saved successfully');
+      toast('Settings saved successfully', { type: 'success' });
     } catch {
-      alert('Failed to save settings');
+      toast('Failed to save settings', { type: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -1118,6 +1321,7 @@ export const Settings: React.FC = () => {
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
     { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
+    { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
   ];
@@ -1280,6 +1484,8 @@ export const Settings: React.FC = () => {
             )}
 
             {activeTab === 'email' && isAdmin && <EmailTab />}
+
+            {activeTab === 'storage' && isAdmin && <StorageTab />}
 
             {activeTab === 'users' && isAdmin && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">

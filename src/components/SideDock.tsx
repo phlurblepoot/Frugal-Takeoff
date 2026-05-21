@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, matchPath } from 'react-router-dom';
-import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Clock, Settings, LogOut, PanelLeftClose } from 'lucide-react';
+import { Menu, Calculator, FileEdit, Sheet, ClipboardList, Clock, Settings, LogOut, PanelLeftClose, Search } from 'lucide-react';
 
 export type DockState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -129,6 +129,19 @@ export const SideDock: React.FC<SideDockProps> = ({ state, onChange }) => {
 
       {/* App list */}
       <div className="flex-1 py-3 px-2 space-y-1 overflow-y-auto">
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+          title={!isExpanded ? 'Search (⌘K)' : undefined}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+        >
+          <Search size={20} className="shrink-0" />
+          {isExpanded && (
+            <span className="flex-1 flex items-center justify-between">
+              <span className="truncate">Search</span>
+              <kbd className="text-[10px] font-mono text-slate-400 border border-slate-200 dark:border-slate-700 rounded px-1 py-0.5">⌘K</kbd>
+            </span>
+          )}
+        </button>
         {APPS.map((app) => {
           const isActive = app.matchRoute(location.pathname);
           return (

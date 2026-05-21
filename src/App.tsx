@@ -17,6 +17,9 @@ import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
+import { ConfirmProvider } from './components/ConfirmDialog';
+import { ShareProvider } from './components/ShareLinkModal';
+import { CommandPalette } from './components/CommandPalette';
 import { SideDock, DockState } from './components/SideDock';
 import { getSettings } from './utils/store';
 
@@ -56,18 +59,23 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
 
   return (
     <ToastProvider>
-      <CollaborationProvider>
-        <NotesProvider>
-          <SideDock state={dockState} onChange={handleDockChange} />
-          <div
-            style={{ marginLeft, transition: 'margin-left 200ms' }}
-          >
-            <UserPresenceOverlay />
-            <NotesOverlay />
-            <Outlet context={{ appName, logoUrl }} />
-          </div>
-        </NotesProvider>
-      </CollaborationProvider>
+      <ConfirmProvider>
+        <ShareProvider>
+          <CollaborationProvider>
+            <NotesProvider>
+              <SideDock state={dockState} onChange={handleDockChange} />
+              {!isLoginPage && <CommandPalette />}
+              <div
+                style={{ marginLeft, transition: 'margin-left 200ms' }}
+              >
+                <UserPresenceOverlay />
+                <NotesOverlay />
+                <Outlet context={{ appName, logoUrl }} />
+              </div>
+            </NotesProvider>
+          </CollaborationProvider>
+        </ShareProvider>
+      </ConfirmProvider>
     </ToastProvider>
   );
 };
