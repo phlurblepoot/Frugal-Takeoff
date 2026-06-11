@@ -69,4 +69,22 @@ describe('files layer', () => {
     expect(getMeta(db, 'nope')).toBeNull();
     expect(getDataUrlString(db, dir, 'nope')).toBeNull();
   });
+
+  it('round-trips dataURLs with extra parameters byte-identically', () => {
+    const url = 'data:text/plain;charset=utf-8;base64,' + Buffer.from('hello').toString('base64');
+    putDataUrl(db, dir, 'txt1', url);
+    expect(getDataUrlString(db, dir, 'txt1')).toBe(url);
+    expect(getMeta(db, 'txt1')!.mime).toBe('text/plain');
+  });
+
+  it('preserves parentFileId/versionNumber/createdAt across overwrite', () => {
+    putBuffer(db, dir, 'img1', Buffer.from('a'), 'image/png');
+    db.prepare('UPDATE files SET parentFileId = ?, versionNumber = ?, createdAt = ? WHERE id = ?')
+      .run('parent1', 3, 12345, 'img1');
+    putBuffer(db, dir, 'img1', Buffer.from('b'), 'image/png');
+    const meta = getMeta(db, 'img1')!;
+    expect(meta.parentFileId).toBe('parent1');
+    expect(meta.versionNumber).toBe(3);
+    expect(meta.createdAt).toBe(12345);
+  });
 });

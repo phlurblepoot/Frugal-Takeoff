@@ -2,8 +2,23 @@ import type Database from 'better-sqlite3';
 import { writeFileContent, readFileContent, deleteFileContent } from './fileStore';
 
 // Matches the legacy dataURL format used everywhere in the old images table.
-// Keep in sync with the regex previously at server.ts:608.
+// Keep in sync with the regex previously at server.ts:608. The `s` flag
+// deliberately differs from the legacy regex: a newline inside the payload
+// would match here. Harmless for real data, all of which is canonical base64.
 export const DATA_URL_RE = /^data:([A-Za-z0-9.+\/-]+)(?:;[^;,]+)*;base64,(.+)$/s;
+
+// Parses a legacy stored string. legacyFormat is 'dataurl' when the prefix is
+// exactly `data:<mime>;base64,`, 'base64' for bare-base64 strings, or the
+// verbatim prefix (e.g. 'data:text/plain;charset=utf-8;base64,') when the
+// dataURL carried extra parameters — getDataUrlString replays it byte-identically.
+export function parseDataUrl(data: string): { mime: string; legacyFormat: string; buf: Buffer } {
+  const m = data.match(DATA_URL_RE);
+  if (!m) return { mime: 'application/octet-stream', legacyFormat: 'base64', buf: Buffer.from(data, 'base64') };
+  const mime = m[1];
+  const prefix = data.slice(0, data.length - m[2].length); // everything before the b64 payload
+  const canonical = `data:${mime};base64,`;
+  return { mime, legacyFormat: prefix === canonical ? 'dataurl' : prefix, buf: Buffer.from(m[2], 'base64') };
+}
 
 export interface FileMeta {
   id: string;
@@ -15,7 +30,7 @@ export interface FileMeta {
   kind: string;
   parentFileId: string | null;
   versionNumber: number;
-  legacyFormat: string | null; // 'dataurl' | 'base64' | null
+  legacyFormat: string | null; // 'dataurl' | 'base64' | verbatim non-canonical prefix | null
   createdAt: number;
 }
 
@@ -34,12 +49,23 @@ function upsertRow(
   legacyFormat: string | null,
   opts: PutOpts
 ): void {
-  const existing = db.prepare('SELECT projectId, kind, name FROM files WHERE id = ?').get(id) as
-    | { projectId: string | null; kind: string; name: string | null }
+  // INSERT OR REPLACE resets unlisted columns to defaults, so carry over
+  // every column we don't intend to change.
+  const existing = db
+    .prepare('SELECT projectId, kind, name, parentFileId, versionNumber, createdAt FROM files WHERE id = ?')
+    .get(id) as
+    | {
+        projectId: string | null;
+        kind: string;
+        name: string | null;
+        parentFileId: string | null;
+        versionNumber: number;
+        createdAt: number;
+      }
     | undefined;
   db.prepare(`
-    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, legacyFormat, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     opts.projectId ?? existing?.projectId ?? null,
@@ -48,8 +74,10 @@ function upsertRow(
     size,
     sha256,
     opts.kind ?? existing?.kind ?? 'other',
+    existing?.parentFileId ?? null,
+    existing?.versionNumber ?? 1,
     legacyFormat,
-    Date.now()
+    existing?.createdAt ?? Date.now()
   );
 }
 
@@ -57,17 +85,7 @@ function upsertRow(
 // Non-dataURL strings are treated as bare base64 — getDataUrlString restores
 // the original string shape either way.
 export function putDataUrl(db: Database.Database, dataDir: string, id: string, data: string, opts: PutOpts = {}): FileMeta {
-  const m = data.match(DATA_URL_RE);
-  let mime = 'application/octet-stream';
-  let legacyFormat = 'base64';
-  let buf: Buffer;
-  if (m) {
-    mime = m[1];
-    legacyFormat = 'dataurl';
-    buf = Buffer.from(m[2], 'base64');
-  } else {
-    buf = Buffer.from(data, 'base64');
-  }
+  const { mime, legacyFormat, buf } = parseDataUrl(data);
   const { size, sha256 } = writeFileContent(dataDir, id, buf);
   upsertRow(db, id, mime, size, sha256, legacyFormat, opts);
   return getMeta(db, id)!;
@@ -94,6 +112,7 @@ export function getDataUrlString(db: Database.Database, dataDir: string, id: str
   if (!buf) return null;
   const b64 = buf.toString('base64');
   if (meta.legacyFormat === 'base64') return b64;
+  if (meta.legacyFormat && meta.legacyFormat !== 'dataurl') return meta.legacyFormat + b64; // verbatim prefix replay
   return `data:${meta.mime};base64,${b64}`;
 }
 
