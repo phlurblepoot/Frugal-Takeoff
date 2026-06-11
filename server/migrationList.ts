@@ -54,6 +54,10 @@ export const migrations: Migration[] = [
           }
           fsSync.renameSync(PROJECTS_DIR, path.join(dataDir, 'projects_migrated'));
         }
+      } catch (e) {
+        console.error('[migrations] legacy project import failed (continuing):', e);
+      }
+      try {
         if (fsSync.existsSync(IMAGES_DIR)) {
           const insert = db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)');
           for (const f of fsSync.readdirSync(IMAGES_DIR)) {
@@ -62,6 +66,10 @@ export const migrations: Migration[] = [
           }
           fsSync.renameSync(IMAGES_DIR, path.join(dataDir, 'images_migrated'));
         }
+      } catch (e) {
+        console.error('[migrations] legacy image import failed (continuing):', e);
+      }
+      try {
         if (fsSync.existsSync(TEMPLATES_FILE)) {
           const insert = db.prepare('INSERT OR IGNORE INTO templates (id, data) VALUES (?, ?)');
           for (const t of JSON.parse(fsSync.readFileSync(TEMPLATES_FILE, 'utf-8'))) {
@@ -70,7 +78,7 @@ export const migrations: Migration[] = [
           fsSync.renameSync(TEMPLATES_FILE, path.join(dataDir, 'templates_migrated.json'));
         }
       } catch (e) {
-        console.error('[migrations] legacy dir import failed (continuing):', e);
+        console.error('[migrations] legacy template import failed (continuing):', e);
       }
     },
   },
