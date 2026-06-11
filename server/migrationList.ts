@@ -3,6 +3,7 @@ import path from 'path';
 import type { Migration } from './migrations';
 import { parseDataUrl } from './files';
 import { writeFileContent } from './fileStore';
+import { decomposeProject } from './projectStore';
 
 export const migrations: Migration[] = [
   {
@@ -208,6 +209,39 @@ export const migrations: Migration[] = [
       }
       db.exec('DROP TABLE images');
       console.log(`[migrations] moved ${metas.length} blobs from images table to disk`);
+    },
+  },
+  {
+    version: 5,
+    name: 'normalize-projects',
+    up({ db }) {
+      const labelFile = db.prepare('UPDATE files SET projectId = ?, kind = ?, name = COALESCE(?, name) WHERE id = ?');
+      const label = (projectId: string, kind: string, name: string | null, fileId: any) => {
+        if (typeof fileId === 'string' && fileId) labelFile.run(projectId, kind, name, fileId);
+      };
+      const rows = db.prepare('SELECT id, data FROM projects').all() as { id: string; data: string | null }[];
+      for (const row of rows) {
+        if (!row.data) continue;
+        let p: any;
+        try { p = JSON.parse(row.data); } catch {
+          console.warn(`[migrations] skipping unparseable project ${row.id} (data preserved)`);
+          continue;
+        }
+        p.id = row.id; // trust the row key over the blob
+        decomposeProject(db, p, 1);
+
+        // Label this project's files so Documents/storage views can attribute them.
+        for (const pg of p.pages ?? []) {
+          label(row.id, 'plan', pg.name ?? null, pg.imageId);
+          label(row.id, 'plan', pg.name ?? null, pg.thumbnailId);
+          label(row.id, 'plan', pg.name ?? null, pg.sourcePdfFileId);
+        }
+        for (const po of p.printouts ?? []) label(row.id, 'printout', po.name ?? null, po.fileId);
+        label(row.id, 'proposal', 'Proposal', p.proposalFileId);
+        const emails = [...(p.email ? [p.email] : []), ...(p.emails ?? [])];
+        for (const e of emails) for (const aid of e?.attachmentIds ?? []) label(row.id, 'document', null, aid);
+      }
+      console.log(`[migrations] normalized ${rows.length} projects`);
     },
   },
 ];

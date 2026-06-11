@@ -1,0 +1,231 @@
+import type Database from 'better-sqlite3';
+import { deleteFileContent } from './fileStore';
+
+export class ValidationError extends Error {}
+export class ConflictError extends Error {}
+
+const parse = (s: string | null): any => (s == null ? undefined : JSON.parse(s));
+
+// Adds key: value only when value is not null/undefined — assembly must omit
+// keys the legacy JSON never had, but keep '' and 0 and false.
+const put = (obj: any, key: string, value: any) => {
+  if (value !== null && value !== undefined) obj[key] = value;
+};
+
+export function loadProject(db: Database.Database, id: string): any | null {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+  if (!row) return null;
+  // Pre-normalization fallback (should not occur after migration 5, but a
+  // legacy-dir import racing ahead of a re-run must not crash the API).
+  if (row.data) {
+    try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'estimating' }; }
+    catch { return null; }
+  }
+
+  const meta = parse(row.meta) ?? {};
+  const project: any = { id: row.id };
+  put(project, 'name', row.name);
+  put(project, 'createdAt', row.createdAt);
+  put(project, 'contractor', row.contractor);
+  put(project, 'address', row.address);
+  put(project, 'bidDueDate', row.bidDueDate);
+  Object.assign(project, meta);
+
+  const planSetRows = db.prepare('SELECT * FROM plan_sets WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
+  if (planSetRows.length > 0) {
+    project.planSets = planSetRows.map(ps => {
+      const obj: any = { id: ps.id };
+      put(obj, 'name', ps.name);
+      Object.assign(obj, parse(ps.attrs) ?? {});
+      return obj;
+    });
+  }
+
+  const measByPage = new Map<string, any[]>();
+  const measRows = db.prepare('SELECT * FROM measurements WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
+  for (const m of measRows) {
+    const obj: any = { id: m.id };
+    put(obj, 'takeoffId', m.takeoffId);
+    put(obj, 'type', m.type);
+    put(obj, 'name', m.name);
+    put(obj, 'color', m.color);
+    obj.points = parse(m.points) ?? [];
+    Object.assign(obj, parse(m.attrs) ?? {});
+    if (!measByPage.has(m.pageId)) measByPage.set(m.pageId, []);
+    measByPage.get(m.pageId)!.push(obj);
+  }
+
+  const pageRows = db.prepare('SELECT * FROM pages WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
+  project.pages = pageRows.map(pg => {
+    const obj: any = { id: pg.id };
+    put(obj, 'name', pg.name);
+    put(obj, 'pageNumber', pg.pageNumber);
+    put(obj, 'planSetId', pg.planSetId);
+    put(obj, 'imageId', pg.imageId);
+    put(obj, 'thumbnailId', pg.thumbnailId);
+    put(obj, 'sourcePdfFileId', pg.sourcePdfFileId);
+    put(obj, 'sourcePdfPageNum', pg.sourcePdfPageNum);
+    Object.assign(obj, parse(pg.attrs) ?? {});
+    obj.measurements = measByPage.get(pg.id) ?? [];
+    return obj;
+  });
+
+  const takeoffRows = db.prepare('SELECT * FROM takeoffs WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
+  project.takeoffs = takeoffRows.map(t => {
+    const obj: any = { id: t.id };
+    put(obj, 'name', t.name);
+    put(obj, 'color', t.color);
+    put(obj, 'type', t.type);
+    Object.assign(obj, parse(t.attrs) ?? {});
+    return obj;
+  });
+
+  project.version = row.version;
+  project.status = row.status;
+  return project;
+}
+
+export function listProjects(db: Database.Database): any[] {
+  const ids = db.prepare('SELECT id FROM projects ORDER BY createdAt DESC').all() as { id: string }[];
+  return ids.map(r => loadProject(db, r.id)).filter(Boolean);
+}
+
+function validate(payload: any, id?: string): void {
+  if (!payload || typeof payload !== 'object') throw new ValidationError('Payload must be an object');
+  if (typeof payload.id !== 'string' || !payload.id) throw new ValidationError('Missing project id');
+  if (id !== undefined && payload.id !== id) throw new ValidationError('Project id mismatch');
+  if (payload.name !== undefined && typeof payload.name !== 'string') throw new ValidationError('name must be a string');
+  if (!Array.isArray(payload.pages)) throw new ValidationError('pages must be an array');
+  if (!Array.isArray(payload.takeoffs)) throw new ValidationError('takeoffs must be an array');
+  if (payload.planSets !== undefined && !Array.isArray(payload.planSets)) throw new ValidationError('planSets must be an array');
+  for (const pg of payload.pages) {
+    if (!pg || typeof pg.id !== 'string' || !pg.id) throw new ValidationError('Every page needs an id');
+    if (pg.measurements !== undefined && !Array.isArray(pg.measurements)) throw new ValidationError('measurements must be an array');
+    for (const m of pg.measurements ?? []) {
+      if (!m || typeof m.id !== 'string' || !m.id) throw new ValidationError('Every measurement needs an id');
+      if (!Array.isArray(m.points)) throw new ValidationError('measurement points must be an array');
+    }
+  }
+  for (const t of payload.takeoffs) {
+    if (!t || typeof t.id !== 'string' || !t.id) throw new ValidationError('Every takeoff needs an id');
+  }
+}
+
+export function deriveStatus(meta: any, existing?: string): string {
+  if (existing && existing !== 'estimating') return existing;
+  if (meta.archived) return 'archived';
+  if (meta.accepted) return 'awarded';
+  if (meta.submitted) return 'proposal_sent';
+  return 'estimating';
+}
+
+// Splits a validated legacy-shaped payload into rows. Caller wraps in a
+// transaction. Never touches the files table (spec §3.3 rule 4).
+export function decomposeProject(db: Database.Database, payload: any, version: number): void {
+  const {
+    id, name, createdAt, contractor, address, bidDueDate,
+    planSets, pages, takeoffs, version: _v, status: _s, ...meta
+  } = payload;
+
+  db.prepare(`
+    UPDATE projects SET name = ?, status = ?, contractor = ?, address = ?, bidDueDate = ?,
+                        version = ?, updatedAt = ?, meta = ?, data = NULL
+    WHERE id = ?
+  `).run(
+    name ?? 'Untitled',
+    deriveStatus(meta, _s),
+    contractor ?? null,
+    address ?? null,
+    typeof bidDueDate === 'number' ? bidDueDate : null,
+    version,
+    Date.now(),
+    JSON.stringify(meta),
+    id
+  );
+
+  for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
+    db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
+  }
+
+  const insPlanSet = db.prepare('INSERT OR REPLACE INTO plan_sets (id, projectId, name, sortOrder, attrs) VALUES (?, ?, ?, ?, ?)');
+  (planSets ?? []).forEach((ps: any, i: number) => {
+    const { id: psId, name: psName, ...rest } = ps;
+    insPlanSet.run(psId, id, psName ?? null, i, JSON.stringify(rest));
+  });
+
+  const insTakeoff = db.prepare('INSERT OR REPLACE INTO takeoffs (id, projectId, name, type, color, sortOrder, attrs) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  (takeoffs ?? []).forEach((t: any, i: number) => {
+    const { id: tId, name: tName, type, color, ...rest } = t;
+    insTakeoff.run(tId, id, tName ?? null, type ?? null, color ?? null, i, JSON.stringify(rest));
+  });
+
+  const insPage = db.prepare(`
+    INSERT OR REPLACE INTO pages (id, projectId, planSetId, name, pageNumber, sortOrder, imageId, thumbnailId, sourcePdfFileId, sourcePdfPageNum, attrs)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insMeas = db.prepare(`
+    INSERT OR REPLACE INTO measurements (id, pageId, projectId, takeoffId, type, name, color, points, sortOrder, attrs)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  (pages ?? []).forEach((pg: any, i: number) => {
+    const {
+      id: pgId, planSetId, name: pgName, pageNumber,
+      imageId, thumbnailId, sourcePdfFileId, sourcePdfPageNum,
+      measurements, ...rest
+    } = pg;
+    insPage.run(
+      pgId, id, planSetId ?? null, pgName ?? null, pageNumber ?? null, i,
+      imageId ?? null, thumbnailId ?? null, sourcePdfFileId ?? null, sourcePdfPageNum ?? null,
+      JSON.stringify(rest)
+    );
+    (measurements ?? []).forEach((m: any, j: number) => {
+      const { id: mId, takeoffId, type, name: mName, color, points, ...mrest } = m;
+      insMeas.run(mId, pgId, id, takeoffId ?? null, type ?? null, mName ?? null, color ?? null,
+        JSON.stringify(points ?? []), j, JSON.stringify(mrest));
+    });
+  });
+}
+
+export function createProject(db: Database.Database, payload: any): { version: number } {
+  validate(payload);
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO projects (id, createdAt) VALUES (?, ?)')
+      .run(payload.id, payload.createdAt ?? Date.now());
+    decomposeProject(db, payload, 1);
+  });
+  tx();
+  return { version: 1 };
+}
+
+export function saveProject(db: Database.Database, id: string, payload: any): { version: number } {
+  validate(payload, id);
+  if (!Number.isInteger(payload.version) || payload.version < 1) {
+    throw new ValidationError('Missing or invalid version — reload the project and try again');
+  }
+  let newVersion = 0;
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT version FROM projects WHERE id = ?').get(id) as { version: number } | undefined;
+    if (!row) throw new ValidationError('Project not found');
+    if (row.version !== payload.version) {
+      throw new ConflictError(`Project changed since it was loaded (server v${row.version}, payload v${payload.version})`);
+    }
+    newVersion = row.version + 1;
+    decomposeProject(db, payload, newVersion);
+  });
+  tx();
+  return { version: newVersion };
+}
+
+// Explicit user action — the one place project-owned files are deleted.
+export function deleteProject(db: Database.Database, dataDir: string, id: string): void {
+  const fileIds = (db.prepare('SELECT id FROM files WHERE projectId = ?').all(id) as { id: string }[]).map(r => r.id);
+  const tx = db.transaction(() => {
+    for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
+      db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
+    }
+    db.prepare('DELETE FROM files WHERE projectId = ?').run(id);
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+  });
+  tx();
+  for (const fid of fileIds) deleteFileContent(dataDir, fid);
+}
