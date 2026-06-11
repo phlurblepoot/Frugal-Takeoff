@@ -103,6 +103,20 @@ describe('migration 5 + loadProject round-trip', () => {
     seedLegacyAndNormalize({ ...LEGACY_PROJECT, id: 'p2', submitted: false, archived: true });
     expect(loadProject(db, 'p2')!.status).toBe('archived');
   });
+
+  it('skips non-object blobs without failing the migration (data preserved)', () => {
+    const ins = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
+    ins.run('badNull', 'null', 1);
+    ins.run('badArr', '[1,2]', 2);
+    ins.run(LEGACY_PROJECT.id, JSON.stringify(LEGACY_PROJECT), LEGACY_PROJECT.createdAt);
+    expect(() => runMigrations(db, dir, migrations)).not.toThrow();
+    // the valid project normalized
+    expect(loadProject(db, 'proj1')!.name).toBe('Maple St Office');
+    expect((db.prepare('SELECT data FROM projects WHERE id = ?').get('proj1') as any).data).toBeNull();
+    // the bad rows' data preserved, not nulled
+    expect((db.prepare('SELECT data FROM projects WHERE id = ?').get('badNull') as any).data).toBe('null');
+    expect((db.prepare('SELECT data FROM projects WHERE id = ?').get('badArr') as any).data).toBe('[1,2]');
+  });
 });
 
 describe('saveProject', () => {

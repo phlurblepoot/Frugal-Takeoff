@@ -19,7 +19,10 @@ export function loadProject(db: Database.Database, id: string): any | null {
   // legacy-dir import racing ahead of a re-run must not crash the API).
   if (row.data) {
     try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'estimating' }; }
-    catch { return null; }
+    catch {
+      console.warn(`[projectStore] project ${id} has an unparseable legacy blob`);
+      return null;
+    }
   }
 
   const meta = parse(row.meta) ?? {};
@@ -111,6 +114,8 @@ function validate(payload: any, id?: string): void {
   }
 }
 
+// Status is intentionally sticky: once a project leaves 'estimating', legacy
+// flags (submitted/accepted/archived) no longer drive it.
 export function deriveStatus(meta: any, existing?: string): string {
   if (existing && existing !== 'estimating') return existing;
   if (meta.archived) return 'archived';

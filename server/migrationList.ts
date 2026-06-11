@@ -227,6 +227,10 @@ export const migrations: Migration[] = [
           console.warn(`[migrations] skipping unparseable project ${row.id} (data preserved)`);
           continue;
         }
+        if (!p || typeof p !== 'object' || Array.isArray(p)) {
+          console.warn(`[migrations] skipping non-object project ${row.id} (data preserved)`);
+          continue;
+        }
         p.id = row.id; // trust the row key over the blob
         decomposeProject(db, p, 1);
 
