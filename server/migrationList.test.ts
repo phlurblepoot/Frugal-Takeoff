@@ -5,6 +5,8 @@ import path from 'path';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { getDataUrlString } from './files';
+import { readFileContent } from './fileStore';
 
 const tmpDir = () => fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-ml-'));
 
@@ -49,6 +51,51 @@ describe('migrations 1-3 on a fresh database', () => {
     expect(() => runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 3))).not.toThrow();
     const row = db.prepare('SELECT data FROM projects WHERE id = ?').get('p1') as { data: string };
     expect(row.data).toBe('{"id":"p1"}');
+    db.close();
+  });
+});
+
+describe('migration 4: images-to-disk', () => {
+  it('moves dataURL rows to disk, creates files rows, drops images table', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 3));
+    const png = 'data:image/png;base64,' + Buffer.from('imgbytes').toString('base64');
+    db.prepare('INSERT INTO images (id, data) VALUES (?, ?)').run('imgA', png);
+    db.prepare('INSERT INTO images (id, data) VALUES (?, ?)').run('imgB', 'bm90LWEtZGF0YXVybA==');
+
+    runMigrations(db, dir, migrations.filter(m => m.version <= 4));
+
+    expect(tableNames(db)).not.toContain('images');
+    expect(getDataUrlString(db, dir, 'imgA')).toBe(png);
+    expect(readFileContent(dir, 'imgA')!.toString()).toBe('imgbytes');
+    // non-dataURL row round-trips as the same bare-base64 string
+    expect(getDataUrlString(db, dir, 'imgB')).toBe('bm90LWEtZGF0YXVybA==');
+    const metaA = db.prepare('SELECT mime, kind, legacyFormat FROM files WHERE id = ?').get('imgA') as any;
+    expect(metaA.mime).toBe('image/png');
+    expect(metaA.kind).toBe('other');
+    expect(metaA.legacyFormat).toBe('dataurl');
+    db.close();
+  });
+
+  it('skips empty rows without failing', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 3));
+    db.prepare('INSERT INTO images (id, data) VALUES (?, ?)').run('empty1', null);
+    expect(() => runMigrations(db, dir, migrations.filter(m => m.version <= 4))).not.toThrow();
+    expect((db.prepare('SELECT COUNT(*) as c FROM files').get() as any).c).toBe(0);
+    db.close();
+  });
+
+  it('preserves non-canonical dataURL prefixes through migration', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 3));
+    const url = 'data:text/plain;charset=utf-8;base64,' + Buffer.from('hello').toString('base64');
+    db.prepare('INSERT INTO images (id, data) VALUES (?, ?)').run('txt1', url);
+    runMigrations(db, dir, migrations.filter(m => m.version <= 4));
+    expect(getDataUrlString(db, dir, 'txt1')).toBe(url);
     db.close();
   });
 });

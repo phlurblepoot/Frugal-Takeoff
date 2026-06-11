@@ -1,6 +1,8 @@
 import fsSync from 'fs';
 import path from 'path';
 import type { Migration } from './migrations';
+import { parseDataUrl } from './files';
+import { writeFileContent } from './fileStore';
 
 export const migrations: Migration[] = [
   {
@@ -172,6 +174,31 @@ export const migrations: Migration[] = [
         );
         CREATE INDEX idx_activity_projectId ON activity (projectId);
       `);
+    },
+  },
+  {
+    version: 4,
+    name: 'images-to-disk',
+    up({ db, dataDir }) {
+      // Walks every legacy base64 blob out of the images table onto disk.
+      // Disk writes are idempotent (same id → same path, atomic overwrite),
+      // so a crash mid-migration is safe: the DB transaction rolls back and
+      // the next boot redoes the walk.
+      const rows = db.prepare('SELECT id, data FROM images').all() as { id: string; data: string | null }[];
+      const insert = db.prepare(`
+        INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, legacyFormat, createdAt)
+        VALUES (?, NULL, NULL, ?, ?, ?, 'other', ?, ?)
+      `);
+      let count = 0;
+      for (const row of rows) {
+        if (!row.data) continue;
+        const { mime, legacyFormat, buf } = parseDataUrl(row.data);
+        const { size, sha256 } = writeFileContent(dataDir, row.id, buf);
+        insert.run(row.id, mime, size, sha256, legacyFormat, Date.now());
+        count++;
+      }
+      db.exec('DROP TABLE images');
+      console.log(`[migrations] moved ${count} blobs from images table to disk`);
     },
   },
 ];
