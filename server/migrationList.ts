@@ -184,21 +184,30 @@ export const migrations: Migration[] = [
       // Disk writes are idempotent (same id → same path, atomic overwrite),
       // so a crash mid-migration is safe: the DB transaction rolls back and
       // the next boot redoes the walk.
-      const rows = db.prepare('SELECT id, data FROM images').all() as { id: string; data: string | null }[];
+      //
+      // Stream rows with iterate() so multi-GB images tables never sit in the
+      // JS heap: each blob is written to disk and dropped before the next row
+      // is fetched. better-sqlite3 forbids running INSERTs while a cursor is
+      // open on the same connection ("connection is busy" error), so only the
+      // tiny metadata tuples are collected during the walk and inserted after
+      // the cursor closes.
       const insert = db.prepare(`
         INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, legacyFormat, createdAt)
         VALUES (?, NULL, NULL, ?, ?, ?, 'other', ?, ?)
       `);
-      let count = 0;
-      for (const row of rows) {
+      const now = Date.now();
+      const metas: { id: string; mime: string; size: number; sha256: string; legacyFormat: string }[] = [];
+      for (const row of db.prepare('SELECT id, data FROM images').iterate() as Iterable<{ id: string; data: string | null }>) {
         if (!row.data) continue;
         const { mime, legacyFormat, buf } = parseDataUrl(row.data);
         const { size, sha256 } = writeFileContent(dataDir, row.id, buf);
-        insert.run(row.id, mime, size, sha256, legacyFormat, Date.now());
-        count++;
+        metas.push({ id: row.id, mime, size, sha256, legacyFormat });
+      }
+      for (const m of metas) {
+        insert.run(m.id, m.mime, m.size, m.sha256, m.legacyFormat, now);
       }
       db.exec('DROP TABLE images');
-      console.log(`[migrations] moved ${count} blobs from images table to disk`);
+      console.log(`[migrations] moved ${metas.length} blobs from images table to disk`);
     },
   },
 ];
