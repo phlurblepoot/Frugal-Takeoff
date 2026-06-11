@@ -271,7 +271,7 @@ function migrateOldData() {
   }
 }
 
-const users: Record<string, { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string }> = {};
+const users: Record<string, { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number }> = {};
 
 async function startServer() {
   await ensureDirs();
