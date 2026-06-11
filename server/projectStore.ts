@@ -147,24 +147,24 @@ export function decomposeProject(db: Database.Database, payload: any, version: n
     db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
   }
 
-  const insPlanSet = db.prepare('INSERT OR REPLACE INTO plan_sets (id, projectId, name, sortOrder, attrs) VALUES (?, ?, ?, ?, ?)');
+  const insPlanSet = db.prepare('INSERT INTO plan_sets (id, projectId, name, sortOrder, attrs) VALUES (?, ?, ?, ?, ?)');
   (planSets ?? []).forEach((ps: any, i: number) => {
     const { id: psId, name: psName, ...rest } = ps;
     insPlanSet.run(psId, id, psName ?? null, i, JSON.stringify(rest));
   });
 
-  const insTakeoff = db.prepare('INSERT OR REPLACE INTO takeoffs (id, projectId, name, type, color, sortOrder, attrs) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insTakeoff = db.prepare('INSERT INTO takeoffs (id, projectId, name, type, color, sortOrder, attrs) VALUES (?, ?, ?, ?, ?, ?, ?)');
   (takeoffs ?? []).forEach((t: any, i: number) => {
     const { id: tId, name: tName, type, color, ...rest } = t;
     insTakeoff.run(tId, id, tName ?? null, type ?? null, color ?? null, i, JSON.stringify(rest));
   });
 
   const insPage = db.prepare(`
-    INSERT OR REPLACE INTO pages (id, projectId, planSetId, name, pageNumber, sortOrder, imageId, thumbnailId, sourcePdfFileId, sourcePdfPageNum, attrs)
+    INSERT INTO pages (id, projectId, planSetId, name, pageNumber, sortOrder, imageId, thumbnailId, sourcePdfFileId, sourcePdfPageNum, attrs)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insMeas = db.prepare(`
-    INSERT OR REPLACE INTO measurements (id, pageId, projectId, takeoffId, type, name, color, points, sortOrder, attrs)
+    INSERT INTO measurements (id, pageId, projectId, takeoffId, type, name, color, points, sortOrder, attrs)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   (pages ?? []).forEach((pg: any, i: number) => {

@@ -161,9 +161,18 @@ describe('createProject / listProjects / deleteProject', () => {
   });
 
   it('lists newest-first', () => {
-    createProject(db, { ...LEGACY_PROJECT, id: 'a', createdAt: 1 });
-    createProject(db, { ...LEGACY_PROJECT, id: 'b', createdAt: 2 });
+    const bare = (id: string, createdAt: number) =>
+      ({ ...LEGACY_PROJECT, id, createdAt, planSets: undefined, pages: [], takeoffs: [] });
+    createProject(db, bare('a', 1));
+    createProject(db, bare('b', 2));
     expect(listProjects(db).map((p: any) => p.id)).toEqual(['b', 'a']);
+  });
+
+  it('fails loudly when two projects share child ids (collision = data bug, never silent theft)', () => {
+    createProject(db, { ...LEGACY_PROJECT, id: 'a' });
+    expect(() => createProject(db, { ...LEGACY_PROJECT, id: 'b' })).toThrow();
+    // transaction rolled back: project b does not half-exist
+    expect(loadProject(db, 'b')).toBeNull();
   });
 
   it('delete removes all child rows and project-owned files', () => {
