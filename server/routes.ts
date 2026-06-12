@@ -209,7 +209,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Storage admin ─────────────────────────────────────────────────────────
 
   // Conservative reference walk: serialize every project aggregate plus every
-  // remaining JSON blob (bids, checklists, notes) and shares, collect every
+  // remaining JSON blob (checklists, notes) and shares, collect every
   // string and every /api/images|files/<id> URL. A file is an orphan only if
   // its id appears nowhere.
   const collectReferencedFileIds = (): Set<string> => {
@@ -230,7 +230,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
     };
     for (const p of listProjects(db)) walk(p);
-    for (const table of ['bids', 'checklists', 'notes']) {
+    for (const table of ['checklists', 'notes']) {
       let rows: { data: string }[] = [];
       try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
       for (const r of rows) {
@@ -261,7 +261,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           + sumLen(`SELECT COALESCE(SUM(length(CAST(points AS BLOB)) + length(CAST(coalesce(attrs,'') AS BLOB))), 0) as bytes FROM measurements`)
           + sumLen(`SELECT COALESCE(SUM(length(CAST(coalesce(attrs,'') AS BLOB))), 0) as bytes FROM takeoffs`),
         templates: sumLen('SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM templates'),
-        bids: sumLen('SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM bids'),
         notes: sumLen('SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM notes'),
         checklists: sumLen('SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM checklists'),
       };
@@ -357,19 +356,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         results.push({ type: 'takeoff', id: `takeoff:${t.projectId}:${t.id}`, title: t.name, subtitle: t.projectName || 'Untitled', projectId: t.projectId });
       }
 
-      // bids stay JSON blobs until Phase 3 removes them
-      const bidRows = db.prepare('SELECT data FROM bids').all() as { data: string }[];
-      let bidHits = 0;
-      for (const r of bidRows) {
-        if (bidHits >= 6) break;
-        let b: any;
-        try { b = JSON.parse(r.data); } catch { continue; }
-        const hay = [b.name, b.contractor, b.address].filter(Boolean).join(' ').toLowerCase();
-        if (hay.includes(q)) {
-          results.push({ type: 'bid', id: `bid:${b.id}`, title: b.name || b.contractor || 'Bid', subtitle: b.contractor || '', bidId: b.id });
-          bidHits++;
-        }
-      }
       res.json({ results });
     } catch (e) {
       console.error('Error running search:', e);

@@ -99,3 +99,24 @@ describe('migration 4: images-to-disk', () => {
     db.close();
   });
 });
+
+describe('migration 6: remove-bid-inbox', () => {
+  it('drops the bids and email_accounts tables', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    expect(tables).not.toContain('bids');
+    expect(tables).not.toContain('email_accounts');
+    db.close();
+  });
+
+  it('preserves bid attachment files rows', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 5));
+    db.prepare(`INSERT INTO files (id, mime, size, sha256, kind, createdAt) VALUES ('att1','application/pdf',1,'x','document',1)`).run();
+    runMigrations(db, dir, migrations);
+    expect((db.prepare('SELECT COUNT(*) as c FROM files').get() as any).c).toBe(1);
+    db.close();
+  });
+});

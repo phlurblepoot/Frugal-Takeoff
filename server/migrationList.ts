@@ -248,4 +248,15 @@ export const migrations: Migration[] = [
       console.log(`[migrations] normalized ${rows.length} projects`);
     },
   },
+  {
+    version: 6,
+    name: 'remove-bid-inbox',
+    up({ db }) {
+      // Bid inbox + IMAP receiving are removed in Phase 3 (spec §2). The
+      // migration framework backs up the DB file before applying, so existing
+      // bid data survives in backups/. Bid email attachments stay in files/
+      // and become reclaimable via the explicit orphan-cleanup admin tool.
+      db.exec('DROP TABLE IF EXISTS bids; DROP TABLE IF EXISTS email_accounts;');
+    },
+  },
 ];
