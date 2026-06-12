@@ -23,7 +23,7 @@ export interface PipelineGroup {
   projects: ProjectSummary[];
 }
 
-const GROUP_DEFS: { id: string; label: string; statuses: string[] }[] = [
+export const GROUP_DEFS: { id: string; label: string; statuses: string[] }[] = [
   { id: 'estimating', label: 'Estimating', statuses: ['estimating', 'proposal_sent'] },
   { id: 'active', label: 'Active', statuses: ['awarded', 'in_progress', 'punch_list'] },
   { id: 'closed', label: 'Complete & Closed', statuses: ['complete', 'lost'] },

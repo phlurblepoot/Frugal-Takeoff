@@ -9,6 +9,7 @@ import {
 import {
   Button, Card, CardBody, CardHeader, EmptyState, ProjectStatusPill, Skeleton,
 } from '../components/ui';
+import { GROUP_DEFS } from './ProjectsPage';
 
 const DAY = 86_400_000;
 
@@ -32,13 +33,17 @@ export const hoursThisWeek = (entries: TimeEntryLite[], now: number = Date.now()
   const start = startOfWeek(new Date(now));
   let ms = 0;
   for (const e of entries) {
+    // An entry is charged to the week it STARTED in (a Sun→Mon overnight
+    // shift counts toward last week) — intended for contractor billing.
     if (e.clockIn >= start) ms += (e.clockOut ?? now) - e.clockIn;
   }
   return ms / 3_600_000;
 };
 
-const ESTIMATING = ['estimating', 'proposal_sent'];
-const ACTIVE = ['awarded', 'in_progress', 'punch_list'];
+// Derived from the pipeline groups so the Dashboard and Projects board can
+// never drift on which statuses count as estimating/active.
+const ESTIMATING = GROUP_DEFS.find(g => g.id === 'estimating')!.statuses;
+const ACTIVE = GROUP_DEFS.find(g => g.id === 'active')!.statuses;
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
