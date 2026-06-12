@@ -31,6 +31,10 @@ export const IssueEditor: React.FC<{
   };
 
   const cycleStatus = async () => {
+    if (title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '')) {
+      toast('Save your changes before changing status', { type: 'warning' });
+      return;
+    }
     const next = issue.status === 'open' ? 'sent' : issue.status === 'sent' ? 'resolved' : 'open';
     try { await setIssueStatus(issue.id, next); onSaved(); } catch { toast('Status update failed', { type: 'error' }); }
   };
@@ -44,7 +48,7 @@ export const IssueEditor: React.FC<{
     >
       <div className="mb-3 flex items-center gap-2">
         <button onClick={cycleStatus} title="Click to advance status"><IssueStatusPill status={issue.status} /></button>
-        <span className="text-xs text-ink-faint">{Object.keys(ISSUE_STATUS_META).join(' → ')}</span>
+        <span className="text-xs text-ink-faint">{Object.values(ISSUE_STATUS_META).map(m => m.label).join(' → ')}</span>
       </div>
       <Field label="Title" htmlFor="iss-title"><Input id="iss-title" value={title} onChange={e => setTitle(e.target.value)} /></Field>
       <div className="mt-3">
