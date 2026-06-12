@@ -601,6 +601,9 @@ const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term 
   );
 };
 
+const PROJECT_TAB_VALUES = ['pages', 'takeoffs', 'printouts', 'email', 'notes'] as const;
+type ProjectTab = (typeof PROJECT_TAB_VALUES)[number];
+
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
   const { setPageName } = useCollaboration();
@@ -610,13 +613,36 @@ export const ProjectView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchTerm = searchParams.get('search') || '';
+  const setSearchTerm = (term: string) => {
+    if (term) {
+      searchParams.set('search', term);
+    } else {
+      searchParams.delete('search');
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
   const [project, setProject] = useState<Project | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeletePrintoutConfirm, setShowDeletePrintoutConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pages' | 'takeoffs' | 'printouts' | 'email' | 'notes'>('pages');
+  // Tab lives in the URL so the project sidebar can highlight the section,
+  // refresh/back preserve it, and links can target a tab directly.
+  const tabParam = searchParams.get('tab');
+  const activeTab: ProjectTab = (PROJECT_TAB_VALUES as readonly string[]).includes(tabParam ?? '')
+    ? (tabParam as ProjectTab)
+    : 'pages';
+  const setActiveTab = (tab: ProjectTab) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'pages') next.delete('tab');
+      else next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  };
   const [showSendProposalModal, setShowSendProposalModal] = useState(false);
   const [sendProposalFileId, setSendProposalFileId] = useState('');
   const [sendProposalMessage, setSendProposalMessage] = useState('');
@@ -836,16 +862,6 @@ export const ProjectView: React.FC = () => {
   const [isRetryingUpload, setIsRetryingUpload] = useState(false);
   const [retryProgress, setRetryProgress] = useState({ status: '', current: 0, total: 0, fileName: '' });
   const [retryPlanSetId, setRetryPlanSetId] = useState<string>('');
-  const [searchParams, setSearchParams] = useSearchParams();
-  const searchTerm = searchParams.get('search') || '';
-  const setSearchTerm = (term: string) => {
-    if (term) {
-      searchParams.set('search', term);
-    } else {
-      searchParams.delete('search');
-    }
-    setSearchParams(searchParams, { replace: true });
-  };
   const [isEditingProjectName, setIsEditingProjectName] = useState(false);
   const [editProjectName, setEditProjectName] = useState('');
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
