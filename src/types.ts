@@ -139,7 +139,7 @@ export interface BidEmail {
   htmlBody?: string;        // HTML body
   receivedAt: number;       // Timestamp
   attachmentIds?: string[]; // File IDs stored in images table
-  accountId?: string;       // Which IMAP account this came from
+  accountId?: string;       // Inbound-account id retained for legacy data compatibility (IMAP removed).
 }
 
 export interface SmtpSettings {
