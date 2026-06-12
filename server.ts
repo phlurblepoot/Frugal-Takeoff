@@ -18,7 +18,7 @@ import { runMigrations } from './server/migrations';
 import { migrations } from './server/migrationList';
 import { registerDataRoutes } from './server/routes';
 import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
-import { getDataUrlString, putBuffer } from './server/files';
+import { getDataUrlString } from './server/files';
 
 dotenv.config();
 
