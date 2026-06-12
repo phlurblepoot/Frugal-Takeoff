@@ -48,8 +48,10 @@ const downloadBlob = (blob: Blob, name: string) => {
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 export const ProjectDocuments: React.FC = () => {
@@ -87,18 +89,20 @@ export const ProjectDocuments: React.FC = () => {
   const handleUpload = async (list: FileList | null) => {
     if (!list || !projectId) return;
     setUploading(true);
-    try {
-      for (const file of Array.from(list)) {
+    let succeeded = 0;
+    for (const file of Array.from(list)) {
+      try {
         await uploadProjectFile(projectId, file, kindFromMime(file.type || 'application/octet-stream'));
-      }
-      toast(`Uploaded ${list.length} file${list.length > 1 ? 's' : ''}`, { type: 'success' });
-      load();
-    } catch {
-      toast('Upload failed', { type: 'error' });
-    } finally {
-      setUploading(false);
-      if (inputRef.current) inputRef.current.value = '';
+        succeeded++;
+      } catch { /* keep going */ }
     }
+    const failed = list.length - succeeded;
+    if (failed === 0) toast(`Uploaded ${list.length} file${list.length > 1 ? 's' : ''}`, { type: 'success' });
+    else if (succeeded === 0) toast('Upload failed', { type: 'error' });
+    else toast(`Uploaded ${succeeded} of ${list.length} — ${failed} failed`, { type: 'error' });
+    setUploading(false);
+    if (inputRef.current) inputRef.current.value = '';
+    load();
   };
 
   const handleOpen = async (f: ProjectFile) => {
@@ -146,6 +150,7 @@ export const ProjectDocuments: React.FC = () => {
             <button
               key={k.id}
               onClick={() => setFilter(k.id)}
+              aria-pressed={filter === k.id}
               className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                 filter === k.id
                   ? 'border-accent-500 bg-accent-50 text-accent-700 dark:bg-accent-900/30 dark:text-accent-300'
