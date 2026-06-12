@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Search, FolderOpen, FileText, Ruler, Mail, Plus, Home, Settings as SettingsIcon,
+  Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   FileSpreadsheet, CheckSquare, Clock, CornerDownLeft, X, Keyboard,
 } from 'lucide-react';
 import { searchAll, SearchResult } from '../utils/store';
@@ -23,7 +23,6 @@ const typeIcon = (type: SearchResult['type']) => {
     case 'project': return <FolderOpen size={16} />;
     case 'page': return <FileText size={16} />;
     case 'takeoff': return <Ruler size={16} />;
-    case 'bid': return <Mail size={16} />;
   }
 };
 
@@ -31,7 +30,6 @@ const typeLabel: Record<SearchResult['type'], string> = {
   project: 'Project',
   page: 'Page',
   takeoff: 'Takeoff',
-  bid: 'Bid',
 };
 
 const isTyping = () => {
@@ -111,7 +109,6 @@ export const CommandPalette: React.FC = () => {
       case 'project': navigate(`/project/${item.projectId}`); break;
       case 'page': navigate(`/project/${item.projectId}/page/${item.pageId}`); break;
       case 'takeoff': navigate(`/project/${item.projectId}`, { state: { activeTab: 'takeoffs' } }); break;
-      case 'bid': navigate('/?tab=bids'); break;
     }
   }, [close, navigate]);
 
@@ -184,7 +181,7 @@ export const CommandPalette: React.FC = () => {
                   ref={inputRef}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search projects, pages, takeoffs, bids…"
+                  placeholder="Search projects, pages, takeoffs…"
                   aria-label="Search"
                   className="flex-1 py-4 bg-transparent outline-none text-slate-900 dark:text-white placeholder-slate-400 text-sm"
                 />
