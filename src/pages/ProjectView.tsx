@@ -2601,32 +2601,11 @@ export const ProjectView: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  const handleViewPrintout = async (printout: Printout) => {
-    const dataUrl = await getFile(printout.fileId);
-    if (!dataUrl) return;
-
-    if (printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')) {
-      // Open Excel files in the Spreadsheet Editor
-      const response = await fetch(dataUrl);
-      const blob = await response.blob();
-      const fileName = printout.name.endsWith('.xlsx') ? printout.name : `${printout.name}.xlsx`;
-      const file = new File([blob], fileName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const source = projectId
-        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
-        : undefined;
-      navigate('/tools/sheets', { state: { file, source } });
-    } else {
-      // Convert data URL to File and open in the PDF Editor. Pass source info so
-      // Save in the editor overwrites this same printout via the file API.
-      const response = await fetch(dataUrl);
-      const blob = await response.blob();
-      const fileName = printout.name.endsWith('.pdf') ? printout.name : `${printout.name}.pdf`;
-      const file = new File([blob], fileName, { type: 'application/pdf' });
-      const source = projectId
-        ? { projectId, printoutId: printout.id, fileId: printout.fileId }
-        : undefined;
-      navigate('/tools/pdf', { state: { file, source } });
-    }
+  const handleViewPrintout = (printout: Printout) => {
+    // Open by file id — the editor fetches meta + content and saves as a new
+    // version under the same id, so this printout reference stays valid.
+    const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
+    navigate(isExcel ? `/tools/sheets?fileId=${printout.fileId}` : `/tools/pdf?fileId=${printout.fileId}`);
   };
 
   // Pops the share modal (copy button + QR code) for a freshly created link.
