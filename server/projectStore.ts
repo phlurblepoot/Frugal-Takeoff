@@ -282,6 +282,9 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
     }
+    // Drop editor drafts for this project's files before the files vanish, so
+    // the subquery can still resolve their ids (prevents a slow drafts leak).
+    db.prepare('DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM files WHERE projectId = ?').run(id);
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   });

@@ -545,7 +545,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/drafts/:fileId', authenticateToken, (req, res) => {
     try {
       const row = db.prepare('SELECT kind, data, updatedAt FROM drafts WHERE userId = ? AND fileId = ?')
-        .get((req as any).user?.id, req.params.fileId);
+        .get((req as any).user.id, req.params.fileId);
       if (!row) return res.status(404).json({ error: 'No draft' });
       res.json(row);
     } catch (e) {
@@ -562,7 +562,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         return res.status(413).json({ error: 'Draft too large' });
       }
       db.prepare('INSERT OR REPLACE INTO drafts (userId, fileId, kind, data, updatedAt) VALUES (?, ?, ?, ?, ?)')
-        .run((req as any).user?.id, req.params.fileId, kind, data, Date.now());
+        .run((req as any).user.id, req.params.fileId, kind, data, Date.now());
       res.json({ success: true });
     } catch (e) {
       console.error('Error saving draft:', e);
@@ -573,7 +573,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.delete('/api/drafts/:fileId', authenticateToken, (req, res) => {
     try {
       db.prepare('DELETE FROM drafts WHERE userId = ? AND fileId = ?')
-        .run((req as any).user?.id, req.params.fileId);
+        .run((req as any).user.id, req.params.fileId);
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Failed to delete draft' });

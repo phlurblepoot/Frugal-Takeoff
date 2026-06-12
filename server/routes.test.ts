@@ -395,4 +395,13 @@ describe('drafts', () => {
     expect((await request(app).put('/api/drafts/f1').send({ kind: 'pdf' })).status).toBe(400);
     expect((await request(app).put('/api/drafts/f1').send({ kind: 'nope', data: '{}' })).status).toBe(400);
   });
+
+  it('deleteProject removes drafts for its files', async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+    await request(app).post('/api/files/df1?projectId=p1&kind=document&name=D.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('x'));
+    await request(app).put('/api/drafts/df1').send({ kind: 'pdf', data: '{}' });
+    await request(app).delete('/api/projects/p1');
+    expect((await request(app).get('/api/drafts/df1')).status).toBe(404);
+  });
 });
