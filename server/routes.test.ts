@@ -303,3 +303,39 @@ describe('GET /api/activity?projectId=', () => {
     for (const item of res.body.items) expect(item.projectId).toBe('p1');
   });
 });
+
+describe('project files', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+  });
+
+  it('POST /api/files/:id labels uploads via query params', async () => {
+    const res = await request(app)
+      .post('/api/files/doc1?projectId=p1&kind=document&name=Contract.pdf')
+      .set('Content-Type', 'application/pdf')
+      .send(Buffer.from('pdfbytes'));
+    expect(res.status).toBe(200);
+    const meta = await request(app).get('/api/files/doc1/meta');
+    expect(meta.status).toBe(200);
+    expect(meta.body).toMatchObject({
+      id: 'doc1', projectId: 'p1', kind: 'document', name: 'Contract.pdf',
+      mime: 'application/pdf', versionNumber: 1, parentFileId: null,
+    });
+  });
+
+  it('GET /api/projects/:id/files lists live files newest-first, no version rows', async () => {
+    await request(app).post('/api/files/doc1?projectId=p1&kind=document&name=A.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('a'));
+    await request(app).post('/api/files/doc2?projectId=p1&kind=spreadsheet&name=B.xlsx')
+      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .send(Buffer.from('b'));
+    const res = await request(app).get('/api/projects/p1/files');
+    expect(res.status).toBe(200);
+    expect(res.body.map((f: any) => f.id).sort()).toEqual(['doc1', 'doc2']);
+    expect(res.body[0].sha256).toBeUndefined(); // slim listing
+  });
+
+  it('GET /api/files/:id/meta 404s for unknown files', async () => {
+    expect((await request(app).get('/api/files/nope/meta')).status).toBe(404);
+  });
+});

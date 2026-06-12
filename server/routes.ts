@@ -216,7 +216,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           return res.status(400).json({ error: 'Empty body' });
         }
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
-        putBuffer(db, dataDir, req.params.id, body, mime);
+        // Optional labeling so project-context uploads land attributed
+        // (Phase 1 left projectId NULL on this legacy-compat endpoint).
+        const q = req.query;
+        putBuffer(db, dataDir, req.params.id, body, mime, {
+          projectId: typeof q.projectId === 'string' && q.projectId ? q.projectId : undefined,
+          kind: typeof q.kind === 'string' && q.kind ? q.kind : undefined,
+          name: typeof q.name === 'string' && q.name ? q.name : undefined,
+        });
         res.json({ success: true });
       } catch (e) {
         console.error('Error saving file:', e);
@@ -264,6 +271,30 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) {
       console.error('Error streaming file:', e);
       res.status(500).json({ error: 'Failed to stream file' });
+    }
+  });
+
+  app.get('/api/files/:id/meta', authenticateToken, (req, res) => {
+    try {
+      const meta = getMeta(db, req.params.id);
+      if (!meta) return res.status(404).json({ error: 'File not found' });
+      const { sha256, legacyFormat, ...slim } = meta as any;
+      res.json(slim);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to fetch file metadata' });
+    }
+  });
+
+  app.get('/api/projects/:id/files', authenticateToken, (req, res) => {
+    try {
+      res.json(db.prepare(`
+        SELECT id, projectId, name, mime, size, kind, parentFileId, versionNumber, createdAt
+        FROM files WHERE projectId = ? AND parentFileId IS NULL
+        ORDER BY createdAt DESC
+      `).all(req.params.id));
+    } catch (e) {
+      console.error('Error listing project files:', e);
+      res.status(500).json({ error: 'Failed to list project files' });
     }
   });
 
