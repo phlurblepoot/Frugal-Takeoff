@@ -5,7 +5,7 @@ import React from 'react';
 const CONTROL =
   'w-full rounded-lg border border-edge bg-raised px-3 py-2 text-sm text-ink ' +
   'placeholder:text-ink-faint transition-colors ' +
-  'focus:border-accent-400 focus:outline-none focus:ring-2 focus:ring-accent-500/25 ' +
+  'focus:border-accent-400 focus-visible:outline-none focus:ring-2 focus:ring-accent-500/25 ' +
   'disabled:opacity-50 disabled:cursor-not-allowed';
 
 export const Field: React.FC<{
@@ -15,13 +15,18 @@ export const Field: React.FC<{
   error?: string;
   children: React.ReactNode;
 }> = ({ label, htmlFor, hint, error, children }) => (
+  // Screen-reader note: the error <p> gets id `${htmlFor}-error`; callers that
+  // need announced errors should pass aria-invalid + aria-describedby on the
+  // control themselves (Field cannot reach into opaque children safely).
   <div className="space-y-1.5">
     <label htmlFor={htmlFor} className="block text-sm font-medium text-ink">
       {label}
     </label>
     {children}
     {error ? (
-      <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+      <p id={htmlFor ? `${htmlFor}-error` : undefined} className="text-xs text-red-600 dark:text-red-400">
+        {error}
+      </p>
     ) : hint ? (
       <p className="text-xs text-ink-faint">{hint}</p>
     ) : null}
