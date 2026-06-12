@@ -504,14 +504,16 @@ export const patchProject = async (
   return await res.json();
 };
 
-export const getActivity = async (limit = 20): Promise<ActivityItem[]> => {
-  const res = await fetchWithRetry(`/api/activity?limit=${limit}`, { headers: { ...getAuthHeaders() } });
+export const getActivity = async (limit = 20, projectId?: string): Promise<ActivityItem[]> => {
+  const qs = `limit=${limit}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`;
+  const res = await fetchWithRetry(`/api/activity?${qs}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return (await res.json()).items;
 };
 
-export const getMyTimeEntries = async (): Promise<TimeEntryLite[]> => {
-  const res = await fetchWithRetry('/api/time-entries', { headers: { ...getAuthHeaders() } });
+export const getMyTimeEntries = async (projectId?: string): Promise<TimeEntryLite[]> => {
+  const url = projectId ? `/api/time-entries?projectId=${encodeURIComponent(projectId)}` : '/api/time-entries';
+  const res = await fetchWithRetry(url, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return await res.json();
 };
@@ -530,6 +532,123 @@ export const clockOut = async (): Promise<void> => {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({}),
+  });
+  await handleResponse(res);
+};
+
+// ── Phase 3b: project files, versions, drafts ────────────────────────────────
+
+export interface ProjectFile {
+  id: string;
+  projectId: string | null;
+  name: string | null;
+  mime: string;
+  size: number;
+  kind: string;
+  parentFileId: string | null;
+  versionNumber: number;
+  createdAt: number;
+}
+
+export interface EditorDraft {
+  kind: 'pdf' | 'sheet';
+  data: string;
+  updatedAt: number;
+}
+
+export const getProjectSummary = async (id: string): Promise<ProjectSummary | null> => {
+  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(id)}/summary`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (res.status === 404) return null;
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getProjectFiles = async (projectId: string): Promise<ProjectFile[]> => {
+  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(projectId)}/files`, {
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getFileMeta = async (id: string): Promise<ProjectFile | null> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/meta`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (res.status === 404) return null;
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const listFileVersions = async (id: string): Promise<ProjectFile[]> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/versions`, {
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Upload a new project document. Returns the generated file id.
+export const uploadProjectFile = async (
+  projectId: string,
+  file: File,
+  kind: string
+): Promise<string> => {
+  const id = crypto.randomUUID();
+  const qs = `projectId=${encodeURIComponent(projectId)}&kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(file.name)}`;
+  const res = await fetchWithRetry(`/api/files/${id}?${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream', ...getAuthHeaders() },
+    body: file,
+  }, { timeoutMs: 300_000 });
+  await handleResponse(res);
+  return id;
+};
+
+// Save-as-version: live content keeps its id; old bytes become history.
+export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/versions`, {
+    method: 'POST',
+    headers: { 'Content-Type': blob.type || 'application/octet-stream', ...getAuthHeaders() },
+    body: blob,
+  }, { timeoutMs: 300_000 });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Authenticated binary fetch of a file's live content.
+export const fetchFileBlob = async (id: string): Promise<Blob> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/content`, {
+    headers: { ...getAuthHeaders() },
+  }, { timeoutMs: 300_000 });
+  await handleResponse(res);
+  return await res.blob();
+};
+
+export const getDraft = async (fileId: string): Promise<EditorDraft | null> => {
+  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (res.status === 404) return null;
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const putDraft = async (fileId: string, kind: 'pdf' | 'sheet', data: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ kind, data }),
+  });
+  await handleResponse(res);
+};
+
+export const deleteDraft = async (fileId: string): Promise<void> => {
+  const res = await fetchWithRetry(`/api/drafts/${encodeURIComponent(fileId)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
   });
   await handleResponse(res);
 };
