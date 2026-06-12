@@ -437,3 +437,66 @@ describe('deleteProject billing cascade', () => {
     expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
+
+describe('billing routes', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  it('invoice create → get → status → list', async () => {
+    const create = await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 2, unitPrice: 100 }] });
+    expect(create.status).toBe(200);
+    const id = create.body.id;
+    const get = await request(app).get(`/api/invoices/${id}`);
+    expect(get.body.totalCents).toBe(20000);
+    expect(get.body.balanceCents).toBe(20000);
+    const status = await request(app).patch(`/api/invoices/${id}`).send({ status: 'sent' });
+    expect(status.status).toBe(200);
+    const list = await request(app).get('/api/projects/p1/invoices');
+    expect(list.body[0].status).toBe('sent');
+  });
+
+  it('save invoice is version-checked (409 on stale)', async () => {
+    const create = await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] });
+    const id = create.body.id;
+    const inv = (await request(app).get(`/api/invoices/${id}`)).body;
+    const ok = await request(app).put(`/api/invoices/${id}`).send({ ...inv, terms: 'Net 15' });
+    expect(ok.status).toBe(200);
+    const stale = await request(app).put(`/api/invoices/${id}`).send({ ...inv, terms: 'Clobber' });
+    expect(stale.status).toBe(409);
+  });
+
+  it('payments round-trip and affect balance', async () => {
+    const id = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] })).body.id;
+    const pay = await request(app).post(`/api/invoices/${id}/payments`).send({ amount: 40, method: 'check' });
+    expect(pay.status).toBe(200);
+    expect((await request(app).get(`/api/invoices/${id}`)).body.balanceCents).toBe(6000);
+    await request(app).delete(`/api/payments/${pay.body.id}`).expect(200);
+    expect((await request(app).get(`/api/invoices/${id}`)).body.balanceCents).toBe(10000);
+  });
+
+  it('change orders + project billing summary rollup', async () => {
+    // set a base contract value via PATCH project
+    await request(app).patch('/api/projects/p1').send({ version: 1, /* contractValue not in patch — set directly */ });
+    db.prepare('UPDATE projects SET contractValue = 10000 WHERE id = ?').run('p1');
+    const co = await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', amount: 2000 });
+    await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
+    const summary = await request(app).get('/api/projects/p1/billing-summary');
+    expect(summary.body.contractValueCents).toBe(1200000); // 10000 + 2000
+  });
+
+  it('rejects non-admins with 403', async () => {
+    // re-register routes with a requireAdmin that denies — simulate a member
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+    expect((await request(memberApp).get('/api/projects/p1/invoices')).status).toBe(403);
+    expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
+  });
+});

@@ -9,6 +9,13 @@ import {
 import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
+import {
+  listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
+  recordPayment, deletePayment, setInvoiceStatus,
+  listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+  billingSummary,
+  ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
+} from './billingStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -162,6 +169,79 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       console.error('Error computing project storage:', e);
       res.status(500).json({ error: 'Failed to compute project storage' });
     }
+  });
+
+  // ── Billing (admin only, spec §4.1/§4.3) ──────────────────────────────────
+  const billingErr = (e: unknown, res: express.Response) => {
+    if (e instanceof BillingNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof BillingConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof BillingValidationError) return res.status(400).json({ error: e.message });
+    console.error('Billing error:', e);
+    return res.status(500).json({ error: 'Billing operation failed' });
+  };
+
+  app.get('/api/projects/:id/invoices', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(listInvoices(db, req.params.id)); } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/projects/:id/invoices', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const r = createInvoice(db, req.params.id, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'invoice_created', message: `Invoice ${req.body?.number ?? ''} created` });
+      res.json(r);
+    } catch (e) { billingErr(e, res); }
+  });
+  app.get('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { const inv = getInvoice(db, req.params.id); if (!inv) return res.status(404).json({ error: 'Invoice not found' }); res.json(inv); } catch (e) { billingErr(e, res); }
+  });
+  app.put('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json({ success: true, ...saveInvoice(db, req.params.id, req.body) }); } catch (e) { billingErr(e, res); }
+  });
+  app.patch('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      const r = setInvoiceStatus(db, req.params.id, req.body.status);
+      res.json({ success: true, ...r });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { deleteInvoice(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+  });
+
+  app.post('/api/invoices/:id/payments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const r = recordPayment(db, req.params.id, req.body);
+      logActivity(db, { userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
+      res.json(r);
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { deletePayment(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+  });
+
+  app.get('/api/projects/:id/change-orders', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(listChangeOrders(db, req.params.id)); } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/projects/:id/change-orders', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const r = createChangeOrder(db, req.params.id, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'change_order_created', message: `Change order ${req.body?.number ?? ''} created` });
+      res.json(r);
+    } catch (e) { billingErr(e, res); }
+  });
+  app.patch('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      const r = setChangeOrderStatus(db, req.params.id, req.body.status);
+      if (req.body.status === 'approved') logActivity(db, { userId: (req as any).user?.id, type: 'change_order_approved', message: 'Change order approved' });
+      res.json({ success: true, ...r });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { deleteChangeOrder(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+  });
+
+  app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(billingSummary(db, req.params.id)); } catch (e) { billingErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────
