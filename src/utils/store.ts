@@ -765,3 +765,64 @@ export const sendInvoice = async (id: string, payload: { to: string; fileId: str
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
 };
+
+// ── Phase 4b: issues ─────────────────────────────────────────────────────────
+
+export interface IssuePhoto { id: string; fileId: string; sortOrder: number; }
+export interface Issue {
+  id: string;
+  projectId: string;
+  number: number;
+  title: string | null;
+  description: string | null;
+  status: string; // open | sent | resolved
+  version: number;
+  sentAt: number | null;
+  createdAt: number;
+  photos: IssuePhoto[];
+}
+export interface IssueListItem {
+  id: string; projectId: string; number: number; title: string | null;
+  description: string | null; status: string; version: number; sentAt: number | null;
+  createdAt: number; photoCount: number;
+}
+
+const issueJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getIssues = async (projectId: string): Promise<IssueListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/issues`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getIssue = async (id: string): Promise<Issue> => {
+  const res = await fetchWithRetry(`/api/issues/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createIssue = async (projectId: string, input: { title: string; description?: string }): Promise<{ id: string; number: number }> => {
+  const res = await issueJson('POST', `/api/projects/${projectId}/issues`, input);
+  await handleResponse(res); return res.json();
+};
+export const saveIssue = async (id: string, issue: Issue): Promise<{ version: number }> => {
+  const res = await issueJson('PUT', `/api/issues/${id}`, issue);
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setIssueStatus = async (id: string, status: string): Promise<void> => {
+  const res = await issueJson('PATCH', `/api/issues/${id}`, { status }); await handleResponse(res);
+};
+export const deleteIssue = async (id: string): Promise<void> => {
+  const res = await issueJson('DELETE', `/api/issues/${id}`); await handleResponse(res);
+};
+export const addIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('POST', `/api/issues/${issueId}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
+  const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const sendIssue = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+  const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
+};
