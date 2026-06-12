@@ -236,11 +236,10 @@ export function listProjectSummaries(db: Database.Database): any[] {
       (db.prepare(`SELECT projectId, COUNT(*) AS c FROM ${table} GROUP BY projectId`).all() as any[])
         .map(r => [r.projectId, r.c])
     );
-  const pageCounts = countBy('pages');
   const takeoffCounts = countBy('takeoffs');
 
   const pageIdsByProject = new Map<string, string[]>();
-  for (const r of db.prepare('SELECT id, projectId FROM pages').all() as any[]) {
+  for (const r of db.prepare('SELECT id, projectId FROM pages ORDER BY sortOrder').all() as any[]) {
     if (!pageIdsByProject.has(r.projectId)) pageIdsByProject.set(r.projectId, []);
     pageIdsByProject.get(r.projectId)!.push(r.id);
   }
@@ -256,7 +255,7 @@ export function listProjectSummaries(db: Database.Database): any[] {
     createdAt: r.createdAt ?? 0,
     updatedAt: r.updatedAt ?? null,
     archived: !!r.archived,
-    pageCount: pageCounts.get(r.id) ?? 0,
+    pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
     takeoffCount: takeoffCounts.get(r.id) ?? 0,
     pageIds: pageIdsByProject.get(r.id) ?? [],
   }));
