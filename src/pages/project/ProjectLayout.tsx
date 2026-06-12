@@ -19,15 +19,22 @@ export const ProjectLayout: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
 
+  // Manual refresh (e.g. after a stage change) — refetches the current
+  // project, so a late resolution can't be stale.
   const refreshSummary = () => {
     if (!projectId) return;
     getProjectSummary(projectId).then(setSummary).catch(() => {});
   };
 
+  // On project switch, guard against an out-of-order resolution: if A→B
+  // happens fast and A's request resolves after B's, the stale flag drops it.
   useEffect(() => {
     setSummary(null);
-    refreshSummary();
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!projectId) return;
+    let stale = false;
+    getProjectSummary(projectId).then(s => { if (!stale) setSummary(s); }).catch(() => {});
+    return () => { stale = true; };
+  }, [projectId]);
 
   // Register only once the name is known — the sidebar shows 'Project' until then.
   useRegisterProjectShell(summary?.id, summary?.name);
