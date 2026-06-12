@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet, useLocation } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
+import { Dashboard } from './pages/Dashboard';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
@@ -83,6 +84,10 @@ export default function App() {
         {
           index: true,
           element: <ProjectsPage />,
+        },
+        {
+          path: 'dashboard',
+          element: <Dashboard />,
         },
         {
           path: 'new',
