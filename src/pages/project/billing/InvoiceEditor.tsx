@@ -123,11 +123,17 @@ export const InvoiceEditor: React.FC<{
   };
 
   const handleSend = async () => {
-    if (!sendTo.trim()) { toast('Enter a recipient email address', { type: 'warning' }); return; }
+    if (!sendTo.trim() || !/\S+@\S+\.\S+/.test(sendTo.trim())) {
+      toast('Enter a valid email address', { type: 'warning' });
+      return;
+    }
     setSending(true);
     try {
       const bytes = await buildBytes();
       const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
+      // The PDF is uploaded as a project document before sending; if the send
+      // fails the file remains in Documents (project-attributed), and a retry
+      // uploads another — acceptable for v1.
       const fileId = await uploadProjectFile(projectId, file, 'invoice');
       await sendInvoice(invoice.id, { to: sendTo.trim(), fileId, message: 'Please find the attached invoice.' });
       toast('Invoice sent', { type: 'success' });
