@@ -1,0 +1,85 @@
+// src/pages/project/issues/issuePdf.ts
+import { jsPDF } from 'jspdf';
+import { Issue } from '../../../utils/store';
+import { resolveAccentRgb } from '../billing/invoicePdf';
+
+export const issueHeading = (issue: Pick<Issue, 'number' | 'title'>): string =>
+  `ISS-${String(issue.number).padStart(3, '0')} · ${issue.title || '(untitled)'}`;
+
+export interface IssuePdfContext {
+  issue: Issue;
+  projectName: string;
+  contractor?: string | null;
+  company: { name: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
+  photoDataUrls: string[]; // pre-fetched (caller resolves each fileId → dataURL)
+  accentRgb?: [number, number, number];
+}
+
+// Builds the issue report PDF and returns the bytes. Reuses the Layout-A header
+// treatment (logo + company left, accent title right) for visual consistency
+// with invoices; body is the issue number/title/description; photos grid follows.
+export function buildIssuePdf(ctx: IssuePdfContext): Uint8Array {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.getWidth();
+  const Hp = doc.internal.pageSize.getHeight();
+  const M = 48;
+  const [ar, ag, ab] = ctx.accentRgb ?? [37, 99, 235];
+  let y = M;
+
+  // Header: logo + company (left), ISSUE REPORT title (right)
+  let leftY = y;
+  if (ctx.company.logoDataUrl) {
+    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip */ }
+  }
+  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
+  doc.text(ctx.company.name || 'Issue Report', M, leftY + 4); leftY += 16;
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90, 90, 90);
+  for (const line of [ctx.company.address, [ctx.company.phone, ctx.company.email].filter(Boolean).join('  ·  ')].filter(Boolean)) {
+    doc.text(String(line), M, leftY); leftY += 12;
+  }
+  doc.setFont('helvetica', 'bold').setFontSize(20).setTextColor(ar, ag, ab);
+  doc.text('ISSUE REPORT', W - M, y + 16, { align: 'right' });
+  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
+  doc.text(new Date(ctx.issue.createdAt).toLocaleDateString(), W - M, y + 34, { align: 'right' });
+  y = Math.max(leftY, y + 50) + 16;
+
+  // Project / contractor
+  doc.setFontSize(10).setTextColor(30, 30, 30);
+  for (const line of [`Project: ${ctx.projectName}`, ctx.contractor ? `Contractor: ${ctx.contractor}` : null].filter(Boolean)) {
+    doc.text(String(line), M, y); y += 14;
+  }
+  y += 8;
+
+  // Issue heading + status
+  doc.setFont('helvetica', 'bold').setFontSize(14).setTextColor(ar, ag, ab);
+  doc.text(issueHeading(ctx.issue), M, y); y += 8;
+  doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y); y += 18;
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(120, 120, 120);
+  doc.text(`Status: ${ctx.issue.status}`, M, y); y += 18;
+
+  // Description
+  if (ctx.issue.description) {
+    doc.setFontSize(11).setTextColor(30, 30, 30);
+    const lines = doc.splitTextToSize(ctx.issue.description, W - 2 * M);
+    doc.text(lines, M, y); y += lines.length * 14 + 12;
+  }
+
+  // Photos grid (2 per row)
+  if (ctx.photoDataUrls.length) {
+    doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(60, 60, 60);
+    doc.text('Photos', M, y); y += 14;
+    const cellW = (W - 2 * M - 12) / 2, cellH = 150;
+    let col = 0;
+    for (const url of ctx.photoDataUrls) {
+      if (y + cellH > Hp - M) { doc.addPage(); y = M; col = 0; }
+      const x = M + col * (cellW + 12);
+      try { doc.addImage(url, 'JPEG', x, y, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
+      col++;
+      if (col === 2) { col = 0; y += cellH + 12; }
+    }
+  }
+
+  return doc.output('arraybuffer') as unknown as Uint8Array;
+}
+
+export { resolveAccentRgb };

@@ -21,6 +21,7 @@ import { loadProject, saveProject as storeSaveProject } from './server/projectSt
 import { getDataUrlString } from './server/files';
 import { logActivity } from './server/activity';
 import { getInvoice } from './server/billingStore';
+import { getIssue, markIssueSent } from './server/issueStore';
 
 dotenv.config();
 
@@ -625,6 +626,29 @@ async function startServer() {
     } catch (e: any) {
       console.error('Error sending invoice:', e);
       res.status(500).json({ error: e.message || 'Failed to send invoice' });
+    }
+  });
+
+  // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
+  app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const iss = getIssue(db, req.params.id);
+      if (!iss) return res.status(404).json({ error: 'Issue not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await sendProjectEmail({
+        to,
+        subject: `Issue ISS-${String(iss.number).padStart(3, '0')}${iss.title ? ` — ${iss.title}` : ''}`,
+        text: message || 'Please find the attached issue report.',
+        fileId,
+        attachmentName: `ISS-${String(iss.number).padStart(3, '0')}.pdf`,
+      });
+      try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
+      logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${String(iss.number).padStart(3, '0')} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending issue:', e);
+      res.status(500).json({ error: e.message || 'Failed to send issue' });
     }
   });
 
