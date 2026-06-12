@@ -22,6 +22,8 @@ export default defineConfig({
           include: ['src/**/*.test.{ts,tsx}'],
           environment: 'jsdom',
           setupFiles: ['./src/test/setup.ts'],
+          // globals enables RTL's auto-cleanup between tests (it registers via
+          // a global afterEach); ui project only — server tests import explicitly.
           globals: true,
         },
       },
