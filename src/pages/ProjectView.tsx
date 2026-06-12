@@ -2936,18 +2936,6 @@ export const ProjectView: React.FC = () => {
     });
   };
 
-  const handleToggleStatus = async (field: 'submitted' | 'responded' | 'accepted') => {
-    if (!project) return;
-    
-    const updatedProject = {
-      ...project,
-      [field]: !project[field]
-    };
-    
-    await saveProject(updatedProject);
-    setProject(updatedProject);
-  };
-
   const handleSaveDueDate = async () => {
     if (!project) return;
     const updatedProject = {
@@ -3246,38 +3234,7 @@ export const ProjectView: React.FC = () => {
               onChanged={(version, status) => setProject(p => (p ? { ...p, version, status } : p))}
             />
 
-            {/* TODO 3b: retire submitted/responded/accepted toggles — superseded by lifecycle status */}
             <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
-              <button
-                onClick={() => handleToggleStatus('submitted')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
-                  project.submitted 
-                    ? 'bg-accent-600 text-white border-accent-600 shadow-sm'
-                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-accent-300 hover:text-accent-500'
-                }`}
-              >
-                Submitted
-              </button>
-              <button
-                onClick={() => handleToggleStatus('responded')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
-                  project.responded 
-                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm'
-                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-amber-300 hover:text-amber-500'
-                }`}
-              >
-                Responded
-              </button>
-              <button
-                onClick={() => handleToggleStatus('accepted')}
-                className={`px-2.5 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border ${
-                  project.accepted 
-                    ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm'
-                    : 'bg-white dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700 hover:border-emerald-300 hover:text-emerald-500'
-                }`}
-              >
-                Accepted
-              </button>
               <button
                 onClick={() => projectId && openNotes(projectId)}
                 className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
