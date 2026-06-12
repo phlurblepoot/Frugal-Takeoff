@@ -11,6 +11,7 @@ export interface ActivityEvent {
 
 // Best-effort event log powering the dashboard feed. Logging must never break
 // the operation it decorates — failures are swallowed (and logged to stderr).
+// No retention policy (rows are ~150 bytes; add a createdAt sweep if it grows).
 export function logActivity(db: Database.Database, e: ActivityEvent): void {
   try {
     db.prepare(
