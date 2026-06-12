@@ -118,3 +118,35 @@ export function deleteInvoice(db: Database.Database, id: string): void {
   });
   tx();
 }
+
+interface PaymentInput { date?: number | null; amount?: number; method?: string; note?: string; }
+
+export function recordPayment(db: Database.Database, invoiceId: string, input: PaymentInput): { id: string } {
+  const inv = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv) throw new NotFoundError('Invoice not found');
+  if (typeof input.amount !== 'number' || !(input.amount > 0)) throw new ValidationError('Payment amount must be a positive number');
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO payments (id, invoiceId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, invoiceId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());
+  return { id };
+}
+
+export function deletePayment(db: Database.Database, id: string): void {
+  db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+}
+
+// Status-only change (draft→sent→paid or back). Version-checked like saveInvoice
+// but leaves lines untouched.
+export function setInvoiceStatus(db: Database.Database, id: string, status: string): { version: number; status: string } {
+  if (!(INVOICE_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid invoice status: ${status}`);
+  let out = { version: 0, status };
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT version FROM invoices WHERE id = ?').get(id) as { version: number } | undefined;
+    if (!row) throw new NotFoundError('Invoice not found');
+    const newVersion = row.version + 1;
+    db.prepare('UPDATE invoices SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+    out = { version: newVersion, status };
+  });
+  tx();
+  return out;
+}

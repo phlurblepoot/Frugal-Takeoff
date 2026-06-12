@@ -10,6 +10,7 @@ import { migrations } from './migrationList';
 import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
+  recordPayment, deletePayment, setInvoiceStatus,
 } from './billingStore';
 
 let db: Database.Database;
@@ -92,5 +93,33 @@ describe('invoices', () => {
     deleteInvoice(db, id);
     expect(getInvoice(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines').get() as any).c).toBe(0);
+  });
+});
+
+describe('payments + status', () => {
+  it('records and deletes payments; balance reflects them', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    const p1 = recordPayment(db, id, { date: 1, amount: 40, method: 'check', note: 'deposit' });
+    recordPayment(db, id, { date: 2, amount: 25.5, method: 'card' });
+    let inv = getInvoice(db, id)!;
+    expect(inv.paidCents).toBe(6550);
+    expect(inv.balanceCents).toBe(3450);
+    deletePayment(db, p1.id);
+    inv = getInvoice(db, id)!;
+    expect(inv.paidCents).toBe(2550);
+  });
+
+  it('rejects invalid payment amounts and unknown invoices', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    expect(() => recordPayment(db, id, { amount: -5 })).toThrow(ValidationError);
+    expect(() => recordPayment(db, 'nope', { amount: 5 })).toThrow(NotFoundError);
+  });
+
+  it('setInvoiceStatus validates the value and bumps version', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    const r = setInvoiceStatus(db, id, 'sent');
+    expect(r.version).toBe(2);
+    expect(getInvoice(db, id)!.status).toBe('sent');
+    expect(() => setInvoiceStatus(db, id, 'galactic')).toThrow(ValidationError);
   });
 });
