@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createBrowserRouter, RouterProvider, Outlet, useLocation, matchPath } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, useLocation } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { ProjectsList } from './pages/ProjectsList';
 import { NewProject } from './pages/NewProject';
@@ -20,43 +20,13 @@ import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ShareProvider } from './components/ShareLinkModal';
 import { CommandPalette } from './components/CommandPalette';
-import { SideDock, DockState } from './components/SideDock';
+import { AppShell } from './components/shell/AppShell';
 import ProjectConflictListener from './components/ProjectConflictListener';
 import { getSettings } from './utils/store';
-
-const DOCK_STORAGE_KEY = 'sideDockState';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const location = useLocation();
   const isLoginPage = location.pathname === '/login';
-
-  const [dockState, setDockState] = useState<DockState>(() => {
-    const saved = localStorage.getItem(DOCK_STORAGE_KEY) as DockState | null;
-    return saved && ['expanded', 'collapsed', 'hidden'].includes(saved) ? saved : 'collapsed';
-  });
-
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  const handleDockChange = (s: DockState) => {
-    setDockState(s);
-    localStorage.setItem(DOCK_STORAGE_KEY, s);
-  };
-
-  const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
-
-  const marginLeft = (isLoginPage || (isMobile && isCanvasPage))
-    ? 0
-    : dockState === 'hidden'
-    ? 0
-    : dockState === 'collapsed'
-    ? 64
-    : 208;
 
   return (
     <ToastProvider>
@@ -65,15 +35,12 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
         <ShareProvider>
           <CollaborationProvider>
             <NotesProvider>
-              <SideDock state={dockState} onChange={handleDockChange} />
               {!isLoginPage && <CommandPalette />}
-              <div
-                style={{ marginLeft, transition: 'margin-left 200ms' }}
-              >
+              <AppShell>
                 <UserPresenceOverlay />
                 <NotesOverlay />
                 <Outlet context={{ appName, logoUrl }} />
-              </div>
+              </AppShell>
             </NotesProvider>
           </CollaborationProvider>
         </ShareProvider>
