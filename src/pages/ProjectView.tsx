@@ -29,6 +29,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useShareLink } from '../components/ShareLinkModal';
 import { Skeleton } from '../components/Skeleton';
+import { ProjectStageControl } from '../components/ProjectStageControl';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -3261,7 +3262,13 @@ export const ProjectView: React.FC = () => {
                 </button>
               </div>
             )}
-            
+              <ProjectStageControl
+                projectId={project.id}
+                version={project.version}
+                status={project.status}
+                onChanged={(version, status) => setProject(p => (p ? { ...p, version, status } : p))}
+              />
+
             <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
               <button
                 onClick={() => handleToggleStatus('submitted')}
