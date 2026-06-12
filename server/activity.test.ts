@@ -40,4 +40,13 @@ describe('activity log', () => {
     db.exec('DROP TABLE activity');
     expect(() => logActivity(db, { type: 't', message: 'm' })).not.toThrow();
   });
+
+  it('filters by projectId when given', () => {
+    logActivity(db, { projectId: 'p1', type: 'a', message: 'one' });
+    logActivity(db, { projectId: 'p9', type: 'a', message: 'two' });
+    logActivity(db, { type: 'a', message: 'three' });
+    const items = listActivity(db, 10, 'p1');
+    expect(items).toHaveLength(1);
+    expect(items[0].message).toBe('one');
+  });
 });

@@ -46,6 +46,17 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  app.get('/api/projects/:id/summary', authenticateToken, (req, res) => {
+    try {
+      const row = listProjectSummaries(db, req.params.id)[0];
+      if (!row) return res.status(404).json({ error: 'Project not found' });
+      res.json(row);
+    } catch (e) {
+      console.error('Error fetching project summary:', e);
+      res.status(500).json({ error: 'Failed to fetch project summary' });
+    }
+  });
+
   app.get('/api/projects/:id', authenticateToken, (req, res) => {
     try {
       const project = loadProject(db, req.params.id);
@@ -120,7 +131,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.get('/api/activity', authenticateToken, (req, res) => {
     try {
-      res.json({ items: listActivity(db, Number(req.query.limit) || 30) });
+      const projectId = typeof req.query.projectId === 'string' && req.query.projectId ? req.query.projectId : undefined;
+      res.json({ items: listActivity(db, Number(req.query.limit) || 30, projectId) });
     } catch (e) {
       console.error('Error fetching activity:', e);
       res.status(500).json({ error: 'Failed to fetch activity' });

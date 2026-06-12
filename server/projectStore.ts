@@ -236,12 +236,12 @@ export function saveProject(db: Database.Database, id: string, payload: any): { 
 // Slim project rows for list/dashboard views — no page/measurement payloads.
 // pageIds are included so the client can keep its "page is being edited"
 // deletion guard without loading full aggregates.
-export function listProjectSummaries(db: Database.Database): any[] {
+export function listProjectSummaries(db: Database.Database, id?: string): any[] {
   const rows = db.prepare(`
     SELECT id, name, status, contractor, address, bidDueDate, version, createdAt, updatedAt,
            COALESCE(json_extract(meta, '$.archived'), 0) AS archived
-    FROM projects ORDER BY createdAt DESC
-  `).all() as any[];
+    FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
+  `).all(...(id ? [id] : [])) as any[];
 
   const countBy = (table: string): Map<string, number> =>
     new Map(

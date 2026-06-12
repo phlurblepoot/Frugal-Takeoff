@@ -22,7 +22,7 @@ export function logActivity(db: Database.Database, e: ActivityEvent): void {
   }
 }
 
-export function listActivity(db: Database.Database, limit = 30): any[] {
+export function listActivity(db: Database.Database, limit = 30, projectId?: string): any[] {
   const capped = Math.max(1, Math.min(100, Math.floor(limit) || 30));
   return db.prepare(`
     SELECT a.id, a.projectId, a.userId, a.type, a.message, a.createdAt,
@@ -30,7 +30,8 @@ export function listActivity(db: Database.Database, limit = 30): any[] {
     FROM activity a
     LEFT JOIN projects p ON p.id = a.projectId
     LEFT JOIN users u ON u.id = a.userId
+    ${projectId ? 'WHERE a.projectId = ?' : ''}
     ORDER BY a.createdAt DESC, a.rowid DESC
     LIMIT ?
-  `).all(capped);
+  `).all(...(projectId ? [projectId, capped] : [capped]));
 }

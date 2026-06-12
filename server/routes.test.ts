@@ -278,3 +278,28 @@ describe('GET /api/activity', () => {
     expect(statusItem.projectName).toBe('Test Project');
   });
 });
+
+describe('GET /api/projects/:id/summary', () => {
+  it('returns the single slim row', async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+    const res = await request(app).get('/api/projects/p1/summary');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 'p1', name: 'Test Project', status: 'estimating', version: 1 });
+    expect(res.body.pages).toBeUndefined();
+  });
+
+  it('404s for unknown projects', async () => {
+    expect((await request(app).get('/api/projects/nope/summary')).status).toBe(404);
+  });
+});
+
+describe('GET /api/activity?projectId=', () => {
+  it('filters the feed to one project', async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', name: 'Other' });
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    const res = await request(app).get('/api/activity?projectId=p1');
+    expect(res.body.items.length).toBeGreaterThan(0);
+    for (const item of res.body.items) expect(item.projectId).toBe('p1');
+  });
+});
