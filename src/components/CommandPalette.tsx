@@ -54,6 +54,7 @@ export const CommandPalette: React.FC = () => {
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const reqId = useRef(0);
+  const clockInFlight = useRef(false);
 
   // On the canvas page the single-key shortcuts belong to the drawing tools, so
   // only the modifier-based palette shortcut is active there.
@@ -73,12 +74,15 @@ export const CommandPalette: React.FC = () => {
     {
       id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,
       run: async () => {
+        if (clockInFlight.current) return;
+        clockInFlight.current = true;
         try {
           const entries = await getMyTimeEntries();
           const open = entries.find(e => e.clockOut === null);
           if (open) { await clockOut(); toast('Clocked out', { type: 'success' }); }
           else { await clockIn(); toast('Clocked in', { type: 'success' }); }
         } catch { toast('Clock action failed', { type: 'error' }); }
+        finally { clockInFlight.current = false; }
       },
     },
   ], [navigate, toast]);

@@ -1,7 +1,7 @@
 // src/components/shell/Sidebar.test.tsx
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../context/ThemeContext';
 import { Sidebar } from './Sidebar';
@@ -44,13 +44,16 @@ describe('Sidebar — company mode', () => {
     expect(screen.getByRole('button', { name: /Projects/ }).className).not.toContain('glow-accent');
   });
 
-  it('marks Dashboard active on /dashboard and Projects active on /projects', () => {
+  it('marks Dashboard active on /dashboard', () => {
     renderAt('/dashboard');
     expect(screen.getByRole('button', { name: /Dashboard/ }).className).toContain('glow-accent');
-    cleanup();
-    localStorage.setItem('token', 'test-token');
+    expect(screen.getByRole('button', { name: /Projects/ }).className).not.toContain('glow-accent');
+  });
+
+  it('marks Projects active on /projects', () => {
     renderAt('/projects');
     expect(screen.getByRole('button', { name: /Projects/ }).className).toContain('glow-accent');
+    expect(screen.getByRole('button', { name: /Dashboard/ }).className).not.toContain('glow-accent');
   });
 
   it('offers a theme toggle', () => {
