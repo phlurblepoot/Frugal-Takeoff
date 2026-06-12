@@ -18,6 +18,10 @@ export interface ModalProps {
 export const Modal: React.FC<ModalProps> = ({
   open, onClose, title, footer, width = 'md', children,
 }) => {
+  const labelId = React.useId();
+
+  // Note: the listener re-registers if `onClose` changes identity each render
+  // (inline arrows). Harmless, but stable handlers via useCallback are nicer.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -36,7 +40,7 @@ export const Modal: React.FC<ModalProps> = ({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
           data-testid="modal-overlay"
-          className="fixed inset-0 z-[150] flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={onClose}
         >
           <motion.div
@@ -46,12 +50,13 @@ export const Modal: React.FC<ModalProps> = ({
             transition={{ duration: 0.15 }}
             role="dialog"
             aria-modal="true"
+            aria-labelledby={title !== undefined ? labelId : undefined}
             className={`flex max-h-[85vh] w-full ${WIDTHS[width]} flex-col rounded-xl border border-edge bg-raised shadow-xl`}
             onClick={(e) => e.stopPropagation()}
           >
             {title !== undefined && (
               <div className="flex shrink-0 items-center justify-between border-b border-edge px-5 py-4">
-                <h2 className="text-base font-semibold text-ink">{title}</h2>
+                <h2 id={labelId} className="text-base font-semibold text-ink">{title}</h2>
                 <button
                   onClick={onClose}
                   aria-label="Close dialog"
