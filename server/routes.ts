@@ -16,6 +16,11 @@ import {
   billingSummary,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
 } from './billingStore';
+import {
+  listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
+  addPhoto, removePhoto,
+  ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
+} from './issueStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -245,6 +250,56 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {
     try { res.json(billingSummary(db, req.params.id)); } catch (e) { billingErr(e, res); }
+  });
+
+  // ── Issues (any authenticated user — field-created, spec §4.3) ────────────
+  const issueErr = (e: unknown, res: express.Response) => {
+    if (e instanceof IssueNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof IssueConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof IssueValidationError) return res.status(400).json({ error: e.message });
+    console.error('Issue error:', e);
+    return res.status(500).json({ error: 'Issue operation failed' });
+  };
+
+  app.get('/api/projects/:id/issues', authenticateToken, (req, res) => {
+    try { res.json(listIssues(db, req.params.id)); } catch (e) { issueErr(e, res); }
+  });
+  app.post('/api/projects/:id/issues', authenticateToken, (req, res) => {
+    try {
+      const r = createIssue(db, req.params.id, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'issue_created', message: `Issue ISS-${String(r.number).padStart(3, '0')} opened: ${req.body?.title ?? ''}` });
+      res.json(r);
+    } catch (e) { issueErr(e, res); }
+  });
+  app.get('/api/issues/:id', authenticateToken, (req, res) => {
+    try { const iss = getIssue(db, req.params.id); if (!iss) return res.status(404).json({ error: 'Issue not found' }); res.json(iss); } catch (e) { issueErr(e, res); }
+  });
+  app.put('/api/issues/:id', authenticateToken, (req, res) => {
+    try { res.json({ success: true, ...saveIssue(db, req.params.id, req.body) }); } catch (e) { issueErr(e, res); }
+  });
+  app.patch('/api/issues/:id', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      const r = setIssueStatus(db, req.params.id, req.body.status);
+      if (req.body.status === 'resolved') {
+        const iss = getIssue(db, req.params.id);
+        logActivity(db, { projectId: iss?.projectId, userId: (req as any).user?.id, type: 'issue_resolved', message: `Issue ISS-${String(iss?.number ?? 0).padStart(3, '0')} resolved` });
+      }
+      res.json({ success: true, ...r });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.delete('/api/issues/:id', authenticateToken, (req, res) => {
+    try { deleteIssue(db, req.params.id); res.json({ success: true }); } catch (e) { issueErr(e, res); }
+  });
+  app.post('/api/issues/:id/photos', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addPhoto(db, req.params.id, req.body.fileId);
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
+  });
+  app.delete('/api/issues/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try { removePhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { issueErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────

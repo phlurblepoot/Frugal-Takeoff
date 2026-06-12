@@ -542,3 +542,45 @@ describe('deleteProject issues cascade', () => {
     expect((db.prepare('SELECT COUNT(*) c FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
+
+describe('issue routes', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  it('create → list (ISS number) → get → status', async () => {
+    const create = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack near door' });
+    expect(create.status).toBe(200);
+    expect(create.body.number).toBe(1);
+    const list = await request(app).get('/api/projects/p1/issues');
+    expect(list.body[0].number).toBe(1);
+    const get = await request(app).get(`/api/issues/${create.body.id}`);
+    expect(get.body.title).toBe('Crack');
+    expect(get.body.status).toBe('open');
+    const patch = await request(app).patch(`/api/issues/${create.body.id}`).send({ status: 'resolved' });
+    expect(patch.status).toBe(200);
+    expect((await request(app).get(`/api/issues/${create.body.id}`)).body.status).toBe('resolved');
+  });
+
+  it('save body is version-checked (409 on stale)', async () => {
+    const id = (await request(app).post('/api/projects/p1/issues').send({ title: 'A' })).body.id;
+    const iss = (await request(app).get(`/api/issues/${id}`)).body;
+    expect((await request(app).put(`/api/issues/${id}`).send({ ...iss, title: 'A2' })).status).toBe(200);
+    expect((await request(app).put(`/api/issues/${id}`).send({ ...iss, title: 'Clobber' })).status).toBe(409);
+  });
+
+  it('photos: link → appears in get → unlink', async () => {
+    const id = (await request(app).post('/api/projects/p1/issues').send({ title: 'A' })).body.id;
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg').set('Content-Type', 'image/jpeg').send(Buffer.from('x'));
+    await request(app).post(`/api/issues/${id}/photos`).send({ fileId: 'ph1' }).expect(200);
+    expect((await request(app).get(`/api/issues/${id}`)).body.photos.map((p: any) => p.fileId)).toEqual(['ph1']);
+    await request(app).delete(`/api/issues/${id}/photos/ph1`).expect(200);
+    expect((await request(app).get(`/api/issues/${id}`)).body.photos).toHaveLength(0);
+  });
+
+  it('validates and 404s', async () => {
+    expect((await request(app).post('/api/projects/p1/issues').send({ title: '' })).status).toBe(400);
+    expect((await request(app).get('/api/issues/nope')).status).toBe(404);
+    expect((await request(app).patch('/api/issues/nope').send({ status: 'open' })).status).toBe(404);
+  });
+});
