@@ -186,7 +186,9 @@ export const ProjectsPage: React.FC = () => {
   const applyPatch = async (p: ProjectSummary, patch: Partial<ProjectSummary> & Record<string, unknown>) => {
     try {
       const r = await patchProject(p.id, { version: p.version, ...patch } as any);
-      setSummaries(prev => prev.map(s => (s.id === p.id ? { ...s, ...patch, version: r.version } : s)));
+      // updatedAt mirrors the server's bump so recency sorting stays correct
+      // without a refetch.
+      setSummaries(prev => prev.map(s => (s.id === p.id ? { ...s, ...patch, version: r.version, updatedAt: Date.now() } : s)));
     } catch (e) {
       if (e instanceof ConflictError) {
         toast('Project changed elsewhere — refreshing', { type: 'warning' });
