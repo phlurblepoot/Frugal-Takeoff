@@ -112,22 +112,45 @@ export const saveUserPreferences = async (prefs: Record<string, string>): Promis
   await handleResponse(res);
 };
 
-export const saveProject = async (project: Project): Promise<void> => {
+// Saves are serialized per project: a save that fires while another is in
+// flight waits for it, then sends with the freshest version we know. This
+// keeps rapid fire-and-forget call sites (measurement edits) from racing
+// themselves into spurious 409s.
+const saveQueues = new Map<string, Promise<void>>();
+// Highest version this tab has confirmed with the server, per project.
+// Heals call sites that pass stale/throwaway objects: a genuinely stale
+// TAB still 409s (the other tab's bumps are never in this map).
+const latestVersions = new Map<string, number>();
+
+export const saveProject = (project: Project): Promise<void> => {
+  const prev = saveQueues.get(project.id) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => doSaveProject(project));
+  saveQueues.set(project.id, run);
+  return run;
+};
+
+async function doSaveProject(project: Project): Promise<void> {
+  const known = latestVersions.get(project.id) ?? 0;
+  const version = Math.max(project.version ?? 0, known) || undefined;
+  const payload = version !== undefined && version !== project.version
+    ? { ...project, version }
+    : project;
   const res = await fetchWithRetry('/api/projects/' + project.id, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(project)
+    body: JSON.stringify(payload)
   });
   if (res.status === 409) {
     window.dispatchEvent(new CustomEvent('project-conflict', { detail: { projectId: project.id } }));
     throw new ConflictError(project.id);
   }
   await handleResponse(res);
-  // Adopt the server's new version so the next save isn't stale. Callers keep
-  // this same object (or spreads of it) in state, so mutating is sufficient.
   const body = await res.json().catch(() => null);
-  if (body && typeof body.version === 'number') project.version = body.version;
-};
+  if (body && typeof body.version === 'number') {
+    project.version = body.version;
+    latestVersions.set(project.id, body.version);
+  }
+}
 
 export const createProject = async (project: Project): Promise<void> => {
   const res = await fetchWithRetry('/api/projects', {
@@ -138,6 +161,7 @@ export const createProject = async (project: Project): Promise<void> => {
   await handleResponse(res);
   const body = await res.json().catch(() => null);
   project.version = body && typeof body.version === 'number' ? body.version : 1;
+  latestVersions.set(project.id, project.version);
 };
 
 export const getProject = async (id: string): Promise<Project | null> => {
