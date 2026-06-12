@@ -31,7 +31,7 @@
   --color-surface:     var(--surface);      /* page background          */
   --color-raised:      var(--raised);       /* cards, popovers, modals  */
   --color-sunken:      var(--sunken);       /* inset wells, table heads */
-  --color-hover:       var(--hover);        /* hover wash on rows/nav   */
+  --color-hover:       var(--hover);        /* hover wash — use as hover:bg-hover, not bare bg-hover */
   --color-edge:        var(--edge);         /* default 1px borders      */
   --color-edge-strong: var(--edge-strong);  /* emphasised borders       */
   --color-ink:         var(--ink);          /* primary text             */
