@@ -73,6 +73,11 @@ describe('invoices', () => {
     expect(() => createInvoice(db, 'nope', { lines: [] })).toThrow(NotFoundError);
   });
 
+  it('rejects non-finite line amounts (Infinity from 1e400)', () => {
+    expect(() => createInvoice(db, 'p1', { lines: [{ description: 'x', qty: 1e400, unitPrice: 1 }] })).toThrow(ValidationError);
+    expect(() => createInvoice(db, 'p1', { lines: [{ description: 'x', qty: 1, unitPrice: Infinity }] })).toThrow(ValidationError);
+  });
+
   it('listInvoices returns slim rows newest-first with totals', () => {
     createInvoice(db, 'p1', { number: 'INV-1', date: 1, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
     createInvoice(db, 'p1', { number: 'INV-2', date: 2, lines: [{ description: 'B', qty: 1, unitPrice: 20 }] });

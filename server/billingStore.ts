@@ -31,8 +31,8 @@ function validateLines(lines: any): LineInput[] {
   if (!Array.isArray(lines)) throw new ValidationError('lines must be an array');
   for (const l of lines) {
     if (!l || typeof l !== 'object') throw new ValidationError('each line must be an object');
-    if (l.qty !== undefined && (typeof l.qty !== 'number' || l.qty < 0)) throw new ValidationError('line qty must be a non-negative number');
-    if (l.unitPrice !== undefined && (typeof l.unitPrice !== 'number' || l.unitPrice < 0)) throw new ValidationError('line unitPrice must be a non-negative number');
+    if (l.qty !== undefined && (!Number.isFinite(l.qty) || l.qty < 0)) throw new ValidationError('line qty must be a non-negative number');
+    if (l.unitPrice !== undefined && (!Number.isFinite(l.unitPrice) || l.unitPrice < 0)) throw new ValidationError('line unitPrice must be a non-negative number');
   }
   return lines;
 }
