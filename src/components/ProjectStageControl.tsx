@@ -36,6 +36,8 @@ export const ProjectStageControl: React.FC<{
     if (next === status || saving) return;
     setSaving(true);
     try {
+      // version is always set after a server round-trip; ?? 1 is a conservative
+      // fallback for legacy projects missing the field (server 409s if stale).
       const r = await patchProject(projectId, { version: version ?? 1, status: next });
       onChanged(r.version, r.status);
       toast(`Stage set to ${PROJECT_STATUS_META[next]?.label ?? next}`, { type: 'success' });

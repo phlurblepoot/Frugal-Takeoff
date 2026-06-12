@@ -3262,13 +3262,14 @@ export const ProjectView: React.FC = () => {
                 </button>
               </div>
             )}
-              <ProjectStageControl
-                projectId={project.id}
-                version={project.version}
-                status={project.status}
-                onChanged={(version, status) => setProject(p => (p ? { ...p, version, status } : p))}
-              />
+            <ProjectStageControl
+              projectId={project.id}
+              version={project.version}
+              status={project.status}
+              onChanged={(version, status) => setProject(p => (p ? { ...p, version, status } : p))}
+            />
 
+            {/* TODO 3b: retire submitted/responded/accepted toggles — superseded by lifecycle status */}
             <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
               <button
                 onClick={() => handleToggleStatus('submitted')}
