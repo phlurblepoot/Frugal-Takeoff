@@ -280,10 +280,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.patch('/api/issues/:id', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      const before = getIssue(db, req.params.id); // read once, before the change
       const r = setIssueStatus(db, req.params.id, req.body.status);
-      if (req.body.status === 'resolved') {
-        const iss = getIssue(db, req.params.id);
-        logActivity(db, { projectId: iss?.projectId, userId: (req as any).user?.id, type: 'issue_resolved', message: `Issue ISS-${String(iss?.number ?? 0).padStart(3, '0')} resolved` });
+      if (req.body.status === 'resolved' && before) {
+        logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'issue_resolved', message: `Issue ISS-${String(before.number).padStart(3, '0')} resolved` });
       }
       res.json({ success: true, ...r });
     } catch (e) { issueErr(e, res); }
