@@ -331,6 +331,15 @@ describe('GET /api/projects/:id/summary', () => {
     expect(res.body.invoiceCount).toBeUndefined();
     expect(res.body.name).toBe(PROJECT.name); // non-pricing fields still present
   });
+
+  it('includes openIssueCount (visible to all roles)', async () => {
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'pi' });
+    await request(app).post('/api/projects/pi/issues').send({ title: 'A' });
+    const i2 = await request(app).post('/api/projects/pi/issues').send({ title: 'B' });
+    await request(app).patch(`/api/issues/${i2.body.id}`).send({ status: 'resolved' });
+    const res = await request(app).get('/api/projects/pi/summary');
+    expect(res.body.openIssueCount).toBe(1); // one open, one resolved
+  });
 });
 
 describe('GET /api/activity?projectId=', () => {

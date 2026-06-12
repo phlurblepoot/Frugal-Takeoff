@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
 import { billingSummary } from './billingStore';
+import { countOpenIssues } from './issueStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -274,6 +275,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
       takeoffCount: takeoffCounts.get(r.id) ?? 0,
       pageIds: pageIdsByProject.get(r.id) ?? [],
+      openIssueCount: countOpenIssues(db, r.id),
     };
     if (!includeBilling) return base;
     const bs = billingSummary(db, r.id);

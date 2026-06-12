@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
-  Activity as ActivityIcon, Building2, Calendar, Clock, DollarSign, FileText,
+  Activity as ActivityIcon, AlertCircle, Building2, Calendar, Clock, DollarSign, FileText,
   FolderOpen, MapPin, Ruler, Upload,
 } from 'lucide-react';
 import { useProjectOutlet } from './ProjectLayout';
@@ -99,6 +99,7 @@ export const ProjectOverview: React.FC = () => {
                 <div className="flex items-center gap-4 pt-1 text-ink-soft">
                   <span className="flex items-center gap-1.5"><FileText size={14} className="text-ink-faint" />{summary.pageCount} pages</span>
                   <span className="flex items-center gap-1.5"><Ruler size={14} className="text-ink-faint" />{summary.takeoffCount} takeoffs</span>
+                  <span className="flex items-center gap-1.5"><AlertCircle size={14} className="text-ink-faint" />{summary.openIssueCount} open issue{summary.openIssueCount === 1 ? '' : 's'}</span>
                 </div>
                 {isAdmin && (summary.contractValueCents ?? 0) > 0 && (
                   <div className="flex items-center gap-2 pt-1 text-ink">

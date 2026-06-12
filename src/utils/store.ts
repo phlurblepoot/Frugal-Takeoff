@@ -450,6 +450,7 @@ export interface ProjectSummary {
   pageCount: number;
   takeoffCount: number;
   pageIds: string[];
+  openIssueCount: number;
   contractValueCents?: number;
   invoiceCount?: number;
 }
