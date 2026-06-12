@@ -150,3 +150,61 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
   tx();
   return out;
 }
+
+interface ChangeOrderInput { number?: string; description?: string; amount?: number; status?: string; }
+
+export function listChangeOrders(db: Database.Database, projectId: string): any[] {
+  return db.prepare('SELECT * FROM change_orders WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
+}
+
+export function createChangeOrder(db: Database.Database, projectId: string, input: ChangeOrderInput): { id: string } {
+  requireProject(db, projectId);
+  if (input.amount !== undefined && !Number.isFinite(input.amount)) throw new ValidationError('amount must be a finite number');
+  if (input.status !== undefined && !(CHANGE_ORDER_STATUSES as readonly string[]).includes(input.status)) {
+    throw new ValidationError(`Invalid change order status: ${input.status}`);
+  }
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, projectId, input.number ?? null, input.description ?? null, Number(input.amount) || 0, input.status ?? 'pending', Date.now());
+  return { id };
+}
+
+export function setChangeOrderStatus(db: Database.Database, id: string, status: string): { status: string } {
+  if (!(CHANGE_ORDER_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid change order status: ${status}`);
+  const row = db.prepare('SELECT id FROM change_orders WHERE id = ?').get(id);
+  if (!row) throw new NotFoundError('Change order not found');
+  db.prepare('UPDATE change_orders SET status = ? WHERE id = ?').run(status, id);
+  return { status };
+}
+
+export function deleteChangeOrder(db: Database.Database, id: string): void {
+  db.prepare('DELETE FROM change_orders WHERE id = ?').run(id);
+}
+
+// Contract rollup + invoice aggregates for a project (spec §4.1). All cents.
+export function billingSummary(db: Database.Database, projectId: string): {
+  baseContractCents: number; approvedChangeCents: number; contractValueCents: number;
+  invoicedCents: number; paidCents: number; outstandingCents: number;
+  invoiceCount: number; changeOrderCount: number;
+} {
+  const proj = db.prepare('SELECT contractValue FROM projects WHERE id = ?').get(projectId) as { contractValue: number | null } | undefined;
+  const baseContractCents = toCents(proj?.contractValue ?? 0);
+  const approvedRows = db.prepare(`SELECT amount FROM change_orders WHERE projectId = ? AND status = 'approved'`).all(projectId) as { amount: number }[];
+  const approvedChangeCents = approvedRows.reduce((a, r) => a + toCents(r.amount), 0);
+
+  const invoices = listInvoices(db, projectId);
+  const invoicedCents = invoices.reduce((a, i) => a + i.totalCents, 0);
+  const paidCents = invoices.reduce((a, i) => a + i.paidCents, 0);
+  const changeOrderCount = (db.prepare('SELECT COUNT(*) c FROM change_orders WHERE projectId = ?').get(projectId) as any).c;
+
+  return {
+    baseContractCents,
+    approvedChangeCents,
+    contractValueCents: baseContractCents + approvedChangeCents,
+    invoicedCents,
+    paidCents,
+    outstandingCents: invoicedCents - paidCents,
+    invoiceCount: invoices.length,
+    changeOrderCount,
+  };
+}

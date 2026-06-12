@@ -11,6 +11,7 @@ import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
   recordPayment, deletePayment, setInvoiceStatus,
+  listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder, billingSummary,
 } from './billingStore';
 
 let db: Database.Database;
@@ -126,5 +127,43 @@ describe('payments + status', () => {
     expect(r.version).toBe(2);
     expect(getInvoice(db, id)!.status).toBe('sent');
     expect(() => setInvoiceStatus(db, id, 'galactic')).toThrow(ValidationError);
+  });
+});
+
+describe('change orders + contract rollup', () => {
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1'); // $10k base
+  });
+
+  it('creates change orders (pending by default) and rolls up only approved ones', () => {
+    createChangeOrder(db, 'p1', { number: 'CO-1', description: 'Extra outlets', amount: 1500 });
+    const co2 = createChangeOrder(db, 'p1', { number: 'CO-2', description: 'Demo', amount: 800 });
+    let s = billingSummary(db, 'p1');
+    expect(s.baseContractCents).toBe(1000000);
+    expect(s.approvedChangeCents).toBe(0); // both pending
+    expect(s.contractValueCents).toBe(1000000);
+
+    setChangeOrderStatus(db, co2.id, 'approved');
+    s = billingSummary(db, 'p1');
+    expect(s.approvedChangeCents).toBe(80000);
+    expect(s.contractValueCents).toBe(1080000); // base + approved CO
+  });
+
+  it('summary aggregates invoiced + paid + balance across invoices', () => {
+    const inv = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice: 500 }] });
+    recordPayment(db, inv.id, { amount: 200 });
+    const s = billingSummary(db, 'p1');
+    expect(s.invoicedCents).toBe(50000);
+    expect(s.paidCents).toBe(20000);
+    expect(s.outstandingCents).toBe(30000);
+    expect(s.invoiceCount).toBe(1);
+  });
+
+  it('validates and lists change orders newest-first', () => {
+    expect(() => createChangeOrder(db, 'p1', { amount: 'x' as any })).toThrow(ValidationError);
+    expect(() => setChangeOrderStatus(db, 'nope', 'approved')).toThrow(NotFoundError);
+    createChangeOrder(db, 'p1', { number: 'CO-1', amount: 1, description: 'a' });
+    createChangeOrder(db, 'p1', { number: 'CO-2', amount: 2, description: 'b' });
+    expect(listChangeOrders(db, 'p1').map(c => c.number)).toEqual(['CO-2', 'CO-1']);
   });
 });
