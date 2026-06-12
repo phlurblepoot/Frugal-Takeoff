@@ -8,6 +8,7 @@ import {
 } from './projectStore';
 import { putDataUrl, putBuffer, getMeta, getDataUrlString } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
+import { logActivity, listActivity } from './activity';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -59,6 +60,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.post('/api/projects', authenticateToken, (req, res) => {
     try {
       const result = createProject(db, req.body);
+      logActivity(db, {
+        projectId: req.body?.id, userId: (req as any).user?.id,
+        type: 'project_created', message: `Project "${req.body?.name ?? 'Untitled'}" created`,
+      });
       res.json({ success: true, version: result.version });
     } catch (e) {
       if (e instanceof ValidationError) return res.status(400).json({ error: e.message });
@@ -82,6 +87,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.patch('/api/projects/:id', authenticateToken, (req, res) => {
     try {
       const result = patchProject(db, req.params.id, req.body);
+      if (req.body?.status !== undefined) {
+        logActivity(db, {
+          projectId: req.params.id, userId: (req as any).user?.id,
+          type: 'status_changed', message: `Stage changed to ${req.body.status}`,
+        });
+      }
       res.json({ success: true, ...result });
     } catch (e) {
       if (e instanceof NotFoundError) return res.status(404).json({ error: e.message });
@@ -94,11 +105,25 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.delete('/api/projects/:id', authenticateToken, (req, res) => {
     try {
+      const name = (db.prepare('SELECT name FROM projects WHERE id = ?').get(req.params.id) as any)?.name;
       deleteProject(db, dataDir, req.params.id);
+      logActivity(db, {
+        userId: (req as any).user?.id,
+        type: 'project_deleted', message: `Project "${name ?? 'Untitled'}" deleted`,
+      });
       res.json({ success: true });
     } catch (e) {
       console.error('Error deleting project:', e);
       res.status(500).json({ error: 'Failed to delete project' });
+    }
+  });
+
+  app.get('/api/activity', authenticateToken, (req, res) => {
+    try {
+      res.json({ items: listActivity(db, Number(req.query.limit) || 30) });
+    } catch (e) {
+      console.error('Error fetching activity:', e);
+      res.status(500).json({ error: 'Failed to fetch activity' });
     }
   });
 

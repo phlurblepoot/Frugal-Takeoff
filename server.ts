@@ -19,6 +19,7 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes } from './server/routes';
 import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
 import { getDataUrlString } from './server/files';
+import { logActivity } from './server/activity';
 
 dotenv.config();
 
@@ -571,6 +572,11 @@ async function startServer() {
       }
 
       await transport.sendMail(mailOptions);
+
+      logActivity(db, {
+        projectId: req.params.id, userId: (req as any).user?.id,
+        type: 'proposal_sent', message: `Proposal emailed for "${project.name ?? 'Untitled'}"`,
+      });
 
       // Reload after the SMTP await so a concurrent edit during the send can't
       // make the version-checked save fail and strand a sent proposal. With no

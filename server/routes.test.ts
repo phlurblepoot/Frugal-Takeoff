@@ -264,3 +264,17 @@ describe('PATCH /api/projects/:id', () => {
     expect((await request(app).patch('/api/projects/nope').send({ version: 1, name: 'X' })).status).toBe(404);
   });
 });
+
+describe('GET /api/activity', () => {
+  it('records project create and status change events', async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    const res = await request(app).get('/api/activity');
+    expect(res.status).toBe(200);
+    const types = res.body.items.map((i: any) => i.type);
+    expect(types).toContain('project_created');
+    expect(types).toContain('status_changed');
+    const statusItem = res.body.items.find((i: any) => i.type === 'status_changed');
+    expect(statusItem.projectName).toBe('Test Project');
+  });
+});
