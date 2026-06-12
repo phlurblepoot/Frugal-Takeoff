@@ -66,7 +66,7 @@ function initDb() {
     }
 
     db = openDb(DB_FILE);
-    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE });
+    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true });
 
     // Initialize default settings
     const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };

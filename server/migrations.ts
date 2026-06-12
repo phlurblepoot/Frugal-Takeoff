@@ -36,11 +36,14 @@ export interface MigrationResult {
 // <dataDir>/backups/ before anything is touched. Disk side-effects inside a
 // migration (e.g. writing extracted files) are NOT transactional — migrations
 // must be written so that re-running them after a mid-way crash is safe.
+// opts.vacuum compacts the database after migrations were applied — SQLite
+// never shrinks the file on its own, and blob-removing migrations (e.g.
+// images-to-disk) leave most of the file as free pages otherwise.
 export function runMigrations(
   db: Database.Database,
   dataDir: string,
   migrations: Migration[],
-  opts: { dbFile?: string } = {}
+  opts: { dbFile?: string; vacuum?: boolean } = {}
 ): MigrationResult {
   const from = currentVersion(db);
   const pending = migrations
@@ -68,5 +71,14 @@ export function runMigrations(
     applied.push(mig.name);
     console.log(`[migrations] applied ${mig.version}: ${mig.name}`);
   }
+
+  if (opts.vacuum && applied.length > 0) {
+    // VACUUM cannot run inside a transaction; safe here — startup, no
+    // concurrent connections, and the pre-migration backup already exists.
+    console.log('[migrations] compacting database (VACUUM)...');
+    db.exec('VACUUM');
+    console.log('[migrations] database compacted');
+  }
+
   return { from, to: pending[pending.length - 1].version, applied };
 }

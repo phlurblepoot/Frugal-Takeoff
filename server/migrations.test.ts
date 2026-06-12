@@ -77,4 +77,31 @@ describe('runMigrations', () => {
     // before schema_version existed is fine either way; assert at least the v1 backup)
     expect(backups.some(f => f.startsWith('app-v1-'))).toBe(true);
   });
+
+  it('vacuums the database after applying when the vacuum option is set', () => {
+    const dir = tmpDir();
+    const dbFile = path.join(dir, 'app.db');
+    let db = openDb(dbFile);
+    // create bloat then delete it so the file is mostly free pages
+    db.exec('CREATE TABLE bloat (data TEXT)');
+    const big = 'x'.repeat(1024 * 1024);
+    const ins = db.prepare('INSERT INTO bloat (data) VALUES (?)');
+    for (let i = 0; i < 10; i++) ins.run(big);
+    db.prepare('DELETE FROM bloat').run();
+    db.close();
+    const sizeBefore = fsSync.statSync(dbFile).size;
+
+    db = openDb(dbFile);
+    runMigrations(db, dir, [m(1, 'CREATE TABLE a (id INTEGER)')], { dbFile, vacuum: true });
+    db.close();
+    const sizeAfter = fsSync.statSync(dbFile).size;
+    expect(sizeBefore).toBeGreaterThan(10 * 1024 * 1024);
+    expect(sizeAfter).toBeLessThan(sizeBefore / 2); // free pages reclaimed
+
+    // and a no-op run must not vacuum (nothing pending → no pause at boot)
+    db = openDb(dbFile);
+    const second = runMigrations(db, dir, [m(1, 'CREATE TABLE a (id INTEGER)')], { dbFile, vacuum: true });
+    expect(second.applied).toEqual([]);
+    db.close();
+  });
 });
