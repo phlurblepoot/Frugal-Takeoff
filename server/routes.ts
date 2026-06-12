@@ -6,7 +6,7 @@ import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
   listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, saveNewVersion, listVersions } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 
@@ -277,6 +277,38 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // Save-as-version: archive current content, overwrite live id in place.
+  app.post(
+    '/api/files/:id/versions',
+    express.raw({ limit: '100mb', type: () => true }),
+    authenticateToken,
+    (req, res) => {
+      try {
+        const body = req.body as Buffer;
+        if (!Buffer.isBuffer(body) || body.length === 0) {
+          return res.status(400).json({ error: 'Empty body' });
+        }
+        if (!getMeta(db, req.params.id)) return res.status(404).json({ error: 'File not found' });
+        const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
+        const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
+        res.json({ success: true, ...result });
+      } catch (e) {
+        console.error('Error saving file version:', e);
+        res.status(500).json({ error: 'Failed to save file version' });
+      }
+    }
+  );
+
+  app.get('/api/files/:id/versions', authenticateToken, (req, res) => {
+    try {
+      const versions = listVersions(db, req.params.id).map(({ sha256, legacyFormat, ...slim }: any) => slim);
+      if (versions.length === 0) return res.status(404).json({ error: 'File not found' });
+      res.json(versions);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to list file versions' });
+    }
+  });
+
   app.get('/api/files/:id/meta', authenticateToken, (req, res) => {
     try {
       const meta = getMeta(db, req.params.id);
@@ -374,12 +406,21 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
+  // Version-history rows are referenced via their parent: keep them as
+  // long as the live file is referenced. Defined once and used by both
+  // the GET and POST orphan handlers below.
+  const isOrphan = (
+    r: { id: string; parentFileId: string | null },
+    referenced: Set<string>
+  ) => !referenced.has(r.id) && !(r.parentFileId && referenced.has(r.parentFileId));
+
   app.get('/api/storage/orphans', authenticateToken, requireAdmin, (_req, res) => {
     try {
       const referenced = collectReferencedFileIds();
-      const rows = db.prepare('SELECT id, size FROM files').all() as { id: string; size: number }[];
+      const rows = db.prepare('SELECT id, size, parentFileId FROM files').all() as
+        { id: string; size: number; parentFileId: string | null }[];
       let count = 0, bytes = 0;
-      for (const r of rows) if (!referenced.has(r.id)) { count++; bytes += r.size; }
+      for (const r of rows) if (isOrphan(r, referenced)) { count++; bytes += r.size; }
       res.json({ count, bytes });
     } catch (e) {
       console.error('Error finding orphaned files:', e);
@@ -390,8 +431,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.post('/api/storage/orphans/cleanup', authenticateToken, requireAdmin, (_req, res) => {
     try {
       const referenced = collectReferencedFileIds();
-      const rows = db.prepare('SELECT id, size FROM files').all() as { id: string; size: number }[];
-      const orphans = rows.filter(r => !referenced.has(r.id));
+      const rows = db.prepare('SELECT id, size, parentFileId FROM files').all() as
+        { id: string; size: number; parentFileId: string | null }[];
+      const orphans = rows.filter(r => isOrphan(r, referenced));
       const bytesFreed = orphans.reduce((a, r) => a + r.size, 0);
       const tx = db.transaction(() => {
         const stmt = db.prepare('DELETE FROM files WHERE id = ?');

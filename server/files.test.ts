@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile } from './files';
+import { putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions } from './files';
 import { readFileContent } from './fileStore';
 
 let db: Database.Database;
@@ -86,5 +86,40 @@ describe('files layer', () => {
     expect(meta.parentFileId).toBe('parent1');
     expect(meta.versionNumber).toBe(3);
     expect(meta.createdAt).toBe(12345);
+  });
+});
+
+describe('file versioning', () => {
+  it('archives old content to a version row and overwrites in place', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1-bytes'), 'application/pdf', { projectId: 'p1', kind: 'printout', name: 'Bid.pdf' });
+    const r1 = saveNewVersion(db, dir, 'f1', Buffer.from('v2-bytes'), 'application/pdf');
+    expect(r1.versionNumber).toBe(2);
+
+    // live row: same id, new content, bumped version, labels intact
+    const live = getMeta(db, 'f1')!;
+    expect(live.versionNumber).toBe(2);
+    expect(live.projectId).toBe('p1');
+    expect(live.name).toBe('Bid.pdf');
+    expect(readFileContent(dir, 'f1')!.toString()).toBe('v2-bytes');
+
+    // archived row: old content, parent points at the original
+    const archived = getMeta(db, r1.archivedVersionId)!;
+    expect(archived.parentFileId).toBe('f1');
+    expect(archived.versionNumber).toBe(1);
+    expect(readFileContent(dir, r1.archivedVersionId)!.toString()).toBe('v1-bytes');
+  });
+
+  it('listVersions returns live row first then history newest-first', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v3'), 'application/pdf');
+    const versions = listVersions(db, 'f1');
+    expect(versions[0].id).toBe('f1');
+    expect(versions[0].versionNumber).toBe(3);
+    expect(versions.slice(1).map(v => v.versionNumber)).toEqual([2, 1]);
+  });
+
+  it('throws for unknown files', () => {
+    expect(() => saveNewVersion(db, dir, 'nope', Buffer.from('x'), 'text/plain')).toThrow();
   });
 });

@@ -339,3 +339,40 @@ describe('project files', () => {
     expect((await request(app).get('/api/files/nope/meta')).status).toBe(404);
   });
 });
+
+describe('file versions over HTTP', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/files/f1?projectId=p1&kind=printout&name=Bid.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
+  });
+
+  it('POST /versions archives and bumps; content endpoint serves the new bytes', async () => {
+    const res = await request(app).post('/api/files/f1/versions')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(res.status).toBe(200);
+    expect(res.body.versionNumber).toBe(2);
+    const content = await request(app).get('/api/files/f1/content?token=good-token');
+    expect(content.body.toString()).toBe('v2');
+    const versions = await request(app).get('/api/files/f1/versions');
+    expect(versions.body).toHaveLength(2);
+    expect(versions.body[1].versionNumber).toBe(1);
+  });
+
+  it('404s when versioning an unknown file', async () => {
+    expect((await request(app).post('/api/files/nope/versions')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('x'))).status).toBe(404);
+  });
+
+  it('orphan cleanup spares version history of referenced files', async () => {
+    // reference f1 from a project printout
+    await request(app).post('/api/projects').send({
+      ...PROJECT, printouts: [{ id: 'po1', name: 'Bid set', fileId: 'f1', createdAt: 1 }],
+    });
+    await request(app).post('/api/files/f1/versions')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    const cleanup = await request(app).post('/api/storage/orphans/cleanup');
+    expect(cleanup.status).toBe(200);
+    const versions = await request(app).get('/api/files/f1/versions');
+    expect(versions.body).toHaveLength(2); // history survived
+  });
+});

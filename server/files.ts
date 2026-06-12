@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import type Database from 'better-sqlite3';
 import { writeFileContent, readFileContent, deleteFileContent } from './fileStore';
 
@@ -119,4 +120,49 @@ export function getDataUrlString(db: Database.Database, dataDir: string, id: str
 export function removeFile(db: Database.Database, dataDir: string, id: string): void {
   db.prepare('DELETE FROM files WHERE id = ?').run(id);
   deleteFileContent(dataDir, id);
+}
+
+// Archive-then-overwrite versioning (spec §3.2). The LIVE content always
+// keeps its original id so every reference (printouts, proposals, share
+// links) stays valid. Each save first snapshots the current content into a
+// new row pointing at the original, then overwrites the live row in place.
+// Disk writes are not transactional with the DB; a crash can at worst leave
+// an unreferenced archived row — reclaimable via explicit orphan cleanup.
+export function saveNewVersion(
+  db: Database.Database,
+  dataDir: string,
+  id: string,
+  buf: Buffer,
+  mime: string
+): { archivedVersionId: string; versionNumber: number } {
+  const live = getMeta(db, id);
+  if (!live) throw new Error(`Cannot version unknown file ${id}`);
+
+  const archivedVersionId = crypto.randomUUID();
+  const oldContent = readFileContent(dataDir, id);
+  if (oldContent) {
+    const { size, sha256 } = writeFileContent(dataDir, archivedVersionId, oldContent);
+    db.prepare(`
+      INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      archivedVersionId, live.projectId, live.name, live.mime, size, sha256,
+      live.kind, id, live.versionNumber, live.legacyFormat, Date.now()
+    );
+  }
+
+  putBuffer(db, dataDir, id, buf, mime); // labels carry over from the live row
+  const versionNumber = live.versionNumber + 1;
+  db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+  return { archivedVersionId, versionNumber };
+}
+
+// Live row first, then archived history newest-first.
+export function listVersions(db: Database.Database, id: string): FileMeta[] {
+  const live = getMeta(db, id);
+  if (!live) return [];
+  const history = db.prepare(
+    'SELECT * FROM files WHERE parentFileId = ? ORDER BY versionNumber DESC'
+  ).all(id) as FileMeta[];
+  return [live, ...history];
 }
