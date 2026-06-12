@@ -21,6 +21,7 @@ import { ConfirmProvider } from './components/ConfirmDialog';
 import { ShareProvider } from './components/ShareLinkModal';
 import { CommandPalette } from './components/CommandPalette';
 import { SideDock, DockState } from './components/SideDock';
+import ProjectConflictListener from './components/ProjectConflictListener';
 import { getSettings } from './utils/store';
 
 const DOCK_STORAGE_KEY = 'sideDockState';
@@ -59,6 +60,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
 
   return (
     <ToastProvider>
+      <ProjectConflictListener />
       <ConfirmProvider>
         <ShareProvider>
           <CollaborationProvider>

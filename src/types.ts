@@ -199,6 +199,12 @@ export interface Project {
   emails?: BidEmail[];
   proposalFileId?: string;
   proposalSentAt?: number;
+  // Optimistic-concurrency version — echoed back on save; the server rejects
+  // stale saves with 409. Assigned by the server (1 on create).
+  version?: number;
+  // Lifecycle stage (estimating | proposal_sent | awarded | in_progress |
+  // punch_list | complete | archived | lost). Server-derived in Phase 1.
+  status?: string;
 }
 
 export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';

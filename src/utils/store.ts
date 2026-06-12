@@ -24,7 +24,13 @@ const fetchWithRetry = async (
   init: RequestInit = {},
   opts: { timeoutMs?: number; retries?: number } = {}
 ): Promise<Response> => {
-  const { timeoutMs = 60_000, retries = 3 } = opts;
+  // Writes are never auto-retried: a retried PUT can carry a stale body and
+  // the version handshake would reject it confusingly (and POSTs aren't
+  // idempotent). Reads stay retried for flaky connections.
+  const method = (init.method || 'GET').toUpperCase();
+  const isWrite = method !== 'GET' && method !== 'HEAD';
+  const { timeoutMs = 60_000, retries: requestedRetries = 3 } = opts;
+  const retries = isWrite ? 0 : requestedRetries;
   let lastErr: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -67,6 +73,13 @@ const handleResponse = async (res: Response) => {
   return res;
 };
 
+export class ConflictError extends Error {
+  constructor(public projectId: string) {
+    super('Project was changed elsewhere');
+    this.name = 'ConflictError';
+  }
+}
+
 export const getSettings = async (): Promise<Record<string, string>> => {
   const res = await fetch('/api/settings');
   await handleResponse(res);
@@ -105,7 +118,15 @@ export const saveProject = async (project: Project): Promise<void> => {
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(project)
   });
+  if (res.status === 409) {
+    window.dispatchEvent(new CustomEvent('project-conflict', { detail: { projectId: project.id } }));
+    throw new ConflictError(project.id);
+  }
   await handleResponse(res);
+  // Adopt the server's new version so the next save isn't stale. Callers keep
+  // this same object (or spreads of it) in state, so mutating is sufficient.
+  const body = await res.json().catch(() => null);
+  if (body && typeof body.version === 'number') project.version = body.version;
 };
 
 export const createProject = async (project: Project): Promise<void> => {
@@ -115,6 +136,8 @@ export const createProject = async (project: Project): Promise<void> => {
     body: JSON.stringify(project)
   });
   await handleResponse(res);
+  const body = await res.json().catch(() => null);
+  project.version = body && typeof body.version === 'number' ? body.version : 1;
 };
 
 export const getProject = async (id: string): Promise<Project | null> => {
