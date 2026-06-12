@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet, useLocation } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
-import { ProjectsList } from './pages/ProjectsList';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
@@ -82,7 +82,7 @@ export default function App() {
         },
         {
           index: true,
-          element: <ProjectsList appName={appName} logoUrl={logoUrl} />,
+          element: <ProjectsPage />,
         },
         {
           path: 'new',
