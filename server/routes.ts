@@ -288,7 +288,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (!Buffer.isBuffer(body) || body.length === 0) {
           return res.status(400).json({ error: 'Empty body' });
         }
-        if (!getMeta(db, req.params.id)) return res.status(404).json({ error: 'File not found' });
+        const target = getMeta(db, req.params.id);
+        if (!target) return res.status(404).json({ error: 'File not found' });
+        if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
         res.json({ success: true, ...result });

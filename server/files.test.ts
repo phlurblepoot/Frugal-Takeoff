@@ -122,4 +122,13 @@ describe('file versioning', () => {
   it('throws for unknown files', () => {
     expect(() => saveNewVersion(db, dir, 'nope', Buffer.from('x'), 'text/plain')).toThrow();
   });
+
+  it('keeps versionNumbers unique across live and history after several saves', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('v1'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v2'), 'application/pdf');
+    saveNewVersion(db, dir, 'f1', Buffer.from('v3'), 'application/pdf');
+    const nums = listVersions(db, 'f1').map(v => v.versionNumber).sort((a, b) => a - b);
+    expect(nums).toEqual([1, 2, 3]);
+    expect(new Set(nums).size).toBe(nums.length);
+  });
 });

@@ -140,20 +140,30 @@ export function saveNewVersion(
 
   const archivedVersionId = crypto.randomUUID();
   const oldContent = readFileContent(dataDir, id);
-  if (oldContent) {
+  if (!oldContent) {
+    console.warn(`[files] versioning ${id} with no on-disk content — version history will have a gap`);
+  } else {
+    // archived bytes to disk before the tx (idempotent; leak-only on rollback)
     const { size, sha256 } = writeFileContent(dataDir, archivedVersionId, oldContent);
-    db.prepare(`
-      INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      archivedVersionId, live.projectId, live.name, live.mime, size, sha256,
-      live.kind, id, live.versionNumber, live.legacyFormat, Date.now()
-    );
+    const versionNumber = live.versionNumber + 1;
+    const tx = db.transaction(() => {
+      db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        archivedVersionId, live.projectId, live.name, live.mime, size, sha256, live.kind, id, live.versionNumber, live.legacyFormat, Date.now()
+      );
+      putBuffer(db, dataDir, id, buf, mime); // disk write is non-tx but idempotent; row upsert is in-tx
+      db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+    });
+    tx();
+    return { archivedVersionId, versionNumber };
   }
-
-  putBuffer(db, dataDir, id, buf, mime); // labels carry over from the live row
+  // no old content: just overwrite + bump (still atomic for the two DB writes)
   const versionNumber = live.versionNumber + 1;
-  db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+  const tx = db.transaction(() => {
+    putBuffer(db, dataDir, id, buf, mime);
+    db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+  });
+  tx();
   return { archivedVersionId, versionNumber };
 }
 
