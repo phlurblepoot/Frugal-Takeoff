@@ -131,7 +131,7 @@ export const ProjectBilling: React.FC = () => {
                 {invoices.map(inv => (
                   <TR key={inv.id} interactive onClick={() => openInvoice(inv.id)}>
                     <TD className="font-medium text-ink">{inv.number || '(untitled)'}</TD>
-                    <TD onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
+                    <TD title="Click to advance status" onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(inv.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(inv.balanceCents)}</TD>
                     <TD onClick={e => e.stopPropagation()}><button onClick={() => removeInvoice(inv.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
@@ -184,6 +184,7 @@ export const ProjectBilling: React.FC = () => {
 
       {editing && (
         <InvoiceEditor
+          key={`${editing.id}:${editing.version}`}
           invoice={editing}
           onClose={() => setEditing(null)}
           onSaved={async () => {
