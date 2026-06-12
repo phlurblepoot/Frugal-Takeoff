@@ -93,4 +93,38 @@ describe('Sidebar — project mode', () => {
     expect(screen.queryByRole('button', { name: /All Projects/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Checklists/ })).toBeInTheDocument();
   });
+
+  it('keeps project mode on the canvas route', () => {
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/project/p1/page/pg1']}>
+          <NotesProvider>
+            <ProjectShellProvider>
+              <RegisterProject id="p1" name="Maple St Office" />
+              <Sidebar state="collapsed" onChange={() => {}} locked />
+            </ProjectShellProvider>
+          </NotesProvider>
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+    // icons-only rail: section labels hidden, but project rows still render
+    expect(screen.getByRole('button', { name: /All Projects/ })).toBeInTheDocument();
+    expect(screen.queryByText('Maple St Office')).not.toBeInTheDocument();
+  });
+
+  it('hides the size toggles when locked', () => {
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/project/p1/page/pg1']}>
+          <NotesProvider>
+            <ProjectShellProvider>
+              <Sidebar state="collapsed" onChange={() => {}} locked />
+            </ProjectShellProvider>
+          </NotesProvider>
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+    expect(screen.queryByTitle('Expand navigation')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Hide sidebar')).not.toBeInTheDocument();
+  });
 });

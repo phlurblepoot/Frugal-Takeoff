@@ -29,6 +29,9 @@ export const ProjectShellProvider: React.FC<{ children: React.ReactNode }> = ({ 
 // Cleared on unmount. Safe to call with undefined while the project loads.
 export function useRegisterProjectShell(id: string | undefined, name: string | undefined): void {
   const { setProject } = useProjectShell();
+  // Effect order matters: the set-effect must be declared before the
+  // clear-effect so StrictMode's mount/cleanup/mount cycle converges on the
+  // project value instead of null. Do not reorder.
   useEffect(() => {
     if (id) setProject({ id, name: name || 'Untitled' });
   }, [id, name, setProject]);
