@@ -243,6 +243,8 @@ export function listProjectSummaries(db: Database.Database, id?: string): any[] 
     FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
   `).all(...(id ? [id] : [])) as any[];
 
+  // These GROUP BY scans cover all projects even for a single-id call. Cheap
+  // at current scale (index-backed); narrow to WHERE projectId = ? if tables grow.
   const countBy = (table: string): Map<string, number> =>
     new Map(
       (db.prepare(`SELECT projectId, COUNT(*) AS c FROM ${table} GROUP BY projectId`).all() as any[])
