@@ -334,4 +334,37 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 9,
+    name: 'issues',
+    up({ db }) {
+      // Issue reports (spec §2 new facets, §3.2): numbered deficiency/observation
+      // records with photos and an open→sent→resolved lifecycle. Field-created by
+      // any user (not admin-gated). number is a per-project sequence (MAX+1).
+      // Photos are existing files rows linked via issue_photos.
+      db.exec(`
+        CREATE TABLE issues (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          title TEXT,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          version INTEGER NOT NULL DEFAULT 1,
+          sentAt INTEGER,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_issues_projectId ON issues (projectId);
+
+        CREATE TABLE issue_photos (
+          id TEXT PRIMARY KEY,
+          issueId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_issue_photos_issueId ON issue_photos (issueId);
+      `);
+    },
+  },
 ];

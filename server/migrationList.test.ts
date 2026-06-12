@@ -155,3 +155,22 @@ describe('migration 8: billing', () => {
     db.close();
   });
 });
+
+describe('migration 9: issues', () => {
+  it('creates issues and issue_photos', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    expect(tables).toContain('issues');
+    expect(tables).toContain('issue_photos');
+    const issCols = (db.prepare(`PRAGMA table_info(issues)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'projectId', 'number', 'title', 'description', 'status', 'version', 'sentAt', 'createdAt']) {
+      expect(issCols, `issues missing ${c}`).toContain(c);
+    }
+    const phCols = (db.prepare(`PRAGMA table_info(issue_photos)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'issueId', 'fileId', 'sortOrder', 'createdAt']) {
+      expect(phCols, `issue_photos missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
+});

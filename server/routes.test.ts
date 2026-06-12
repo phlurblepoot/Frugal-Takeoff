@@ -529,3 +529,16 @@ describe('billing routes', () => {
     expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
   });
 });
+
+describe('deleteProject issues cascade', () => {
+  it('removes issues and issue_photos for the project', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    const iss = await request(app).post('/api/projects/p1/issues').send({ title: 'Crack', description: 'Wall crack' });
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'ph1' });
+    await request(app).delete('/api/projects/p1');
+    expect((db.prepare('SELECT COUNT(*) c FROM issues WHERE projectId = ?').get('p1') as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+  });
+});
