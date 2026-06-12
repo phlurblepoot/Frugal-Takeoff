@@ -218,6 +218,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         // Optional labeling so project-context uploads land attributed
         // (Phase 1 left projectId NULL on this legacy-compat endpoint).
+        // Known limitation (internal single-tenant): re-POSTing an existing
+        // file id with a different ?projectId relabels it. Real uploads use
+        // fresh UUIDs so this only triggers on deliberate re-posts.
         const q = req.query;
         putBuffer(db, dataDir, req.params.id, body, mime, {
           projectId: typeof q.projectId === 'string' && q.projectId ? q.projectId : undefined,
