@@ -43,6 +43,7 @@ export const Modal: React.FC<ModalProps> = ({
           className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={onClose}
         >
+          {/* TODO Phase 5 (a11y pass): focus trap + initial focus + restore on close */}
           <motion.div
             initial={{ scale: 0.96, y: 8 }}
             animate={{ scale: 1, y: 0 }}
