@@ -526,3 +526,103 @@ export const deleteChecklist = async (id: string): Promise<void> => {
   });
   await handleResponse(res);
 };
+
+// ── Phase 3a: summaries, granular patches, activity, time ────────────────────
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  status: string;
+  contractor: string | null;
+  address: string | null;
+  bidDueDate: number | null;
+  version: number;
+  createdAt: number;
+  updatedAt: number | null;
+  archived: boolean;
+  pageCount: number;
+  takeoffCount: number;
+  pageIds: string[];
+}
+
+export interface ProjectPatch {
+  version: number;
+  name?: string;
+  status?: string;
+  archived?: boolean;
+  contractor?: string | null;
+  address?: string | null;
+  bidDueDate?: number | null;
+}
+
+export interface ActivityItem {
+  id: string;
+  projectId: string | null;
+  userId: string | null;
+  type: string;
+  message: string;
+  createdAt: number;
+  projectName: string | null;
+  username: string | null;
+}
+
+export interface TimeEntryLite {
+  id: string;
+  projectId: string | null;
+  clockIn: number;
+  clockOut: number | null;
+  description: string;
+}
+
+export const getProjectsSummary = async (): Promise<ProjectSummary[]> => {
+  const res = await fetchWithRetry('/api/projects/summary', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Granular field update with optimistic concurrency. Unlike saveProject, a
+// 409 here does NOT dispatch the global project-conflict event — callers
+// decide (list views refetch; ProjectView dispatches it themselves).
+export const patchProject = async (
+  id: string,
+  patch: ProjectPatch
+): Promise<{ version: number; status: string }> => {
+  const res = await fetchWithRetry(`/api/projects/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(patch),
+  });
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getActivity = async (limit = 20): Promise<ActivityItem[]> => {
+  const res = await fetchWithRetry(`/api/activity?limit=${limit}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).items;
+};
+
+export const getMyTimeEntries = async (): Promise<TimeEntryLite[]> => {
+  const res = await fetchWithRetry('/api/time-entries', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const clockIn = async (projectId?: string): Promise<void> => {
+  const res = await fetchWithRetry('/api/time-entries/clock-in', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ projectId: projectId ?? null }),
+  });
+  await handleResponse(res);
+};
+
+export const clockOut = async (): Promise<void> => {
+  const res = await fetchWithRetry('/api/time-entries/clock-out', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({}),
+  });
+  await handleResponse(res);
+};
