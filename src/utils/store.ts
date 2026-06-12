@@ -760,3 +760,7 @@ export const getBillingSummary = async (projectId: string): Promise<BillingSumma
   const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
+export const sendInvoice = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+  const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
+  await handleResponse(res);
+};

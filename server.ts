@@ -20,6 +20,7 @@ import { registerDataRoutes } from './server/routes';
 import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
 import { getDataUrlString } from './server/files';
 import { logActivity } from './server/activity';
+import { getInvoice } from './server/billingStore';
 
 dotenv.config();
 
@@ -498,6 +499,37 @@ async function startServer() {
     });
   }
 
+  // Sends a stored file as a PDF attachment via SMTP. Returns nothing; throws on
+  // misconfiguration/failure. Shared by proposal + invoice + (later) issue sends.
+  async function sendProjectEmail(opts: {
+    to: string;
+    subject: string;
+    text: string;
+    fileId: string;
+    attachmentName: string;
+    inReplyTo?: string;
+  }): Promise<void> {
+    const transport = buildTransporter();
+    if (!transport) throw new Error('SMTP not configured');
+    const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+    const smtpCfg: Record<string, string> = {};
+    smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
+    const dataUrl = getDataUrlString(db, DATA_DIR, opts.fileId);
+    if (!dataUrl) throw new Error('Attachment file not found');
+    const base64Data = dataUrl.split(',')[1];
+    const mimeType = dataUrl.split(';')[0].replace('data:', '');
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    const mailOptions: nodemailer.SendMailOptions = {
+      from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+      to: opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      attachments: [{ filename: opts.attachmentName, content: fileBuffer, contentType: mimeType }],
+    };
+    if (opts.inReplyTo) { mailOptions.inReplyTo = opts.inReplyTo; mailOptions.references = opts.inReplyTo; }
+    await transport.sendMail(mailOptions);
+  }
+
   // SMTP settings (stored in settings table under smtp.* keys)
   app.get("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
     try {
@@ -540,38 +572,19 @@ async function startServer() {
       if (!project.email) return res.status(400).json({ error: "Project has no associated email to reply to" });
 
       const { fileId, message } = req.body as { fileId: string; message?: string };
-      const fileData = getDataUrlString(db, DATA_DIR, fileId);
-      if (!fileData) return res.status(404).json({ error: "File not found" });
-
-      const transport = buildTransporter();
-      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
-
-      const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-      const smtpCfg: Record<string, string> = {};
-      smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
-
-      const dataUrl = fileData;
-      const base64Data = dataUrl.split(',')[1];
-      const mimeType = dataUrl.split(';')[0].replace('data:', '');
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-
-      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
       const toAddress = project.email.from || '';
       if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
 
-      const mailOptions: nodemailer.SendMailOptions = {
-        from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
+
+      await sendProjectEmail({
         to: toAddress,
         subject,
         text: message || 'Please find the attached proposal.',
-        attachments: [{ filename: 'proposal.pdf', content: fileBuffer, contentType: mimeType }],
-      };
-      if (project.email.messageId) {
-        mailOptions.inReplyTo = project.email.messageId;
-        mailOptions.references = project.email.messageId;
-      }
-
-      await transport.sendMail(mailOptions);
+        fileId,
+        attachmentName: 'proposal.pdf',
+        inReplyTo: project.email.messageId || undefined,
+      });
 
       logActivity(db, {
         projectId: req.params.id, userId: (req as any).user?.id,
@@ -588,6 +601,30 @@ async function startServer() {
     } catch (error: any) {
       console.error("Error sending project proposal:", error);
       res.status(500).json({ error: error.message || "Failed to send proposal" });
+    }
+  });
+
+  // Send an invoice PDF via SMTP (admin only)
+  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const inv = getInvoice(db, req.params.id);
+      if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await sendProjectEmail({
+        to,
+        subject: `Invoice ${inv.number ?? ''}`.trim(),
+        text: message || 'Please find the attached invoice.',
+        fileId,
+        attachmentName: `${inv.number || 'invoice'}.pdf`,
+      });
+      // mark sent (best effort) + log
+      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
+      logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending invoice:', e);
+      res.status(500).json({ error: e.message || 'Failed to send invoice' });
     }
   });
 

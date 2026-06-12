@@ -197,6 +197,7 @@ export const ProjectBilling: React.FC = () => {
           projectName={projectSummary?.name ?? ''}
           contractor={projectSummary?.contractor}
           address={projectSummary?.address}
+          projectId={projectId ?? ''}
         />
       )}
     </div>

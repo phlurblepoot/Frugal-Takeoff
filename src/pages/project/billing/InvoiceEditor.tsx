@@ -1,7 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice, getSettings } from '../../../utils/store';
+import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice, getSettings, sendInvoice, uploadProjectFile } from '../../../utils/store';
 import { dollarsToCents, formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Select, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
@@ -19,7 +19,8 @@ export const InvoiceEditor: React.FC<{
   projectName: string;
   contractor?: string | null;
   address?: string | null;
-}> = ({ invoice, onClose, onSaved, projectName, contractor, address }) => {
+  projectId: string;
+}> = ({ invoice, onClose, onSaved, projectName, contractor, address, projectId }) => {
   const { toast } = useToast();
   const [number, setNumber] = useState(invoice.number ?? '');
   const [terms, setTerms] = useState(invoice.terms ?? '');
@@ -28,6 +29,8 @@ export const InvoiceEditor: React.FC<{
   const [saving, setSaving] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('check');
+  const [sendTo, setSendTo] = useState('');
+  const [sending, setSending] = useState(false);
 
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
@@ -119,6 +122,20 @@ export const InvoiceEditor: React.FC<{
     } catch { toast('PDF generation failed', { type: 'error' }); }
   };
 
+  const handleSend = async () => {
+    if (!sendTo.trim()) { toast('Enter a recipient email address', { type: 'warning' }); return; }
+    setSending(true);
+    try {
+      const bytes = await buildBytes();
+      const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
+      const fileId = await uploadProjectFile(projectId, file, 'invoice');
+      await sendInvoice(invoice.id, { to: sendTo.trim(), fileId, message: 'Please find the attached invoice.' });
+      toast('Invoice sent', { type: 'success' });
+      onSaved();
+    } catch { toast('Failed to send invoice', { type: 'error' }); }
+    finally { setSending(false); }
+  };
+
   return (
     <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
@@ -159,6 +176,18 @@ export const InvoiceEditor: React.FC<{
           <div className="text-ink-soft">Total <span className="ml-2 font-semibold text-ink">{formatMoney(total)}</span></div>
           <div className="text-ink-soft">Paid <span className="ml-2 font-semibold text-ink">{formatMoney(paid)}</span></div>
           <div className="text-ink-soft">Balance <span className="ml-2 font-semibold text-ink">{formatMoney(balance)}</span></div>
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-edge pt-3">
+        <h4 className="mb-2 text-sm font-semibold text-ink">Send invoice</h4>
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <Field label="To" htmlFor="send-to">
+              <Input id="send-to" type="email" value={sendTo} onChange={e => setSendTo(e.target.value)} placeholder="recipient@example.com" />
+            </Field>
+          </div>
+          <Button onClick={handleSend} disabled={sending}>{sending ? 'Sending…' : 'Send invoice'}</Button>
         </div>
       </div>
 
