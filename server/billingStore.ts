@@ -124,7 +124,7 @@ interface PaymentInput { date?: number | null; amount?: number; method?: string;
 export function recordPayment(db: Database.Database, invoiceId: string, input: PaymentInput): { id: string } {
   const inv = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId);
   if (!inv) throw new NotFoundError('Invoice not found');
-  if (typeof input.amount !== 'number' || !(input.amount > 0)) throw new ValidationError('Payment amount must be a positive number');
+  if (!Number.isFinite(input.amount) || (input.amount as number) <= 0) throw new ValidationError('Payment amount must be a positive number');
   const id = crypto.randomUUID();
   db.prepare('INSERT INTO payments (id, invoiceId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, invoiceId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());

@@ -115,6 +115,11 @@ describe('payments + status', () => {
     expect(() => recordPayment(db, 'nope', { amount: 5 })).toThrow(NotFoundError);
   });
 
+  it('rejects non-finite payment amounts', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    expect(() => recordPayment(db, id, { amount: 1e400 })).toThrow(ValidationError);
+  });
+
   it('setInvoiceStatus validates the value and bumps version', () => {
     const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
     const r = setInvoiceStatus(db, id, 'sent');
