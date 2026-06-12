@@ -164,6 +164,17 @@ describe('storage + search + orphans', () => {
     expect((await request(app).get('/api/images/orphan1')).status).toBe(404);
   });
 
+  it('orphan cleanup spares standalone project document uploads', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id 'p1'
+    // A Documents upload: referenced ONLY by files.projectId, not by any project JSON
+    await request(app).post('/api/files/doc1?projectId=p1&kind=document&name=Contract.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('contract'));
+    const orphans = await request(app).get('/api/storage/orphans');
+    expect(orphans.body.count).toBe(0); // doc1 is NOT an orphan
+    await request(app).post('/api/storage/orphans/cleanup');
+    expect((await request(app).get('/api/files/doc1/meta')).status).toBe(200); // survived
+  });
+
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
     await request(app).post('/api/projects').send({
       ...PROJECT,

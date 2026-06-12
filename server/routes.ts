@@ -373,6 +373,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       addString(r.resourceId);
       try { walk(JSON.parse(r.resourceId)); } catch { /* plain id */ }
     }
+    // Files attributed to a live project are referenced by definition (e.g.
+    // standalone Documents uploads whose id never appears in project JSON).
+    const projectFileRows = db.prepare(
+      'SELECT id FROM files WHERE projectId IS NOT NULL AND projectId IN (SELECT id FROM projects)'
+    ).all() as { id: string }[];
+    for (const r of projectFileRows) referenced.add(r.id);
     return referenced;
   };
 
