@@ -302,6 +302,17 @@ describe('GET /api/projects/:id/summary', () => {
   it('404s for unknown projects', async () => {
     expect((await request(app).get('/api/projects/nope/summary')).status).toBe(404);
   });
+
+  it('includes contractValueCents (base + approved COs) and invoiceCount', async () => {
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc' });
+    db.prepare('UPDATE projects SET contractValue = 5000 WHERE id = ?').run('pc');
+    const co = await request(app).post('/api/projects/pc/change-orders').send({ number: 'CO-1', amount: 1000 });
+    await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
+    await request(app).post('/api/projects/pc/invoices').send({ number: 'INV-1', lines: [] });
+    const res = await request(app).get('/api/projects/pc/summary');
+    expect(res.body.contractValueCents).toBe(600000); // 5000 + 1000
+    expect(res.body.invoiceCount).toBe(1);
+  });
 });
 
 describe('GET /api/activity?projectId=', () => {

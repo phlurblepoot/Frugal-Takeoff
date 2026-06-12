@@ -6,7 +6,7 @@ import type { ProjectSummary } from '../utils/store';
 const mk = (over: Partial<ProjectSummary>): ProjectSummary => ({
   id: 'x', name: 'P', status: 'estimating', contractor: null, address: null,
   bidDueDate: null, version: 1, createdAt: 1, updatedAt: null, archived: false,
-  pageCount: 0, takeoffCount: 0, pageIds: [], ...over,
+  pageCount: 0, takeoffCount: 0, pageIds: [], contractValueCents: 0, invoiceCount: 0, ...over,
 });
 
 describe('groupSummaries', () => {

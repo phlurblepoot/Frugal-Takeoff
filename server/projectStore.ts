@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
+import { billingSummary } from './billingStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -258,21 +259,26 @@ export function listProjectSummaries(db: Database.Database, id?: string): any[] 
     pageIdsByProject.get(r.projectId)!.push(r.id);
   }
 
-  return rows.map(r => ({
-    id: r.id,
-    name: r.name ?? 'Untitled',
-    status: r.status ?? 'estimating',
-    contractor: r.contractor ?? null,
-    address: r.address ?? null,
-    bidDueDate: r.bidDueDate ?? null,
-    version: r.version ?? 1,
-    createdAt: r.createdAt ?? 0,
-    updatedAt: r.updatedAt ?? null,
-    archived: !!r.archived,
-    pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
-    takeoffCount: takeoffCounts.get(r.id) ?? 0,
-    pageIds: pageIdsByProject.get(r.id) ?? [],
-  }));
+  return rows.map(r => {
+    const bs = billingSummary(db, r.id);
+    return {
+      id: r.id,
+      name: r.name ?? 'Untitled',
+      status: r.status ?? 'estimating',
+      contractor: r.contractor ?? null,
+      address: r.address ?? null,
+      bidDueDate: r.bidDueDate ?? null,
+      version: r.version ?? 1,
+      createdAt: r.createdAt ?? 0,
+      updatedAt: r.updatedAt ?? null,
+      archived: !!r.archived,
+      pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
+      takeoffCount: takeoffCounts.get(r.id) ?? 0,
+      pageIds: pageIdsByProject.get(r.id) ?? [],
+      contractValueCents: bs.contractValueCents,
+      invoiceCount: bs.invoiceCount,
+    };
+  });
 }
 
 // Explicit user action — the one place project-owned files are deleted.

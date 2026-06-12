@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
-  Activity as ActivityIcon, Building2, Calendar, Clock, FileText,
+  Activity as ActivityIcon, Building2, Calendar, Clock, DollarSign, FileText,
   FolderOpen, MapPin, Ruler, Upload,
 } from 'lucide-react';
 import { useProjectOutlet } from './ProjectLayout';
@@ -15,6 +15,7 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Skeleton,
 } from '../../components/ui';
 import { timeAgo, hoursThisWeek } from '../Dashboard';
+import { formatMoney } from '../../utils/money';
 
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 
@@ -22,6 +23,7 @@ export const ProjectOverview: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { summary, refreshSummary } = useProjectOutlet();
   const { toast } = useToast();
+  const isAdmin = (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [entries, setEntries] = useState<TimeEntryLite[] | null>(null);
 
@@ -98,6 +100,12 @@ export const ProjectOverview: React.FC = () => {
                   <span className="flex items-center gap-1.5"><FileText size={14} className="text-ink-faint" />{summary.pageCount} pages</span>
                   <span className="flex items-center gap-1.5"><Ruler size={14} className="text-ink-faint" />{summary.takeoffCount} takeoffs</span>
                 </div>
+                {isAdmin && summary.contractValueCents > 0 && (
+                  <div className="flex items-center gap-2 pt-1 text-ink">
+                    <DollarSign size={14} className="text-ink-faint" />
+                    Contract value: <span className="font-semibold">{formatMoney(summary.contractValueCents)}</span>
+                  </div>
+                )}
               </dl>
             )}
           </CardBody>
