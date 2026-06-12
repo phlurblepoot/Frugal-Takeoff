@@ -129,6 +129,18 @@ describe('Sidebar — project mode', () => {
     expect(screen.queryByText('Maple St Office')).not.toBeInTheDocument();
   });
 
+  it('shows Billing for admins', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'a', role: 'admin' }));
+    renderProject('/project/p1');
+    expect(screen.getByRole('button', { name: /Billing/ })).toBeInTheDocument();
+  });
+
+  it('hides Billing for members', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'm', role: 'member' }));
+    renderProject('/project/p1');
+    expect(screen.queryByRole('button', { name: /Billing/ })).not.toBeInTheDocument();
+  });
+
   it('hides the size toggles when locked', () => {
     render(
       <ThemeProvider>

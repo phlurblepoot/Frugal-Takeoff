@@ -4,7 +4,7 @@ import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ClipboardList, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
-  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard,
+  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
@@ -40,12 +40,14 @@ const PROJECT_NAV: {
   Icon: NavEntry['Icon'];
   path: string;
   match: (pathname: string, base: string) => boolean;
+  adminOnly?: boolean;
 }[] = [
-  { id: 'overview',  label: 'Overview',           Icon: LayoutGrid, path: '',           match: (p, b) => p === b },
-  { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,      path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
-  { id: 'documents', label: 'Documents',          Icon: FolderOpen, path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
-  { id: 'notes',     label: 'Notes',              Icon: StickyNote, path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
-  { id: 'time',      label: 'Time',               Icon: Clock,      path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
+  { id: 'overview',  label: 'Overview',           Icon: LayoutGrid,  path: '',           match: (p, b) => p === b },
+  { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,       path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
+  { id: 'documents', label: 'Documents',          Icon: FolderOpen,  path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
+  { id: 'notes',     label: 'Notes',              Icon: StickyNote,  path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
+  { id: 'time',      label: 'Time',               Icon: Clock,       path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
+  { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
 ];
 
 // Row used by every nav item. The active item gets the glow treatment —
@@ -96,6 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'admin';
   const expanded = state === 'expanded';
 
   const handleLogout = () => {
@@ -176,7 +179,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
               </p>
             )}
             <div className="space-y-0.5">
-              {PROJECT_NAV.map(item => {
+              {PROJECT_NAV.filter(item => !item.adminOnly || isAdmin).map(item => {
                 const base = `/project/${projectId}`;
                 return (
                   <NavRow
