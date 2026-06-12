@@ -23,7 +23,6 @@ import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
-import { useRegisterProjectShell } from '../context/ProjectShellContext';
 import { useCollaboration } from '../context/CollaborationContext';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -626,7 +625,6 @@ export const ProjectView: React.FC = () => {
     setSearchParams(searchParams, { replace: true });
   };
   const [project, setProject] = useState<Project | null>(null);
-  useRegisterProjectShell(project?.id, project?.name);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);

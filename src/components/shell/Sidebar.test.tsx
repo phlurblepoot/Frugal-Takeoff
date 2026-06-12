@@ -87,17 +87,22 @@ describe('Sidebar — project mode', () => {
     renderProject('/project/p1');
     expect(screen.getByRole('button', { name: /All Projects/ })).toBeInTheDocument();
     expect(screen.getByText('Maple St Office')).toBeInTheDocument();
-    for (const label of ['Plans & Pages', 'Takeoffs', 'Printouts', 'Proposal', 'Notes']) {
+    for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Notes', 'Time']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
     // company nav is gone
     expect(screen.queryByRole('button', { name: /Checklists/ })).not.toBeInTheDocument();
   });
 
-  it('highlights the section matching ?tab=', () => {
-    renderProject('/project/p1?tab=takeoffs');
-    expect(screen.getByRole('button', { name: /Takeoffs/ }).className).toContain('glow-accent');
-    expect(screen.getByRole('button', { name: /Plans & Pages/ }).className).not.toContain('glow-accent');
+  it('highlights the section matching the route', () => {
+    renderProject('/project/p1/documents');
+    expect(screen.getByRole('button', { name: /Documents/ }).className).toContain('glow-accent');
+    expect(screen.getByRole('button', { name: /Overview/ }).className).not.toContain('glow-accent');
+  });
+
+  it('highlights Overview at the project root and Takeoff on canvas routes', () => {
+    renderProject('/project/p1');
+    expect(screen.getByRole('button', { name: /Overview/ }).className).toContain('glow-accent');
   });
 
   it('stays in company mode off project routes', () => {

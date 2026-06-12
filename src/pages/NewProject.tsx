@@ -601,7 +601,7 @@ export const NewProject: React.FC = () => {
 
       await saveProject(project);
 
-      navigate(`/project/${projectId}`);
+      navigate(`/project/${projectId}/takeoff`);
     } catch (error) {
       console.error('Error saving project:', error);
       toast('Failed to save project.', { type: 'error' });

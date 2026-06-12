@@ -6,6 +6,11 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
+import { ProjectLayout } from './pages/project/ProjectLayout';
+import { ProjectOverview } from './pages/project/ProjectOverview';
+import { ProjectDocuments } from './pages/project/ProjectDocuments';
+import { ProjectNotes } from './pages/project/ProjectNotes';
+import { ProjectTime } from './pages/project/ProjectTime';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
@@ -99,11 +104,15 @@ export default function App() {
         },
         {
           path: 'project/:projectId',
-          element: <ProjectView />,
-        },
-        {
-          path: 'project/:projectId/page/:pageId',
-          element: <CanvasView />,
+          element: <ProjectLayout />,
+          children: [
+            { index: true, element: <ProjectOverview /> },
+            { path: 'takeoff', element: <ProjectView /> },
+            { path: 'documents', element: <ProjectDocuments /> },
+            { path: 'notes', element: <ProjectNotes /> },
+            { path: 'time', element: <ProjectTime /> },
+            { path: 'page/:pageId', element: <CanvasView /> },
+          ],
         },
         {
           path: 'settings',

@@ -10,7 +10,6 @@ import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calcu
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
-import { useRegisterProjectShell } from '../context/ProjectShellContext';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -210,7 +209,6 @@ const CanvasViewInner: React.FC = () => {
   const pageRoom = (pId: string) => `/project/${projectId}/page/${pId}`;
 
   const [project, setProject] = useState<Project | null>(null);
-  useRegisterProjectShell(project?.id, project?.name);
   const [page, setPage] = useState<ProjectPage | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -656,7 +654,7 @@ const CanvasViewInner: React.FC = () => {
 
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
-      navigate(`/project/${pId}`);
+      navigate(`/project/${pId}/takeoff`);
       return;
     }
 
@@ -1250,7 +1248,7 @@ const CanvasViewInner: React.FC = () => {
           <div className="w-full md:w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
               <div className="flex items-center justify-between mb-4">
-                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
+                <Link to={`/project/${project.id}/takeoff`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
                   <ArrowLeft size={16} />
                   <span className="md:inline">Back to Project</span>
                 </Link>
@@ -1854,8 +1852,8 @@ const CanvasViewInner: React.FC = () => {
             <div className="hidden md:flex pointer-events-auto items-center gap-2">
               {!isLeftSidebarOpen && (
                 <>
-                  <Link 
-                    to={`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
+                  <Link
+                    to={`/project/${project.id}/takeoff${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
                   >
                     <ArrowLeft size={16} />

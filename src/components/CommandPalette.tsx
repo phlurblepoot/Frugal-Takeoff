@@ -126,7 +126,7 @@ export const CommandPalette: React.FC = () => {
     switch (item.type) {
       case 'project': navigate(`/project/${item.projectId}`); break;
       case 'page': navigate(`/project/${item.projectId}/page/${item.pageId}`); break;
-      case 'takeoff': navigate(`/project/${item.projectId}`, { state: { activeTab: 'takeoffs' } }); break;
+      case 'takeoff': navigate(`/project/${item.projectId}/takeoff?tab=takeoffs`); break;
     }
   }, [close, navigate]);
 

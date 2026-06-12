@@ -4,11 +4,10 @@ import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ClipboardList, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
-  ArrowLeft, LayoutGrid, Ruler, Printer, Mail, StickyNote, LayoutDashboard,
+  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
-import { useNotes } from '../../context/NotesContext';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -32,14 +31,21 @@ const TOOLS_NAV: NavEntry[] = [
   { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/tools/sheets', match: p => p.startsWith('/tools/sheets') || p.startsWith('/spreadsheet-editor') },
 ];
 
-// Project sections, Phase 2 edition: they map onto ProjectView's tabs
-// (?tab= — Task 9). Notes is not a tab — it opens the notes overlay.
-// Phase 3 replaces these with the full section list and real routes.
-const PROJECT_NAV: { id: string; label: string; Icon: NavEntry['Icon']; tab: string | null }[] = [
-  { id: 'pages',     label: 'Plans & Pages', Icon: LayoutGrid, tab: null },
-  { id: 'takeoffs',  label: 'Takeoffs',      Icon: Ruler,      tab: 'takeoffs' },
-  { id: 'printouts', label: 'Printouts',     Icon: Printer,    tab: 'printouts' },
-  { id: 'email',     label: 'Proposal',      Icon: Mail,       tab: 'email' },
+// Project sections (spec §4.2), Phase 3b edition: real nested routes.
+// 'Takeoff & Estimate' keeps its internal ?tab= sub-tabs; Punch/Issues/Billing
+// arrive in Phase 4; Project Settings in Phase 5.
+const PROJECT_NAV: {
+  id: string;
+  label: string;
+  Icon: NavEntry['Icon'];
+  path: string;
+  match: (pathname: string, base: string) => boolean;
+}[] = [
+  { id: 'overview',  label: 'Overview',           Icon: LayoutGrid, path: '',           match: (p, b) => p === b },
+  { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,      path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
+  { id: 'documents', label: 'Documents',          Icon: FolderOpen, path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
+  { id: 'notes',     label: 'Notes',              Icon: StickyNote, path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
+  { id: 'time',      label: 'Time',               Icon: Clock,      path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
 ];
 
 // Row used by every nav item. The active item gets the glow treatment —
@@ -84,11 +90,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   const navigate = useNavigate();
   const { mode, toggleMode } = useTheme();
   const { project } = useProjectShell();
-  const { openNotes } = useNotes();
   const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
   const projectId = projectMatch?.params.projectId;
-  const onProjectRoot = !!matchPath('/project/:projectId', location.pathname);
-  const activeTab = new URLSearchParams(location.search).get('tab') ?? 'pages';
 
   if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
 
@@ -173,25 +176,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
               </p>
             )}
             <div className="space-y-0.5">
-              {PROJECT_NAV.map(item => (
-                <NavRow
-                  key={item.id}
-                  label={item.label}
-                  Icon={item.Icon}
-                  expanded={expanded}
-                  active={onProjectRoot && activeTab === (item.tab ?? 'pages')}
-                  onClick={() =>
-                    navigate(item.tab ? `/project/${projectId}?tab=${item.tab}` : `/project/${projectId}`)
-                  }
-                />
-              ))}
-              {/* Notes is an overlay, not a route — no active state. */}
-              <NavRow
-                label="Notes"
-                Icon={StickyNote}
-                expanded={expanded}
-                onClick={() => openNotes(projectId)}
-              />
+              {PROJECT_NAV.map(item => {
+                const base = `/project/${projectId}`;
+                return (
+                  <NavRow
+                    key={item.id}
+                    label={item.label}
+                    Icon={item.Icon}
+                    expanded={expanded}
+                    active={item.match(location.pathname, base)}
+                    onClick={() => navigate(`${base}${item.path}`)}
+                  />
+                );
+              })}
             </div>
           </>
         ) : (
