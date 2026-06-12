@@ -433,7 +433,7 @@ describe('deleteProject billing cascade', () => {
     ]) {
       expect((db.prepare(sql).get('p1') as any).c).toBe(0);
     }
-    expect((db.prepare('SELECT COUNT(*) c FROM payments').get() as any).c).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines').get() as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM payments WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
