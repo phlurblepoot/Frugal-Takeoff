@@ -3,6 +3,14 @@ import { deleteFileContent } from './fileStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
+export class NotFoundError extends Error {}
+
+// Project lifecycle stages (spec §2). 'archived' is reachable via the
+// archived flag rather than the stage dropdown, but remains a valid value.
+export const PROJECT_STATUSES = [
+  'estimating', 'proposal_sent', 'awarded', 'in_progress',
+  'punch_list', 'complete', 'archived', 'lost',
+] as const;
 
 const parse = (s: string | null): any => (s == null ? undefined : JSON.parse(s));
 
@@ -273,4 +281,71 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
   });
   tx();
   for (const fid of fileIds) deleteFileContent(dataDir, fid);
+}
+
+// Granular, version-checked field updates — the first of the spec §3.3
+// "granular writes". Touches only columns + the meta.archived flag; never
+// touches child tables or files.
+export function patchProject(
+  db: Database.Database,
+  id: string,
+  patch: any
+): { version: number; status: string } {
+  if (!patch || typeof patch !== 'object') throw new ValidationError('Payload must be an object');
+  if (!Number.isInteger(patch.version) || patch.version < 1) {
+    throw new ValidationError('Missing or invalid version — reload the project and try again');
+  }
+  const ALLOWED = ['version', 'name', 'status', 'archived', 'contractor', 'address', 'bidDueDate'];
+  for (const k of Object.keys(patch)) {
+    if (!ALLOWED.includes(k)) throw new ValidationError(`Unknown field: ${k}`);
+  }
+  if (patch.name !== undefined && (typeof patch.name !== 'string' || !patch.name.trim())) {
+    throw new ValidationError('name must be a non-empty string');
+  }
+  if (patch.status !== undefined && !(PROJECT_STATUSES as readonly string[]).includes(patch.status)) {
+    throw new ValidationError(`Invalid status: ${patch.status}`);
+  }
+  if (patch.archived !== undefined && typeof patch.archived !== 'boolean') {
+    throw new ValidationError('archived must be a boolean');
+  }
+  for (const k of ['contractor', 'address'] as const) {
+    if (patch[k] !== undefined && patch[k] !== null && typeof patch[k] !== 'string') {
+      throw new ValidationError(`${k} must be a string or null`);
+    }
+  }
+  if (patch.bidDueDate !== undefined && patch.bidDueDate !== null && typeof patch.bidDueDate !== 'number') {
+    throw new ValidationError('bidDueDate must be a number or null');
+  }
+
+  let out = { version: 0, status: '' };
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT version, status, meta FROM projects WHERE id = ?').get(id) as
+      | { version: number; status: string; meta: string | null }
+      | undefined;
+    if (!row) throw new NotFoundError('Project not found');
+    if (row.version !== patch.version) {
+      throw new ConflictError(`Project changed since it was loaded (server v${row.version}, payload v${patch.version})`);
+    }
+    const newVersion = row.version + 1;
+    const sets: string[] = ['version = ?', 'updatedAt = ?'];
+    const vals: any[] = [newVersion, Date.now()];
+    for (const k of ['name', 'status', 'contractor', 'address', 'bidDueDate'] as const) {
+      if (patch[k] !== undefined) {
+        sets.push(`${k} = ?`);
+        vals.push(patch[k]);
+      }
+    }
+    if (patch.archived !== undefined) {
+      let meta: any = {};
+      try { meta = JSON.parse(row.meta || '{}'); } catch { /* keep {} */ }
+      if (patch.archived) meta.archived = true;
+      else delete meta.archived; // legacy shape omits the key when not archived
+      sets.push('meta = ?');
+      vals.push(JSON.stringify(meta));
+    }
+    db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+    out = { version: newVersion, status: patch.status ?? row.status ?? 'estimating' };
+  });
+  tx();
+  return out;
 }

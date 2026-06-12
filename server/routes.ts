@@ -4,7 +4,7 @@ import fsSync from 'fs';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
-  listProjectSummaries, ValidationError, ConflictError,
+  listProjectSummaries, patchProject, ValidationError, ConflictError, NotFoundError,
 } from './projectStore';
 import { putDataUrl, putBuffer, getMeta, getDataUrlString } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
@@ -75,6 +75,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
       if (e instanceof ValidationError) return res.status(400).json({ error: e.message });
       console.error('Error updating project:', e);
+      res.status(500).json({ error: 'Failed to update project' });
+    }
+  });
+
+  app.patch('/api/projects/:id', authenticateToken, (req, res) => {
+    try {
+      const result = patchProject(db, req.params.id, req.body);
+      res.json({ success: true, ...result });
+    } catch (e) {
+      if (e instanceof NotFoundError) return res.status(404).json({ error: e.message });
+      if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+      if (e instanceof ValidationError) return res.status(400).json({ error: e.message });
+      console.error('Error patching project:', e);
       res.status(500).json({ error: 'Failed to update project' });
     }
   });

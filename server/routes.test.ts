@@ -215,3 +215,52 @@ describe('GET /api/projects/summary', () => {
     expect(res.body.find((r: any) => r.id === 'p2').archived).toBe(true);
   });
 });
+
+describe('PATCH /api/projects/:id', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT);
+  });
+
+  it('updates status and bumps version', async () => {
+    const res = await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, version: 2, status: 'awarded' });
+    const get = await request(app).get('/api/projects/p1');
+    expect(get.body.status).toBe('awarded');
+    expect(get.body.version).toBe(2);
+  });
+
+  it('updates name and archived flag', async () => {
+    const res = await request(app).patch('/api/projects/p1')
+      .send({ version: 1, name: 'Renamed', archived: true });
+    expect(res.body.version).toBe(2);
+    const get = await request(app).get('/api/projects/p1');
+    expect(get.body.name).toBe('Renamed');
+    expect(get.body.archived).toBe(true);
+  });
+
+  it('un-archiving removes the meta key entirely', async () => {
+    await request(app).patch('/api/projects/p1').send({ version: 1, archived: true });
+    await request(app).patch('/api/projects/p1').send({ version: 2, archived: false });
+    const get = await request(app).get('/api/projects/p1');
+    expect(get.body.archived).toBeUndefined(); // legacy shape omits the key
+  });
+
+  it('rejects stale versions with 409 and changes nothing', async () => {
+    await request(app).patch('/api/projects/p1').send({ version: 1, name: 'First' });
+    const stale = await request(app).patch('/api/projects/p1').send({ version: 1, name: 'Clobber' });
+    expect(stale.status).toBe(409);
+    expect((await request(app).get('/api/projects/p1')).body.name).toBe('First');
+  });
+
+  it('rejects invalid payloads with 400', async () => {
+    expect((await request(app).patch('/api/projects/p1').send({ version: 1, status: 'galactic' })).status).toBe(400);
+    expect((await request(app).patch('/api/projects/p1').send({ version: 1, nonsense: true })).status).toBe(400);
+    expect((await request(app).patch('/api/projects/p1').send({ status: 'awarded' })).status).toBe(400); // no version
+    expect((await request(app).patch('/api/projects/p1').send({ version: 1, name: '' })).status).toBe(400);
+  });
+
+  it('404s for unknown projects', async () => {
+    expect((await request(app).patch('/api/projects/nope').send({ version: 1, name: 'X' })).status).toBe(404);
+  });
+});
