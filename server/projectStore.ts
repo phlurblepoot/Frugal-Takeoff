@@ -124,6 +124,10 @@ function validate(payload: any, id?: string): void {
 
 // Status is intentionally sticky: once a project leaves 'estimating', legacy
 // flags (submitted/accepted/archived) no longer drive it.
+// NOTE: patchProject can leave meta.archived and status transiently divergent
+// (PATCH archived:true keeps the real stage; the next full save re-derives
+// status='archived' here). Accepted for 3a — revisit when archived/status
+// are decoupled.
 export function deriveStatus(meta: any, existing?: string): string {
   if (existing && existing !== 'estimating') return existing;
   if (meta.archived) return 'archived';
