@@ -5,7 +5,8 @@ import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   FileSpreadsheet, CheckSquare, Clock, CornerDownLeft, X, Keyboard,
 } from 'lucide-react';
-import { searchAll, SearchResult } from '../utils/store';
+import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
+import { useToast } from './Toast';
 
 type Action = {
   id: string;
@@ -44,6 +45,7 @@ const isTyping = () => {
 export const CommandPalette: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -61,13 +63,25 @@ export const CommandPalette: React.FC = () => {
 
   const staticActions: Action[] = useMemo(() => [
     { id: 'a:new', type: 'action', title: 'New project', icon: <Plus size={16} />, run: () => navigate('/new') },
-    { id: 'a:home', type: 'action', title: 'Dashboard', icon: <Home size={16} />, run: () => navigate('/') },
+    { id: 'a:home', type: 'action', title: 'Dashboard', icon: <Home size={16} />, run: () => navigate('/dashboard') },
+    { id: 'a:projects', type: 'action', title: 'Projects', icon: <FolderOpen size={16} />, run: () => navigate('/projects') },
     { id: 'a:settings', type: 'action', title: 'Settings', icon: <SettingsIcon size={16} />, run: () => navigate('/settings') },
-    { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/pdf-editor') },
-    { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/spreadsheet-editor') },
+    { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/tools/pdf') },
+    { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
     { id: 'a:checklist', type: 'action', title: 'Checklists', icon: <CheckSquare size={16} />, run: () => navigate('/checklist') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
-  ], [navigate]);
+    {
+      id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,
+      run: async () => {
+        try {
+          const entries = await getMyTimeEntries();
+          const open = entries.find(e => e.clockOut === null);
+          if (open) { await clockOut(); toast('Clocked out', { type: 'success' }); }
+          else { await clockIn(); toast('Clocked in', { type: 'success' }); }
+        } catch { toast('Clock action failed', { type: 'error' }); }
+      },
+    },
+  ], [navigate, toast]);
 
   // Debounced search.
   useEffect(() => {

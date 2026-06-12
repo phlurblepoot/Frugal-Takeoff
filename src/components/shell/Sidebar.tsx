@@ -4,7 +4,7 @@ import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ClipboardList, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
-  ArrowLeft, LayoutGrid, Ruler, Printer, Mail, StickyNote,
+  ArrowLeft, LayoutGrid, Ruler, Printer, Mail, StickyNote, LayoutDashboard,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
@@ -21,14 +21,15 @@ interface NavEntry {
 }
 
 const WORKSPACE_NAV: NavEntry[] = [
-  { id: 'projects', label: 'Projects', Icon: FolderKanban, path: '/', match: p => p === '/' || p === '/new' || p.startsWith('/project') },
+  { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard, path: '/dashboard', match: p => p === '/' || p.startsWith('/dashboard') },
+  { id: 'projects', label: 'Projects', Icon: FolderKanban, path: '/projects', match: p => p.startsWith('/projects') || p === '/new' || p.startsWith('/project') },
   { id: 'checklists', label: 'Checklists', Icon: ClipboardList, path: '/checklist', match: p => p.startsWith('/checklist') },
   { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
 ];
 
 const TOOLS_NAV: NavEntry[] = [
-  { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/pdf-editor', match: p => p.startsWith('/pdf-editor') },
-  { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/spreadsheet-editor', match: p => p.startsWith('/spreadsheet-editor') },
+  { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/tools/pdf', match: p => p.startsWith('/tools/pdf') || p.startsWith('/pdf-editor') },
+  { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/tools/sheets', match: p => p.startsWith('/tools/sheets') || p.startsWith('/spreadsheet-editor') },
 ];
 
 // Project sections, Phase 2 edition: they map onto ProjectView's tabs
@@ -160,7 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                 label="All Projects"
                 Icon={ArrowLeft}
                 expanded={expanded}
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/projects')}
               />
             </div>
             {expanded && (

@@ -650,7 +650,7 @@ const CanvasViewInner: React.FC = () => {
     setIsLoading(true);
     const proj = await getProject(pId);
     if (!proj) {
-      navigate('/');
+      navigate('/projects');
       return;
     }
 

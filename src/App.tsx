@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createBrowserRouter, RouterProvider, Outlet, useLocation } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -83,11 +83,15 @@ export default function App() {
         },
         {
           index: true,
-          element: <ProjectsPage />,
+          element: <Navigate to="/dashboard" replace />,
         },
         {
           path: 'dashboard',
           element: <Dashboard />,
+        },
+        {
+          path: 'projects',
+          element: <ProjectsPage />,
         },
         {
           path: 'new',
@@ -106,12 +110,20 @@ export default function App() {
           element: <Settings />,
         },
         {
-          path: 'pdf-editor',
+          path: 'tools/pdf',
           element: <PdfEditor />,
         },
         {
-          path: 'spreadsheet-editor',
+          path: 'tools/sheets',
           element: <SpreadsheetEditor />,
+        },
+        {
+          path: 'pdf-editor',
+          element: <Navigate to="/tools/pdf" replace />,
+        },
+        {
+          path: 'spreadsheet-editor',
+          element: <Navigate to="/tools/sheets" replace />,
         },
         {
           path: 'checklist',

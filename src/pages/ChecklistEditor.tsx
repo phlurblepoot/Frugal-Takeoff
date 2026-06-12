@@ -1084,7 +1084,7 @@ export const ChecklistEditor: React.FC = () => {
     const source = po.fileId
       ? { projectId: activeIdRef.current ?? '', printoutId: po.id, fileId: po.fileId }
       : undefined;
-    navigate('/pdf-editor', { state: { file, source } });
+    navigate('/tools/pdf', { state: { file, source } });
   };
 
   const handleDownloadPrintout = async (po: ChecklistPrintout) => {

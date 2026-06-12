@@ -1116,7 +1116,7 @@ export const ProjectView: React.FC = () => {
     setIsLoading(true);
     const data = await getProject(id);
     if (!data) {
-      navigate('/');
+      navigate('/projects');
       return;
     }
     setProject(data);
@@ -2616,7 +2616,7 @@ export const ProjectView: React.FC = () => {
       const source = projectId
         ? { projectId, printoutId: printout.id, fileId: printout.fileId }
         : undefined;
-      navigate('/spreadsheet-editor', { state: { file, source } });
+      navigate('/tools/sheets', { state: { file, source } });
     } else {
       // Convert data URL to File and open in the PDF Editor. Pass source info so
       // Save in the editor overwrites this same printout via the file API.
@@ -2627,7 +2627,7 @@ export const ProjectView: React.FC = () => {
       const source = projectId
         ? { projectId, printoutId: printout.id, fileId: printout.fileId }
         : undefined;
-      navigate('/pdf-editor', { state: { file, source } });
+      navigate('/tools/pdf', { state: { file, source } });
     }
   };
 
@@ -3211,7 +3211,7 @@ export const ProjectView: React.FC = () => {
       )}
 
       <div className="max-w-5xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
+        <Link to="/projects" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>

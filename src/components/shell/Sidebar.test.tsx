@@ -1,7 +1,7 @@
 // src/components/shell/Sidebar.test.tsx
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../context/ThemeContext';
 import { Sidebar } from './Sidebar';
@@ -33,7 +33,7 @@ beforeEach(() => {
 describe('Sidebar — company mode', () => {
   it('shows workspace and tools nav groups', () => {
     renderAt('/');
-    for (const label of ['Projects', 'Checklists', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
+    for (const label of ['Dashboard', 'Projects', 'Checklists', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -42,6 +42,15 @@ describe('Sidebar — company mode', () => {
     renderAt('/time');
     expect(screen.getByRole('button', { name: /Time/ }).className).toContain('glow-accent');
     expect(screen.getByRole('button', { name: /Projects/ }).className).not.toContain('glow-accent');
+  });
+
+  it('marks Dashboard active on /dashboard and Projects active on /projects', () => {
+    renderAt('/dashboard');
+    expect(screen.getByRole('button', { name: /Dashboard/ }).className).toContain('glow-accent');
+    cleanup();
+    localStorage.setItem('token', 'test-token');
+    renderAt('/projects');
+    expect(screen.getByRole('button', { name: /Projects/ }).className).toContain('glow-accent');
   });
 
   it('offers a theme toggle', () => {

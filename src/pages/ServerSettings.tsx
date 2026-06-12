@@ -156,7 +156,7 @@ export const ServerSettings: React.FC = () => {
         if (user.role === 'admin') {
           setIsAdmin(true);
         } else {
-          navigate('/');
+          navigate('/dashboard');
         }
       } else {
         navigate('/login');

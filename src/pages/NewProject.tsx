@@ -639,7 +639,7 @@ export const NewProject: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
       <div className="max-w-2xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
+        <Link to="/projects" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
@@ -838,7 +838,7 @@ export const NewProject: React.FC = () => {
 
             <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end gap-3">
               <Link
-                to="/"
+                to="/projects"
                 className="px-6 py-3 rounded-xl font-medium text-slate-600 hover:bg-slate-100 transition-colors"
               >
                 Cancel
