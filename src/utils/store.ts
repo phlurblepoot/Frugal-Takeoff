@@ -654,3 +654,109 @@ export const deleteDraft = async (fileId: string): Promise<void> => {
   });
   await handleResponse(res);
 };
+
+// ── Phase 4a: billing ────────────────────────────────────────────────────────
+
+export interface InvoiceLine {
+  id?: string;
+  description: string;
+  qty: number;
+  unitPrice: number;
+}
+export interface Payment {
+  id: string;
+  date: number | null;
+  amount: number;
+  method: string | null;
+  note: string | null;
+}
+export interface Invoice {
+  id: string;
+  projectId: string;
+  number: string | null;
+  date: number | null;
+  status: string; // draft | sent | paid
+  terms: string | null;
+  version: number;
+  createdAt: number;
+  lines: InvoiceLine[];
+  payments: Payment[];
+  totalCents: number;
+  paidCents: number;
+  balanceCents: number;
+}
+export interface InvoiceListItem {
+  id: string; projectId: string; number: string | null; date: number | null;
+  status: string; terms: string | null; version: number; createdAt: number;
+  totalCents: number; paidCents: number; balanceCents: number;
+}
+export interface ChangeOrder {
+  id: string; projectId: string; number: string | null; description: string | null;
+  amount: number; status: string; createdAt: number; // pending | approved | rejected
+}
+export interface BillingSummary {
+  baseContractCents: number; approvedChangeCents: number; contractValueCents: number;
+  invoicedCents: number; paidCents: number; outstandingCents: number;
+  invoiceCount: number; changeOrderCount: number;
+}
+export interface InvoiceInput {
+  number?: string; date?: number | null; terms?: string; status?: string;
+  lines: { description: string; qty: number; unitPrice: number }[];
+}
+
+const billingJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getInvoices = async (projectId: string): Promise<InvoiceListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/invoices`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getInvoice = async (id: string): Promise<Invoice> => {
+  const res = await fetchWithRetry(`/api/invoices/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createInvoice = async (projectId: string, input: InvoiceInput): Promise<{ id: string; version: number }> => {
+  const res = await billingJson('POST', `/api/projects/${projectId}/invoices`, input);
+  await handleResponse(res); return res.json();
+};
+export const saveInvoice = async (id: string, invoice: Invoice): Promise<{ version: number }> => {
+  const res = await billingJson('PUT', `/api/invoices/${id}`, invoice);
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setInvoiceStatus = async (id: string, status: string): Promise<{ version: number }> => {
+  const res = await billingJson('PATCH', `/api/invoices/${id}`, { status });
+  await handleResponse(res); return res.json();
+};
+export const deleteInvoice = async (id: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/invoices/${id}`); await handleResponse(res);
+};
+export const recordPayment = async (invoiceId: string, p: { amount: number; date?: number; method?: string; note?: string }): Promise<{ id: string }> => {
+  const res = await billingJson('POST', `/api/invoices/${invoiceId}/payments`, p);
+  await handleResponse(res); return res.json();
+};
+export const deletePayment = async (id: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/payments/${id}`); await handleResponse(res);
+};
+export const getChangeOrders = async (projectId: string): Promise<ChangeOrder[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/change-orders`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createChangeOrder = async (projectId: string, co: { number?: string; description?: string; amount: number }): Promise<{ id: string }> => {
+  const res = await billingJson('POST', `/api/projects/${projectId}/change-orders`, co);
+  await handleResponse(res); return res.json();
+};
+export const setChangeOrderStatus = async (id: string, status: string): Promise<void> => {
+  const res = await billingJson('PATCH', `/api/change-orders/${id}`, { status }); await handleResponse(res);
+};
+export const deleteChangeOrder = async (id: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/change-orders/${id}`); await handleResponse(res);
+};
+export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
