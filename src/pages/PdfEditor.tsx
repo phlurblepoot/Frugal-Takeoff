@@ -696,13 +696,19 @@ export const PdfEditor: React.FC = () => {
 
   // Mirror the active tab's annotations to a server-side draft (spec §6 —
   // crash/refresh safe). Only file-backed tabs draft; standalone tabs keep
-  // IndexedDB-only persistence. Empty annotation sets still sync (clearing).
+  // IndexedDB-only persistence.
   useEffect(() => {
     const tab = tabs.find((t) => t.id === activeTabId);
     const fileId = tab?.source?.fileId;
     if (!fileId) return;
     const handle = setTimeout(() => {
-      putDraft(fileId, 'pdf', JSON.stringify({ annotations })).catch(() => {});
+      // Empty == "no draft" (consistent with the restore gate). Don't persist
+      // empty rows on mere open or post-save bake; clear any existing draft instead.
+      if (annotations.length > 0) {
+        putDraft(fileId, 'pdf', JSON.stringify({ annotations })).catch(() => {});
+      } else {
+        deleteDraft(fileId).catch(() => {});
+      }
     }, 2000);
     return () => clearTimeout(handle);
   }, [annotations, activeTabId, tabs]);
