@@ -20,7 +20,7 @@ import { runMigrations } from './server/migrations';
 import { migrations } from './server/migrationList';
 import { registerDataRoutes } from './server/routes';
 import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
-import { getDataUrlString, getMeta, putBuffer } from './server/files';
+import { getDataUrlString, putBuffer } from './server/files';
 
 dotenv.config();
 
@@ -897,8 +897,12 @@ async function startServer() {
 
       await transport.sendMail(mailOptions);
 
-      const updatedProject = { ...project, proposalFileId: fileId, proposalSentAt: Date.now() };
-      storeSaveProject(db, req.params.id, updatedProject); // server-side load→save: version is current
+      // Reload after the SMTP await so a concurrent edit during the send can't
+      // make the version-checked save fail and strand a sent proposal. With no
+      // await between this load and the save, nothing can interleave.
+      const fresh = loadProject(db, req.params.id) ?? project;
+      const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
+      storeSaveProject(db, req.params.id, updatedProject);
       res.json(loadProject(db, req.params.id));
     } catch (error: any) {
       console.error("Error sending project proposal:", error);
