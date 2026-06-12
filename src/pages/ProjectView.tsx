@@ -23,6 +23,7 @@ import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { StickyNote } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
+import { useRegisterProjectShell } from '../context/ProjectShellContext';
 import { useCollaboration } from '../context/CollaborationContext';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -601,7 +602,7 @@ const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term 
   );
 };
 
-const PROJECT_TAB_VALUES = ['pages', 'takeoffs', 'printouts', 'email', 'notes'] as const;
+const PROJECT_TAB_VALUES = ['pages', 'takeoffs', 'printouts', 'email'] as const;
 type ProjectTab = (typeof PROJECT_TAB_VALUES)[number];
 
 export const ProjectView: React.FC = () => {
@@ -624,6 +625,7 @@ export const ProjectView: React.FC = () => {
     setSearchParams(searchParams, { replace: true });
   };
   const [project, setProject] = useState<Project | null>(null);
+  useRegisterProjectShell(project?.id, project?.name);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);

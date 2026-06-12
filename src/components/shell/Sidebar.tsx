@@ -1,11 +1,14 @@
 // src/components/shell/Sidebar.tsx
 import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ClipboardList, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
+  ArrowLeft, LayoutGrid, Ruler, Printer, Mail, StickyNote,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useProjectShell } from '../../context/ProjectShellContext';
+import { useNotes } from '../../context/NotesContext';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -26,6 +29,16 @@ const WORKSPACE_NAV: NavEntry[] = [
 const TOOLS_NAV: NavEntry[] = [
   { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/pdf-editor', match: p => p.startsWith('/pdf-editor') },
   { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/spreadsheet-editor', match: p => p.startsWith('/spreadsheet-editor') },
+];
+
+// Project sections, Phase 2 edition: they map onto ProjectView's tabs
+// (?tab= — Task 9). Notes is not a tab — it opens the notes overlay.
+// Phase 3 replaces these with the full section list and real routes.
+const PROJECT_NAV: { id: string; label: string; Icon: NavEntry['Icon']; tab: string | null }[] = [
+  { id: 'pages',     label: 'Plans & Pages', Icon: LayoutGrid, tab: null },
+  { id: 'takeoffs',  label: 'Takeoffs',      Icon: Ruler,      tab: 'takeoffs' },
+  { id: 'printouts', label: 'Printouts',     Icon: Printer,    tab: 'printouts' },
+  { id: 'email',     label: 'Proposal',      Icon: Mail,       tab: 'email' },
 ];
 
 // Row used by every nav item. The active item gets the glow treatment —
@@ -69,6 +82,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   const location = useLocation();
   const navigate = useNavigate();
   const { mode, toggleMode } = useTheme();
+  const { project } = useProjectShell();
+  const { openNotes } = useNotes();
+  const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
+  const projectId = projectMatch?.params.projectId;
+  const onProjectRoot = !!matchPath('/project/:projectId', location.pathname);
+  const activeTab = new URLSearchParams(location.search).get('tab') ?? 'pages';
 
   if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
 
@@ -134,32 +153,76 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
             <kbd className="text-[10px] font-mono text-ink-faint border border-edge rounded px-1 py-0.5">⌘K</kbd>
           }
         />
-        <SectionLabel show={expanded}>Workspace</SectionLabel>
-        <div className="space-y-0.5">
-          {WORKSPACE_NAV.map(item => (
-            <NavRow
-              key={item.id}
-              label={item.label}
-              Icon={item.Icon}
-              expanded={expanded}
-              active={item.match(location.pathname)}
-              onClick={() => navigate(item.path)}
-            />
-          ))}
-        </div>
-        <SectionLabel show={expanded}>Tools</SectionLabel>
-        <div className="space-y-0.5">
-          {TOOLS_NAV.map(item => (
-            <NavRow
-              key={item.id}
-              label={item.label}
-              Icon={item.Icon}
-              expanded={expanded}
-              active={item.match(location.pathname)}
-              onClick={() => navigate(item.path)}
-            />
-          ))}
-        </div>
+        {projectId ? (
+          <>
+            <div className="pt-2">
+              <NavRow
+                label="All Projects"
+                Icon={ArrowLeft}
+                expanded={expanded}
+                onClick={() => navigate('/')}
+              />
+            </div>
+            {expanded && (
+              <p
+                className="px-3 pt-3 pb-1 text-sm font-semibold text-ink truncate"
+                title={project && project.id === projectId ? project.name : undefined}
+              >
+                {project && project.id === projectId ? project.name : 'Project'}
+              </p>
+            )}
+            <div className="space-y-0.5">
+              {PROJECT_NAV.map(item => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  Icon={item.Icon}
+                  expanded={expanded}
+                  active={onProjectRoot && activeTab === (item.tab ?? 'pages')}
+                  onClick={() =>
+                    navigate(item.tab ? `/project/${projectId}?tab=${item.tab}` : `/project/${projectId}`)
+                  }
+                />
+              ))}
+              {/* Notes is an overlay, not a route — no active state. */}
+              <NavRow
+                label="Notes"
+                Icon={StickyNote}
+                expanded={expanded}
+                onClick={() => openNotes(projectId)}
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <SectionLabel show={expanded}>Workspace</SectionLabel>
+            <div className="space-y-0.5">
+              {WORKSPACE_NAV.map(item => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  Icon={item.Icon}
+                  expanded={expanded}
+                  active={item.match(location.pathname)}
+                  onClick={() => navigate(item.path)}
+                />
+              ))}
+            </div>
+            <SectionLabel show={expanded}>Tools</SectionLabel>
+            <div className="space-y-0.5">
+              {TOOLS_NAV.map(item => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  Icon={item.Icon}
+                  expanded={expanded}
+                  active={item.match(location.pathname)}
+                  onClick={() => navigate(item.path)}
+                />
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Footer */}

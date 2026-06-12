@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, matchPath } from 'react-router-dom';
 import { Sidebar, SidebarState } from './Sidebar';
+import { ProjectShellProvider } from '../../context/ProjectShellContext';
 
 // Keep the legacy storage key so existing users keep their saved preference.
 const SIDEBAR_STORAGE_KEY = 'sideDockState';
@@ -38,11 +39,11 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     !showSidebar || effectiveState === 'hidden' ? 0 : effectiveState === 'collapsed' ? 64 : 208;
 
   return (
-    <>
+    <ProjectShellProvider>
       {showSidebar && <Sidebar state={effectiveState} onChange={handleChange} locked={isCanvasPage} />}
       <div className="min-h-screen bg-surface" style={{ marginLeft, transition: 'margin-left 200ms' }}>
         {children}
       </div>
-    </>
+    </ProjectShellProvider>
   );
 };

@@ -10,6 +10,7 @@ import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calcu
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
+import { useRegisterProjectShell } from '../context/ProjectShellContext';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -209,6 +210,7 @@ const CanvasViewInner: React.FC = () => {
   const pageRoom = (pId: string) => `/project/${projectId}/page/${pId}`;
 
   const [project, setProject] = useState<Project | null>(null);
+  useRegisterProjectShell(project?.id, project?.name);
   const [page, setPage] = useState<ProjectPage | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
