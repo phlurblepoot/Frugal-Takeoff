@@ -16,6 +16,7 @@ import {
 } from '../../components/ui';
 import { InvoiceStatusPill, ChangeOrderStatusPill } from '../../components/ui/BillingPills';
 import { InvoiceEditor } from './billing/InvoiceEditor';
+import { useProjectOutlet } from './ProjectLayout';
 
 export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
 
@@ -25,6 +26,7 @@ export const ProjectBilling: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const { toast } = useToast();
   const confirm = useConfirm();
+  const { summary: projectSummary } = useProjectOutlet();
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [invoices, setInvoices] = useState<InvoiceListItem[] | null>(null);
   const [changeOrders, setChangeOrders] = useState<ChangeOrder[] | null>(null);
@@ -192,6 +194,9 @@ export const ProjectBilling: React.FC = () => {
             try { setEditing(await getInvoice(editing.id)); } catch { setEditing(null); }
             load();
           }}
+          projectName={projectSummary?.name ?? ''}
+          contractor={projectSummary?.contractor}
+          address={projectSummary?.address}
         />
       )}
     </div>

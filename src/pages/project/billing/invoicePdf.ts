@@ -1,0 +1,128 @@
+import { jsPDF } from 'jspdf';
+import { Invoice } from '../../../utils/store';
+import { formatMoney } from '../../../utils/money';
+
+const fmtQty = (n: number) => String(n);
+
+// Pure data-shaping (unit-tested).
+export const invoiceRows = (lines: Invoice['lines']): string[][] =>
+  lines.map(l => [
+    l.description || '',
+    fmtQty(Number(l.qty) || 0),
+    formatMoney(Math.round((Number(l.unitPrice) || 0) * 100)),
+    formatMoney(Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100)),
+  ]);
+
+export const invoiceTotalsBlock = (totalCents: number, paidCents: number): [string, string][] => [
+  ['Total', formatMoney(totalCents)],
+  ['Paid', formatMoney(paidCents)],
+  ['Balance Due', formatMoney(totalCents - paidCents)],
+];
+
+// Resolve the app's accent color (configurable theme) to an RGB triple.
+// Browsers compute the oklch CSS var to rgb() for a probe element's color.
+export function resolveAccentRgb(): [number, number, number] {
+  try {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--color-accent-600)';
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    const rgb = getComputedStyle(probe).color; // "rgb(r, g, b)"
+    document.body.removeChild(probe);
+    const m = rgb.match(/(\d+)\D+(\d+)\D+(\d+)/);
+    if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  } catch { /* fall through */ }
+  return [37, 99, 235]; // sane blue fallback
+}
+
+export interface InvoicePdfContext {
+  invoice: Invoice;
+  projectName: string;
+  contractor?: string | null;
+  address?: string | null;
+  company: { name: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
+  accentRgb?: [number, number, number];
+}
+
+export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const W = doc.internal.pageSize.getWidth();
+  const M = 48;
+  const [ar, ag, ab] = ctx.accentRgb ?? [37, 99, 235];
+  let y = M;
+
+  // Header: logo + company block (left)
+  let leftY = y;
+  if (ctx.company.logoDataUrl) {
+    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip bad logo */ }
+  }
+  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
+  doc.text(ctx.company.name || 'Invoice', M, leftY + 4); leftY += 16;
+  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90, 90, 90);
+  for (const line of [ctx.company.address, [ctx.company.phone, ctx.company.email].filter(Boolean).join('  ·  ')].filter(Boolean)) {
+    doc.text(String(line), M, leftY); leftY += 12;
+  }
+
+  // Header: INVOICE title + meta (right)
+  doc.setFont('helvetica', 'bold').setFontSize(22).setTextColor(ar, ag, ab);
+  doc.text('INVOICE', W - M, y + 16, { align: 'right' });
+  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
+  let metaY = y + 36;
+  doc.text(`No: ${ctx.invoice.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
+  if (ctx.invoice.date) { doc.text(`Date: ${new Date(ctx.invoice.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
+  if (ctx.invoice.terms) { doc.text(`Terms: ${ctx.invoice.terms}`, W - M, metaY, { align: 'right' }); metaY += 14; }
+
+  y = Math.max(leftY, metaY) + 20;
+
+  // Bill To
+  doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(120, 120, 120);
+  doc.text('BILL TO', M, y); y += 14;
+  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
+  for (const line of [ctx.contractor, ctx.projectName, ctx.address].filter(Boolean)) {
+    doc.text(String(line), M, y); y += 13;
+  }
+  y += 14;
+
+  // Line table header
+  const xQty = 320, xUnit = 396, xAmt = W - M;
+  doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60, 60, 60);
+  doc.text('DESCRIPTION', M, y);
+  doc.text('QTY', xQty, y, { align: 'right' });
+  doc.text('UNIT', xUnit, y, { align: 'right' });
+  doc.text('AMOUNT', xAmt, y, { align: 'right' });
+  y += 6;
+  doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y);
+  y += 16;
+
+  // Rows
+  doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
+  for (const [desc, qty, unit, amount] of invoiceRows(ctx.invoice.lines)) {
+    doc.text(desc, M, y, { maxWidth: 260 });
+    doc.text(qty, xQty, y, { align: 'right' });
+    doc.text(unit, xUnit, y, { align: 'right' });
+    doc.text(amount, xAmt, y, { align: 'right' });
+    y += 18;
+  }
+  doc.setDrawColor(210, 210, 210).setLineWidth(0.5).line(M, y, W - M, y);
+  y += 8;
+
+  // Totals (bottom-right)
+  doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(xUnit - 20, y, W - M, y);
+  y += 16;
+  const totals = invoiceTotalsBlock(ctx.invoice.totalCents, ctx.invoice.paidCents);
+  for (const [label, value] of totals) {
+    const bold = label === 'Balance Due';
+    doc.setFont('helvetica', bold ? 'bold' : 'normal').setFontSize(bold ? 12 : 10).setTextColor(30, 30, 30);
+    doc.text(label, xUnit, y, { align: 'right' });
+    doc.text(value, xAmt, y, { align: 'right' });
+    y += bold ? 18 : 15;
+  }
+
+  // PAID stamp when fully paid
+  if (ctx.invoice.totalCents > 0 && ctx.invoice.totalCents - ctx.invoice.paidCents === 0) {
+    doc.setFont('helvetica', 'bold').setFontSize(56).setTextColor(22, 163, 74);
+    doc.text('PAID', W / 2 - 40, y + 40, { angle: 18 });
+  }
+
+  return doc.output('arraybuffer') as unknown as Uint8Array;
+}

@@ -1,10 +1,11 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice } from '../../../utils/store';
+import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice, getSettings } from '../../../utils/store';
 import { dollarsToCents, formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Select, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { buildInvoicePdf, resolveAccentRgb } from './invoicePdf';
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
   Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100);
@@ -15,7 +16,10 @@ export const InvoiceEditor: React.FC<{
   invoice: Invoice;
   onClose: () => void;
   onSaved: () => void;
-}> = ({ invoice, onClose, onSaved }) => {
+  projectName: string;
+  contractor?: string | null;
+  address?: string | null;
+}> = ({ invoice, onClose, onSaved, projectName, contractor, address }) => {
   const { toast } = useToast();
   const [number, setNumber] = useState(invoice.number ?? '');
   const [terms, setTerms] = useState(invoice.terms ?? '');
@@ -64,10 +68,62 @@ export const InvoiceEditor: React.FC<{
     } catch { toast('Failed to record payment', { type: 'error' }); }
   };
 
+  const buildBytes = async (): Promise<Uint8Array> => {
+    const settings = await getSettings();
+    let logoDataUrl: string | undefined;
+    const logoUrl = settings.logoUrl;
+    if (logoUrl) {
+      if (logoUrl.startsWith('data:')) {
+        logoDataUrl = logoUrl;
+      } else {
+        try {
+          const resp = await fetch(logoUrl);
+          const blob = await resp.blob();
+          logoDataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch { /* skip logo on fetch error */ }
+      }
+    }
+    return buildInvoicePdf({
+      invoice,
+      projectName,
+      contractor,
+      address,
+      company: {
+        name: settings.appName || 'Invoice',
+        address: settings.companyAddress,
+        phone: settings.companyPhone,
+        email: settings.companyEmail,
+        logoDataUrl,
+      },
+      accentRgb: resolveAccentRgb(),
+    });
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      const bytes = await buildBytes();
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${invoice.number ?? invoice.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { toast('PDF generation failed', { type: 'error' }); }
+  };
+
   return (
     <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
         <Button variant="secondary" onClick={onClose}>Close</Button>
+        <Button variant="secondary" onClick={handleDownloadPdf}>Download PDF</Button>
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>
       </>}
     >
