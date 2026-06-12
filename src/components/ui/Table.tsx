@@ -8,6 +8,7 @@ export const Table: React.FC<React.TableHTMLAttributes<HTMLTableElement>> = ({
   ...rest
 }) => (
   <div className="overflow-x-auto">
+    {/* sticky thead would require max-h-* + overflow-y-auto added here */}
     <table className={`w-full text-sm text-ink ${className}`} {...rest} />
   </div>
 );
@@ -41,7 +42,7 @@ export const TR: React.FC<React.HTMLAttributes<HTMLTableRowElement> & { interact
 export const TH: React.FC<React.ThHTMLAttributes<HTMLTableCellElement>> = ({
   className = '',
   ...rest
-}) => <th className={`px-4 py-3 font-semibold ${className}`} {...rest} />;
+}) => <th className={`px-4 py-3 ${className}`} {...rest} />;
 
 export const TD: React.FC<React.TdHTMLAttributes<HTMLTableCellElement>> = ({
   className = '',

@@ -15,4 +15,9 @@ describe('ProgressBar', () => {
     render(<ProgressBar value={150} />);
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
   });
+
+  it('treats NaN as 0', () => {
+    render(<ProgressBar value={NaN} />);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+  });
 });

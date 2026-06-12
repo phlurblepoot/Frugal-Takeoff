@@ -6,7 +6,7 @@ export const ProgressBar: React.FC<{ value: number; className?: string }> = ({
   value,
   className = '',
 }) => {
-  const clamped = Math.max(0, Math.min(100, value));
+  const clamped = Math.max(0, Math.min(100, Number.isNaN(value) ? 0 : value));
   return (
     <div
       role="progressbar"
