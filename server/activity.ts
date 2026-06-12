@@ -29,7 +29,7 @@ export function listActivity(db: Database.Database, limit = 30): any[] {
     FROM activity a
     LEFT JOIN projects p ON p.id = a.projectId
     LEFT JOIN users u ON u.id = a.userId
-    ORDER BY a.createdAt DESC, a.id DESC
+    ORDER BY a.createdAt DESC, a.rowid DESC
     LIMIT ?
   `).all(capped);
 }
