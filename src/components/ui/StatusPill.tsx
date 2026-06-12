@@ -49,8 +49,10 @@ export const ProjectStatusPill: React.FC<{ status?: string | null; className?: s
   status,
   className,
 }) => {
-  const meta = (status && PROJECT_STATUS_META[status]) ||
-    { label: status || 'Unknown', tone: 'slate' as PillTone };
+  const entry = status != null && Object.hasOwn(PROJECT_STATUS_META, status)
+    ? PROJECT_STATUS_META[status]
+    : null;
+  const meta = entry ?? { label: status || 'Unknown', tone: 'slate' as PillTone };
   return (
     <StatusPill tone={meta.tone} className={className}>
       {meta.label}

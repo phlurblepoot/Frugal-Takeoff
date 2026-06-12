@@ -33,4 +33,9 @@ describe('ProjectStatusPill', () => {
     render(<ProjectStatusPill status="something_else" />);
     expect(screen.getByText('something_else').className).toContain('slate');
   });
+
+  it('treats prototype keys as unknown statuses', () => {
+    render(<ProjectStatusPill status="constructor" />);
+    expect(screen.getByText('constructor').className).toContain('slate');
+  });
 });
