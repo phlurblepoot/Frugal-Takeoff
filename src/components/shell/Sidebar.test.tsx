@@ -87,7 +87,7 @@ describe('Sidebar — project mode', () => {
     renderProject('/project/p1');
     expect(screen.getByRole('button', { name: /All Projects/ })).toBeInTheDocument();
     expect(screen.getByText('Maple St Office')).toBeInTheDocument();
-    for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Notes', 'Time']) {
+    for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Notes', 'Time', 'Issues']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
     // company nav is gone
@@ -139,6 +139,12 @@ describe('Sidebar — project mode', () => {
     localStorage.setItem('user', JSON.stringify({ username: 'm', role: 'member' }));
     renderProject('/project/p1');
     expect(screen.queryByRole('button', { name: /Billing/ })).not.toBeInTheDocument();
+  });
+
+  it('shows Issues for non-admins (not admin-gated)', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'm', role: 'user' }));
+    renderProject('/project/p1');
+    expect(screen.getByRole('button', { name: /Issues/ })).toBeInTheDocument();
   });
 
   it('hides the size toggles when locked', () => {

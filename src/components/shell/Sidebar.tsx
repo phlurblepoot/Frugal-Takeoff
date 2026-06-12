@@ -4,7 +4,7 @@ import { useLocation, useNavigate, matchPath } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ClipboardList, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
-  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign,
+  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
@@ -47,6 +47,7 @@ const PROJECT_NAV: {
   { id: 'documents', label: 'Documents',          Icon: FolderOpen,  path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
   { id: 'notes',     label: 'Notes',              Icon: StickyNote,  path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
   { id: 'time',      label: 'Time',               Icon: Clock,       path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
+  { id: 'issues',    label: 'Issues',             Icon: AlertCircle, path: '/issues',    match: (p, b) => p.startsWith(`${b}/issues`) },
   { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
 ];
 
