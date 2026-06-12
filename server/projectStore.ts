@@ -221,6 +221,47 @@ export function saveProject(db: Database.Database, id: string, payload: any): { 
   return { version: newVersion };
 }
 
+// Slim project rows for list/dashboard views — no page/measurement payloads.
+// pageIds are included so the client can keep its "page is being edited"
+// deletion guard without loading full aggregates.
+export function listProjectSummaries(db: Database.Database): any[] {
+  const rows = db.prepare(`
+    SELECT id, name, status, contractor, address, bidDueDate, version, createdAt, updatedAt,
+           COALESCE(json_extract(meta, '$.archived'), 0) AS archived
+    FROM projects ORDER BY createdAt DESC
+  `).all() as any[];
+
+  const countBy = (table: string): Map<string, number> =>
+    new Map(
+      (db.prepare(`SELECT projectId, COUNT(*) AS c FROM ${table} GROUP BY projectId`).all() as any[])
+        .map(r => [r.projectId, r.c])
+    );
+  const pageCounts = countBy('pages');
+  const takeoffCounts = countBy('takeoffs');
+
+  const pageIdsByProject = new Map<string, string[]>();
+  for (const r of db.prepare('SELECT id, projectId FROM pages').all() as any[]) {
+    if (!pageIdsByProject.has(r.projectId)) pageIdsByProject.set(r.projectId, []);
+    pageIdsByProject.get(r.projectId)!.push(r.id);
+  }
+
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name ?? 'Untitled',
+    status: r.status ?? 'estimating',
+    contractor: r.contractor ?? null,
+    address: r.address ?? null,
+    bidDueDate: r.bidDueDate ?? null,
+    version: r.version ?? 1,
+    createdAt: r.createdAt ?? 0,
+    updatedAt: r.updatedAt ?? null,
+    archived: !!r.archived,
+    pageCount: pageCounts.get(r.id) ?? 0,
+    takeoffCount: takeoffCounts.get(r.id) ?? 0,
+    pageIds: pageIdsByProject.get(r.id) ?? [],
+  }));
+}
+
 // Explicit user action — the one place project-owned files are deleted.
 export function deleteProject(db: Database.Database, dataDir: string, id: string): void {
   const fileIds = (db.prepare('SELECT id FROM files WHERE projectId = ?').all(id) as { id: string }[]).map(r => r.id);

@@ -187,3 +187,31 @@ describe('storage + search + orphans', () => {
     expect(res.body).toHaveProperty('imageBytes');
   });
 });
+
+describe('GET /api/projects/summary', () => {
+  it('returns slim rows with counts and pageIds, no page payloads', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT,
+      pages: [
+        { id: 'pg1', name: 'A1', imageId: '', measurements: [], scaleConfig: null },
+        { id: 'pg2', name: 'A2', imageId: '', measurements: [], scaleConfig: null },
+      ],
+      takeoffs: [{ id: 't1', name: 'Drywall', color: '#fff', type: 'area' }],
+    });
+    const res = await request(app).get('/api/projects/summary');
+    expect(res.status).toBe(200);
+    const row = res.body.find((r: any) => r.id === 'p1');
+    expect(row).toMatchObject({
+      name: 'Test Project', status: 'estimating', version: 1, archived: false,
+      pageCount: 2, takeoffCount: 1, contractor: 'GC Co',
+    });
+    expect(row.pageIds.sort()).toEqual(['pg1', 'pg2']);
+    expect(row.pages).toBeUndefined(); // slim — no aggregates
+  });
+
+  it('reflects the archived meta flag', async () => {
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', archived: true });
+    const res = await request(app).get('/api/projects/summary');
+    expect(res.body.find((r: any) => r.id === 'p2').archived).toBe(true);
+  });
+});

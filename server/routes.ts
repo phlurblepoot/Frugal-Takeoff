@@ -4,7 +4,7 @@ import fsSync from 'fs';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
-  ValidationError, ConflictError,
+  listProjectSummaries, ValidationError, ConflictError,
 } from './projectStore';
 import { putDataUrl, putBuffer, getMeta, getDataUrlString } from './files';
 import { pathFor, statFile, deleteFileContent } from './fileStore';
@@ -31,6 +31,17 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) {
       console.error('Error fetching projects:', e);
       res.status(500).json({ error: 'Failed to fetch projects' });
+    }
+  });
+
+  // NOTE: must be registered before '/api/projects/:id' or Express matches
+  // 'summary' as a project id.
+  app.get('/api/projects/summary', authenticateToken, (_req, res) => {
+    try {
+      res.json(listProjectSummaries(db));
+    } catch (e) {
+      console.error('Error fetching project summaries:', e);
+      res.status(500).json({ error: 'Failed to fetch project summaries' });
     }
   });
 
