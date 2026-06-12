@@ -279,4 +279,59 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 8,
+    name: 'billing',
+    up({ db }) {
+      // Billing v1 (spec §2, §3.2). Money stored as REAL dollars; all totals
+      // are computed in integer cents in billingStore to avoid float drift.
+      // Line-item identity is preserved (no totals-only invoices) so a future
+      // AIA schedule-of-values can reference these rows (spec §3.2).
+      db.exec(`
+        CREATE TABLE invoices (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number TEXT,
+          date INTEGER,
+          status TEXT NOT NULL DEFAULT 'draft',
+          terms TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_invoices_projectId ON invoices (projectId);
+
+        CREATE TABLE invoice_lines (
+          id TEXT PRIMARY KEY,
+          invoiceId TEXT NOT NULL,
+          description TEXT,
+          qty REAL NOT NULL DEFAULT 1,
+          unitPrice REAL NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_invoice_lines_invoiceId ON invoice_lines (invoiceId);
+
+        CREATE TABLE payments (
+          id TEXT PRIMARY KEY,
+          invoiceId TEXT NOT NULL,
+          date INTEGER,
+          amount REAL NOT NULL DEFAULT 0,
+          method TEXT,
+          note TEXT,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_payments_invoiceId ON payments (invoiceId);
+
+        CREATE TABLE change_orders (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number TEXT,
+          description TEXT,
+          amount REAL NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending',
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_change_orders_projectId ON change_orders (projectId);
+      `);
+    },
+  },
 ];

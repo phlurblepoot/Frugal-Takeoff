@@ -416,3 +416,24 @@ describe('drafts', () => {
     expect((await request(app).get('/api/drafts/df1')).status).toBe(404);
   });
 });
+
+describe('deleteProject billing cascade', () => {
+  it('removes invoices, lines, payments, change orders for the project', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    const inv = await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
+    const invoiceId = inv.body.id;
+    await request(app).post(`/api/invoices/${invoiceId}/payments`).send({ date: 1, amount: 50, method: 'check' });
+    await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', amount: 200 });
+    await request(app).delete('/api/projects/p1');
+    // all billing rows gone
+    for (const sql of [
+      'SELECT COUNT(*) c FROM invoices WHERE projectId = ?',
+      'SELECT COUNT(*) c FROM change_orders WHERE projectId = ?',
+    ]) {
+      expect((db.prepare(sql).get('p1') as any).c).toBe(0);
+    }
+    expect((db.prepare('SELECT COUNT(*) c FROM payments').get() as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines').get() as any).c).toBe(0);
+  });
+});

@@ -282,6 +282,11 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
     }
+    // Billing rows (Phase 4a) — payments/lines reference invoices, delete first.
+    db.prepare('DELETE FROM payments WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').run(id);
+    db.prepare('DELETE FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').run(id);
+    db.prepare('DELETE FROM invoices WHERE projectId = ?').run(id);
+    db.prepare('DELETE FROM change_orders WHERE projectId = ?').run(id);
     // Drop editor drafts for this project's files before the files vanish, so
     // the subquery can still resolve their ids (prevents a slow drafts leak).
     db.prepare('DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE projectId = ?)').run(id);

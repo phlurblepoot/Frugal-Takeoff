@@ -134,3 +134,24 @@ describe('migration 7: drafts', () => {
     db.close();
   });
 });
+
+describe('migration 8: billing', () => {
+  it('creates invoices, invoice_lines, payments, change_orders', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    for (const t of ['invoices', 'invoice_lines', 'payments', 'change_orders']) {
+      expect(tables, `missing ${t}`).toContain(t);
+    }
+    // shape spot-checks
+    const invCols = (db.prepare(`PRAGMA table_info(invoices)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'projectId', 'number', 'date', 'status', 'terms', 'version', 'createdAt']) {
+      expect(invCols, `invoices missing ${c}`).toContain(c);
+    }
+    const coCols = (db.prepare(`PRAGMA table_info(change_orders)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'projectId', 'number', 'description', 'amount', 'status', 'createdAt']) {
+      expect(coCols, `change_orders missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
+});
