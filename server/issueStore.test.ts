@@ -9,6 +9,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
+  addPhoto, removePhoto, markIssueSent, countOpenIssues,
   ValidationError, ConflictError, NotFoundError,
 } from './issueStore';
 
@@ -71,5 +72,42 @@ describe('issues', () => {
     deleteIssue(db, id);
     expect(getIssue(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM issue_photos').get() as any).c).toBe(0);
+  });
+});
+
+describe('photos + sent', () => {
+  it('adds and removes photo links (newest sortOrder appended)', () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    addPhoto(db, id, 'f1');
+    addPhoto(db, id, 'f2');
+    let iss = getIssue(db, id)!;
+    expect(iss.photos.map((p: any) => p.fileId)).toEqual(['f1', 'f2']);
+    removePhoto(db, id, 'f1');
+    iss = getIssue(db, id)!;
+    expect(iss.photos.map((p: any) => p.fileId)).toEqual(['f2']);
+  });
+
+  it('addPhoto throws for an unknown issue and is idempotent on duplicate fileId', () => {
+    expect(() => addPhoto(db, 'nope', 'f1')).toThrow(NotFoundError);
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    addPhoto(db, id, 'f1');
+    addPhoto(db, id, 'f1'); // duplicate ignored
+    expect(getIssue(db, id)!.photos).toHaveLength(1);
+  });
+
+  it('markIssueSent sets sentAt + status sent', () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    markIssueSent(db, id);
+    const iss = getIssue(db, id)!;
+    expect(iss.status).toBe('sent');
+    expect(typeof iss.sentAt).toBe('number');
+  });
+
+  it('countOpenIssues counts only open issues for a project', () => {
+    const a = createIssue(db, 'p1', { title: 'A' });
+    createIssue(db, 'p1', { title: 'B' });
+    setIssueStatus(db, a.id, 'resolved');
+    expect(countOpenIssues(db, 'p1')).toBe(1);
+    expect(countOpenIssues(db, 'p2')).toBe(0);
   });
 });

@@ -79,3 +79,25 @@ export function deleteIssue(db: Database.Database, id: string): void {
   });
   tx();
 }
+
+export function addPhoto(db: Database.Database, issueId: string, fileId: string): void {
+  if (!db.prepare('SELECT id FROM issues WHERE id = ?').get(issueId)) throw new NotFoundError('Issue not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const exists = db.prepare('SELECT id FROM issue_photos WHERE issueId = ? AND fileId = ?').get(issueId, fileId);
+  if (exists) return; // idempotent
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM issue_photos WHERE issueId = ?').get(issueId) as any).m;
+  db.prepare('INSERT INTO issue_photos (id, issueId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), issueId, fileId, max + 1, Date.now());
+}
+
+export function removePhoto(db: Database.Database, issueId: string, fileId: string): void {
+  db.prepare('DELETE FROM issue_photos WHERE issueId = ? AND fileId = ?').run(issueId, fileId);
+}
+
+export function markIssueSent(db: Database.Database, id: string): void {
+  db.prepare("UPDATE issues SET status = 'sent', sentAt = ?, version = version + 1 WHERE id = ?").run(Date.now(), id);
+}
+
+export function countOpenIssues(db: Database.Database, projectId: string): number {
+  return (db.prepare("SELECT COUNT(*) c FROM issues WHERE projectId = ? AND status = 'open'").get(projectId) as any).c;
+}
