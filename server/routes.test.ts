@@ -376,3 +376,23 @@ describe('file versions over HTTP', () => {
     expect(versions.body).toHaveLength(2); // history survived
   });
 });
+
+describe('drafts', () => {
+  it('PUT/GET/DELETE round-trip scoped to the user', async () => {
+    const put = await request(app).put('/api/drafts/f1')
+      .send({ kind: 'pdf', data: JSON.stringify({ annotations: [] }) });
+    expect(put.status).toBe(200);
+    const get = await request(app).get('/api/drafts/f1');
+    expect(get.status).toBe(200);
+    expect(get.body.kind).toBe('pdf');
+    expect(JSON.parse(get.body.data)).toEqual({ annotations: [] });
+    expect(typeof get.body.updatedAt).toBe('number');
+    await request(app).delete('/api/drafts/f1').expect(200);
+    expect((await request(app).get('/api/drafts/f1')).status).toBe(404);
+  });
+
+  it('rejects invalid payloads', async () => {
+    expect((await request(app).put('/api/drafts/f1').send({ kind: 'pdf' })).status).toBe(400);
+    expect((await request(app).put('/api/drafts/f1').send({ kind: 'nope', data: '{}' })).status).toBe(400);
+  });
+});

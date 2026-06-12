@@ -120,3 +120,17 @@ describe('migration 6: remove-bid-inbox', () => {
     db.close();
   });
 });
+
+describe('migration 7: drafts', () => {
+  it('creates the drafts table keyed by user+file', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    expect(tableNames(db)).toContain('drafts');
+    db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1','f1','pdf','{}',1)`).run();
+    // same key replaces, different user coexists
+    db.prepare(`INSERT OR REPLACE INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1','f1','pdf','{"a":1}',2)`).run();
+    db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u2','f1','pdf','{}',1)`).run();
+    expect((db.prepare('SELECT COUNT(*) AS c FROM drafts').get() as any).c).toBe(2);
+    db.close();
+  });
+});

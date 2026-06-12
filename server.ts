@@ -793,6 +793,12 @@ async function startServer() {
     }
   });
 
+  // Unknown API routes must 404 as JSON — without this they fall through to
+  // the SPA shell and return index.html with HTTP 200.
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

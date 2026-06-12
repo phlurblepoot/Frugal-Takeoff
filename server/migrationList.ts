@@ -259,4 +259,24 @@ export const migrations: Migration[] = [
       db.exec('DROP TABLE IF EXISTS bids; DROP TABLE IF EXISTS email_accounts;');
     },
   },
+  {
+    version: 7,
+    name: 'drafts',
+    up({ db }) {
+      // Server-side editor drafts (spec §6): crash/refresh-safe working state
+      // for the PDF/spreadsheet editors, keyed per user per file. data is the
+      // editor-specific JSON (annotations / FortuneSheet workbook) — the base
+      // file content is re-fetched by fileId, never duplicated here.
+      db.exec(`
+        CREATE TABLE drafts (
+          userId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          data TEXT NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          PRIMARY KEY (userId, fileId)
+        );
+      `);
+    },
+  },
 ];
