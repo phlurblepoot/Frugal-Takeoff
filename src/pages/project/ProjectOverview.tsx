@@ -100,7 +100,7 @@ export const ProjectOverview: React.FC = () => {
                   <span className="flex items-center gap-1.5"><FileText size={14} className="text-ink-faint" />{summary.pageCount} pages</span>
                   <span className="flex items-center gap-1.5"><Ruler size={14} className="text-ink-faint" />{summary.takeoffCount} takeoffs</span>
                 </div>
-                {isAdmin && summary.contractValueCents > 0 && (
+                {isAdmin && (summary.contractValueCents ?? 0) > 0 && (
                   <div className="flex items-center gap-2 pt-1 text-ink">
                     <DollarSign size={14} className="text-ink-faint" />
                     Contract value: <span className="font-semibold">{formatMoney(summary.contractValueCents)}</span>

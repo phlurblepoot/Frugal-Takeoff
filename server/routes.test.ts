@@ -313,6 +313,24 @@ describe('GET /api/projects/:id/summary', () => {
     expect(res.body.contractValueCents).toBe(600000); // 5000 + 1000
     expect(res.body.invoiceCount).toBe(1);
   });
+
+  it('omits billing fields for non-admins', async () => {
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'pm' });
+    // build a member-role app sharing the same db
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+    const res = await request(memberApp).get('/api/projects/pm/summary');
+    expect(res.status).toBe(200);
+    expect(res.body.contractValueCents).toBeUndefined();
+    expect(res.body.invoiceCount).toBeUndefined();
+    expect(res.body.name).toBe(PROJECT.name); // non-pricing fields still present
+  });
 });
 
 describe('GET /api/activity?projectId=', () => {

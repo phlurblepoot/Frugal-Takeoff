@@ -237,7 +237,7 @@ export function saveProject(db: Database.Database, id: string, payload: any): { 
 // Slim project rows for list/dashboard views — no page/measurement payloads.
 // pageIds are included so the client can keep its "page is being edited"
 // deletion guard without loading full aggregates.
-export function listProjectSummaries(db: Database.Database, id?: string): any[] {
+export function listProjectSummaries(db: Database.Database, id?: string, includeBilling = true): any[] {
   const rows = db.prepare(`
     SELECT id, name, status, contractor, address, bidDueDate, version, createdAt, updatedAt,
            COALESCE(json_extract(meta, '$.archived'), 0) AS archived
@@ -260,8 +260,7 @@ export function listProjectSummaries(db: Database.Database, id?: string): any[] 
   }
 
   return rows.map(r => {
-    const bs = billingSummary(db, r.id);
-    return {
+    const base = {
       id: r.id,
       name: r.name ?? 'Untitled',
       status: r.status ?? 'estimating',
@@ -275,9 +274,10 @@ export function listProjectSummaries(db: Database.Database, id?: string): any[] 
       pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
       takeoffCount: takeoffCounts.get(r.id) ?? 0,
       pageIds: pageIdsByProject.get(r.id) ?? [],
-      contractValueCents: bs.contractValueCents,
-      invoiceCount: bs.invoiceCount,
     };
+    if (!includeBilling) return base;
+    const bs = billingSummary(db, r.id);
+    return { ...base, contractValueCents: bs.contractValueCents, invoiceCount: bs.invoiceCount };
   });
 }
 

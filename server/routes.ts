@@ -44,9 +44,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // NOTE: must be registered before '/api/projects/:id' or Express matches
   // 'summary' as a project id.
-  app.get('/api/projects/summary', authenticateToken, (_req, res) => {
+  app.get('/api/projects/summary', authenticateToken, (req, res) => {
     try {
-      res.json(listProjectSummaries(db));
+      const isAdmin = (req as any).user?.role === 'admin';
+      res.json(listProjectSummaries(db, undefined, isAdmin));
     } catch (e) {
       console.error('Error fetching project summaries:', e);
       res.status(500).json({ error: 'Failed to fetch project summaries' });
@@ -55,7 +56,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.get('/api/projects/:id/summary', authenticateToken, (req, res) => {
     try {
-      const row = listProjectSummaries(db, req.params.id)[0];
+      const isAdmin = (req as any).user?.role === 'admin';
+      const row = listProjectSummaries(db, req.params.id, isAdmin)[0];
       if (!row) return res.status(404).json({ error: 'Project not found' });
       res.json(row);
     } catch (e) {

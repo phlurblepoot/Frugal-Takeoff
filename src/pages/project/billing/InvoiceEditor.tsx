@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice, getSettings, sendInvoice, uploadProjectFile } from '../../../utils/store';
-import { dollarsToCents, formatMoney } from '../../../utils/money';
+import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Select, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { buildInvoicePdf, resolveAccentRgb } from './invoicePdf';
