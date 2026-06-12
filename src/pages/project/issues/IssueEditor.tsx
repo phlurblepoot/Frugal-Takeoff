@@ -82,6 +82,10 @@ export const IssueEditor: React.FC<{
   const [sendTo, setSendTo] = useState('');
   const [sending, setSending] = useState(false);
   const handleSend = async () => {
+    if (title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '')) {
+      toast('Save your changes before sending', { type: 'warning' });
+      return;
+    }
     if (!sendTo.trim() || !/\S+@\S+\.\S+/.test(sendTo.trim())) { toast('Enter a valid email address', { type: 'warning' }); return; }
     setSending(true);
     try {

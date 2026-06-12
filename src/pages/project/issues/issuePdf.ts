@@ -81,5 +81,3 @@ export function buildIssuePdf(ctx: IssuePdfContext): Uint8Array {
 
   return doc.output('arraybuffer') as unknown as Uint8Array;
 }
-
-export { resolveAccentRgb };
