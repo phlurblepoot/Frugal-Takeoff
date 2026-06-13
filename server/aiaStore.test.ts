@@ -494,4 +494,38 @@ describe('computeG703 / computeG702 — exact cents', () => {
   it('computeG702 throws NotFoundError for unknown pay app', () => {
     expect(() => computeG702(db, 'no-such-id')).toThrow(NotFoundError);
   });
+
+  // Characterization: prior-application stored materials do NOT roll into column D.
+  // AIA G703 col D = prior application's (D+E) = work only; stored (col F) is a
+  // current snapshot, separate from D. D must be 5000000, NOT 5100000.
+  it('col D excludes prior stored materials (AIA G703 correct: D = work only)', () => {
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'Work', scheduledValueCents: 10000000 });
+
+    // App #1: 50% work complete, $1000 in stored materials.
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 100000 },
+    ], 1);
+    // (app#1 completedToDate = 5000000; stored = 100000)
+
+    // App #2: same 50% work (no new work this period), more stored materials on hand.
+    const a2 = createPayApp(db, 'p1', {});
+    savePayAppLines(db, a2.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 200000 },
+    ], 1);
+
+    const g703 = computeG703(db, a2.id);
+    const r = g703[0];
+
+    // D = prior WORK only: round(10000000 * 50 / 100) = 5000000
+    // If prior stored were included, D would be 5100000 — that is AIA-incorrect.
+    expect(r.previousCents).toBe(5000000);    // D: prior work only, NOT 5100000
+    expect(r.thisPeriodCents).toBe(0);        // E: no new work this period
+    expect(r.storedCents).toBe(200000);       // F: current stored snapshot
+    expect(r.totalToDateCents).toBe(5200000); // G: completedToDate(5000000) + storedCents(200000)
+
+    // G702 internal consistency: L4 == sum of col G.
+    const g702 = computeG702(db, a2.id);
+    expect(g702.L4totalCompletedStoredCents).toBe(5200000); // matches col G sum
+  });
 });

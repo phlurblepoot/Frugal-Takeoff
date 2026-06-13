@@ -389,6 +389,7 @@ export function computeG703(db: Database.Database, payAppId: string): G703Row[] 
 
     const priorLine = priorLines.get(sov.id);
     const priorPercent = priorLine ? priorLine.percentComplete : 0;
+    // AIA G703 col D = prior application's (D+E) = work completed only; stored materials (col F) are 'presently stored', NOT included in D. Intentional.
     const previousCents = priorLine ? Math.round(scheduledValueCents * priorPercent / 100) : 0;
 
     const thisPeriodCents = completedToDateCents - previousCents;
