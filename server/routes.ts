@@ -28,6 +28,12 @@ import {
   ConflictError as PunchConflictError,
   NotFoundError as PunchNotFoundError,
 } from './punchStore';
+import {
+  getTask, listTasks, createTask, saveTask, setTaskStatus, deleteTask, addTaskPhoto, removeTaskPhoto,
+  ValidationError as TaskValidationError,
+  ConflictError as TaskConflictError,
+  NotFoundError as TaskNotFoundError,
+} from './taskStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -357,6 +363,53 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.delete('/api/punch/:id/photos/:fileId', authenticateToken, (req, res) => {
     try { removePunchPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { punchErr(e, res); }
+  });
+
+  // ── Users roster (any authenticated user — for assignee pickers) ───────────
+  app.get('/api/users/list', authenticateToken, (req, res) => {
+    try { res.json(db.prepare('SELECT id, username, role FROM users ORDER BY username').all()); }
+    catch (e) { console.error('Users list error:', e); res.status(500).json({ error: 'Failed to list users' }); }
+  });
+
+  // ── Tasks (collaborative task list — any authenticated user, Phase 4c-2) ───
+  const taskErr = (e: unknown, res: express.Response) => {
+    if (e instanceof TaskNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof TaskConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof TaskValidationError) return res.status(400).json({ error: e.message });
+    console.error('Task error:', e);
+    return res.status(500).json({ error: 'Task operation failed' });
+  };
+
+  app.get('/api/tasks', authenticateToken, (req, res) => {
+    try { res.json(listTasks(db)); } catch (e) { taskErr(e, res); }
+  });
+  app.post('/api/tasks', authenticateToken, (req, res) => {
+    try { res.json(createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null })); } catch (e) { taskErr(e, res); }
+  });
+  app.get('/api/tasks/:id', authenticateToken, (req, res) => {
+    try { const t = getTask(db, req.params.id); if (!t) return res.status(404).json({ error: 'Task not found' }); res.json(t); } catch (e) { taskErr(e, res); }
+  });
+  app.put('/api/tasks/:id', authenticateToken, (req, res) => {
+    try { res.json({ success: true, ...saveTask(db, req.params.id, req.body) }); } catch (e) { taskErr(e, res); }
+  });
+  app.patch('/api/tasks/:id', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      res.json({ success: true, ...setTaskStatus(db, req.params.id, req.body.status) });
+    } catch (e) { taskErr(e, res); }
+  });
+  app.delete('/api/tasks/:id', authenticateToken, (req, res) => {
+    try { deleteTask(db, req.params.id); res.json({ success: true }); } catch (e) { taskErr(e, res); }
+  });
+  app.post('/api/tasks/:id/photos', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addTaskPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
+      res.json({ success: true });
+    } catch (e) { taskErr(e, res); }
+  });
+  app.delete('/api/tasks/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try { removeTaskPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { taskErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────

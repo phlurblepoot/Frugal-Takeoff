@@ -672,3 +672,84 @@ describe('punch routes', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('users-list + task routes (auth-only, not admin-gated)', () => {
+  let userApp: express.Express;
+
+  beforeEach(() => {
+    // Seed real users so /api/users/list and assignee validation have rows
+    db.prepare("INSERT INTO users (id, username, password, role) VALUES ('u1','alice','secret','admin'),('u2','bob','hunter2','user')").run();
+
+    // Non-admin 'user' app — every task route must work here (NOT admin-gated)
+    userApp = express();
+    userApp.use(express.json());
+    registerDataRoutes(userApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+  });
+
+  it('GET /api/users/list (non-admin) returns roster with no password leaked', async () => {
+    const res = await request(userApp).get('/api/users/list');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(0);
+    for (const row of res.body) {
+      expect(row).toHaveProperty('id');
+      expect(row).toHaveProperty('username');
+      expect(row).toHaveProperty('role');
+      expect(row).not.toHaveProperty('password');
+    }
+  });
+
+  it('POST /api/tasks (non-admin) creates a task — not admin-gated', async () => {
+    const res = await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Fix door' });
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBeTruthy();
+  });
+
+  it('GET /api/tasks (non-admin) lists tasks with assigneeUsername (null when unassigned)', async () => {
+    const create = await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Fix door' });
+    const list = await request(userApp).get('/api/tasks');
+    expect(list.status).toBe(200);
+    expect(Array.isArray(list.body)).toBe(true);
+    const row = list.body.find((t: any) => t.id === create.body.id);
+    expect(row).toBeTruthy();
+    expect(row.assigneeUsername).toBeNull();
+  });
+
+  it('POST /api/tasks with a real assignee → 200; bogus assignee → 400', async () => {
+    const ok = await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Assigned', assigneeUserId: 'u1' });
+    expect(ok.status).toBe(200);
+    const get = await request(userApp).get(`/api/tasks/${ok.body.id}`);
+    expect(get.body.assigneeUsername).toBe('alice');
+    const bad = await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Bad', assigneeUserId: 'nope' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('PUT /api/tasks/:id with stale version 99 → 409 version_conflict', async () => {
+    const id = (await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Door' })).body.id;
+    const res = await request(userApp).put(`/api/tasks/${id}`).send({ title: 'Door', version: 99 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('version_conflict');
+  });
+
+  it('PATCH /api/tasks/:id status: valid → 200; bad → 400; missing → 400', async () => {
+    const id = (await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Door' })).body.id;
+    expect((await request(userApp).patch(`/api/tasks/${id}`).send({ status: 'in_progress' })).status).toBe(200);
+    expect((await request(userApp).patch(`/api/tasks/${id}`).send({ status: 'nope' })).status).toBe(400);
+    expect((await request(userApp).patch(`/api/tasks/${id}`).send({})).status).toBe(400);
+  });
+
+  it('POST /api/tasks/:id/photos: valid stage → 200, appears in GET; bad stage → 400', async () => {
+    const id = (await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Door' })).body.id;
+    const add = await request(userApp).post(`/api/tasks/${id}/photos`).send({ fileId: 'f1', stage: 'before' });
+    expect(add.status).toBe(200);
+    const bad = await request(userApp).post(`/api/tasks/${id}/photos`).send({ fileId: 'f1', stage: 'sideways' });
+    expect(bad.status).toBe(400);
+    const get = await request(userApp).get(`/api/tasks/${id}`);
+    expect(get.body.photos.some((p: any) => p.fileId === 'f1')).toBe(true);
+  });
+});
