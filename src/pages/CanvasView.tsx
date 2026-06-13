@@ -14,6 +14,7 @@ import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '..
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
 import { CustomCostRow } from '../components/CustomCostRow';
+import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -100,13 +101,6 @@ const CanvasViewInner: React.FC = () => {
 
   const [showCurrentPageOnly, setShowCurrentPageOnly] = useState(false);
 
-  type HistoryAction =
-    | { type: 'add'; measurement: Measurement }
-    | { type: 'delete'; measurement: Measurement }
-    | { type: 'update'; measurementId: string; before: Partial<Measurement>; after: Partial<Measurement> };
-
-  const [history, setHistory] = useState<HistoryAction[]>([]);
-  const [redoStack, setRedoStack] = useState<HistoryAction[]>([]);
   const [measurementFilter, setMeasurementFilter] = useState('');
   const [showPageJump, setShowPageJump] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
@@ -147,32 +141,6 @@ const CanvasViewInner: React.FC = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-
-  const pushToHistory = (action: HistoryAction) => {
-    setHistory(prev => [...prev, action].slice(-50));
-    setRedoStack([]);
-  };
-
-  const applyAction = (action: HistoryAction, direction: 'undo' | 'redo') => {
-    if (!page) return;
-    if (action.type === 'add') {
-      if (direction === 'undo') {
-        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
-        if (selectedMeasurementId === action.measurement.id) setSelectedMeasurementId(null);
-      } else {
-        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
-      }
-    } else if (action.type === 'delete') {
-      if (direction === 'undo') {
-        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
-      } else {
-        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
-      }
-    } else if (action.type === 'update') {
-      const patch = direction === 'undo' ? action.before : action.after;
-      savePageUpdates({ measurements: page.measurements.map(m => m.id === action.measurementId ? { ...m, ...patch } : m) });
-    }
-  };
 
   const handleCopy = () => {
     if (!selectedMeasurementId) return;
@@ -216,24 +184,6 @@ const CanvasViewInner: React.FC = () => {
     } catch (err) {
       console.error('Failed to parse copied measurement', err);
     }
-  };
-
-  const handleUndo = () => {
-    if (history.length === 0 || !page) return;
-    const lastAction = history[history.length - 1];
-    setHistory(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, lastAction]);
-    applyAction(lastAction, 'undo');
-    toast('Undone', { type: 'info', duration: 1500 });
-  };
-
-  const handleRedo = () => {
-    if (redoStack.length === 0 || !page) return;
-    const action = redoStack[redoStack.length - 1];
-    setRedoStack(prev => prev.slice(0, -1));
-    setHistory(prev => [...prev, action]);
-    applyAction(action, 'redo');
-    toast('Redone', { type: 'info', duration: 1500 });
   };
 
   const handleMultiSelectToggle = (id: string, type: string) => {
@@ -361,6 +311,28 @@ const CanvasViewInner: React.FC = () => {
     setTemplates(data);
   };
 
+  const savePageUpdates = async (updates: Partial<ProjectPage>) => {
+    if (!project || !page) return;
+
+    const updatedPage = { ...page, ...updates };
+    const updatedProject = {
+      ...project,
+      pages: project.pages.map(p => p.id === page.id ? updatedPage : p)
+    };
+
+    setPage(updatedPage);
+    setProject(updatedProject);
+    await saveProject(updatedProject);
+  };
+
+  const { history, redoStack, pushToHistory, undo, redo, reset: resetHistory } = useMeasurementHistory({
+    page,
+    selectedMeasurementId,
+    setSelectedMeasurementId,
+    savePageUpdates,
+    toast,
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't intercept if user is typing in an input or textarea
@@ -437,17 +409,17 @@ const CanvasViewInner: React.FC = () => {
       // Redo must be checked before Undo (Shift+Z vs Z)
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
         e.preventDefault();
-        handleRedo();
+        redo();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
         e.preventDefault();
-        handleRedo();
+        redo();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
-        handleUndo();
+        undo();
       }
 
       // Arrow key page navigation
@@ -512,7 +484,7 @@ const CanvasViewInner: React.FC = () => {
     setPage(pg);
     setImageUrl(imgUrl);
     setSelectedMeasurementId(null);
-    setHistory([]);
+    resetHistory();
     
     // Set default takeoff if available
     if (proj.takeoffs.length > 0) {
@@ -522,20 +494,6 @@ const CanvasViewInner: React.FC = () => {
     }
     
     setIsLoading(false);
-  };
-
-  const savePageUpdates = async (updates: Partial<ProjectPage>) => {
-    if (!project || !page) return;
-    
-    const updatedPage = { ...page, ...updates };
-    const updatedProject = {
-      ...project,
-      pages: project.pages.map(p => p.id === page.id ? updatedPage : p)
-    };
-    
-    setPage(updatedPage);
-    setProject(updatedProject);
-    await saveProject(updatedProject);
   };
 
   // Other pages in the project that this page can reference. Filters out
@@ -1232,7 +1190,7 @@ const CanvasViewInner: React.FC = () => {
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
-              onClick={handleUndo}
+              onClick={undo}
               disabled={history.length === 0}
               className={`p-2 rounded-lg transition-colors ${
                 history.length === 0
@@ -1244,7 +1202,7 @@ const CanvasViewInner: React.FC = () => {
               <Undo size={18} />
             </button>
             <button
-              onClick={handleRedo}
+              onClick={redo}
               disabled={redoStack.length === 0}
               className={`p-2 rounded-lg transition-colors ${
                 redoStack.length === 0
@@ -1797,7 +1755,7 @@ const CanvasViewInner: React.FC = () => {
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
                 data-testid="btn-undo"
-                onClick={handleUndo}
+                onClick={undo}
                 disabled={history.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   history.length === 0
@@ -1810,7 +1768,7 @@ const CanvasViewInner: React.FC = () => {
               </button>
               <button
                 data-testid="btn-redo"
-                onClick={handleRedo}
+                onClick={redo}
                 disabled={redoStack.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   redoStack.length === 0
@@ -1953,8 +1911,8 @@ const CanvasViewInner: React.FC = () => {
             remoteUsers={users}
             onCursorMove={sendCursor}
             currentUserId={socket?.id}
-            onUndo={handleUndo}
-            onRedo={handleRedo}
+            onUndo={undo}
+            onRedo={redo}
             onCopy={selectedMeasurementId ? handleCopy : undefined}
             onPaste={handlePaste}
             hasCopied={!!localStorage.getItem('copiedMeasurement')}
