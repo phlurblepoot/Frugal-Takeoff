@@ -9,8 +9,12 @@ import {
   isPointInPolygon,
   calculateRealValue,
   calculateSurfaceAreaPx,
+  convertUnit,
+  calculateTakeoffTotalCost,
+  calculateTakeoffCostDetails,
+  roundUpTo100,
 } from './math';
-import { Point, ScaleConfig } from '../types';
+import { Point, ScaleConfig, MeasurementTakeoff } from '../types';
 
 describe('geometry & scale', () => {
   describe('calculateDistance', () => {
@@ -140,6 +144,142 @@ describe('geometry & scale', () => {
     });
     it('null scale -> 0', () => {
       expect(calculateSurfaceAreaPx(points, heights, false, null)).toBe(0);
+    });
+  });
+});
+
+describe('units & cost', () => {
+  describe('convertUnit', () => {
+    it('length ft -> in = 12', () => {
+      expect(convertUnit(1, 'ft', 'in', 'length')).toBe(12);
+    });
+    it('length in -> ft = 1 (from 12)', () => {
+      expect(convertUnit(12, 'in', 'ft', 'length')).toBe(1);
+    });
+    it('area ft -> in = 144', () => {
+      expect(convertUnit(1, 'ft', 'in', 'area')).toBe(144);
+    });
+    it('same unit returns value', () => {
+      expect(convertUnit(7, 'ft', 'ft', 'length')).toBe(7);
+    });
+    it('count type returns value unchanged', () => {
+      expect(convertUnit(7, 'ft', 'in', 'count')).toBe(7);
+    });
+    it('unknown unit returns value unchanged', () => {
+      expect(convertUnit(7, 'furlong', 'in', 'length')).toBe(7);
+    });
+    it('"sq ft" -> "sq in" area = 144 (sq prefix normalized)', () => {
+      expect(convertUnit(1, 'sq ft', 'sq in', 'area')).toBe(144);
+    });
+  });
+
+  const baseTakeoff: MeasurementTakeoff = {
+    id: 't1',
+    name: 'Test',
+    color: '#000',
+    type: 'area',
+  };
+
+  describe('calculateTakeoffTotalCost', () => {
+    it('flat cost', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [{ id: 'c1', name: 'Flat', type: 'flat', cost: 100 }],
+      };
+      expect(calculateTakeoffTotalCost(t, 0)).toBe(100);
+    });
+    it('yield cost', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [{ id: 'c1', name: 'Y', type: 'yield', yield: 10, cost: 5 }],
+      };
+      expect(calculateTakeoffTotalCost(t, 100)).toBe(50);
+    });
+    it('yield of 0 -> 0', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [{ id: 'c1', name: 'Y', type: 'yield', yield: 0, cost: 5 }],
+      };
+      expect(calculateTakeoffTotalCost(t, 100)).toBe(0);
+    });
+    it('unit cost', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [{ id: 'c1', name: 'U', type: 'unit', costPerUnit: 2 }],
+      };
+      expect(calculateTakeoffTotalCost(t, 30)).toBe(60);
+    });
+    it('amount_per_units cost', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [
+          { id: 'c1', name: 'A', type: 'amount_per_units', perUnits: 5, amount: 10 },
+        ],
+      };
+      expect(calculateTakeoffTotalCost(t, 100)).toBe(200);
+    });
+    it('two costs sum (flat + unit)', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [
+          { id: 'c1', name: 'Flat', type: 'flat', cost: 100 },
+          { id: 'c2', name: 'U', type: 'unit', costPerUnit: 1 },
+        ],
+      };
+      expect(calculateTakeoffTotalCost(t, 50)).toBe(150);
+    });
+    it('non-advanced uses costPerUnit', () => {
+      const t: MeasurementTakeoff = { ...baseTakeoff, costPerUnit: 3 };
+      expect(calculateTakeoffTotalCost(t, 10)).toBe(30);
+    });
+    it('empty takeoff -> 0', () => {
+      const t: MeasurementTakeoff = { ...baseTakeoff };
+      expect(calculateTakeoffTotalCost(t, 100)).toBe(0);
+    });
+  });
+
+  describe('calculateTakeoffCostDetails', () => {
+    it('advanced yield produces detail row', () => {
+      const t: MeasurementTakeoff = {
+        ...baseTakeoff,
+        isAdvancedCost: true,
+        customCosts: [
+          { id: 'c1', name: 'Mud', type: 'yield', yield: 10, cost: 5, unit: 'bags' },
+        ],
+      };
+      const details = calculateTakeoffCostDetails(t, 100);
+      expect(details).toHaveLength(1);
+      expect(details[0].costValue).toBe(50);
+      expect(details[0].quantity).toBe(10);
+      expect(details[0].quantityUnit).toBe('bags');
+    });
+    it('non-advanced returns []', () => {
+      const t: MeasurementTakeoff = { ...baseTakeoff };
+      expect(calculateTakeoffCostDetails(t, 100)).toEqual([]);
+    });
+  });
+
+  describe('roundUpTo100', () => {
+    it('0 -> 0', () => {
+      expect(roundUpTo100(0)).toBe(0);
+    });
+    it('negative -> 0', () => {
+      expect(roundUpTo100(-5)).toBe(0);
+    });
+    it('exact 100 -> 100', () => {
+      expect(roundUpTo100(100)).toBe(100);
+    });
+    it('101 -> 200', () => {
+      expect(roundUpTo100(101)).toBe(200);
+    });
+    it('250 -> 300', () => {
+      expect(roundUpTo100(250)).toBe(300);
     });
   });
 });
