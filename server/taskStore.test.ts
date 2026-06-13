@@ -9,6 +9,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listTasks, getTask, createTask, saveTask,
+  setTaskStatus, deleteTask, addTaskPhoto, removeTaskPhoto,
   ValidationError, ConflictError, NotFoundError,
 } from './taskStore';
 
@@ -83,5 +84,69 @@ describe('tasks', () => {
 
   it('saveTask with unknown id throws NotFoundError', () => {
     expect(() => saveTask(db, 'no-such-id', { title: 'X', version: 1 })).toThrow(NotFoundError);
+  });
+});
+
+describe('setTaskStatus', () => {
+  it('sets status and bumps version', () => {
+    const { id } = createTask(db, { title: 'Work item' });
+    const result = setTaskStatus(db, id, 'in_progress');
+    expect(result).toEqual({ status: 'in_progress' });
+    const task = getTask(db, id)!;
+    expect(task.status).toBe('in_progress');
+    expect(task.version).toBe(2);
+  });
+
+  it('throws ValidationError for invalid status', () => {
+    const { id } = createTask(db, { title: 'Work item' });
+    expect(() => setTaskStatus(db, id, 'nope')).toThrow(ValidationError);
+  });
+
+  it('throws NotFoundError for unknown id', () => {
+    expect(() => setTaskStatus(db, 'no-such-id', 'in_progress')).toThrow(NotFoundError);
+  });
+});
+
+describe('addTaskPhoto / removeTaskPhoto', () => {
+  it('addTaskPhoto is idempotent (same fileId+stage twice → 1 photo)', () => {
+    const { id } = createTask(db, { title: 'Photo task' });
+    addTaskPhoto(db, id, 'f1', 'before');
+    addTaskPhoto(db, id, 'f1', 'before');
+    const task = getTask(db, id)!;
+    expect(task.photos.length).toBe(1);
+    expect(task.photos[0].stage).toBe('before');
+  });
+
+  it('throws ValidationError for invalid stage', () => {
+    const { id } = createTask(db, { title: 'Photo task' });
+    expect(() => addTaskPhoto(db, id, 'f1', 'sideways')).toThrow(ValidationError);
+  });
+
+  it('throws ValidationError for empty fileId', () => {
+    const { id } = createTask(db, { title: 'Photo task' });
+    expect(() => addTaskPhoto(db, id, '', 'before')).toThrow(ValidationError);
+  });
+
+  it('throws NotFoundError for unknown task', () => {
+    expect(() => addTaskPhoto(db, 'no-such-id', 'f1', 'before')).toThrow(NotFoundError);
+  });
+
+  it('removeTaskPhoto removes the photo', () => {
+    const { id } = createTask(db, { title: 'Photo task' });
+    addTaskPhoto(db, id, 'f1', 'before');
+    removeTaskPhoto(db, id, 'f1');
+    const task = getTask(db, id)!;
+    expect(task.photos.length).toBe(0);
+  });
+});
+
+describe('deleteTask', () => {
+  it('deletes task and cascades task_photos', () => {
+    const { id } = createTask(db, { title: 'To delete' });
+    addTaskPhoto(db, id, 'f1', 'before');
+    deleteTask(db, id);
+    expect(getTask(db, id)).toBeNull();
+    const count = (db.prepare('SELECT COUNT(*) c FROM task_photos WHERE taskId = ?').get(id) as any).c;
+    expect(count).toBe(0);
   });
 });

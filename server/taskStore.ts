@@ -83,3 +83,33 @@ export function saveTask(db: Database.Database, id: string, input: TaskInput & {
   tx();
   return { version: newVersion };
 }
+
+export function setTaskStatus(db: Database.Database, id: string, status: string): { status: string } {
+  if (!(TASK_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid task status: ${status}`);
+  const row = db.prepare('SELECT id FROM tasks WHERE id = ?').get(id);
+  if (!row) throw new NotFoundError('Task not found');
+  db.prepare('UPDATE tasks SET status = ?, version = version + 1 WHERE id = ?').run(status, id);
+  return { status };
+}
+
+export function deleteTask(db: Database.Database, id: string): void {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM task_photos WHERE taskId = ?').run(id);
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+export function addTaskPhoto(db: Database.Database, taskId: string, fileId: string, stage: string): void {
+  if (!db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId)) throw new NotFoundError('Task not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  if (!(TASK_PHOTO_STAGES as readonly string[]).includes(stage)) throw new ValidationError(`Invalid photo stage: ${stage}`);
+  if (db.prepare('SELECT id FROM task_photos WHERE taskId = ? AND fileId = ? AND stage = ?').get(taskId, fileId, stage)) return;
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM task_photos WHERE taskId = ?').get(taskId) as any).m;
+  db.prepare('INSERT INTO task_photos (id, taskId, fileId, stage, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), taskId, fileId, stage, max + 1, Date.now());
+}
+
+export function removeTaskPhoto(db: Database.Database, taskId: string, fileId: string): void {
+  db.prepare('DELETE FROM task_photos WHERE taskId = ? AND fileId = ?').run(taskId, fileId);
+}
