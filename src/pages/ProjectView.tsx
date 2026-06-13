@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { formatRealValue, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
@@ -17,7 +17,6 @@ import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
-import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { StickyNote } from 'lucide-react';
@@ -262,14 +261,12 @@ export const ProjectView: React.FC = () => {
   const [isRetryingUpload, setIsRetryingUpload] = useState(false);
   const [retryProgress, setRetryProgress] = useState({ status: '', current: 0, total: 0, fileName: '' });
   const [retryPlanSetId, setRetryPlanSetId] = useState<string>('');
-  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
-  const [editProjectName, setEditProjectName] = useState('');
-  const [isEditingDueDate, setIsEditingDueDate] = useState(false);
-  const [editDueDate, setEditDueDate] = useState('');
-  const [isEditingAddress, setIsEditingAddress] = useState(false);
-  const [editAddress, setEditAddress] = useState('');
-  const [isEditingContractor, setIsEditingContractor] = useState(false);
-  const [editContractor, setEditContractor] = useState('');
+  // Project name/contractor/address/due-date are edited in the admin Project
+  // Settings section (/project/:id/settings); the header shows them read-only.
+  const isAdmin = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; }
+    catch { return false; }
+  })();
   const [isOptimizingThumbnails, setIsOptimizingThumbnails] = useState(false);
   const [optimizeProgress, setOptimizeProgress] = useState({ current: 0, total: 0 });
   const [activePages, setActivePages] = useState<string[]>([]);
@@ -1654,39 +1651,6 @@ export const ProjectView: React.FC = () => {
     return computeTakeoffTotals(project, revisionModel.currentPageIds);
   };
 
-  const handleSaveDueDate = async () => {
-    if (!project) return;
-    const updatedProject = {
-      ...project,
-      bidDueDate: editDueDate ? new Date(editDueDate).getTime() : undefined
-    };
-    await saveProject(updatedProject);
-    setProject(updatedProject);
-    setIsEditingDueDate(false);
-  };
-
-  const handleSaveAddress = async () => {
-    if (!project) return;
-    const updatedProject = {
-      ...project,
-      address: editAddress || undefined
-    };
-    await saveProject(updatedProject);
-    setProject(updatedProject);
-    setIsEditingAddress(false);
-  };
-
-  const handleSaveContractor = async () => {
-    if (!project) return;
-    const updatedProject = {
-      ...project,
-      contractor: editContractor || undefined
-    };
-    await saveProject(updatedProject);
-    setProject(updatedProject);
-    setIsEditingContractor(false);
-  };
-
   const handleOptimizeThumbnails = async () => {
     if (!project) return;
     
@@ -1817,24 +1781,6 @@ export const ProjectView: React.FC = () => {
     return sorted;
   }, [visiblePages, searchTerm, pagesSortMode, favoritePageIds]);
 
-  const handleSaveProjectName = async () => {
-    if (!project || !editProjectName.trim()) return;
-
-    // Optimistic: show the new name right away and close the editor; roll back
-    // to the previous name if the save fails.
-    const previous = project;
-    const updatedProject = { ...project, name: editProjectName.trim() };
-    setProject(updatedProject);
-    setIsEditingProjectName(false);
-    try {
-      await saveProject(updatedProject);
-    } catch (error) {
-      console.error('Failed to update project name:', error);
-      setProject(previous);
-      toast('Failed to update project name. Please try again.', { type: 'error' });
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
@@ -1899,50 +1845,19 @@ export const ProjectView: React.FC = () => {
         
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-8 gap-4 md:gap-6">
           <div className="w-full">
-            {isEditingProjectName ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={editProjectName}
-                  onChange={(e) => setEditProjectName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveProjectName();
-                    if (e.key === 'Escape') setIsEditingProjectName(false);
-                  }}
-                  className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white border-b-2 border-accent-500 focus:outline-none bg-transparent dark:bg-transparent px-1 min-w-[300px]"
-                  autoFocus
-                />
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white break-words leading-tight">{project.name}</h1>
+              {isAdmin && (
                 <button
-                  onClick={handleSaveProjectName}
-                  aria-label="Save project name"
-                  className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                  onClick={() => navigate(`/project/${projectId}/settings`)}
+                  className="p-1.5 text-slate-400 hover:text-accent-600 transition-all rounded-lg hover:bg-accent-50 flex-shrink-0"
+                  title="Project settings"
+                  aria-label="Project settings"
                 >
-                  <Check size={20} />
+                  <SlidersHorizontal size={18} />
                 </button>
-                <button
-                  onClick={() => setIsEditingProjectName(false)}
-                  aria-label="Cancel"
-                  className="p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3 group">
-                <h1 className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white break-words leading-tight">{project.name}</h1>
-                <button
-                  onClick={() => {
-                    setEditProjectName(project.name);
-                    setIsEditingProjectName(true);
-                  }}
-                  className="p-1.5 text-slate-400 hover:text-accent-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-accent-50"
-                  title="Edit project name"
-                  aria-label="Edit project name"
-                >
-                  <Edit2 size={18} />
-                </button>
-              </div>
-            )}
+              )}
+            </div>
             <ProjectStageControl
               projectId={project.id}
               version={project.version}
@@ -1968,114 +1883,30 @@ export const ProjectView: React.FC = () => {
               
               <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <Building2 size={14} className="text-slate-400 flex-shrink-0" />
-                {isEditingContractor ? (
-                  <div className="flex items-center gap-1 flex-1">
-                    <input
-                      type="text"
-                      value={editContractor}
-                      onChange={(e) => setEditContractor(e.target.value)}
-                      placeholder="Contractor"
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent-500"
-                    />
-                    <button onClick={handleSaveContractor} className="text-green-600 hover:bg-green-50 p-1 rounded">
-                      <Check size={14} />
-                    </button>
-                    <button onClick={() => setIsEditingContractor(false)} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
-                      <X size={14} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
-                    <span className="truncate">{project.contractor || 'No contractor'}</span>
-                    <button 
-                      onClick={() => {
-                        setEditContractor(project.contractor || '');
-                        setIsEditingContractor(true);
-                      }}
-                      className="text-slate-400 hover:text-accent-500 transition-opacity p-1"
-                    >
-                      <Edit2 size={12} />
-                    </button>
-                  </div>
-                )}
+                <span className="truncate">{project.contractor || 'No contractor'}</span>
               </div>
 
               <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <MapPin size={14} className="text-slate-400 flex-shrink-0" />
-                {isEditingAddress ? (
-                  <div className="flex items-center gap-1 flex-1">
-                    <AddressAutocomplete
-                      value={editAddress}
-                      onChange={setEditAddress}
-                      placeholder="Address"
-                    />
-                    <button onClick={handleSaveAddress} className="text-green-600 hover:bg-green-50 p-1 rounded">
-                      <Check size={14} />
-                    </button>
-                    <button onClick={() => setIsEditingAddress(false)} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
-                      <X size={14} />
-                    </button>
-                  </div>
+                {project.address ? (
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-accent-600 hover:underline transition-colors truncate"
+                  >
+                    {project.address}
+                  </a>
                 ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
-                    {project.address ? (
-                      <a 
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-accent-600 hover:underline transition-colors truncate"
-                      >
-                        {project.address}
-                      </a>
-                    ) : (
-                      <span className="truncate">No address</span>
-                    )}
-                    <button 
-                      onClick={() => {
-                        setEditAddress(project.address || '');
-                        setIsEditingAddress(true);
-                      }}
-                      className="text-slate-400 hover:text-accent-500 transition-opacity p-1"
-                    >
-                      <Edit2 size={12} />
-                    </button>
-                  </div>
+                  <span className="truncate">No address</span>
                 )}
               </div>
 
               <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
                 <Clock size={14} className="text-slate-400 flex-shrink-0" />
-                {isEditingDueDate ? (
-                  <div className="flex items-center gap-1 flex-1">
-                    <input
-                      type="date"
-                      value={editDueDate}
-                      onChange={(e) => setEditDueDate(e.target.value)}
-                      className="w-full border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent-500"
-                    />
-                    <button onClick={handleSaveDueDate} className="text-green-600 hover:bg-green-50 p-1 rounded">
-                      <Check size={14} />
-                    </button>
-                    <button onClick={() => setIsEditingDueDate(false)} className="text-slate-400 hover:bg-slate-100 p-1 rounded">
-                      <X size={14} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 group flex-1 min-w-0">
-                    <span className={`${getDueDateColor()} truncate`}>
-                      Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
-                    </span>
-                    <button
-                      onClick={() => {
-                        setEditDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
-                        setIsEditingDueDate(true);
-                      }}
-                      className="text-slate-400 hover:text-accent-600 transition-opacity p-1"
-                    >
-                      <Edit2 size={12} />
-                    </button>
-                  </div>
-                )}
+                <span className={`${getDueDateColor()} truncate`}>
+                  Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
+                </span>
               </div>
 
               {projectStorage && (
