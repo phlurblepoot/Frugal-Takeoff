@@ -13,6 +13,11 @@ import {
   calculateTakeoffTotalCost,
   calculateTakeoffCostDetails,
   roundUpTo100,
+  evaluateMathExpression,
+  parseFeetAndInches,
+  formatFeetAndInches,
+  formatRealValue,
+  formatMeasurement,
 } from './math';
 import { Point, ScaleConfig, MeasurementTakeoff } from '../types';
 
@@ -280,6 +285,114 @@ describe('units & cost', () => {
     });
     it('250 -> 300', () => {
       expect(roundUpTo100(250)).toBe(300);
+    });
+  });
+});
+
+describe('parsing & formatting', () => {
+  describe('evaluateMathExpression', () => {
+    it('plain number string', () => {
+      expect(evaluateMathExpression('5')).toBe(5);
+    });
+    it('addition expression', () => {
+      expect(evaluateMathExpression('=2+3')).toBe(5);
+    });
+    it('multiplication expression', () => {
+      expect(evaluateMathExpression('=10*2')).toBe(20);
+    });
+    it('percentage expression', () => {
+      expect(evaluateMathExpression('=40%')).toBeCloseTo(0.4);
+    });
+    it('whitespace only -> null', () => {
+      expect(evaluateMathExpression('   ')).toBeNull();
+    });
+    it('non-numeric -> null', () => {
+      expect(evaluateMathExpression('abc')).toBeNull();
+    });
+    it('disallowed identifiers (=alert(1)) -> null', () => {
+      expect(evaluateMathExpression('=alert(1)')).toBeNull();
+    });
+    it('incomplete expression (=2+) -> null', () => {
+      // characterization: throws SyntaxError internally, caught -> null
+      expect(evaluateMathExpression('=2+')).toBeNull();
+    });
+  });
+
+  describe('formatFeetAndInches', () => {
+    it('0 -> 0"', () => {
+      expect(formatFeetAndInches(0)).toBe('0"');
+    });
+    it('1.5 -> 1\' - 6"', () => {
+      expect(formatFeetAndInches(1.5)).toBe(`1' - 6"`);
+    });
+    it('0.03 ft -> sub-inch fraction "3/8\\""', () => {
+      // characterization: 0.03 ft = 0.36 in, rounds to 6/16 = 3/8 inch
+      expect(formatFeetAndInches(0.03)).toBe(`3/8"`);
+    });
+    it('0.5 ft -> 6"', () => {
+      expect(formatFeetAndInches(0.5)).toBe(`6"`);
+    });
+  });
+
+  describe('parseFeetAndInches', () => {
+    it('plain "5" defaults to ft -> 5', () => {
+      expect(parseFeetAndInches('5')).toBe(5);
+    });
+    it('"6" with default in -> 0.5 ft', () => {
+      expect(parseFeetAndInches('6', 'in')).toBeCloseTo(0.5);
+    });
+    it('empty -> null', () => {
+      expect(parseFeetAndInches('')).toBeNull();
+    });
+    it('feet+inches "5\' 6\\"" -> 5.5', () => {
+      expect(parseFeetAndInches(`5' 6"`)).toBeCloseTo(5.5);
+    });
+    it('bare fraction "1/2" -> 0.5', () => {
+      expect(parseFeetAndInches('1/2')).toBeCloseTo(0.5);
+    });
+    it('"3 1/2" default ft -> 3.5', () => {
+      // characterization: whole+fraction treated as feet when no explicit units
+      expect(parseFeetAndInches('3 1/2')).toBeCloseTo(3.5);
+    });
+  });
+
+  describe('formatRealValue', () => {
+    it('count rounds and labels "each"', () => {
+      expect(formatRealValue(3.7, 'count', 'each')).toBe('4 each');
+    });
+    it('length in ft -> feet-and-inches', () => {
+      // characterization: length ft routes through formatFeetAndInches
+      expect(formatRealValue(10, 'length', 'ft')).toBe(`10' - 0"`);
+    });
+    it('area in ft -> "N.NN sq ft"', () => {
+      expect(formatRealValue(10, 'area', 'ft')).toBe('10.00 sq ft');
+    });
+  });
+
+  describe('formatMeasurement', () => {
+    it('length with null scale -> px', () => {
+      expect(formatMeasurement(12.5, 'length', null)).toBe('12.50 px');
+    });
+    it('area with null scale -> px²', () => {
+      expect(formatMeasurement(12.5, 'area', null)).toBe('12.50 px²');
+    });
+    it('length with scale -> feet-and-inches', () => {
+      const scale: ScaleConfig = {
+        pixelDistance: 10,
+        realWorldDistance: 5,
+        unit: 'ft',
+      };
+      // characterization: 100px * (5/10) = 50 ft
+      expect(formatMeasurement(100, 'length', scale)).toBe(`50' - 0"`);
+    });
+    it('area with scale -> sq ft', () => {
+      const scale: ScaleConfig = {
+        pixelDistance: 10,
+        realWorldDistance: 5,
+        unit: 'ft',
+      };
+      // characterization: 100px * (5/10)^2 = 25 sq ft
+      expect(formatMeasurement(100, 'area', scale)).toBe('25.00 sq ft');
     });
   });
 });
