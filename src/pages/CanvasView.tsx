@@ -5,6 +5,9 @@ import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
+import { ScaleCalibrationModal } from '../components/canvas/ScaleCalibrationModal';
+import { KeyboardShortcutsModal } from '../components/canvas/KeyboardShortcutsModal';
+import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
@@ -2359,68 +2362,15 @@ const CanvasViewInner: React.FC = () => {
       </div>
 
       {/* Scale Modal */}
-      {showScaleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-              <h3 className="font-semibold text-slate-800 dark:text-slate-200">Set Scale</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                Enter the real-world distance for the line you just drew.
-                {(scaleUnit === 'ft' || scaleUnit === 'in') && (
-                  <span className="block mt-1 text-xs text-slate-500">
-                    You can use fractions and feet/inches (e.g., 3' 4 1/2", 3.5, 4 1/2")
-                  </span>
-                )}
-              </p>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Distance</label>
-                  <input
-                    type="text"
-                    value={scaleInput}
-                    onChange={(e) => setScaleInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') confirmScale();
-                    }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
-                    autoFocus
-                  />
-                </div>
-                <div className="w-24">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Unit</label>
-                  <select
-                    value={scaleUnit}
-                    onChange={(e) => setScaleUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="ft">ft</option>
-                    <option value="in">in</option>
-                    <option value="m">m</option>
-                    <option value="cm">cm</option>
-                    <option value="mm">mm</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
-              <button
-                onClick={() => setShowScaleModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-lg transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmScale}
-                className="px-4 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 active:scale-95 rounded-lg transition-all"
-              >
-                Set Scale
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ScaleCalibrationModal
+        open={showScaleModal}
+        scaleInput={scaleInput}
+        onScaleInputChange={setScaleInput}
+        scaleUnit={scaleUnit}
+        onScaleUnitChange={setScaleUnit}
+        onApply={confirmScale}
+        onClose={() => setShowScaleModal(false)}
+      />
 
       {/* New Measurement Modal */}
       {newMeasurementModal && (() => {
@@ -2746,83 +2696,9 @@ const CanvasViewInner: React.FC = () => {
         />
       )}
       {/* Keyboard Shortcuts Help Modal */}
-      {showShortcutsHelp && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4" onClick={() => setShowShortcutsHelp(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-accent-100 flex items-center justify-center text-accent-600">
-                  <HelpCircle size={20} />
-                </div>
-                <h3 className="text-lg font-semibold text-slate-900">Keyboard Shortcuts</h3>
-              </div>
-              <button onClick={() => setShowShortcutsHelp(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="overflow-y-auto max-h-[60vh]">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Key</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {[
-                    ['?', 'Show this help'],
-                    ['Escape', 'Cancel / close modal / deselect'],
-                    ['Ctrl+Z', 'Undo'],
-                    ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'],
-                    ['Delete', 'Delete selected measurement'],
-                    ['Backspace (while drawing)', 'Remove last point'],
-                    ['P', 'Resume/extend selected measurement (or segment)'],
-                    ['Ctrl+C', 'Copy measurement'],
-                    ['Ctrl+V', 'Paste measurement'],
-                    ['← / →', 'Previous / next page'],
-                    ['Enter', 'Finish current measurement'],
-                    ['A (while drawing)', 'Toggle arc mode'],
-                  ].map(([key, action]) => (
-                    <tr key={key} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-3 font-mono text-xs text-accent-700 bg-accent-50/50 whitespace-nowrap">{key}</td>
-                      <td className="px-6 py-3 text-slate-700">{action}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 text-center">
-              <p className="text-xs text-slate-400">Press <span className="font-mono">Escape</span> or click outside to close</p>
-            </div>
-          </div>
-        </div>
-      )}
+      <KeyboardShortcutsModal open={showShortcutsHelp} onClose={() => setShowShortcutsHelp(false)} />
       {/* Tool Disabled Message Modal */}
-      {toolDisabledMessage && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                <Settings size={20} />
-              </div>
-              <h3 className="text-lg font-semibold text-slate-900">Tool Restricted</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-slate-600">
-                {toolDisabledMessage}
-              </p>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
-              <button
-                onClick={() => setToolDisabledMessage(null)}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 rounded-xl transition-colors shadow-sm"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ToolDisabledModal message={toolDisabledMessage} onClose={() => setToolDisabledMessage(null)} />
     </div>
   );
 };
