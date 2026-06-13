@@ -10,6 +10,8 @@ import { migrations } from './migrationList';
 import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
   seedSovLines, syncChangeOrders,
+  createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
+  computeG703, computeG702,
   ValidationError, ConflictError, NotFoundError,
 } from './aiaStore';
 
@@ -213,5 +215,283 @@ describe('syncChangeOrders', () => {
     const list = listSovLines(db, 'p1');
     expect(list.map(l => l.description)).toEqual(['E1', 'E2', 'CO']);
     expect(list.map(l => l.sortOrder)).toEqual([0, 1, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pay applications + G702/G703 computation — CHARACTERIZATION (exact cents).
+// ---------------------------------------------------------------------------
+
+// Helper: a project with two SOV lines: $100k and $50k.
+function setupTwoLines(): { line1: string; line2: string } {
+  const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'Line 1', scheduledValueCents: 10000000 });
+  const { id: line2 } = createSovLine(db, 'p1', { itemNo: '2', description: 'Line 2', scheduledValueCents: 5000000 });
+  return { line1, line2 };
+}
+
+describe('createPayApp', () => {
+  it('numbers sequentially per project, defaults retainage to 10, seeds lines for each SOV line', () => {
+    const { line1, line2 } = setupTwoLines();
+    const a1 = createPayApp(db, 'p1', {});
+    expect(a1.number).toBe(1);
+    const app = getPayApp(db, a1.id)!;
+    expect(app.status).toBe('draft');
+    expect(app.version).toBe(1);
+    expect(app.retainagePercent).toBe(10);
+    expect(app.storedRetainagePercent).toBe(10);
+    expect(app.lines.length).toBe(2);
+    const sovIds = app.lines.map((l: any) => l.sovLineId).sort();
+    expect(sovIds).toEqual([line1, line2].sort());
+    expect(app.lines.every((l: any) => l.percentComplete === 0 && l.storedMaterialsCents === 0)).toBe(true);
+
+    const a2 = createPayApp(db, 'p1', {});
+    expect(a2.number).toBe(2);
+  });
+
+  it('carries forward the prior app percentComplete + storedMaterialsCents', () => {
+    const { line1 } = setupTwoLines();
+    const a1 = createPayApp(db, 'p1', {});
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 12345 },
+    ], 1);
+    const a2 = createPayApp(db, 'p1', {});
+    const app2 = getPayApp(db, a2.id)!;
+    const l1 = app2.lines.find((l: any) => l.sovLineId === line1);
+    expect(l1.percentComplete).toBe(50);
+    expect(l1.storedMaterialsCents).toBe(12345);
+  });
+
+  it('uses input retainage percents and validates them', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', { retainagePercent: 5, storedRetainagePercent: 7.5 });
+    const app = getPayApp(db, a.id)!;
+    expect(app.retainagePercent).toBe(5);
+    expect(app.storedRetainagePercent).toBe(7.5);
+    expect(() => createPayApp(db, 'p1', { retainagePercent: 101 })).toThrow(ValidationError);
+    expect(() => createPayApp(db, 'p1', { retainagePercent: Infinity })).toThrow(ValidationError);
+    expect(() => createPayApp(db, 'p1', { storedRetainagePercent: -1 })).toThrow(ValidationError);
+  });
+
+  it('rejects unknown project', () => {
+    expect(() => createPayApp(db, 'nope', {})).toThrow(NotFoundError);
+  });
+});
+
+describe('listPayApps / getPayApp', () => {
+  it('lists ordered by number ASC', () => {
+    setupTwoLines();
+    createPayApp(db, 'p1', {});
+    createPayApp(db, 'p1', {});
+    createPayApp(db, 'p1', {});
+    expect(listPayApps(db, 'p1').map(a => a.number)).toEqual([1, 2, 3]);
+  });
+
+  it('getPayApp returns null for unknown id', () => {
+    expect(getPayApp(db, 'no-such-id')).toBeNull();
+  });
+});
+
+describe('savePayAppLines', () => {
+  it('upserts lines, bumps app version', () => {
+    const { line1 } = setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    const r = savePayAppLines(db, a.id, [
+      { sovLineId: line1, percentComplete: 25, storedMaterialsCents: 100 },
+    ], 1);
+    expect(r.version).toBe(2);
+    const app = getPayApp(db, a.id)!;
+    expect(app.version).toBe(2);
+    const l1 = app.lines.find((l: any) => l.sovLineId === line1);
+    expect(l1.percentComplete).toBe(25);
+    expect(l1.storedMaterialsCents).toBe(100);
+  });
+
+  it('inserts a pay_app_line that did not exist yet', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    // a SOV line added AFTER the app was created has no seeded pay_app_line
+    const { id: line3 } = createSovLine(db, 'p1', { description: 'Late', scheduledValueCents: 1000 });
+    savePayAppLines(db, a.id, [{ sovLineId: line3, percentComplete: 10, storedMaterialsCents: 0 }], 1);
+    const app = getPayApp(db, a.id)!;
+    const l3 = app.lines.find((l: any) => l.sovLineId === line3);
+    expect(l3.percentComplete).toBe(10);
+  });
+
+  it('throws ConflictError on stale version', () => {
+    const { line1 } = setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: 10, storedMaterialsCents: 0 }], 1); // -> v2
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: 20, storedMaterialsCents: 0 }], 1))
+      .toThrow(ConflictError);
+  });
+
+  it('rejects bad percentComplete (>100 / non-finite)', () => {
+    const { line1 } = setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: 101, storedMaterialsCents: 0 }], 1)).toThrow(ValidationError);
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: Infinity, storedMaterialsCents: 0 }], 1)).toThrow(ValidationError);
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: -1, storedMaterialsCents: 0 }], 1)).toThrow(ValidationError);
+  });
+
+  it('rejects bad storedMaterialsCents (non-integer / negative)', () => {
+    const { line1 } = setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: 0, storedMaterialsCents: 1.5 }], 1)).toThrow(ValidationError);
+    expect(() => savePayAppLines(db, a.id, [{ sovLineId: line1, percentComplete: 0, storedMaterialsCents: -1 }], 1)).toThrow(ValidationError);
+  });
+});
+
+describe('setPayApp', () => {
+  it('patches status + retainage and bumps version', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    const r = setPayApp(db, a.id, { status: 'submitted', retainagePercent: 5 });
+    expect(r.version).toBe(2);
+    const app = getPayApp(db, a.id)!;
+    expect(app.status).toBe('submitted');
+    expect(app.retainagePercent).toBe(5);
+    expect(app.storedRetainagePercent).toBe(10); // unchanged
+  });
+
+  it('validates retainage', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    expect(() => setPayApp(db, a.id, { retainagePercent: 200 })).toThrow(ValidationError);
+  });
+});
+
+describe('deletePayApp', () => {
+  it('cascades its pay_app_lines', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    expect(getPayApp(db, a.id)!.lines.length).toBe(2);
+    deletePayApp(db, a.id);
+    expect(getPayApp(db, a.id)).toBeNull();
+    const remaining = db.prepare('SELECT COUNT(*) c FROM aia_pay_app_lines WHERE payAppId = ?').get(a.id) as any;
+    expect(remaining.c).toBe(0);
+  });
+});
+
+describe('computeG703 / computeG702 — exact cents', () => {
+  it('app #1: 50% line1, 0% line2, retainage 10/10', () => {
+    const { line1 } = setupTwoLines();
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 },
+      // line2 left at 0%
+    ], 1);
+
+    const g703 = computeG703(db, a1.id);
+    const r1 = g703[0];
+    expect(r1.scheduledValueCents).toBe(10000000);   // C
+    expect(r1.previousCents).toBe(0);                 // D
+    expect(r1.thisPeriodCents).toBe(5000000);         // E
+    expect(r1.storedCents).toBe(0);                   // F
+    expect(r1.totalToDateCents).toBe(5000000);        // G
+    expect(r1.balanceToFinishCents).toBe(5000000);
+    expect(r1.retainageCents).toBe(500000);
+
+    const g702 = computeG702(db, a1.id);
+    expect(g702.L1originalContractCents).toBe(15000000);
+    expect(g702.L2changeOrdersCents).toBe(0);
+    expect(g702.L3contractSumToDateCents).toBe(15000000);
+    expect(g702.L4totalCompletedStoredCents).toBe(5000000);
+    expect(g702.L5aRetainageWorkCents).toBe(500000);
+    expect(g702.L5bRetainageStoredCents).toBe(0);
+    expect(g702.L5retainageCents).toBe(500000);
+    expect(g702.L6earnedLessRetainageCents).toBe(4500000);
+    expect(g702.L7lessPreviousCents).toBe(0);
+    expect(g702.L8currentPaymentDueCents).toBe(4500000);
+    expect(g702.L9balanceToFinishCents).toBe(10500000);
+  });
+
+  it('app #2: carry-forward, 75%/200000 stored on line1, 40% on line2; L7 pulls prior L6', () => {
+    const { line1, line2 } = setupTwoLines();
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 },
+    ], 1);
+
+    const a2 = createPayApp(db, 'p1', {});
+    savePayAppLines(db, a2.id, [
+      { sovLineId: line1, percentComplete: 75, storedMaterialsCents: 200000 },
+      { sovLineId: line2, percentComplete: 40, storedMaterialsCents: 0 },
+    ], 1);
+
+    const g703 = computeG703(db, a2.id);
+    const r1 = g703[0];
+    expect(r1.scheduledValueCents).toBe(10000000);  // C
+    expect(r1.previousCents).toBe(5000000);         // D (prior 50%)
+    expect(r1.thisPeriodCents).toBe(2500000);       // E (75% - 50%)
+    expect(r1.storedCents).toBe(200000);            // F
+    expect(r1.totalToDateCents).toBe(7700000);      // G
+    expect(r1.retainageCents).toBe(770000);         // round(7500000*10%)=750000 + round(200000*10%)=20000
+
+    const r2 = g703[1];
+    expect(r2.scheduledValueCents).toBe(5000000);
+    expect(r2.previousCents).toBe(0);
+    expect(r2.thisPeriodCents).toBe(2000000);       // 40%
+    expect(r2.totalToDateCents).toBe(2000000);
+    expect(r2.retainageCents).toBe(200000);
+
+    const g702 = computeG702(db, a2.id);
+    expect(g702.L4totalCompletedStoredCents).toBe(9700000);  // 7700000 + 2000000
+    expect(g702.L5aRetainageWorkCents).toBe(950000);         // 750000 + 200000
+    expect(g702.L5bRetainageStoredCents).toBe(20000);        // round(200000*10%)
+    expect(g702.L5retainageCents).toBe(970000);
+    expect(g702.L6earnedLessRetainageCents).toBe(8730000);
+    expect(g702.L7lessPreviousCents).toBe(4500000);          // app#1 L6
+    expect(g702.L8currentPaymentDueCents).toBe(4230000);     // 8730000 - 4500000
+  });
+
+  it('per-line retainage override uses the line percent not the app percent', () => {
+    const { line1, line2 } = setupTwoLines();
+    // override line2 to 5% retainage
+    const l2 = getSovLine(db, line2)!;
+    saveSovLine(db, line2, { ...l2, retainagePercent: 5 });
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 },
+      { sovLineId: line2, percentComplete: 100, storedMaterialsCents: 0 },
+    ], 1);
+
+    const g703 = computeG703(db, a1.id);
+    const r1 = g703[0]; // 10% app default
+    expect(r1.retainageCents).toBe(500000); // round(5000000*10%)
+    const r2 = g703[1]; // 5% override on a fully complete $50k line
+    // completed = 5000000; retainage = round(5000000*5%) = 250000  (would be 500000 at 10%)
+    expect(r2.retainageCents).toBe(250000);
+
+    const g702 = computeG702(db, a1.id);
+    // L5a = round(5000000*10%) + round(5000000*5%) = 500000 + 250000 = 750000
+    expect(g702.L5aRetainageWorkCents).toBe(750000);
+  });
+
+  it('change-order line: L1 unchanged, L2 / L3 include it, changeOrders.additions set', () => {
+    setupTwoLines();
+    createSovLine(db, 'p1', { description: 'CO', scheduledValueCents: 1000000, isChangeOrder: 1 });
+    const a1 = createPayApp(db, 'p1', {});
+    const g702 = computeG702(db, a1.id);
+    expect(g702.L1originalContractCents).toBe(15000000);  // unchanged
+    expect(g702.L2changeOrdersCents).toBe(1000000);
+    expect(g702.L3contractSumToDateCents).toBe(16000000);
+    expect(g702.changeOrders.additionsCents).toBe(1000000);
+    expect(g702.changeOrders.deductionsCents).toBe(0);
+    expect(g702.changeOrders.netCents).toBe(1000000);
+  });
+
+  it('rounds per line (Math.round): 333 @ 33% => 110 cents', () => {
+    const { id: line } = createSovLine(db, 'p1', { description: 'Tiny', scheduledValueCents: 333 });
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 0, storedRetainagePercent: 0 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 33, storedMaterialsCents: 0 }], 1);
+    const g703 = computeG703(db, a1.id);
+    // Math.round(333 * 33 / 100) = Math.round(109.89) = 110
+    expect(g703[0].totalToDateCents).toBe(110);
+    expect(g703[0].thisPeriodCents).toBe(110);
+  });
+
+  it('computeG702 throws NotFoundError for unknown pay app', () => {
+    expect(() => computeG702(db, 'no-such-id')).toThrow(NotFoundError);
   });
 });
