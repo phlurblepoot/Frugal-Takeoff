@@ -98,3 +98,100 @@ export async function seedProjectWithPage(
 
   return { projectId, pageId, imageId, name };
 }
+
+export interface SeedWithTakeoffResult extends SeedResult {
+  takeoffId: string;
+  takeoffName: string;
+  measurementId: string;
+}
+
+/**
+ * Seed a project that already contains ONE takeoff plus ONE length measurement
+ * wired to it on the single page. This is the minimum shape the Print path
+ * needs: buildHighlightsPdf() returns null (and handlePrint records NO printout)
+ * unless some current page carries a measurement whose takeoffId is in the
+ * selected set. Seeding the link directly avoids drawing on the canvas (slow)
+ * while still exercising the real Print → printout-in-Proposal flow.
+ *
+ * The seeded takeoff renders as a row on the Takeoffs tab, so the spec can
+ * select it (its checkbox) and trigger Print/Excel with no UI takeoff creation.
+ */
+export async function seedProjectWithTakeoffMeasurement(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedWithTakeoffResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+
+  const projectId = randomUUID();
+  const pageId = randomUUID();
+  const imageId = randomUUID();
+  const takeoffId = randomUUID();
+  const measurementId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Export Project ${short}`;
+  const takeoffName = `Wall Length ${short}`;
+
+  const base64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const dataUrl = `data:image/png;base64,${base64}`;
+  const imgRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: imageId, data: dataUrl },
+  });
+  if (!imgRes.ok()) {
+    throw new Error(`image upload failed: ${imgRes.status()} ${await imgRes.text()}`);
+  }
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [
+      {
+        id: takeoffId,
+        name: takeoffName,
+        color: '#3b82f6',
+        type: 'length',
+        unit: 'ft',
+        costPerUnit: 5,
+      },
+    ],
+    pages: [
+      {
+        id: pageId,
+        name: 'Sheet 1',
+        imageId,
+        imageWidth: 1000,
+        imageHeight: 800,
+        // A 2-point length measurement bound to the seeded takeoff. This is what
+        // makes the page eligible for the highlights PDF.
+        measurements: [
+          {
+            id: measurementId,
+            type: 'length',
+            name: 'Wall A',
+            color: '#3b82f6',
+            takeoffId,
+            points: [
+              { x: 100, y: 100 },
+              { x: 400, y: 100 },
+            ],
+          },
+        ],
+        // A scale so the measurement formats to a real value; not strictly
+        // required for Print to produce a printout, but keeps totals sane.
+        scaleConfig: { pixelDistance: 100, realWorldDistance: 10, unit: 'ft' },
+      },
+    ],
+    version: 1,
+    status: 'estimating',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, pageId, imageId, name, takeoffId, takeoffName, measurementId };
+}

@@ -1,5 +1,10 @@
 import { test as base, expect, request as apiRequest, type Page } from '@playwright/test';
-import { login, seedProjectWithPage, type LoginResult } from './seed';
+import {
+  login,
+  seedProjectWithPage,
+  seedProjectWithTakeoffMeasurement,
+  type LoginResult,
+} from './seed';
 
 interface Fixtures {
   /** A logged-in session `{ token, user }` obtained via the API. */
@@ -39,4 +44,4 @@ export const test = base.extend<Fixtures>({
   },
 });
 
-export { expect, login, seedProjectWithPage };
+export { expect, login, seedProjectWithPage, seedProjectWithTakeoffMeasurement };
