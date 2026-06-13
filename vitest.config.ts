@@ -8,7 +8,7 @@ export default defineConfig({
       {
         test: {
           name: 'server',
-          include: ['server/**/*.test.ts'],
+          include: ['server/**/*.test.ts', 'scripts/**/*.test.ts'],
           exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
           environment: 'node',
         },
