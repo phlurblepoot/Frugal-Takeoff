@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
+import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
+import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { formatRealValue, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
@@ -32,11 +32,8 @@ import { CustomCostRow } from '../components/CustomCostRow';
 import {
   buildHighlightsPdf,
   computeTakeoffTotals,
-  generateProposalPdf,
-  getProposalPrefsKey,
   HIGHLIGHT_QUALITY_PRESETS,
   HighlightQuality,
-  ProposalOptions,
 } from './project/proposal/proposalGenerator';
 
 // Renders `text` with the first case-insensitive occurrence of `term` wrapped
@@ -58,7 +55,7 @@ const HighlightedText: React.FC<{ text: string; term: string }> = ({ text, term 
   );
 };
 
-const PROJECT_TAB_VALUES = ['pages', 'takeoffs', 'printouts', 'email'] as const;
+const PROJECT_TAB_VALUES = ['pages', 'takeoffs', 'email'] as const;
 type ProjectTab = (typeof PROJECT_TAB_VALUES)[number];
 
 export const ProjectView: React.FC = () => {
@@ -82,9 +79,7 @@ export const ProjectView: React.FC = () => {
   };
   const [project, setProject] = useState<Project | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
-  const [printoutToDelete, setPrintoutToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showDeletePrintoutConfirm, setShowDeletePrintoutConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   // Tab lives in the URL so the project sidebar can highlight the section,
   // refresh/back preserve it, and links can target a tab directly.
@@ -100,10 +95,6 @@ export const ProjectView: React.FC = () => {
       return next;
     }, { replace: true });
   };
-  const [showSendProposalModal, setShowSendProposalModal] = useState(false);
-  const [sendProposalFileId, setSendProposalFileId] = useState('');
-  const [sendProposalMessage, setSendProposalMessage] = useState('');
-  const [sendingProposal, setSendingProposal] = useState(false);
   const [expandedThreadKeys, setExpandedThreadKeys] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [projectStorage, setProjectStorage] = useState<ProjectStorage | null>(null);
@@ -137,19 +128,10 @@ export const ProjectView: React.FC = () => {
   const [editTakeoffPricePackage, setEditTakeoffPricePackage] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
-  const [isGeneratingProposal, setIsGeneratingProposal] = useState(false);
   const [progressMessage, setProgressMessage] = useState('');
-  const [showProposalModal, setShowProposalModal] = useState(false);
-  const [proposalIncludeCostDetail, setProposalIncludeCostDetail] = useState(false);
-  const [proposalIncludeHighlights, setProposalIncludeHighlights] = useState(false);
-  const [proposalCustomTitle, setProposalCustomTitle] = useState('');
-  const [proposalHeaderColor, setProposalHeaderColor] = useState('#1e293b');
-  const [proposalCoverNotes, setProposalCoverNotes] = useState('');
-  const [proposalFontFamily, setProposalFontFamily] = useState<'helvetica' | 'times' | 'courier'>('helvetica');
-  const [proposalValidUntil, setProposalValidUntil] = useState('');
-  const [proposalTerms, setProposalTerms] = useState('');
-  const [proposalIncludeSignature, setProposalIncludeSignature] = useState(false);
-  const [proposalIncludeTakeoffList, setProposalIncludeTakeoffList] = useState(true);
+  // Blueprint print quality for the Print (highlighted plans) export. Persisted
+  // per-user via the proposal-prefs effect below since it's shared with the
+  // proposal section's highlight quality.
   const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
@@ -171,36 +153,17 @@ export const ProjectView: React.FC = () => {
     return () => window.removeEventListener('scroll', onScroll);
   }, [activeTab, scrollKey]);
 
-  // ── Proposal preference persistence ──────────────────────────────────────
   // Update collaboration page name when project loads
   useEffect(() => {
     if (project) setPageName(project.name);
   }, [project, setPageName]);
 
-  // Load saved prefs on mount: localStorage first (instant), then server (source of truth)
+  // Load saved prefs on mount from the server (source of truth). The proposal
+  // section owns the bulk of proposal preferences now; ProjectView only still
+  // reads the shared blueprint print quality (used by the Print export) plus
+  // the pages-tab view/sort modes.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(getProposalPrefsKey());
-      if (raw) {
-        const p = JSON.parse(raw);
-        if (p.headerColor)                setProposalHeaderColor(p.headerColor);
-        if (p.fontFamily)                 setProposalFontFamily(p.fontFamily);
-        if (p.includeCostDetail != null)  setProposalIncludeCostDetail(p.includeCostDetail);
-        if (p.includeHighlights != null)  setProposalIncludeHighlights(p.includeHighlights);
-        if (p.includeSignature    != null)  setProposalIncludeSignature(p.includeSignature);
-        if (p.includeTakeoffList  != null)  setProposalIncludeTakeoffList(p.includeTakeoffList);
-        if (p.highlightQuality)             setHighlightQuality(p.highlightQuality);
-      }
-    } catch { /* ignore corrupt data */ }
-
-    // Server prefs override localStorage (cross-browser sync)
     getUserPreferences().then(prefs => {
-      if (prefs['proposal-headerColor'])                setProposalHeaderColor(prefs['proposal-headerColor']);
-      if (prefs['proposal-fontFamily'])                 setProposalFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
-      if (prefs['proposal-includeCostDetail'] != null)  setProposalIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
-      if (prefs['proposal-includeHighlights'] != null)  setProposalIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
-      if (prefs['proposal-includeSignature']    != null)  setProposalIncludeSignature(prefs['proposal-includeSignature'] === 'true');
-      if (prefs['proposal-includeTakeoffList']  != null)  setProposalIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
       if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
       if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
       const sort = prefs['pages-sortMode'];
@@ -210,7 +173,7 @@ export const ProjectView: React.FC = () => {
       // to description sort, which is what the option was meant to do.
       if (sort === 'pageNumber' || sort === 'description' || sort === 'highlightsDesc') setPagesSortMode(sort);
       else if (sort === 'name') setPagesSortMode('description');
-    }).catch(() => { /* offline — localStorage values already applied */ });
+    }).catch(() => { /* offline — defaults already applied */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Persist the pages-tab view mode + sort separately from the proposal
@@ -253,31 +216,11 @@ export const ProjectView: React.FC = () => {
     };
   }, [pageContextMenu]);
 
-  // Auto-save whenever any persistent pref changes (localStorage + server)
+  // Persist the shared blueprint print quality to the server (cross-browser).
+  // The proposal section owns the rest of the proposal preferences.
   useEffect(() => {
-    // Cache in localStorage (fast, offline-safe)
-    try {
-      localStorage.setItem(getProposalPrefsKey(), JSON.stringify({
-        headerColor:       proposalHeaderColor,
-        fontFamily:        proposalFontFamily,
-        includeCostDetail: proposalIncludeCostDetail,
-        includeHighlights: proposalIncludeHighlights,
-        includeSignature:    proposalIncludeSignature,
-        includeTakeoffList:  proposalIncludeTakeoffList,
-        highlightQuality,
-      }));
-    } catch { /* ignore quota errors */ }
-    // Persist to server (source of truth, cross-browser)
-    saveUserPreferences({
-      'proposal-headerColor':       proposalHeaderColor,
-      'proposal-fontFamily':        proposalFontFamily,
-      'proposal-includeCostDetail': String(proposalIncludeCostDetail),
-      'proposal-includeHighlights': String(proposalIncludeHighlights),
-      'proposal-includeSignature':    String(proposalIncludeSignature),
-      'proposal-includeTakeoffList':  String(proposalIncludeTakeoffList),
-      'proposal-highlightQuality':    highlightQuality,
-    }).catch(() => {});
-  }, [proposalHeaderColor, proposalFontFamily, proposalIncludeCostDetail, proposalIncludeHighlights, proposalIncludeSignature, proposalIncludeTakeoffList, highlightQuality]);
+    saveUserPreferences({ 'proposal-highlightQuality': highlightQuality }).catch(() => {});
+  }, [highlightQuality]);
 
   const [editingTakeoff, setEditingTakeoff] = useState<MeasurementTakeoff | null>(null);
   const [editTakeoffName, setEditTakeoffName] = useState('');
@@ -1246,7 +1189,8 @@ export const ProjectView: React.FC = () => {
         setIsPrinting(false);
         setProgressMessage('');
         setSelectedTakeoffIds(new Set());
-        setActiveTab('printouts');
+        // Printout history now lives in the Proposal section.
+        navigate(`/project/${projectId}/proposal`);
       };
     } catch (error) {
       console.error('Error generating PDF:', error);
@@ -1471,7 +1415,8 @@ export const ProjectView: React.FC = () => {
         setProject(updatedProject);
         setIsExportingExcel(false);
         setSelectedTakeoffIds(new Set());
-        setActiveTab('printouts');
+        // Printout history now lives in the Proposal section.
+        navigate(`/project/${projectId}/proposal`);
       };
     } catch (error) {
       console.error('Error generating Excel:', error);
@@ -1480,145 +1425,8 @@ export const ProjectView: React.FC = () => {
     }
   };
 
-  const handleGenerateProposal = async (
-    includeCostDetail: boolean,
-    includeHighlights: boolean,
-    headerColor = '#1e293b',
-    coverNotes = '',
-    fontFamily: 'helvetica' | 'times' | 'courier' = 'helvetica',
-    validUntil = '',
-    terms = '',
-    includeSignature = false,
-    includeTakeoffList = true,
-  ) => {
-    if (!project || selectedTakeoffIds.size === 0) return;
-    setShowProposalModal(false);
-    setIsGeneratingProposal(true);
-    setProgressMessage('Building cover page…');
-
-    try {
-      const settings = await getSettings();
-
-      const options: ProposalOptions = {
-        includeCostDetail,
-        includeHighlights,
-        headerColor,
-        coverNotes,
-        fontFamily,
-        validUntil,
-        terms,
-        includeSignature,
-        includeTakeoffList,
-        customTitle: proposalCustomTitle,
-        highlightQuality,
-      };
-
-      const { pdfBytes, suggestedName } = await generateProposalPdf(
-        project,
-        getTakeoffTotals(),
-        selectedTakeoffIds,
-        revisionModel.currentPageIds,
-        options,
-        settings,
-        setProgressMessage,
-      );
-
-      setProgressMessage('Saving…');
-      const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const reader = new FileReader();
-      reader.readAsDataURL(pdfBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        const fileId = uuidv4();
-        await saveFile(fileId, base64data);
-        const printoutName = suggestedName;
-        const newPrintout: Printout = {
-          id: uuidv4(),
-          name: printoutName,
-          fileId,
-          createdAt: Date.now(),
-          type: 'pdf',
-        };
-        const updatedProject = {
-          ...project,
-          printouts: [...(project.printouts || []), newPrintout],
-        };
-        await saveProject(updatedProject);
-        setProject(updatedProject);
-        setIsGeneratingProposal(false);
-        setProgressMessage('');
-        setSelectedTakeoffIds(new Set());
-        setActiveTab('printouts');
-      };
-    } catch (error) {
-      console.error('Error generating proposal:', error);
-      toast('Failed to generate proposal PDF.', { type: 'error' });
-      setIsGeneratingProposal(false);
-      setProgressMessage('');
-    }
-  };
-
-  const handleDeletePrintout = (printoutId: string) => {
-    setPrintoutToDelete(printoutId);
-    setShowDeletePrintoutConfirm(true);
-  };
-
-  const confirmDeletePrintout = async () => {
-    if (!project || !printoutToDelete) return;
-    
-    const printout = project.printouts?.find(p => p.id === printoutToDelete);
-    if (!printout) {
-      setShowDeletePrintoutConfirm(false);
-      setPrintoutToDelete(null);
-      return;
-    }
-
-    const updatedProject = {
-      ...project,
-      printouts: project.printouts?.filter(p => p.id !== printoutToDelete) || [],
-    };
-
-    await saveProject(updatedProject);
-    await deleteFile(printout.fileId);
-    setProject(updatedProject);
-    setShowDeletePrintoutConfirm(false);
-    setPrintoutToDelete(null);
-  };
-
-  const handleDownloadPrintout = async (printout: Printout) => {
-    const dataUrl = await getFile(printout.fileId);
-    if (!dataUrl) return;
-
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    const isExcel = printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    const extension = isExcel ? '.xlsx' : '.pdf';
-    link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleViewPrintout = (printout: Printout) => {
-    // Open by file id — the editor fetches meta + content and saves as a new
-    // version under the same id, so this printout reference stays valid.
-    const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
-    navigate(isExcel ? `/tools/sheets?fileId=${printout.fileId}` : `/tools/pdf?fileId=${printout.fileId}`);
-  };
-
   // Pops the share modal (copy button + QR code) for a freshly created link.
   const showShareUrl = (url: string, title?: string) => shareLink(url, title);
-
-  const handleSharePrintout = async (printout: Printout) => {
-    try {
-      const id = await createShare('printout', printout.fileId, printout.name);
-      const settings = await getSettings();
-      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
-      showShareUrl(`${host}/share/${id}`, printout.name);
-    } catch {
-      toast('Failed to create share link', { type: 'error' });
-    }
-  };
 
   const handleSharePage = async (page: { imageId: string; name?: string; description?: string }) => {
     try {
@@ -2064,7 +1872,7 @@ export const ProjectView: React.FC = () => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
 
       {/* ── PDF generation progress overlay ── */}
-      {(isPrinting || isGeneratingProposal || isExportingExcel) && (
+      {(isPrinting || isExportingExcel) && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-xs mx-4 flex flex-col items-center gap-5">
             <Loader2 size={44} className="text-accent-600 animate-spin" />
@@ -2072,8 +1880,6 @@ export const ProjectView: React.FC = () => {
               <p className="font-semibold text-slate-800 dark:text-slate-100 text-base">
                 {isPrinting
                   ? 'Generating PDF…'
-                  : isGeneratingProposal
-                  ? 'Generating Proposal…'
                   : 'Exporting to Excel…'}
               </p>
               {progressMessage && (
@@ -2342,17 +2148,6 @@ export const ProjectView: React.FC = () => {
           >
             Takeoffs
             {activeTab === 'takeoffs' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('printouts')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'printouts' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
-            }`}
-          >
-            Printouts
-            {activeTab === 'printouts' && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
             )}
           </button>
@@ -2942,16 +2737,11 @@ export const ProjectView: React.FC = () => {
                       Excel ({selectedTakeoffIds.size})
                     </button>
                     <button
-                      onClick={() => {
-                        setProposalCustomTitle(project.name);
-                        setProposalIncludeCostDetail(false);
-                        setShowProposalModal(true);
-                      }}
-                      disabled={isGeneratingProposal}
-                      className="flex-1 sm:flex-none px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                      onClick={() => navigate(`/project/${projectId}/proposal`)}
+                      className="flex-1 sm:flex-none px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                     >
-                      {isGeneratingProposal ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
-                      Proposal ({selectedTakeoffIds.size})
+                      <FileText size={14} />
+                      Proposal
                     </button>
                   </div>
                 )}
@@ -3512,75 +3302,6 @@ export const ProjectView: React.FC = () => {
               </div>
             )}
           </div>
-        ) : activeTab === 'printouts' ? (
-          <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Generated Printouts</h2>
-              <p className="text-sm text-slate-500">
-                {project.printouts?.length || 0} files saved
-              </p>
-            </div>
-
-            {(!project.printouts || project.printouts.length === 0) ? (
-              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
-                <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
-                  <Printer size={32} />
-                </div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-1">No printouts yet</h3>
-                <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto">
-                  Select takeoffs from the Takeoffs tab and click "Print PDF" or "Export Excel" to generate a report.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {[...(project.printouts || [])].sort((a, b) => b.createdAt - a.createdAt).map((printout) => (
-                  <div key={printout.id} className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-md transition-all group">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div className={`w-12 h-12 ${printout.type === 'excel' ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600' : 'bg-accent-50 dark:bg-accent-900/30 text-accent-600'} rounded-xl flex items-center justify-center`}>
-                          {printout.type === 'excel' ? <FileSpreadsheet size={24} /> : <FileText size={24} />}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => handleSharePrintout(printout)}
-                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
-                            title="Copy share link"
-                          >
-                            <LinkIcon size={18} />
-                          </button>
-                          <button
-                            onClick={() => handleViewPrintout(printout)}
-                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
-                            title={printout.type === 'excel' ? "Open in Spreadsheet Editor" : "View PDF"}
-                          >
-                            <Eye size={18} />
-                          </button>
-                          <button
-                            onClick={() => handleDownloadPrintout(printout)}
-                            className="p-2 text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/30 rounded-lg transition-colors"
-                            title={printout.type === 'excel' ? "Download Excel" : "Download PDF"}
-                          >
-                            <Download size={18} />
-                          </button>
-                          <button 
-                            onClick={() => handleDeletePrintout(printout.id)}
-                            className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                            title="Delete Printout"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </div>
-                      </div>
-                      <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-1 line-clamp-1">{printout.name}</h3>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Generated on {new Date(printout.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         ) : (
           /* Email tab — only reachable when project.email exists */
           project.email ? (
@@ -3599,7 +3320,7 @@ export const ProjectView: React.FC = () => {
                     </p>
                   </div>
                   <button
-                    onClick={() => { setSendProposalFileId(''); setSendProposalMessage(''); setShowSendProposalModal(true); }}
+                    onClick={() => navigate(`/project/${projectId}/proposal`)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all shrink-0"
                   >
                     <Send size={13} /> Send Proposal
@@ -3676,66 +3397,6 @@ export const ProjectView: React.FC = () => {
         )}
       </div>
 
-      {/* Send Proposal Modal */}
-      {showSendProposalModal && project.email && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl w-full max-w-xl">
-            <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Send size={20} className="text-accent-600" /> Send Proposal</h3>
-              <button onClick={() => setShowSendProposalModal(false)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"><X size={18} /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-3 text-sm">
-                <p className="text-slate-500 dark:text-slate-400 text-xs uppercase font-bold tracking-wider mb-1">Replying to</p>
-                <p className="font-semibold text-slate-800 dark:text-slate-200">{project.email.fromName || project.email.from}</p>
-                <p className="text-slate-500 dark:text-slate-400 text-xs">{project.email.from} · Re: {project.email.subject}</p>
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Attach Proposal</label>
-                <select className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500"
-                  value={sendProposalFileId} onChange={e => setSendProposalFileId(e.target.value)}>
-                  <option value="">— Select a printout —</option>
-                  {(project.printouts || []).filter(pr => pr.type === 'pdf').map(pr => (
-                    <option key={pr.fileId} value={pr.fileId}>{pr.name}</option>
-                  ))}
-                </select>
-                {!(project.printouts || []).some(pr => pr.type === 'pdf') && (
-                  <p className="mt-1.5 text-xs text-slate-400">No PDF printouts on this project yet. Generate one from the Takeoffs tab.</p>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">Message <span className="font-normal text-slate-400 normal-case">(optional)</span></label>
-                <textarea rows={4} className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm outline-none focus:ring-2 focus:ring-accent-500 resize-none" value={sendProposalMessage} onChange={e => setSendProposalMessage(e.target.value)} placeholder="Please find our proposal attached. Don't hesitate to reach out with any questions." />
-              </div>
-            </div>
-            <div className="p-6 pt-0 flex justify-end gap-3">
-              <button onClick={() => setShowSendProposalModal(false)} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Cancel</button>
-              <button
-                onClick={async () => {
-                  if (!sendProposalFileId || !project) return;
-                  setSendingProposal(true);
-                  try {
-                    const updated = await sendProjectProposal(project.id, sendProposalFileId, sendProposalMessage || undefined);
-                    setProject(updated);
-                    setShowSendProposalModal(false);
-                    setSendProposalFileId('');
-                    setSendProposalMessage('');
-                  } catch (e: any) {
-                    toast('Failed to send: ' + (e.message || 'Unknown error'), { type: 'error' });
-                  } finally {
-                    setSendingProposal(false);
-                  }
-                }}
-                disabled={sendingProposal || !sendProposalFileId}
-                className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2"
-              >
-                {sendingProposal ? <><RefreshCw size={15} className="animate-spin" /> Sending…</> : <><Send size={15} /> Send</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {showDeleteAllConfirm && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
@@ -3788,35 +3449,6 @@ export const ProjectView: React.FC = () => {
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
               >
                 Delete Takeoff
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showDeletePrintoutConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Delete Printout</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-slate-600">
-                Are you sure you want to delete this printout? This action cannot be undone.
-              </p>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-              <button
-                onClick={() => { setShowDeletePrintoutConfirm(false); setPrintoutToDelete(null); }}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeletePrintout}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
-              >
-                Delete Printout
               </button>
             </div>
           </div>
@@ -4260,215 +3892,6 @@ export const ProjectView: React.FC = () => {
         </div>
       )}
 
-      {/* Proposal PDF Modal */}
-      {showProposalModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700 flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3 flex-shrink-0">
-              <div className="p-2 bg-violet-50 dark:bg-violet-900/30 rounded-lg">
-                <FileText size={20} className="text-violet-600 dark:text-violet-400" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Generate Proposal PDF</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  {selectedTakeoffIds.size} takeoff{selectedTakeoffIds.size !== 1 ? 's' : ''} selected
-                </p>
-              </div>
-            </div>
-            <div className="p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  Proposal Title
-                </label>
-                <input
-                  type="text"
-                  value={proposalCustomTitle}
-                  onChange={e => setProposalCustomTitle(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all"
-                  placeholder={project.name}
-                />
-              </div>
-              {/* Header color */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Header Color</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="color"
-                    value={proposalHeaderColor}
-                    onChange={e => setProposalHeaderColor(e.target.value)}
-                    className="h-10 w-14 rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-0.5 bg-white dark:bg-slate-800"
-                  />
-                  <span className="text-sm text-slate-500 dark:text-slate-400 font-mono">{proposalHeaderColor}</span>
-                  <button
-                    type="button"
-                    onClick={() => setProposalHeaderColor('#1e293b')}
-                    className="ml-auto text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-
-              {/* Font family */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Font Style</label>
-                <select
-                  value={proposalFontFamily}
-                  onChange={e => setProposalFontFamily(e.target.value as 'helvetica' | 'times' | 'courier')}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white focus:ring-2 focus:ring-violet-500 outline-none transition-all text-sm"
-                >
-                  <option value="helvetica">Helvetica (Modern)</option>
-                  <option value="times">Times (Traditional)</option>
-                  <option value="courier">Courier (Monospace)</option>
-                </select>
-              </div>
-
-              {/* Cover notes */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  Cover Page Notes
-                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional</span>
-                </label>
-                <textarea
-                  value={proposalCoverNotes}
-                  onChange={e => setProposalCoverNotes(e.target.value)}
-                  rows={3}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all resize-none text-sm"
-                  placeholder="e.g. This proposal is valid for 30 days. Pricing excludes permits and inspections."
-                />
-              </div>
-
-              {/* Valid until */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  Valid Until
-                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional</span>
-                </label>
-                <input
-                  type="date"
-                  value={proposalValidUntil}
-                  onChange={e => setProposalValidUntil(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white focus:ring-2 focus:ring-violet-500 outline-none transition-all text-sm"
-                />
-              </div>
-
-              {/* Terms & conditions */}
-              <div>
-                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  Terms &amp; Conditions
-                  <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">optional — adds a page after the summary</span>
-                </label>
-                <textarea
-                  value={proposalTerms}
-                  onChange={e => setProposalTerms(e.target.value)}
-                  rows={3}
-                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-violet-500 outline-none transition-all resize-none text-sm"
-                  placeholder="e.g. Payment due within 30 days. All work is subject to standard industry practices..."
-                />
-              </div>
-
-              <label className="flex items-start gap-3 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={proposalIncludeSignature}
-                  onChange={e => setProposalIncludeSignature(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">Include signature block</span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add acceptance signature lines to the cover page</span>
-                </span>
-              </label>
-
-              <label className="flex items-start gap-3 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={proposalIncludeTakeoffList}
-                  onChange={e => setProposalIncludeTakeoffList(e.target.checked)}
-                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">Include takeoff list</span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add a takeoff summary page with quantities and totals</span>
-                </span>
-              </label>
-
-              <label className={`flex items-start gap-3 cursor-pointer group ${!proposalIncludeTakeoffList ? 'opacity-40 pointer-events-none' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={proposalIncludeCostDetail}
-                  onChange={e => setProposalIncludeCostDetail(e.target.checked)}
-                  disabled={!proposalIncludeTakeoffList}
-                  className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
-                />
-                <span>
-                  <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
-                    Include cost detail
-                  </span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Show unit rates and custom cost line items under each takeoff
-                  </span>
-                </span>
-              </label>
-              <div>
-                <label className="flex items-start gap-3 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={proposalIncludeHighlights}
-                    onChange={e => setProposalIncludeHighlights(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 dark:border-slate-600 text-violet-600 focus:ring-violet-500"
-                  />
-                  <span>
-                    <span className="block text-sm font-semibold text-slate-800 dark:text-slate-200">
-                      Append highlighted plans
-                    </span>
-                    <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Add annotated blueprint pages to the end of the PDF
-                    </span>
-                  </span>
-                </label>
-                {proposalIncludeHighlights && (
-                  <div className="mt-3 ml-7">
-                    <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
-                      Blueprint Print Quality
-                    </label>
-                    <select
-                      value={highlightQuality}
-                      onChange={e => setHighlightQuality(e.target.value as HighlightQuality)}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm focus:ring-2 focus:ring-violet-500 outline-none transition-all"
-                    >
-                      {(Object.entries(HIGHLIGHT_QUALITY_PRESETS) as [HighlightQuality, { label: string }][]).map(([k, v]) => (
-                        <option key={k} value={k}>{v.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-              {project.address && (
-                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-lg px-3 py-2">
-                  <MapPin size={13} />
-                  <span>{project.address}</span>
-                </div>
-              )}
-            </div>
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-100 dark:border-slate-700 rounded-b-2xl flex justify-end gap-3 flex-shrink-0">
-              <button
-                onClick={() => setShowProposalModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleGenerateProposal(proposalIncludeCostDetail, proposalIncludeHighlights, proposalHeaderColor, proposalCoverNotes, proposalFontFamily, proposalValidUntil, proposalTerms, proposalIncludeSignature, proposalIncludeTakeoffList)}
-                className="px-5 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shadow-sm flex items-center gap-2"
-              >
-                <FileText size={15} />
-                Generate PDF
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <UploadFailuresModal
         open={showUploadFailuresModal}
