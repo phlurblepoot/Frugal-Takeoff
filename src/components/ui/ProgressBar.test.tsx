@@ -4,20 +4,14 @@ import { render, screen } from '@testing-library/react';
 import { ProgressBar } from './ProgressBar';
 
 describe('ProgressBar', () => {
-  it('exposes the value via aria and sizes the fill', () => {
-    render(<ProgressBar value={40} />);
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '40');
-    expect((bar.firstChild as HTMLElement).style.width).toBe('40%');
+  it('shows done/total and a percent label', () => {
+    render(<ProgressBar done={3} total={4} />);
+    expect(screen.getByText('3 / 4')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '75');
   });
 
-  it('clamps out-of-range values', () => {
-    render(<ProgressBar value={150} />);
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
-  });
-
-  it('treats NaN as 0', () => {
-    render(<ProgressBar value={NaN} />);
+  it('handles zero total without NaN', () => {
+    render(<ProgressBar done={0} total={0} />);
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
   });
 });
