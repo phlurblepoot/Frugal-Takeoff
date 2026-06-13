@@ -10,7 +10,7 @@ import { KeyboardShortcutsModal } from '../components/canvas/KeyboardShortcutsMo
 import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
 import { MeasurementSidebar } from '../components/canvas/MeasurementSidebar';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
