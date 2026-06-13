@@ -174,3 +174,22 @@ describe('migration 9: issues', () => {
     db.close();
   });
 });
+
+describe('migration 10: punch', () => {
+  it('creates punch_items and punch_photos', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    expect(tables).toContain('punch_items');
+    expect(tables).toContain('punch_photos');
+    const itemCols = (db.prepare(`PRAGMA table_info(punch_items)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'projectId', 'area', 'description', 'done', 'sortOrder', 'version', 'createdAt']) {
+      expect(itemCols, `punch_items missing ${c}`).toContain(c);
+    }
+    const phCols = (db.prepare(`PRAGMA table_info(punch_photos)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'punchItemId', 'fileId', 'stage', 'sortOrder', 'createdAt']) {
+      expect(phCols, `punch_photos missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
+});

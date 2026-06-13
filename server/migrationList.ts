@@ -367,4 +367,37 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 10,
+    name: 'punch',
+    up({ db }) {
+      // Punch & Checklists (spec §4.2): project-scoped, area-grouped punch items
+      // with per-area progress and before/during/after photos. Field-created by any
+      // user (not admin-gated, like issues). No numbering, no email — printable only.
+      // Photos are existing files rows linked via punch_photos with a stage.
+      db.exec(`
+        CREATE TABLE punch_items (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          area TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          done INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_punch_items_projectId ON punch_items (projectId);
+
+        CREATE TABLE punch_photos (
+          id TEXT PRIMARY KEY,
+          punchItemId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          stage TEXT NOT NULL DEFAULT 'before',
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_punch_photos_itemId ON punch_photos (punchItemId);
+      `);
+    },
+  },
 ];
