@@ -3,13 +3,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckSquare, Plus, Download, ImageIcon } from 'lucide-react';
 import {
-  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone,
+  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, ProgressBar, Skeleton,
 } from '../../components/ui';
 import { PunchItemEditor } from './punch/PunchItemEditor';
+import { buildPunchPdf } from './punch/punchPdf';
+import { resolveAccentRgb } from './billing/invoicePdf';
+import { useProjectOutlet } from './ProjectLayout';
 
 const UNASSIGNED = 'Unassigned';
 
@@ -17,6 +20,7 @@ interface AreaGroup { area: string; label: string; items: PunchListItem[]; }
 
 export const ProjectPunch: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const { summary } = useProjectOutlet();
   const { toast } = useToast();
   const [items, setItems] = useState<PunchListItem[] | null>(null);
   const [editing, setEditing] = useState<PunchItem | null>(null);
@@ -79,8 +83,24 @@ export const ProjectPunch: React.FC = () => {
     } catch { toast('Failed to create item', { type: 'error' }); }
   };
 
-  const handleDownload = () => {
-    // TODO(Task 10): buildPunchPdf
+  const handleDownload = async () => {
+    try {
+      const projectName = summary?.name || 'project';
+      const settings = await getSettings();
+      let logoDataUrl: string | undefined = settings.logoUrl || undefined;
+      if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
+        const blob = await (await fetch(logoDataUrl)).blob();
+        logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
+      }
+      const doc = buildPunchPdf({
+        items: list.map(i => ({ area: i.area, description: i.description, done: i.done })),
+        projectName,
+        company: { name: settings.appName || 'Punch List', logoDataUrl },
+        photoDataUrls: {}, // text-only v1; param kept so photos can be added later
+        accentRgb: resolveAccentRgb(),
+      });
+      doc.save(`${projectName}-punch-list.pdf`);
+    } catch { toast('Failed to generate report', { type: 'error' }); }
   };
 
   return (
