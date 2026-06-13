@@ -221,6 +221,7 @@ interface Relation {
 const FK_RELATIONS: Relation[] = [
   { child: 'measurements', childCol: 'pageId', parent: 'pages', parentCol: 'id' },
   { child: 'pages', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
+  { child: 'plan_sets', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'takeoffs', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'issues', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'issue_photos', childCol: 'issueId', parent: 'issues', parentCol: 'id' },
