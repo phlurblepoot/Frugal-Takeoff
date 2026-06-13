@@ -21,6 +21,13 @@ import {
   addPhoto, removePhoto,
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
+import {
+  getPunchItem, listPunchItems, createPunchItem, savePunchItem,
+  setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
+  ValidationError as PunchValidationError,
+  ConflictError as PunchConflictError,
+  NotFoundError as PunchNotFoundError,
+} from './punchStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -300,6 +307,56 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.delete('/api/issues/:id/photos/:fileId', authenticateToken, (req, res) => {
     try { removePhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { issueErr(e, res); }
+  });
+
+  // ── Punch & Checklists (any authenticated user — field-created, spec §4.2) ──
+  const punchErr = (e: unknown, res: express.Response) => {
+    if (e instanceof PunchNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof PunchConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof PunchValidationError) return res.status(400).json({ error: e.message });
+    console.error('Punch error:', e);
+    return res.status(500).json({ error: 'Punch operation failed' });
+  };
+
+  app.get('/api/projects/:id/punch', authenticateToken, (req, res) => {
+    try { res.json(listPunchItems(db, req.params.id)); } catch (e) { punchErr(e, res); }
+  });
+  app.post('/api/projects/:id/punch', authenticateToken, (req, res) => {
+    try {
+      const r = createPunchItem(db, req.params.id, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'punch_created', message: `Punch item added${req.body?.area ? ` (${req.body.area})` : ''}: ${req.body?.description ?? ''}` });
+      res.json(r);
+    } catch (e) { punchErr(e, res); }
+  });
+  app.get('/api/punch/:id', authenticateToken, (req, res) => {
+    try { const it = getPunchItem(db, req.params.id); if (!it) return res.status(404).json({ error: 'Punch item not found' }); res.json(it); } catch (e) { punchErr(e, res); }
+  });
+  app.put('/api/punch/:id', authenticateToken, (req, res) => {
+    try { res.json({ success: true, ...savePunchItem(db, req.params.id, req.body) }); } catch (e) { punchErr(e, res); }
+  });
+  app.patch('/api/punch/:id', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.done !== 'boolean') return res.status(400).json({ error: 'done (boolean) is required' });
+      const before = getPunchItem(db, req.params.id);
+      const r = setPunchDone(db, req.params.id, req.body.done);
+      if (req.body.done && before) {
+        logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'punch_done', message: `Punch item done${before.area ? ` (${before.area})` : ''}: ${before.description ?? ''}` });
+      }
+      res.json({ success: true, ...r });
+    } catch (e) { punchErr(e, res); }
+  });
+  app.delete('/api/punch/:id', authenticateToken, (req, res) => {
+    try { deletePunchItem(db, req.params.id); res.json({ success: true }); } catch (e) { punchErr(e, res); }
+  });
+  app.post('/api/punch/:id/photos', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addPunchPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
+      res.json({ success: true });
+    } catch (e) { punchErr(e, res); }
+  });
+  app.delete('/api/punch/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try { removePunchPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { punchErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────

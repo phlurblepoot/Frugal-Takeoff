@@ -593,3 +593,61 @@ describe('issue routes', () => {
     expect((await request(app).patch('/api/issues/nope').send({ status: 'open' })).status).toBe(404);
   });
 });
+
+describe('punch routes', () => {
+  let userApp: express.Express;
+
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+
+    // A second app wired with a non-admin 'user' role — proves punch is NOT admin-gated
+    userApp = express();
+    userApp.use(express.json());
+    registerDataRoutes(userApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+  });
+
+  it('non-admin user CAN POST and GET punch items (not admin-gated)', async () => {
+    const create = await request(userApp).post('/api/projects/p1/punch')
+      .send({ description: 'Touch up paint', area: 'Kitchen' });
+    expect(create.status).toBe(200);
+    expect(create.body.id).toBeTruthy();
+    const list = await request(userApp).get('/api/projects/p1/punch');
+    expect(list.status).toBe(200);
+    expect(list.body.some((item: any) => item.description === 'Touch up paint')).toBe(true);
+  });
+
+  it('PUT with stale version returns 409 with code version_conflict', async () => {
+    const id = (await request(app).post('/api/projects/p1/punch').send({ description: 'Fix door', area: 'Entry' })).body.id;
+    const res = await request(app).put(`/api/punch/${id}`).send({ description: 'Updated', version: 99 });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('version_conflict');
+  });
+
+  it('PATCH with done:true marks item done (200)', async () => {
+    const id = (await request(app).post('/api/projects/p1/punch').send({ description: 'Caulk tub', area: 'Bath' })).body.id;
+    const res = await request(app).patch(`/api/punch/${id}`).send({ done: true });
+    expect(res.status).toBe(200);
+    expect((await request(app).get(`/api/punch/${id}`)).body.done).toBe(1);
+  });
+
+  it('PATCH without done boolean returns 400', async () => {
+    const id = (await request(app).post('/api/projects/p1/punch').send({ description: 'Sand walls' })).body.id;
+    const res = await request(app).patch(`/api/punch/${id}`).send({ area: 'Hall' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/punch/:id/photos links photo; GET shows it; invalid stage → 400', async () => {
+    const id = (await request(app).post('/api/projects/p1/punch').send({ description: 'Install fixture' })).body.id;
+    const add = await request(app).post(`/api/punch/${id}/photos`).send({ fileId: 'f1', stage: 'before' });
+    expect(add.status).toBe(200);
+    const get = await request(app).get(`/api/punch/${id}`);
+    expect(get.body.photos.some((p: any) => p.fileId === 'f1')).toBe(true);
+    const bad = await request(app).post(`/api/punch/${id}/photos`).send({ fileId: 'f2', stage: 'invalid' });
+    expect(bad.status).toBe(400);
+  });
+});
