@@ -1788,6 +1788,7 @@ const CanvasViewInner: React.FC = () => {
               </button>
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
+                data-testid="btn-multi-select-toggle"
                 onClick={() => { setIsMultiSelectMode(m => !m); if (isMultiSelectMode) setMultiSelectedIds(new Set()); }}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${isMultiSelectMode ? 'bg-amber-500 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-amber-600'}`}
                 title="Multi-select (Ctrl+click on desktop)"
@@ -1981,6 +1982,7 @@ const CanvasViewInner: React.FC = () => {
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
                   <input
                     type="checkbox"
+                    data-testid="toggle-current-page-only"
                     checked={showCurrentPageOnly}
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
                     className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
@@ -2005,6 +2007,7 @@ const CanvasViewInner: React.FC = () => {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 type="text"
+                data-testid="measurement-filter"
                 value={measurementFilter}
                 onChange={(e) => setMeasurementFilter(e.target.value)}
                 placeholder="Filter takeoffs & measurements..."
@@ -2044,6 +2047,7 @@ const CanvasViewInner: React.FC = () => {
                     </button>
                     {multiSelectedIds.size >= 2 && (
                       <button
+                        data-testid="btn-merge"
                         onClick={handleMergeSelected}
                         className="text-sm font-semibold bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition-all"
                       >
@@ -2138,6 +2142,7 @@ const CanvasViewInner: React.FC = () => {
                   >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <button
+                        data-testid="takeoff-expand"
                         onClick={(e) => {
                           e.stopPropagation();
                           setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
@@ -2943,6 +2948,7 @@ function MeasurementItem({
           <div className="ml-auto flex items-center gap-3">
             {takeoffType === 'area' && measurement.type === 'length' && (
               <button
+                data-testid="btn-edit-heights"
                 onClick={(e) => { e.stopPropagation(); onEditHeights?.(); }}
                 className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
               >

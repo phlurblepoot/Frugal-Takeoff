@@ -3,6 +3,7 @@ import {
   login,
   seedProjectWithPage,
   seedProjectWithTakeoffMeasurement,
+  seedProjectWithAreaTakeoffLength,
   type LoginResult,
 } from './seed';
 
@@ -44,4 +45,10 @@ export const test = base.extend<Fixtures>({
   },
 });
 
-export { expect, login, seedProjectWithPage, seedProjectWithTakeoffMeasurement };
+export {
+  expect,
+  login,
+  seedProjectWithPage,
+  seedProjectWithTakeoffMeasurement,
+  seedProjectWithAreaTakeoffLength,
+};

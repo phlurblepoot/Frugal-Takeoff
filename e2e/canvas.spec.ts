@@ -1,4 +1,4 @@
-import { test, expect, seedProjectWithPage, login } from './fixtures/test';
+import { test, expect, seedProjectWithPage, seedProjectWithAreaTakeoffLength, login } from './fixtures/test';
 import type { Page } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,8 +140,9 @@ async function calibrate(
  *  to be safe). Requires a scale to already be set (the New button is gated on
  *  page.scaleConfig). */
 async function createTakeoff(page: Page, name: string, type: 'length' | 'area' | 'count') {
-  // The "New" button (Plus) in the sidebar header.
-  await page.getByRole('button', { name: 'New' }).click();
+  // The "New" button (Plus) in the sidebar header. exact:true so it doesn't
+  // also match the per-card "New Measurement" button once a takeoff exists.
+  await page.getByRole('button', { name: 'New', exact: true }).click();
   await expect(page.getByTestId('takeoff-name-input')).toBeVisible();
   await page.getByTestId('takeoff-name-input').fill(name);
   // The "Measurement Type" <select> has no testid; locate by its option set.
@@ -321,6 +322,218 @@ test.describe('CanvasView drawing engine', () => {
     await expect(authedPage.getByTestId('measurement-row')).toHaveCount(0);
 
     await authedPage.getByTestId('btn-redo').click();
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CanvasView — RIGHT-SIDEBAR interaction characterization (Phase 5h Task 2).
+//
+// Locks in the CURRENT behavior of the measurement-sidebar bits that Task 3 will
+// refactor: the measurement filter, the "current page only" toggle, the per-card
+// takeoff expand/collapse chevron, the wall-heights modal, and the multi-select
+// + merge flow. These are characterization tests — they assert what the app
+// ACTUALLY does today (quirks included) and do NOT try to fix it.
+//
+// Selection mechanics relevant here (read from src/components/PdfCanvas.tsx +
+// src/pages/CanvasView.tsx):
+//   • Each takeoff card defaults to EXPANDED (expandedTakeoffs[id] !== false).
+//   • The per-card chevron is [data-testid="takeoff-expand"]; clicking it
+//     toggles only that card's measurement rows.
+//   • "Edit Heights" only renders when a measurement is SELECTED *and* it's a
+//     LENGTH measurement living under an AREA takeoff (takeoffType==='area',
+//     measurement.type==='length'). It opens the "Wall Heights" modal.
+//   • Multi-select: the toolbar [data-testid="btn-multi-select-toggle"] flips
+//     isMultiSelectMode. In that mode, CLICKING a measurement SHAPE on the Konva
+//     canvas toggles it into multiSelectedIds (onMultiSelectToggle). The shapes
+//     only `listening` when NO drawing tool is active, so we switch to tool-pan
+//     before clicking shapes. The merge banner appears once size>0.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Calibrate + create ONE takeoff + draw ONE horizontal length under it.
+ *  Returns the screen coords of the drawn line so callers can click its shape
+ *  (e.g. for multi-select). */
+async function drawLengthUnder(
+  authedPage: Page, box: Box, name: string,
+  x1: number, cy: number, len = 200,
+): Promise<{ midX: number; midY: number }> {
+  await createTakeoff(authedPage, name, 'length');
+  await authedPage.getByTestId('tool-length').click();
+  await clickCanvas(authedPage, box, x1, cy);
+  await clickCanvas(authedPage, box, x1 + len, cy);
+  await authedPage.keyboard.press('Enter');
+  return { midX: x1 + len / 2, midY: cy };
+}
+
+test.describe('CanvasView right-sidebar interactions', () => {
+  // 1: filter narrows the visible takeoffs/measurements; clearing restores all.
+  test('measurement filter shows matching takeoff and hides the rest', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const x1 = box.width / 2 - 200;
+    await calibrate(authedPage, box, [x1, cy], [box.width / 2 + 200, cy], '10');
+
+    // Two differently-named length takeoffs, each with one measurement.
+    await drawLengthUnder(authedPage, box, 'Plumbing', x1, cy - 60);
+    await drawLengthUnder(authedPage, box, 'Electrical', x1, cy + 60);
+
+    const sidebar = authedPage.getByTestId('measurement-sidebar');
+    await expect(sidebar.getByText('Plumbing', { exact: true })).toBeVisible();
+    await expect(sidebar.getByText('Electrical', { exact: true })).toBeVisible();
+
+    // Filter to "Plumb" → only the Plumbing card remains; Electrical is hidden.
+    const filter = authedPage.getByTestId('measurement-filter');
+    await filter.fill('Plumb');
+    await expect(sidebar.getByText('Plumbing', { exact: true })).toBeVisible();
+    await expect(sidebar.getByText('Electrical', { exact: true })).toHaveCount(0);
+
+    // Clear → both return.
+    await filter.fill('');
+    await expect(sidebar.getByText('Plumbing', { exact: true })).toBeVisible();
+    await expect(sidebar.getByText('Electrical', { exact: true })).toBeVisible();
+  });
+
+  // 2: "current page only" toggle flips state; measurements stay visible.
+  // QUIRK: the seed has a single page, so there's no cross-page measurement to
+  // hide — we can only assert the toggle flips and the page's rows remain.
+  test('current-page-only toggle flips and keeps current-page measurements', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const x1 = box.width / 2 - 200;
+    await calibrate(authedPage, box, [x1, cy], [box.width / 2 + 200, cy], '10');
+    await drawLengthUnder(authedPage, box, 'Linear', x1, cy);
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+
+    const toggle = authedPage.getByTestId('toggle-current-page-only');
+    // Default: unchecked (shows all pages' measurements).
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    // The single page's measurement is still present after enabling page-only.
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+    await toggle.uncheck();
+    await expect(toggle).not.toBeChecked();
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+
+  // 3: per-card chevron collapses/expands the takeoff's measurement rows.
+  // QUIRK: cards default to EXPANDED, so the row is visible initially.
+  test('takeoff chevron collapses and re-expands its measurement rows', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const x1 = box.width / 2 - 200;
+    await calibrate(authedPage, box, [x1, cy], [box.width / 2 + 200, cy], '10');
+    await drawLengthUnder(authedPage, box, 'Linear', x1, cy);
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+
+    const chevron = authedPage.getByTestId('takeoff-expand').first();
+    // Collapse → rows hide.
+    await chevron.click();
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(0);
+    // Expand → rows return.
+    await chevron.click();
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+
+  // 4: a LENGTH measurement under an AREA takeoff exposes Edit Heights, which
+  // opens the "Wall Heights" modal; setting a height + saving closes it cleanly.
+  //
+  // QUIRK: there is NO unblocked tool path to create a length-under-area in the
+  // UI — the length tool is DISABLED while an area takeoff is selected
+  // (activeType lock), and an area takeoff's "New Measurement" forces type
+  // 'area'. The only UI route is drag-dropping a length row into an area card
+  // (flaky to drive). We therefore SEED the length-under-area shape and
+  // characterize the Edit Heights button + modal from there.
+  test('edit-heights opens the Wall Heights modal and saves', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithAreaTakeoffLength(request, token);
+    await gotoCanvas(authedPage, projectId, pageId);
+
+    const row = authedPage.getByTestId('measurement-row').first();
+    await expect(row).toBeVisible();
+    // Select the row so the Edit Heights affordance renders.
+    await row.click();
+
+    const editHeights = authedPage.getByTestId('btn-edit-heights');
+    await expect(editHeights).toBeVisible();
+    await editHeights.click();
+
+    // The Wall Heights modal opens.
+    await expect(authedPage.getByText('Wall Heights')).toBeVisible();
+    // Set a global height and save.
+    await authedPage.getByPlaceholder('Height').first().fill('8');
+    await authedPage.getByRole('button', { name: 'Save Heights' }).click();
+    // Modal closes; no crash; the row survives.
+    await expect(authedPage.getByText('Wall Heights')).toHaveCount(0);
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+
+  // 5: multi-select mode + merge. Enable the mode, click two length SHAPES on
+  // the canvas (tool must be pan so shapes `listening`), assert the merge banner
+  // counts 2, then Merge → the two rows collapse into one.
+  test('multi-select enables banner and merge collapses two measurements', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const x1 = box.width / 2 - 200;
+    await calibrate(authedPage, box, [x1, cy], [box.width / 2 + 200, cy], '10');
+
+    // Two SEPARATE length measurements under one takeoff. QUIRK: finalizeSegment
+    // APPENDS to the currently-selected same-type measurement instead of making a
+    // new one (PdfCanvas canAppend path). So after the first line we press Escape
+    // to clear the measurement selection (keeps the takeoff selected, so the
+    // length tool stays enabled) before drawing the second line.
+    await createTakeoff(authedPage, 'Linear', 'length');
+    await authedPage.getByTestId('tool-length').click();
+    await clickCanvas(authedPage, box, x1, cy - 60);
+    await clickCanvas(authedPage, box, x1 + 200, cy - 60);
+    await authedPage.keyboard.press('Enter');
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+
+    await authedPage.keyboard.press('Escape'); // clear measurement selection
+    await authedPage.getByTestId('tool-length').click();
+    await clickCanvas(authedPage, box, x1, cy + 60);
+    await clickCanvas(authedPage, box, x1 + 200, cy + 60);
+    await authedPage.keyboard.press('Enter');
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(2);
+
+    // Switch to pan so measurement shapes start `listening`, then enable
+    // multi-select mode.
+    await authedPage.getByTestId('tool-pan').click();
+    await authedPage.getByTestId('btn-multi-select-toggle').click();
+
+    // Click each line's midpoint on the canvas to add it to the selection.
+    await clickCanvas(authedPage, box, x1 + 100, cy - 60);
+    await clickCanvas(authedPage, box, x1 + 100, cy + 60);
+
+    // Merge banner shows the count.
+    const sidebar = authedPage.getByTestId('measurement-sidebar');
+    await expect(sidebar.getByText('2 selected')).toBeVisible();
+
+    // Merge folds the source measurement's segments into the target and then
+    // DELETES the source. QUIRK: handleMergeSelected calls deleteMeasurement,
+    // which opens the standard delete-CONFIRM dialog rather than deleting
+    // outright — so the merge isn't truly done until we confirm.
+    await authedPage.getByTestId('btn-merge').click();
+    await expect(authedPage.getByTestId('btn-confirm-delete')).toBeVisible();
+    await authedPage.getByTestId('btn-confirm-delete').click();
+
+    // After confirming, the two measurements have collapsed into one.
     await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
   });
 });

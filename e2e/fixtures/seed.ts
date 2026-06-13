@@ -116,6 +116,91 @@ export interface SeedWithTakeoffResult extends SeedResult {
  * The seeded takeoff renders as a row on the Takeoffs tab, so the spec can
  * select it (its checkbox) and trigger Print/Excel with no UI takeoff creation.
  */
+/**
+ * Seed a project whose single page carries an AREA takeoff containing a LENGTH
+ * measurement. This is the exact shape that surfaces the "Edit Heights"
+ * affordance in the sidebar (MeasurementItem renders it only when
+ * takeoffType==='area' AND measurement.type==='length' — i.e. a wall whose
+ * surface area = length × height). The normal UI path to create this is a
+ * drag-drop of a length measurement into an area takeoff card, which is flaky to
+ * drive via Playwright; seeding it directly lets the Heights-modal spec stay
+ * deterministic.
+ */
+export async function seedProjectWithAreaTakeoffLength(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedWithTakeoffResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+
+  const projectId = randomUUID();
+  const pageId = randomUUID();
+  const imageId = randomUUID();
+  const takeoffId = randomUUID();
+  const measurementId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Heights Project ${short}`;
+  const takeoffName = `Wall Surface ${short}`;
+
+  const base64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const dataUrl = `data:image/png;base64,${base64}`;
+  const imgRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: imageId, data: dataUrl },
+  });
+  if (!imgRes.ok()) {
+    throw new Error(`image upload failed: ${imgRes.status()} ${await imgRes.text()}`);
+  }
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [
+      {
+        id: takeoffId,
+        name: takeoffName,
+        color: '#10b981',
+        type: 'area',
+        unit: 'ft',
+      },
+    ],
+    pages: [
+      {
+        id: pageId,
+        name: 'Sheet 1',
+        imageId,
+        imageWidth: 1000,
+        imageHeight: 800,
+        measurements: [
+          {
+            id: measurementId,
+            type: 'length',
+            name: 'Wall A',
+            color: '#10b981',
+            takeoffId,
+            points: [
+              { x: 100, y: 100 },
+              { x: 400, y: 100 },
+            ],
+          },
+        ],
+        scaleConfig: { pixelDistance: 100, realWorldDistance: 10, unit: 'ft' },
+      },
+    ],
+    version: 1,
+    status: 'estimating',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, pageId, imageId, name, takeoffId, takeoffName, measurementId };
+}
+
 export async function seedProjectWithTakeoffMeasurement(
   request: APIRequestContext,
   token: string,
