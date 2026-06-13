@@ -451,6 +451,8 @@ export interface ProjectSummary {
   takeoffCount: number;
   pageIds: string[];
   openIssueCount: number;
+  punchDone: number;
+  punchTotal: number;
   contractValueCents?: number;
   invoiceCount?: number;
 }
@@ -825,4 +827,55 @@ export const removeIssuePhoto = async (issueId: string, fileId: string): Promise
 };
 export const sendIssue = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
+};
+
+// ── Phase 4c: punch list ──────────────────────────────────────────────────────
+
+export interface PunchPhoto { id: string; fileId: string; stage: string; sortOrder: number; }
+export interface PunchItem {
+  id: string; projectId: string; area: string; description: string;
+  done: number; sortOrder: number; version: number; createdAt: number;
+  photos: PunchPhoto[];
+}
+export interface PunchListItem {
+  id: string; projectId: string; area: string; description: string;
+  done: number; sortOrder: number; version: number; createdAt: number;
+  photoCount: number;
+}
+
+const punchJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getPunchItems = async (projectId: string): Promise<PunchListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/punch`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getPunchItem = async (id: string): Promise<PunchItem> => {
+  const res = await fetchWithRetry(`/api/punch/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createPunchItem = async (projectId: string, input: { area: string; description: string }): Promise<{ id: string }> => {
+  const res = await punchJson('POST', `/api/projects/${projectId}/punch`, input);
+  await handleResponse(res); return res.json();
+};
+export const savePunchItem = async (id: string, item: PunchItem): Promise<{ version: number }> => {
+  const res = await punchJson('PUT', `/api/punch/${id}`, { area: item.area, description: item.description, version: item.version });
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setPunchDone = async (id: string, done: number): Promise<void> => {
+  const res = await punchJson('PATCH', `/api/punch/${id}`, { done }); await handleResponse(res);
+};
+export const deletePunchItem = async (id: string): Promise<void> => {
+  const res = await punchJson('DELETE', `/api/punch/${id}`); await handleResponse(res);
+};
+export const addPunchPhoto = async (itemId: string, fileId: string, stage: string): Promise<void> => {
+  const res = await punchJson('POST', `/api/punch/${itemId}/photos`, { fileId, stage }); await handleResponse(res);
+};
+export const removePunchPhoto = async (itemId: string, fileId: string): Promise<void> => {
+  const res = await punchJson('DELETE', `/api/punch/${itemId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
