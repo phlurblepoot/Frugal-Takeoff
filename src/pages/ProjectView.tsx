@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'reac
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight, ChevronUp, Edit2, Check, X, Loader2, Upload, Search, Printer, Download, Eye, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Link as LinkIcon, Mail, Send, RefreshCw, LayoutGrid, List, Star, HardDrive, Layers, History, GitCompare, Copy } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, deleteFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, sendProjectProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, formatRealValue, calculateSurfaceAreaPx, convertUnit, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
+import { formatRealValue, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
 import { PlanSetManager } from '../components/PlanSetManager';
@@ -31,6 +31,7 @@ import { ProjectStageControl } from '../components/ProjectStageControl';
 import { CustomCostRow } from '../components/CustomCostRow';
 import {
   buildHighlightsPdf,
+  computeTakeoffTotals,
   generateProposalPdf,
   getProposalPrefsKey,
   HIGHLIGHT_QUALITY_PRESETS,
@@ -1838,99 +1839,11 @@ export const ProjectView: React.FC = () => {
   // Calculate totals for takeoffs. Only the current revision of each sheet (for
   // the selected plan set) counts, so measurements stranded on superseded
   // sheets don't inflate the totals.
+  // Single shared implementation lives in proposalGenerator.computeTakeoffTotals;
+  // ProjectView and the /proposal section both call it so totals never diverge.
   const getTakeoffTotals = () => {
     if (!project) return [];
-
-    const pagesToCalculate = project.pages.filter(p => revisionModel.currentPageIds.has(p.id));
-
-    return project.takeoffs.map(takeoff => {
-      let totalRealValue = 0;
-      let displayUnit = takeoff.unit || '';
-
-      const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string; measurements: { id: string; name: string; realValue: number; unit: string }[] }[] = [];
-
-      pagesToCalculate.forEach(page => {
-        const takeoffMeasurements = page.measurements.filter(m => m.takeoffId === takeoff.id);
-
-        if (takeoffMeasurements.length > 0) {
-          let pageRealValue = 0;
-          let pageUnit = '';
-          const measurementBreakdown: { id: string; name: string; realValue: number; unit: string }[] = [];
-
-          takeoffMeasurements.forEach(m => {
-            // Determine which scale to use
-            let currentScale = page.scaleConfig;
-            if (page.isMultiRegion && m.regionId) {
-              const region = page.scaleRegions?.find(r => r.id === m.regionId);
-              if (region?.scaleConfig) {
-                currentScale = region.scaleConfig;
-              }
-            }
-
-            let measurementRealValue = 0;
-            let measurementUnit = '';
-
-            if (takeoff.type === 'count') {
-              measurementRealValue = 1;
-              measurementUnit = 'each';
-            } else if (currentScale) {
-              const allMPtsTotals = [m.points, ...(m.segments ?? []).map(s => s.points)];
-              let pixelValue = 0;
-              if (takeoff.type === 'length' && m.type === 'length') {
-                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-              } else if (takeoff.type === 'area' && m.type === 'area') {
-                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
-              } else if (takeoff.type === 'area' && m.type === 'length') {
-                pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
-              }
-
-              if (pixelValue > 0) {
-                const realVal = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
-
-                // Convert to a consistent unit
-                // If takeoff has a specific unit, use that. Otherwise use page scale unit.
-                const targetUnit = takeoff.unit || page.scaleConfig?.unit || currentScale.unit;
-                const convertedVal = convertUnit(realVal, currentScale.unit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
-
-                measurementRealValue = convertedVal;
-                measurementUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
-              }
-            }
-
-            if (measurementRealValue > 0) {
-              pageRealValue += measurementRealValue;
-              pageUnit = measurementUnit;
-              measurementBreakdown.push({
-                id: m.id,
-                name: m.name,
-                realValue: measurementRealValue,
-                unit: measurementUnit,
-              });
-            }
-          });
-
-          if (pageRealValue > 0) {
-            totalRealValue += pageRealValue;
-            if (!displayUnit) displayUnit = pageUnit;
-
-            pageBreakdown.push({
-              pageId: page.id,
-              pageName: page.name,
-              realValue: pageRealValue,
-              unit: pageUnit,
-              measurements: measurementBreakdown,
-            });
-          }
-        }
-      });
-
-      return {
-        ...takeoff,
-        totalRealValue,
-        unit: takeoff.unit || displayUnit, // Keep the original unit if it was set, otherwise use the detected one
-        pageBreakdown
-      };
-    });
+    return computeTakeoffTotals(project, revisionModel.currentPageIds);
   };
 
   const handleSaveDueDate = async () => {

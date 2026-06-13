@@ -429,6 +429,107 @@ export type TakeoffTotals = MeasurementTakeoff & {
   }[];
 };
 
+// Pure per-takeoff totals computation. Extracted verbatim from ProjectView's
+// getTakeoffTotals() so both the legacy modal and the new /proposal section
+// share ONE implementation. Only the current revision of each sheet counts —
+// the caller passes `currentPageIds` (from computeRevisionModel) so that
+// measurements stranded on superseded sheets don't inflate the totals.
+export function computeTakeoffTotals(
+  project: Project,
+  currentPageIds: Set<string>,
+): TakeoffTotals[] {
+  const pagesToCalculate = project.pages.filter(p => currentPageIds.has(p.id));
+
+  return project.takeoffs.map(takeoff => {
+    let totalRealValue = 0;
+    let displayUnit = takeoff.unit || '';
+
+    const pageBreakdown: { pageId: string; pageName: string; realValue: number; unit: string; measurements: { id: string; name: string; realValue: number; unit: string }[] }[] = [];
+
+    pagesToCalculate.forEach(page => {
+      const takeoffMeasurements = page.measurements.filter(m => m.takeoffId === takeoff.id);
+
+      if (takeoffMeasurements.length > 0) {
+        let pageRealValue = 0;
+        let pageUnit = '';
+        const measurementBreakdown: { id: string; name: string; realValue: number; unit: string }[] = [];
+
+        takeoffMeasurements.forEach(m => {
+          // Determine which scale to use
+          let currentScale = page.scaleConfig;
+          if (page.isMultiRegion && m.regionId) {
+            const region = page.scaleRegions?.find(r => r.id === m.regionId);
+            if (region?.scaleConfig) {
+              currentScale = region.scaleConfig;
+            }
+          }
+
+          let measurementRealValue = 0;
+          let measurementUnit = '';
+
+          if (takeoff.type === 'count') {
+            measurementRealValue = 1;
+            measurementUnit = 'each';
+          } else if (currentScale) {
+            const allMPtsTotals = [m.points, ...(m.segments ?? []).map(s => s.points)];
+            let pixelValue = 0;
+            if (takeoff.type === 'length' && m.type === 'length') {
+              pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
+            } else if (takeoff.type === 'area' && m.type === 'area') {
+              pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+            } else if (takeoff.type === 'area' && m.type === 'length') {
+              pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
+            }
+
+            if (pixelValue > 0) {
+              const realVal = calculateRealValue(pixelValue, takeoff.type as 'length' | 'area' | 'count', currentScale);
+
+              // Convert to a consistent unit
+              // If takeoff has a specific unit, use that. Otherwise use page scale unit.
+              const targetUnit = takeoff.unit || page.scaleConfig?.unit || currentScale.unit;
+              const convertedVal = convertUnit(realVal, currentScale.unit, targetUnit.replace('sq ', ''), takeoff.type as 'length' | 'area' | 'count');
+
+              measurementRealValue = convertedVal;
+              measurementUnit = targetUnit.startsWith('sq ') ? targetUnit : (takeoff.type === 'area' && !targetUnit.startsWith('sq ') ? `sq ${targetUnit}` : targetUnit);
+            }
+          }
+
+          if (measurementRealValue > 0) {
+            pageRealValue += measurementRealValue;
+            pageUnit = measurementUnit;
+            measurementBreakdown.push({
+              id: m.id,
+              name: m.name,
+              realValue: measurementRealValue,
+              unit: measurementUnit,
+            });
+          }
+        });
+
+        if (pageRealValue > 0) {
+          totalRealValue += pageRealValue;
+          if (!displayUnit) displayUnit = pageUnit;
+
+          pageBreakdown.push({
+            pageId: page.id,
+            pageName: page.name,
+            realValue: pageRealValue,
+            unit: pageUnit,
+            measurements: measurementBreakdown,
+          });
+        }
+      }
+    });
+
+    return {
+      ...takeoff,
+      totalRealValue,
+      unit: takeoff.unit || displayUnit, // Keep the original unit if it was set, otherwise use the detected one
+      pageBreakdown,
+    };
+  });
+}
+
 export interface ProposalOptions {
   includeCostDetail: boolean; includeHighlights: boolean;
   headerColor: string; coverNotes: string;

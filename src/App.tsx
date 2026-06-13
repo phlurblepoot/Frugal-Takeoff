@@ -14,6 +14,7 @@ import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectPunch } from './pages/project/ProjectPunch';
+import { ProjectProposal } from './pages/project/ProjectProposal';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
@@ -111,6 +112,7 @@ export default function App() {
           children: [
             { index: true, element: <ProjectOverview /> },
             { path: 'takeoff', element: <ProjectView /> },
+            { path: 'proposal', element: <ProjectProposal /> },
             { path: 'documents', element: <ProjectDocuments /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },
