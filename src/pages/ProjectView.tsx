@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'reac
 import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronRight, Edit2, Loader2, Upload, Printer, FileText, Hash, ZoomIn, ZoomOut, Maximize, FileSpreadsheet, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, Copy, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
-import { formatRealValue, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
+import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
@@ -28,7 +28,6 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useShareLink } from '../components/ShareLinkModal';
 import { Skeleton } from '../components/Skeleton';
 import { ProjectStageControl } from '../components/ProjectStageControl';
-import { CustomCostRow } from '../components/CustomCostRow';
 import {
   buildHighlightsPdf,
   computeTakeoffTotals,
@@ -37,6 +36,8 @@ import {
 } from './project/proposal/proposalGenerator';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
+import { TakeoffEditModal } from './project/TakeoffEditModal';
+import { TakeoffDeleteModals } from './project/TakeoffDeleteModals';
 
 // Renders `text` with the first case-insensitive occurrence of `term` wrapped
 // in <mark> so search hits visibly pop out of page titles and snippets. No
@@ -2499,64 +2500,14 @@ export const ProjectView: React.FC = () => {
         )}
       </div>
 
-      {showDeleteAllConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900 text-red-600">Delete All Takeoffs</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-slate-600">
-                Are you sure you want to delete ALL takeoffs in this project? This will ungroup all measurements. This action is permanent and cannot be undone.
-              </p>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-              <button
-                onClick={() => setShowDeleteAllConfirm(false)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeleteAllTakeoffs}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
-              >
-                Delete All
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Delete Takeoff</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-slate-600">
-                Are you sure you want to delete this takeoff? All measurements associated with it will be ungrouped. This action cannot be undone.
-              </p>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-              <button
-                onClick={() => { setShowDeleteConfirm(false); setTakeoffToDelete(null); }}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                data-testid="btn-confirm-delete"
-                onClick={confirmDeleteTakeoff}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
-              >
-                Delete Takeoff
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <TakeoffDeleteModals
+        showDeleteAllConfirm={showDeleteAllConfirm}
+        onConfirmDeleteAll={confirmDeleteAllTakeoffs}
+        onCloseDeleteAll={() => setShowDeleteAllConfirm(false)}
+        showDeleteConfirm={showDeleteConfirm}
+        onConfirmDelete={confirmDeleteTakeoff}
+        onCloseDelete={() => { setShowDeleteConfirm(false); setTakeoffToDelete(null); }}
+      />
 
       <NewTakeoffModal
         open={showTakeoffModal}
@@ -2575,182 +2526,26 @@ export const ProjectView: React.FC = () => {
       />
 
       {editingTakeoff && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Edit Measurement Takeoff</h3>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
-                <input
-                  data-testid="edit-takeoff-name"
-                  type="text"
-                  value={editTakeoffName}
-                  onChange={(e) => setEditTakeoffName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                  placeholder="e.g. Hardwood Flooring"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Price Package <span className="text-slate-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  type="text"
-                  list="price-package-options-edit"
-                  value={editTakeoffPricePackage}
-                  onChange={(e) => setEditTakeoffPricePackage(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                  placeholder="e.g. Flooring Package"
-                />
-                <datalist id="price-package-options-edit">
-                  {Array.from(new Set(project.takeoffs.map(t => t.pricePackage).filter(Boolean))).map(pkg => (
-                    <option key={pkg} value={pkg} />
-                  ))}
-                </datalist>
-                <p className="mt-1 text-xs text-slate-400">Takeoffs with the same package name are grouped together.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Measurement Type</label>
-                  <input
-                    type="text"
-                    value={editingTakeoff.type}
-                    disabled
-                    className="w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-slate-50 text-slate-500 capitalize"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Color</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={editTakeoffColor}
-                      onChange={(e) => setEditTakeoffColor(e.target.value)}
-                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 p-1"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Unit</label>
-                  <select
-                    value={editTakeoffUnit}
-                    onChange={(e) => setEditTakeoffUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
-                  >
-                    <option value="">Default (Scale Unit)</option>
-                    {editingTakeoff.type === 'length' && (
-                      <>
-                        <option value="in">Inches (in)</option>
-                        <option value="ft">Feet (ft)</option>
-                        <option value="yd">Yards (yd)</option>
-                        <option value="cm">Centimeters (cm)</option>
-                        <option value="m">Meters (m)</option>
-                      </>
-                    )}
-                    {editingTakeoff.type === 'area' && (
-                      <>
-                        <option value="sqin">Square Inches (sq in)</option>
-                        <option value="sqft">Square Feet (sq ft)</option>
-                        <option value="sqyd">Square Yards (sq yd)</option>
-                        <option value="sqcm">Square Centimeters (sq cm)</option>
-                        <option value="sqm">Square Meters (sq m)</option>
-                      </>
-                    )}
-                    {editingTakeoff.type === 'count' && (
-                      <option value="each">Each</option>
-                    )}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    disabled={isEditTakeoffAdvanced}
-                    value={isEditTakeoffAdvanced ? '' : editTakeoffCostPerUnit}
-                    onChange={(e) => setEditTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-slate-50 disabled:text-slate-400"
-                    placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 py-2">
-                <input
-                  data-testid="toggle-advanced-cost"
-                  type="checkbox"
-                  id="isEditTakeoffAdvanced"
-                  checked={isEditTakeoffAdvanced}
-                  onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
-                  className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
-                />
-                <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
-                  Advanced Costing (Custom Items)
-                </label>
-              </div>
-
-              {isEditTakeoffAdvanced && (
-                <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
-                    <button
-                      onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
-                      className="text-accent-600 hover:text-accent-700 p-1 rounded-full hover:bg-accent-50 transition-colors"
-                      title="Add Cost Item"
-                    >
-                      <Plus size={16} />
-                    </button>
-                  </div>
-                  
-                  {editTakeoffCustomCosts.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {editTakeoffCustomCosts.map((item, index) => (
-                        <CustomCostRow
-                          key={item.id}
-                          item={item}
-                          index={index}
-                          unitLabel={UNIT_LABELS[editTakeoffUnit] || editTakeoffUnit || (editingTakeoff?.type === 'area' ? 'sq ft' : editingTakeoff?.type === 'length' ? 'ft' : 'ea')}
-                          onChange={(idx, updated) => {
-                            const newCosts = [...editTakeoffCustomCosts];
-                            newCosts[idx] = updated;
-                            setEditTakeoffCustomCosts(newCosts);
-                          }}
-                          onRemove={(idx) => {
-                            setEditTakeoffCustomCosts(editTakeoffCustomCosts.filter((_, i) => i !== idx));
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-              <button
-                onClick={() => setEditingTakeoff(null)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                data-testid="btn-save-takeoff"
-                onClick={handleSaveEditTakeoff}
-                disabled={!editTakeoffName}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
-              >
-                Save Changes
-              </button>
-            </div>
-          </div>
-        </div>
+        <TakeoffEditModal
+          editingTakeoff={editingTakeoff}
+          editTakeoffName={editTakeoffName}
+          setEditTakeoffName={setEditTakeoffName}
+          editTakeoffColor={editTakeoffColor}
+          setEditTakeoffColor={setEditTakeoffColor}
+          editTakeoffUnit={editTakeoffUnit}
+          setEditTakeoffUnit={setEditTakeoffUnit}
+          editTakeoffCostPerUnit={editTakeoffCostPerUnit}
+          setEditTakeoffCostPerUnit={setEditTakeoffCostPerUnit}
+          isEditTakeoffAdvanced={isEditTakeoffAdvanced}
+          setIsEditTakeoffAdvanced={setIsEditTakeoffAdvanced}
+          editTakeoffCustomCosts={editTakeoffCustomCosts}
+          setEditTakeoffCustomCosts={setEditTakeoffCustomCosts}
+          editTakeoffPricePackage={editTakeoffPricePackage}
+          setEditTakeoffPricePackage={setEditTakeoffPricePackage}
+          pricePackageOptions={project.takeoffs.map(t => t.pricePackage)}
+          onSave={handleSaveEditTakeoff}
+          onClose={() => setEditingTakeoff(null)}
+        />
       )}
 
       {showManagePlanSets && project && (
