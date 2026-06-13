@@ -261,3 +261,32 @@ describe('migration 11: tasks', () => {
     db.close();
   });
 });
+
+describe('migration 12: aia-billing', () => {
+  it('creates aia_sov_lines, aia_pay_apps, aia_pay_app_lines', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    for (const t of ['aia_sov_lines', 'aia_pay_apps', 'aia_pay_app_lines']) {
+      expect(tables, `missing ${t}`).toContain(t);
+    }
+    const sovCols = columnNames(db, 'aia_sov_lines');
+    for (const c of ['id', 'projectId', 'itemNo', 'description', 'scheduledValueCents',
+                     'retainagePercent', 'isChangeOrder', 'changeOrderId', 'sortOrder',
+                     'version', 'createdAt']) {
+      expect(sovCols, `aia_sov_lines missing ${c}`).toContain(c);
+    }
+    const appCols = columnNames(db, 'aia_pay_apps');
+    for (const c of ['id', 'projectId', 'number', 'periodTo', 'applicationDate',
+                     'retainagePercent', 'storedRetainagePercent', 'status',
+                     'version', 'createdAt']) {
+      expect(appCols, `aia_pay_apps missing ${c}`).toContain(c);
+    }
+    const lineCols = columnNames(db, 'aia_pay_app_lines');
+    for (const c of ['id', 'payAppId', 'sovLineId', 'percentComplete',
+                     'storedMaterialsCents', 'createdAt']) {
+      expect(lineCols, `aia_pay_app_lines missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
+});

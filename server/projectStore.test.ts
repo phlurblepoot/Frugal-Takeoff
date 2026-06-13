@@ -157,6 +157,27 @@ describe('saveProject', () => {
     expect(() => saveProject(db, 'proj1', { ...p, name: 42 })).toThrow(ValidationError);
   });
 
+  it('round-trips an aiaSettings object through the meta column', () => {
+    const aiaSettings = {
+      billingMode: 'aia',
+      retainagePercent: 10,
+      storedRetainagePercent: 10,
+      ownerName: 'City of Springfield',
+      ownerAddress: '100 Main St',
+      architectName: 'Wright & Assoc',
+      architectAddress: '200 Oak Ave',
+      contractDate: '2024-03-01',
+      ownerProjectNumber: 'OPN-42',
+      architectProjectNumber: 'APN-7',
+      contractFor: 'General Construction',
+    };
+    const p = loadProject(db, 'proj1')!;
+    p.aiaSettings = aiaSettings;
+    saveProject(db, 'proj1', p);
+    const reloaded = loadProject(db, 'proj1')!;
+    expect(reloaded.aiaSettings).toEqual(aiaSettings);
+  });
+
   it('never touches the files table on save', () => {
     const before = db.prepare('SELECT COUNT(*) as c FROM files').get() as any;
     const p = loadProject(db, 'proj1')!;
@@ -197,5 +218,16 @@ describe('createProject / listProjects / deleteProject', () => {
       expect((db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
     }
     expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+  });
+
+  it('delete cascades AIA billing rows', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    db.prepare(`INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, sortOrder, version, createdAt) VALUES ('sov1', 'proj1', 'Line', 100000, 0, 1, 1)`).run();
+    db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'proj1', 1, 'draft', 1, 1)`).run();
+    db.prepare(`INSERT INTO aia_pay_app_lines (id, payAppId, sovLineId, percentComplete, storedMaterialsCents, createdAt) VALUES ('pl1', 'app1', 'sov1', 50, 0, 1)`).run();
+    deleteProject(db, dir, 'proj1');
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_sov_lines WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_apps WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_app_lines WHERE id = 'pl1'`).get() as any).c).toBe(0);
   });
 });

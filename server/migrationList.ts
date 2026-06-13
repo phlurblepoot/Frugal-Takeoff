@@ -486,4 +486,54 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 12,
+    name: 'aia-billing',
+    up({ db }) {
+      // AIA progress billing (G702/G703): per-project Schedule of Values, a monthly
+      // sequence of pay applications, and per-line progress. Money in INTEGER CENTS.
+      // Additive — no data transform. (Phase 7, building on spec §3.2's anticipated
+      // schedule_of_values / pay_applications.)
+      db.exec(`
+        CREATE TABLE aia_sov_lines (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          itemNo TEXT,
+          description TEXT NOT NULL DEFAULT '',
+          scheduledValueCents INTEGER NOT NULL DEFAULT 0,
+          retainagePercent REAL,
+          isChangeOrder INTEGER NOT NULL DEFAULT 0,
+          changeOrderId TEXT,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_aia_sov_projectId ON aia_sov_lines (projectId);
+
+        CREATE TABLE aia_pay_apps (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          periodTo TEXT,
+          applicationDate TEXT,
+          retainagePercent REAL NOT NULL DEFAULT 10,
+          storedRetainagePercent REAL NOT NULL DEFAULT 10,
+          status TEXT NOT NULL DEFAULT 'draft',
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_aia_pay_apps_projectId ON aia_pay_apps (projectId);
+
+        CREATE TABLE aia_pay_app_lines (
+          id TEXT PRIMARY KEY,
+          payAppId TEXT NOT NULL,
+          sovLineId TEXT NOT NULL,
+          percentComplete REAL NOT NULL DEFAULT 0,
+          storedMaterialsCents INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_aia_pay_app_lines_payAppId ON aia_pay_app_lines (payAppId);
+      `);
+    },
+  },
 ];
