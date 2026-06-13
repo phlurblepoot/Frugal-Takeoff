@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
+  AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -60,6 +61,11 @@ export const CommandPalette: React.FC = () => {
   // only the modifier-based palette shortcut is active there.
   const onCanvas = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
 
+  // Project context: when inside a project, the palette offers contextual actions.
+  const projMatch = matchPath('/project/:projectId/*', location.pathname) || matchPath('/project/:projectId', location.pathname);
+  const projectId = projMatch?.params?.projectId as string | undefined;
+  const isAdmin = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; } })();
+
   const close = useCallback(() => { setOpen(false); setQuery(''); setResults([]); setSelected(0); }, []);
 
   const staticActions: Action[] = useMemo(() => [
@@ -87,6 +93,33 @@ export const CommandPalette: React.FC = () => {
     },
   ], [navigate, toast]);
 
+  // Contextual actions: surfaced only when the user is inside a project.
+  const contextualActions: Action[] = useMemo(() => {
+    if (!projectId) return [];
+    const actions: Action[] = [
+      { id: 'ctx:new-issue', type: 'action' as const, title: 'New issue', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues?new=1`) },
+      { id: 'ctx:new-punch', type: 'action' as const, title: 'New punch item', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch?new=1`) },
+      { id: 'ctx:new-task', type: 'action' as const, title: 'New task', subtitle: 'Project', icon: <ListTodo size={16} />, run: () => navigate('/tasks?new=1') },
+      { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
+      { id: 'ctx:overview', type: 'action' as const, title: 'Project overview', subtitle: 'Project', icon: <LayoutGrid size={16} />, run: () => navigate(`/project/${projectId}`) },
+      { id: 'ctx:takeoff', type: 'action' as const, title: 'Takeoff & estimate', subtitle: 'Project', icon: <Ruler size={16} />, run: () => navigate(`/project/${projectId}/takeoff`) },
+      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/project/${projectId}/documents`) },
+      { id: 'ctx:punch', type: 'action' as const, title: 'Punch & checklists', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch`) },
+      { id: 'ctx:issues', type: 'action' as const, title: 'Issues', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues`) },
+      { id: 'ctx:time', type: 'action' as const, title: 'Time', subtitle: 'Project', icon: <Clock size={16} />, run: () => navigate(`/project/${projectId}/time`) },
+      { id: 'ctx:notes', type: 'action' as const, title: 'Notes', subtitle: 'Project', icon: <StickyNote size={16} />, run: () => navigate(`/project/${projectId}/notes`) },
+    ];
+    if (isAdmin) {
+      actions.push(
+        { id: 'ctx:billing', type: 'action' as const, title: 'Billing', subtitle: 'Project', icon: <DollarSign size={16} />, run: () => navigate(`/project/${projectId}/billing`) },
+        { id: 'ctx:settings', type: 'action' as const, title: 'Project settings', subtitle: 'Project', icon: <SlidersHorizontal size={16} />, run: () => navigate(`/project/${projectId}/settings`) },
+      );
+    }
+    return actions;
+  }, [projectId, isAdmin, navigate]);
+
+  const allActions = useMemo(() => [...contextualActions, ...staticActions], [contextualActions, staticActions]);
+
   // Debounced search.
   useEffect(() => {
     if (!open) return;
@@ -109,9 +142,9 @@ export const CommandPalette: React.FC = () => {
 
   const filteredActions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return staticActions;
-    return staticActions.filter(a => a.title.toLowerCase().includes(q));
-  }, [staticActions, query]);
+    if (!q) return allActions;
+    return allActions.filter(a => a.title.toLowerCase().includes(q));
+  }, [allActions, query]);
 
   const items: Item[] = useMemo(
     () => [...filteredActions, ...results.map(r => ({ ...r, icon: typeIcon(r.type) }))],
