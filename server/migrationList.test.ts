@@ -193,3 +193,71 @@ describe('migration 10: punch', () => {
     db.close();
   });
 });
+
+describe('migration 11: tasks', () => {
+  it('creates tasks and task_photos', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    expect(tables).toContain('tasks');
+    expect(tables).toContain('task_photos');
+    const taskCols = (db.prepare(`PRAGMA table_info(tasks)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'category', 'title', 'notes', 'assigneeUserId', 'status',
+                     'dueDate', 'sortOrder', 'version', 'createdAt', 'createdBy']) {
+      expect(taskCols, `tasks missing ${c}`).toContain(c);
+    }
+    const phCols = (db.prepare(`PRAGMA table_info(task_photos)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'taskId', 'fileId', 'stage', 'sortOrder', 'createdAt']) {
+      expect(phCols, `task_photos missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
+
+  it('imports legacy checklists into tasks', () => {
+    const db = openDb(':memory:');
+    // migrate through v10 so the legacy `checklists` table exists but v11 hasn't run
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 10));
+    db.prepare('INSERT INTO checklists (id, data, createdAt) VALUES (?, ?, ?)').run(
+      'cl1',
+      JSON.stringify({
+        id: 'cl1', name: 'Shop Punchout', createdAt: 1000,
+        items: [
+          { id: 'it1', description: 'Fix door', location: 'Bay 2', done: true, order: 0, comments: 'use shims',
+            beforePhotoIds: ['pa'], inProgressPhotoIds: [], afterPhotoIds: ['pb'], createdAt: 1001 },
+          { id: 'it2', description: 'Sweep', location: '', done: false, order: 1, createdAt: 1002 },
+        ],
+        printouts: [],
+      }),
+      1000,
+    );
+
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 11));
+
+    const tasks = db.prepare('SELECT * FROM tasks ORDER BY sortOrder').all() as any[];
+    expect(tasks.length).toBe(2);
+    expect(tasks[0].title).toBe('Fix door');
+    expect(tasks[0].category).toBe('Shop Punchout');
+    expect(tasks[0].status).toBe('done');
+    expect(tasks[0].notes).toBe('use shims');
+    expect(tasks[1].title).toBe('Sweep');
+    expect(tasks[1].category).toBe('Shop Punchout');
+    expect(tasks[1].status).toBe('todo');
+    expect(tasks[1].notes).toBe('');
+
+    const photos = db.prepare('SELECT * FROM task_photos WHERE taskId = ? ORDER BY stage').all('it1') as any[];
+    expect(photos.map(p => `${p.stage}:${p.fileId}`)).toEqual(['after:pb', 'before:pa']);
+
+    // legacy table is retained (backup)
+    expect(db.prepare('SELECT COUNT(*) c FROM checklists').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('survives a malformed legacy blob', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 10));
+    db.prepare('INSERT INTO checklists (id, data, createdAt) VALUES (?, ?, ?)').run('bad', '{not json', 1);
+    expect(() => runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 11))).not.toThrow();
+    expect(db.prepare('SELECT COUNT(*) c FROM tasks').get()).toEqual({ c: 0 });
+    db.close();
+  });
+});

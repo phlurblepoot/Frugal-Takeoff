@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fsSync from 'fs';
 import path from 'path';
 import type { Migration } from './migrations';
@@ -398,6 +399,91 @@ export const migrations: Migration[] = [
         );
         CREATE INDEX idx_punch_photos_itemId ON punch_photos (punchItemId);
       `);
+    },
+  },
+  {
+    version: 11,
+    name: 'tasks',
+    up({ db }) {
+      // Collaborative Task List (Phase 4c-2): company-level, category-grouped tasks
+      // assignable to any user, with todo|in_progress|done status, due dates, staged
+      // photos (before|in_progress|after), and notes. Field-created by any user
+      // (not admin-gated). Mirrors punch but with assignee + dueDate + status.
+      db.exec(`
+        CREATE TABLE tasks (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          assigneeUserId TEXT,
+          status TEXT NOT NULL DEFAULT 'todo',
+          dueDate TEXT,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdAt INTEGER NOT NULL,
+          createdBy TEXT
+        );
+        CREATE INDEX idx_tasks_assignee ON tasks (assigneeUserId);
+        CREATE INDEX idx_tasks_status ON tasks (status);
+
+        CREATE TABLE task_photos (
+          id TEXT PRIMARY KEY,
+          taskId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          stage TEXT NOT NULL DEFAULT 'before',
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_task_photos_taskId ON task_photos (taskId);
+      `);
+
+      // Non-destructive import of legacy standalone checklists. Each legacy item
+      // becomes a task (category = checklist name). The legacy `checklists` table
+      // is intentionally KEPT as a backup. One bad blob must not fail boot — the
+      // framework wraps up() in a transaction, but every inner error is caught
+      // before it can propagate, so the outer transaction is never aborted.
+      let rows: { data: string }[] = [];
+      try {
+        rows = db.prepare('SELECT data FROM checklists ORDER BY createdAt ASC').all() as { data: string }[];
+      } catch { rows = []; } // table may not exist on a brand-new db
+
+      const insTask = db.prepare(`INSERT INTO tasks
+        (id, category, title, notes, assigneeUserId, status, dueDate, sortOrder, version, createdAt, createdBy)
+        VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, 1, ?, NULL)`);
+      const insPhoto = db.prepare(`INSERT INTO task_photos
+        (id, taskId, fileId, stage, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?, ?)`);
+
+      let sort = 0;
+      for (const r of rows) {
+        let cl: any;
+        try { cl = JSON.parse(r.data); } catch { continue; } // skip malformed blob
+        if (!cl || !Array.isArray(cl.items)) continue;
+        const category = typeof cl.name === 'string' ? cl.name : '';
+        for (const it of cl.items) {
+          if (!it || typeof it !== 'object') continue;
+          const taskId = typeof it.id === 'string' && it.id ? it.id : crypto.randomUUID();
+          const title = typeof it.description === 'string' ? it.description : '';
+          const notes = typeof it.comments === 'string' ? it.comments : '';
+          const status = it.done === true ? 'done' : 'todo';
+          const createdAt = Number.isFinite(it.createdAt) ? it.createdAt : Date.now();
+          try {
+            insTask.run(taskId, category, title, notes, status, sort++, createdAt);
+          } catch { continue; } // duplicate id etc. — skip, don't abort
+          let pSort = 0;
+          const stages: [string, any][] = [
+            ['before', it.beforePhotoIds],
+            ['in_progress', it.inProgressPhotoIds],
+            ['after', it.afterPhotoIds],
+          ];
+          for (const [stage, ids] of stages) {
+            if (!Array.isArray(ids)) continue;
+            for (const fileId of ids) {
+              if (typeof fileId !== 'string' || !fileId) continue;
+              try { insPhoto.run(crypto.randomUUID(), taskId, fileId, stage, pSort++, createdAt); } catch { /* skip */ }
+            }
+          }
+        }
+      }
     },
   },
 ];
