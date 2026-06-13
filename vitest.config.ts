@@ -9,6 +9,7 @@ export default defineConfig({
         test: {
           name: 'server',
           include: ['server/**/*.test.ts'],
+          exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
           environment: 'node',
         },
       },
@@ -20,6 +21,7 @@ export default defineConfig({
         test: {
           name: 'ui',
           include: ['src/**/*.test.{ts,tsx}'],
+          exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
           environment: 'jsdom',
           setupFiles: ['./src/test/setup.ts'],
           // globals enables RTL's auto-cleanup between tests (it registers via
