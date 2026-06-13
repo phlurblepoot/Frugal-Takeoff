@@ -170,9 +170,14 @@ async function startServer() {
     },
   });
 
+  // The Playwright e2e harness logs in many times per run (per-worker session +
+  // a few explicit logins per spec), which would trip a 10/min cap. Detect the
+  // e2e store (set via STORAGE_PATH=.e2e-data in playwright.config.ts) and lift
+  // the cap there. Production behavior is unchanged.
+  const isE2E = (process.env.STORAGE_PATH ?? '').includes('.e2e-data');
   const loginLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 10,
+    max: isE2E ? 100000 : 10,
     message: { error: 'Too many login attempts. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,

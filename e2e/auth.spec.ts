@@ -13,5 +13,8 @@ test('seeded project loads under an authed session', async ({ authedPage, apiTok
   await authedPage.goto(`/project/${projectId}`);
   await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}`));
   // The project overview renders the project name once the summary loads.
-  await expect(authedPage.getByText(name)).toBeVisible();
+  // Scope to the page <h1> heading: the same name also appears in the sidebar
+  // "recent projects" list (a <p title=name>) once recordRecentProject runs,
+  // so a bare getByText(name) intermittently trips strict mode (2 matches).
+  await expect(authedPage.getByRole('heading', { name })).toBeVisible();
 });
