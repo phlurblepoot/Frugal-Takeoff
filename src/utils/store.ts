@@ -867,7 +867,7 @@ export const savePunchItem = async (id: string, item: PunchItem): Promise<{ vers
   if (res.status === 409) throw new ConflictError(id);
   await handleResponse(res); return res.json();
 };
-export const setPunchDone = async (id: string, done: number): Promise<void> => {
+export const setPunchDone = async (id: string, done: boolean): Promise<void> => {
   const res = await punchJson('PATCH', `/api/punch/${id}`, { done }); await handleResponse(res);
 };
 export const deletePunchItem = async (id: string): Promise<void> => {

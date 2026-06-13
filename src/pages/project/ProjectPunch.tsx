@@ -65,7 +65,7 @@ export const ProjectPunch: React.FC = () => {
   };
 
   const toggleDone = async (item: PunchListItem) => {
-    try { await setPunchDone(item.id, item.done ? 0 : 1); reload(); }
+    try { await setPunchDone(item.id, !item.done); reload(); }
     catch { toast('Failed to update item', { type: 'error' }); }
   };
 
