@@ -4,6 +4,7 @@ import { ArrowLeft, FileImage, Settings, Plus, Trash2, ChevronDown, ChevronRight
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { formatRealValue, UNIT_LABELS, calculateTakeoffTotalCost, evaluateMathExpression, calculateTakeoffCostDetails, roundUpTo100 } from '../utils/math';
+import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
 import { PlanSetManager } from '../components/PlanSetManager';
@@ -1225,54 +1226,6 @@ export const ProjectView: React.FC = () => {
       }
 
       const addTakeoffRows = (takeoff: typeof selectedTakeoffs[0]) => {
-        const allocateSubsetCost = (subsetValue: number) => {
-          if (takeoff.isAdvancedCost && takeoff.customCosts) {
-            return takeoff.customCosts.reduce((sum, item) => {
-              switch (item.type) {
-                case 'flat':
-                  return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                case 'yield':
-                  return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
-                case 'unit':
-                  return sum + subsetValue * (item.costPerUnit || 0);
-                case 'amount_per_units':
-                  return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
-                default:
-                  return sum;
-              }
-            }, 0);
-          }
-          return calculateTakeoffTotalCost(takeoff, subsetValue);
-        };
-        const allocateSubsetDetails = (subsetValue: number) => {
-          if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
-          return takeoff.customCosts.map(item => {
-            let cost = 0;
-            let quantity: number | undefined;
-            switch (item.type) {
-              case 'flat':
-                cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                break;
-              case 'yield':
-                if (item.yield && item.yield > 0) {
-                  quantity = subsetValue / item.yield;
-                  cost = quantity * (item.cost || 0);
-                }
-                break;
-              case 'unit':
-                cost = subsetValue * (item.costPerUnit || 0);
-                break;
-              case 'amount_per_units':
-                if (item.perUnits && item.perUnits > 0) {
-                  quantity = subsetValue / item.perUnits;
-                  cost = quantity * (item.amount || 0);
-                }
-                break;
-            }
-            return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
-          });
-        };
-
         const formatQty = (value: number, unit: string | undefined) => value > 0
           ? formatRealValue(value, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false)
           : '-';
@@ -1285,7 +1238,7 @@ export const ProjectView: React.FC = () => {
         };
 
         const addAdvancedDetailRows = (
-          details: ReturnType<typeof allocateSubsetDetails>,
+          details: SubsetCostDetail[],
           subsetQtyFormatted: string,
           indent: string,
         ) => {
@@ -1317,8 +1270,8 @@ export const ProjectView: React.FC = () => {
           });
         };
 
-        const totalCost = allocateSubsetCost(takeoff.totalRealValue);
-        const totalDetails = allocateSubsetDetails(takeoff.totalRealValue);
+        const totalCost = allocateSubsetCost(takeoff, takeoff.totalRealValue);
+        const totalDetails = allocateSubsetDetails(takeoff, takeoff.totalRealValue);
         const qtyFormatted = formatQty(takeoff.totalRealValue, takeoff.unit);
 
         // Main takeoff row
@@ -1331,8 +1284,8 @@ export const ProjectView: React.FC = () => {
 
         // Page rows (and nested measurement rows)
         takeoff.pageBreakdown.forEach(pb => {
-          const pageCost = allocateSubsetCost(pb.realValue);
-          const pageDetails = allocateSubsetDetails(pb.realValue);
+          const pageCost = allocateSubsetCost(takeoff, pb.realValue);
+          const pageDetails = allocateSubsetDetails(takeoff, pb.realValue);
           const pageQtyFormatted = formatQty(pb.realValue, pb.unit);
 
           rows.push([
@@ -1348,8 +1301,8 @@ export const ProjectView: React.FC = () => {
           }
 
           pb.measurements.forEach(meas => {
-            const measCost = allocateSubsetCost(meas.realValue);
-            const measDetails = allocateSubsetDetails(meas.realValue);
+            const measCost = allocateSubsetCost(takeoff, meas.realValue);
+            const measDetails = allocateSubsetDetails(takeoff, meas.realValue);
             const measQtyFormatted = formatQty(meas.realValue, meas.unit);
 
             rows.push([
@@ -2715,58 +2668,11 @@ export const ProjectView: React.FC = () => {
                               <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
                                 <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
                                   {(() => {
-                                    const allocateSubsetCost = (subsetValue: number) => {
-                                      if (takeoff.isAdvancedCost && takeoff.customCosts) {
-                                        return takeoff.customCosts.reduce((sum, item) => {
-                                          switch (item.type) {
-                                            case 'flat':
-                                              return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                                            case 'yield':
-                                              return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
-                                            case 'unit':
-                                              return sum + subsetValue * (item.costPerUnit || 0);
-                                            case 'amount_per_units':
-                                              return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
-                                            default:
-                                              return sum;
-                                          }
-                                        }, 0);
-                                      }
-                                      return calculateTakeoffTotalCost(takeoff, subsetValue);
-                                    };
-                                    const allocateSubsetDetails = (subsetValue: number) => {
-                                      if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
-                                      return takeoff.customCosts.map(item => {
-                                        let cost = 0;
-                                        let quantity: number | undefined;
-                                        switch (item.type) {
-                                          case 'flat':
-                                            cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                                            break;
-                                          case 'yield':
-                                            if (item.yield && item.yield > 0) {
-                                              quantity = subsetValue / item.yield;
-                                              cost = quantity * (item.cost || 0);
-                                            }
-                                            break;
-                                          case 'unit':
-                                            cost = subsetValue * (item.costPerUnit || 0);
-                                            break;
-                                          case 'amount_per_units':
-                                            if (item.perUnits && item.perUnits > 0) {
-                                              quantity = subsetValue / item.perUnits;
-                                              cost = quantity * (item.amount || 0);
-                                            }
-                                            break;
-                                        }
-                                        return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
-                                      });
-                                    };
                                     return takeoff.pageBreakdown.map(pb => {
                                       const pageKey = `${takeoff.id}__${pb.pageId}`;
                                       const isPageExpanded = !!expandedTakeoffPages[pageKey];
-                                      const pageTotalCost = allocateSubsetCost(pb.realValue);
-                                      const pageCostDetails = allocateSubsetDetails(pb.realValue);
+                                      const pageTotalCost = allocateSubsetCost(takeoff, pb.realValue);
+                                      const pageCostDetails = allocateSubsetDetails(takeoff, pb.realValue);
                                       return (
                                         <div key={pb.pageId}>
                                           <div className="py-3 pl-8 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start hover:bg-white dark:hover:bg-slate-800 transition-colors">
@@ -2821,8 +2727,8 @@ export const ProjectView: React.FC = () => {
                                           {isPageExpanded && (
                                             <div className="bg-white/60 dark:bg-slate-900/40 border-t border-slate-100 dark:border-slate-700/60 divide-y divide-slate-100/80 dark:divide-slate-700/60">
                                               {pb.measurements.map(meas => {
-                                                const measTotalCost = allocateSubsetCost(meas.realValue);
-                                                const measCostDetails = allocateSubsetDetails(meas.realValue);
+                                                const measTotalCost = allocateSubsetCost(takeoff, meas.realValue);
+                                                const measCostDetails = allocateSubsetDetails(takeoff, meas.realValue);
                                                 return (
                                                   <div key={meas.id} className="py-2 pl-16 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start text-xs">
                                                     <span className="text-slate-600 dark:text-slate-300 truncate">{meas.name || 'Measurement'}</span>
@@ -2970,56 +2876,9 @@ export const ProjectView: React.FC = () => {
                       </button>
 
                       {expandedTakeoffs[takeoff.id] && (() => {
-                        const allocateSubsetCost = (subsetValue: number) => {
-                          if (takeoff.isAdvancedCost && takeoff.customCosts) {
-                            return takeoff.customCosts.reduce((sum, item) => {
-                              switch (item.type) {
-                                case 'flat':
-                                  return sum + (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                                case 'yield':
-                                  return item.yield && item.yield > 0 ? sum + (subsetValue / item.yield) * (item.cost || 0) : sum;
-                                case 'unit':
-                                  return sum + subsetValue * (item.costPerUnit || 0);
-                                case 'amount_per_units':
-                                  return item.perUnits && item.perUnits > 0 ? sum + (subsetValue / item.perUnits) * (item.amount || 0) : sum;
-                                default:
-                                  return sum;
-                              }
-                            }, 0);
-                          }
-                          return calculateTakeoffTotalCost(takeoff, subsetValue);
-                        };
-                        const allocateSubsetDetails = (subsetValue: number) => {
-                          if (!takeoff.isAdvancedCost || !takeoff.customCosts) return [];
-                          return takeoff.customCosts.map(item => {
-                            let cost = 0;
-                            let quantity: number | undefined;
-                            switch (item.type) {
-                              case 'flat':
-                                cost = (item.cost || 0) * (takeoff.totalRealValue > 0 ? subsetValue / takeoff.totalRealValue : 0);
-                                break;
-                              case 'yield':
-                                if (item.yield && item.yield > 0) {
-                                  quantity = subsetValue / item.yield;
-                                  cost = quantity * (item.cost || 0);
-                                }
-                                break;
-                              case 'unit':
-                                cost = subsetValue * (item.costPerUnit || 0);
-                                break;
-                              case 'amount_per_units':
-                                if (item.perUnits && item.perUnits > 0) {
-                                  quantity = subsetValue / item.perUnits;
-                                  cost = quantity * (item.amount || 0);
-                                }
-                                break;
-                            }
-                            return { ...item, costValue: cost, quantity, quantityUnit: item.unit };
-                          });
-                        };
                         const renderStats = (subsetValue: number, unit: string, small: boolean) => {
-                          const subsetCost = allocateSubsetCost(subsetValue);
-                          const subsetDetails = allocateSubsetDetails(subsetValue);
+                          const subsetCost = allocateSubsetCost(takeoff, subsetValue);
+                          const subsetDetails = allocateSubsetDetails(takeoff, subsetValue);
                           return (
                             <div className={`grid grid-cols-3 gap-2 ${small ? 'text-[10px]' : 'text-[11px]'}`}>
                               <div>
