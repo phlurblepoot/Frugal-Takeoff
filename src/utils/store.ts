@@ -879,3 +879,70 @@ export const addPunchPhoto = async (itemId: string, fileId: string, stage: strin
 export const removePunchPhoto = async (itemId: string, fileId: string): Promise<void> => {
   const res = await punchJson('DELETE', `/api/punch/${itemId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
+
+// ── Phase 4c-2: task list ─────────────────────────────────────────────────────
+
+export interface TaskPhoto { id: string; fileId: string; stage: string; sortOrder: number; }
+export interface AssignableUser { id: string; username: string; role: string; }
+export interface Task {
+  id: string; category: string; title: string; notes: string;
+  assigneeUserId: string | null; assigneeUsername: string | null;
+  status: string; dueDate: string | null; sortOrder: number;
+  version: number; createdAt: number; createdBy: string | null;
+  photos: TaskPhoto[];
+}
+export interface TaskListItem {
+  id: string; category: string; title: string; notes: string;
+  assigneeUserId: string | null; assigneeUsername: string | null;
+  status: string; dueDate: string | null; sortOrder: number;
+  version: number; createdAt: number; createdBy: string | null;
+  photoCount: number;
+}
+
+const taskJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getAssignableUsers = async (): Promise<AssignableUser[]> => {
+  const res = await fetchWithRetry('/api/users/list', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getTasks = async (): Promise<TaskListItem[]> => {
+  const res = await fetchWithRetry('/api/tasks', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getTask = async (id: string): Promise<Task> => {
+  const res = await fetchWithRetry(`/api/tasks/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createTask = async (input: { category?: string; title: string; assigneeUserId?: string | null; dueDate?: string | null; notes?: string }): Promise<{ id: string }> => {
+  const res = await taskJson('POST', '/api/tasks', input);
+  await handleResponse(res); return res.json();
+};
+export const saveTask = async (id: string, task: Task): Promise<{ version: number }> => {
+  const res = await taskJson('PUT', `/api/tasks/${id}`, {
+    category: task.category,
+    title: task.title,
+    notes: task.notes,
+    assigneeUserId: task.assigneeUserId,
+    dueDate: task.dueDate,
+    version: task.version,
+  });
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setTaskStatus = async (id: string, status: string): Promise<void> => {
+  const res = await taskJson('PATCH', `/api/tasks/${id}`, { status }); await handleResponse(res);
+};
+export const deleteTask = async (id: string): Promise<void> => {
+  const res = await taskJson('DELETE', `/api/tasks/${id}`); await handleResponse(res);
+};
+export const addTaskPhoto = async (taskId: string, fileId: string, stage: string): Promise<void> => {
+  const res = await taskJson('POST', `/api/tasks/${taskId}/photos`, { fileId, stage }); await handleResponse(res);
+};
+export const removeTaskPhoto = async (taskId: string, fileId: string): Promise<void> => {
+  const res = await taskJson('DELETE', `/api/tasks/${taskId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
