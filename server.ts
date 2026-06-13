@@ -423,38 +423,8 @@ async function startServer() {
     }
   });
 
-  // Checklists API
-  app.get("/api/checklists", authenticateToken, (req, res) => {
-    try {
-      const rows = db.prepare('SELECT data FROM checklists ORDER BY createdAt ASC').all() as { data: string }[];
-      res.json(rows.map(r => JSON.parse(r.data)));
-    } catch (error) {
-      console.error("Error fetching checklists:", error);
-      res.status(500).json({ error: "Failed to fetch checklists" });
-    }
-  });
-
-  app.put("/api/checklists/:id", authenticateToken, (req, res) => {
-    try {
-      const checklist = req.body;
-      const stmt = db.prepare('INSERT OR REPLACE INTO checklists (id, data, createdAt) VALUES (?, ?, ?)');
-      stmt.run(checklist.id, JSON.stringify(checklist), checklist.createdAt || Date.now());
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error saving checklist:", error);
-      res.status(500).json({ error: "Failed to save checklist" });
-    }
-  });
-
-  app.delete("/api/checklists/:id", authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM checklists WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting checklist:", error);
-      res.status(500).json({ error: "Failed to delete checklist" });
-    }
-  });
+  // Checklists API removed — feature moved to /api/tasks (collaborative Tasks page).
+  // The `checklists` table is retained as a data backup (see migration 11); do not drop it.
 
   // User Preferences API (per-user, cross-browser)
   app.get("/api/user-preferences", authenticateToken, (req, res) => {

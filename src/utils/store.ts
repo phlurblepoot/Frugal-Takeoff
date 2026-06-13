@@ -411,29 +411,6 @@ export const formatBytes = (bytes: number): string => {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
-export const getChecklists = async (): Promise<any[]> => {
-  const res = await fetch('/api/checklists', { headers: getAuthHeaders() });
-  await handleResponse(res);
-  return res.json();
-};
-
-export const saveChecklist = async (checklist: any): Promise<void> => {
-  const res = await fetch(`/api/checklists/${checklist.id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(checklist),
-  });
-  await handleResponse(res);
-};
-
-export const deleteChecklist = async (id: string): Promise<void> => {
-  const res = await fetch(`/api/checklists/${id}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  });
-  await handleResponse(res);
-};
-
 // ── Phase 3a: summaries, granular patches, activity, time ────────────────────
 
 export interface ProjectSummary {

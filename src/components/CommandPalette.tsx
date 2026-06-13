@@ -3,7 +3,7 @@ import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
-  FileSpreadsheet, CheckSquare, Clock, CornerDownLeft, X, Keyboard,
+  FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -69,7 +69,7 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:settings', type: 'action', title: 'Settings', icon: <SettingsIcon size={16} />, run: () => navigate('/settings') },
     { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/tools/pdf') },
     { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
-    { id: 'a:checklist', type: 'action', title: 'Checklists', icon: <CheckSquare size={16} />, run: () => navigate('/checklist') },
+    { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
     {
       id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,

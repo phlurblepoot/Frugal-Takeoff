@@ -33,7 +33,7 @@ beforeEach(() => {
 describe('Sidebar — company mode', () => {
   it('shows workspace and tools nav groups', () => {
     renderAt('/');
-    for (const label of ['Dashboard', 'Projects', 'Checklists', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
+    for (const label of ['Dashboard', 'Projects', 'Tasks', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
@@ -90,8 +90,8 @@ describe('Sidebar — project mode', () => {
     for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Punch & Checklists', 'Notes', 'Time', 'Issues']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // company nav is gone (anchor so it doesn't match project 'Punch & Checklists')
-    expect(screen.queryByRole('button', { name: /^Checklists$/ })).not.toBeInTheDocument();
+    // company nav is gone
+    expect(screen.queryByRole('button', { name: /^Tasks$/ })).not.toBeInTheDocument();
   });
 
   it('highlights the section matching the route', () => {
@@ -108,7 +108,7 @@ describe('Sidebar — project mode', () => {
   it('stays in company mode off project routes', () => {
     renderProject('/time');
     expect(screen.queryByRole('button', { name: /All Projects/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Checklists/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Tasks/ })).toBeInTheDocument();
   });
 
   it('keeps project mode on the canvas route', () => {

@@ -18,7 +18,7 @@ import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
-import { ChecklistEditor } from './pages/ChecklistEditor';
+import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
@@ -141,8 +141,8 @@ export default function App() {
           element: <Navigate to="/tools/sheets" replace />,
         },
         {
-          path: 'checklist',
-          element: <ChecklistEditor />,
+          path: 'tasks',
+          element: <TasksPage />,
         },
         {
           path: 'time',
