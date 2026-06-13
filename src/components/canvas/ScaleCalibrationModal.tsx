@@ -40,6 +40,7 @@ export const ScaleCalibrationModal: React.FC<ScaleCalibrationModalProps> = ({
             <div className="flex-1">
               <label className="block text-xs font-medium text-slate-500 mb-1">Distance</label>
               <input
+                data-testid="scale-input"
                 type="text"
                 value={scaleInput}
                 onChange={(e) => onScaleInputChange(e.target.value)}
@@ -74,6 +75,7 @@ export const ScaleCalibrationModal: React.FC<ScaleCalibrationModalProps> = ({
             Cancel
           </button>
           <button
+            data-testid="scale-apply"
             onClick={onApply}
             className="px-4 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 active:scale-95 rounded-lg transition-all"
           >

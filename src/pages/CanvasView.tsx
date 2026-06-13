@@ -1691,7 +1691,7 @@ const CanvasViewInner: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex-1 relative min-h-0">
+        <div data-testid="canvas-surface" className="flex-1 relative min-h-0">
           {/* Floating Controls */}
           <div className={`absolute top-[58px] md:top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
             <div className="hidden md:flex pointer-events-auto items-center gap-2">
@@ -1732,12 +1732,14 @@ const CanvasViewInner: React.FC = () => {
             
             <div className={`pointer-events-auto flex items-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
               <ToolButton
+                testId="tool-pan"
                 active={currentTool === 'pan'}
                 onClick={() => setCurrentTool('pan')}
                 icon={<Hand size={20} />}
                 label="Pan"
               />
               <ToolButton
+                testId="tool-scale"
                 active={currentTool === 'scale'}
                 onClick={() => setCurrentTool('scale')}
                 icon={<Settings size={20} />}
@@ -1745,6 +1747,7 @@ const CanvasViewInner: React.FC = () => {
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <ToolButton
+                testId="tool-length"
                 active={currentTool === 'length'}
                 onClick={() => setCurrentTool('length')}
                 icon={<Ruler size={20} />}
@@ -1757,6 +1760,7 @@ const CanvasViewInner: React.FC = () => {
                 }}
               />
               <ToolButton
+                testId="tool-area"
                 active={currentTool === 'area'}
                 onClick={() => setCurrentTool('area')}
                 icon={<Square size={20} />}
@@ -1769,6 +1773,7 @@ const CanvasViewInner: React.FC = () => {
                 }}
               />
               <ToolButton
+                testId="tool-count"
                 active={currentTool === 'count'}
                 onClick={() => setCurrentTool('count')}
                 icon={<Hash size={20} />}
@@ -1791,6 +1796,7 @@ const CanvasViewInner: React.FC = () => {
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
+                data-testid="btn-undo"
                 onClick={handleUndo}
                 disabled={history.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
@@ -1803,6 +1809,7 @@ const CanvasViewInner: React.FC = () => {
                 <Undo size={20} />
               </button>
               <button
+                data-testid="btn-redo"
                 onClick={handleRedo}
                 disabled={redoStack.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
@@ -1983,7 +1990,7 @@ const CanvasViewInner: React.FC = () => {
         >
           {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <div className={`bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
+        <div data-testid="measurement-sidebar" className={`bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
           <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <div className="flex items-center gap-2">
@@ -2240,6 +2247,7 @@ const CanvasViewInner: React.FC = () => {
                           .map(m => (
                             <MeasurementItem
                               key={m.id}
+                              testId="measurement-row"
                               measurement={m}
                               scaleConfig={p.scaleConfig}
                               takeoffType={takeoff.type}
@@ -2332,10 +2340,11 @@ const CanvasViewInner: React.FC = () => {
                     p.measurements
                       .filter(m => !m.takeoffId)
                       .map(m => (
-                        <MeasurementItem 
-                          key={m.id} 
-                          measurement={m} 
-                          scaleConfig={p.scaleConfig} 
+                        <MeasurementItem
+                          key={m.id}
+                          testId="measurement-row"
+                          measurement={m}
+                          scaleConfig={p.scaleConfig}
                           takeoffType={undefined}
                           onDelete={() => deleteMeasurement(m.id, p.id)}
                           selected={selectedMeasurementId === m.id}
@@ -2467,6 +2476,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDeleteMeasurement}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 active:scale-95 rounded-xl transition-all shadow-sm"
               >
@@ -2516,6 +2526,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDeleteTakeoff}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
               >
@@ -2537,6 +2548,7 @@ const CanvasViewInner: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
                 <input
+                  data-testid="edit-takeoff-name"
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
@@ -2620,6 +2632,7 @@ const CanvasViewInner: React.FC = () => {
 
               <div className="flex items-center gap-2 py-2">
                 <input
+                  data-testid="toggle-advanced-cost"
                   type="checkbox"
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
@@ -2673,6 +2686,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-save-takeoff"
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
@@ -2751,25 +2765,28 @@ export const CanvasView: React.FC = () => {
   );
 };
 
-function ToolButton({ 
-  active, 
-  onClick, 
-  icon, 
-  label, 
+function ToolButton({
+  active,
+  onClick,
+  icon,
+  label,
   disabled = false,
   onDisabledClick,
-  className = ""
-}: { 
-  active: boolean; 
-  onClick: () => void; 
-  icon: React.ReactNode; 
+  className = "",
+  testId
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
   label: string;
   disabled?: boolean;
   onDisabledClick?: () => void;
   className?: string;
+  testId?: string;
 }) {
   return (
     <button
+      data-testid={testId}
       onClick={disabled ? onDisabledClick : onClick}
       title={label}
       className={`
@@ -2800,8 +2817,9 @@ function MeasurementItem({
   pageId,
   projectId,
   planSetName,
-  pageIds
-}: { 
+  pageIds,
+  testId
+}: {
   measurement: Measurement;
   scaleConfig: ScaleConfig | null;
   takeoffType?: string;
@@ -2816,6 +2834,7 @@ function MeasurementItem({
   projectId?: string;
   planSetName?: string;
   pageIds?: string[];
+  testId?: string;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(measurement.name);
@@ -2839,6 +2858,7 @@ function MeasurementItem({
   return (
     <div
       ref={rowRef}
+      data-testid={testId}
       data-measurement-id={measurement.id}
       className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
       onClick={onSelect}
@@ -2912,7 +2932,7 @@ function MeasurementItem({
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0 ml-2">
-          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
+          <span data-testid="measurement-value" className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
             {measurement.type === 'count'
               ? formatMeasurement(1, 'count', scaleConfig, takeoff)
               : (() => {

@@ -1962,6 +1962,7 @@ export const ProjectView: React.FC = () => {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                   <input
+                    data-testid="page-search"
                     ref={pageSearchInputRef}
                     type="text"
                     placeholder="Search pages and text...  ( / )"
@@ -2004,6 +2005,7 @@ export const ProjectView: React.FC = () => {
                 {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
                 <div className="flex items-center gap-0.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg p-0.5 shadow-sm">
                   <button
+                    data-testid="view-grid"
                     type="button"
                     onClick={() => setPagesViewMode('grid')}
                     title="Grid view"
@@ -2017,6 +2019,7 @@ export const ProjectView: React.FC = () => {
                     <LayoutGrid size={16} />
                   </button>
                   <button
+                    data-testid="view-list"
                     type="button"
                     onClick={() => setPagesViewMode('list')}
                     title="List view"
@@ -2069,6 +2072,7 @@ export const ProjectView: React.FC = () => {
                   Name Pages
                 </button>
                 <button
+                  data-testid="btn-add-pages"
                   onClick={() => setShowAddPagesModal(true)}
                   className="flex-1 lg:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
@@ -2097,7 +2101,7 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
             ) : pagesViewMode === 'list' ? (
-              <div className="flex flex-col gap-2">
+              <div data-testid="pages-list" className="flex flex-col gap-2">
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
                   const isEditing = editingPageId === page.id;
@@ -2109,6 +2113,7 @@ export const ProjectView: React.FC = () => {
                   return (
                     <Link
                       key={page.id}
+                      data-testid="page-row"
                       to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                       state={{ pageIds: filteredPages.map(p => p.id) }}
                       onContextMenu={(e) => {
@@ -2171,6 +2176,7 @@ export const ProjectView: React.FC = () => {
                               onClick={e => e.stopPropagation()}
                             />
                             <input
+                              data-testid="page-rename-input"
                               type="text"
                               value={editingPageDescription}
                               onChange={(e) => setEditingPageDescription(e.target.value)}
@@ -2251,13 +2257,14 @@ export const ProjectView: React.FC = () => {
                 })}
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <div data-testid="pages-list" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
                   const isFavorite = favoritePageIds.has(page.id);
                   return (
                   <Link
                     key={page.id}
+                    data-testid="page-row"
                     to={`/project/${project.id}/page/${page.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     state={{ pageIds: filteredPages.map(p => p.id) }}
                     onContextMenu={(e) => {
@@ -2341,6 +2348,7 @@ export const ProjectView: React.FC = () => {
                             <div className="flex flex-col gap-1">
                               <label className="text-[10px] font-bold text-slate-400 uppercase">Description</label>
                               <input
+                                data-testid="page-rename-input"
                                 type="text"
                                 value={editingPageDescription}
                                 onChange={(e) => setEditingPageDescription(e.target.value)}
@@ -2505,6 +2513,7 @@ export const ProjectView: React.FC = () => {
                       ))}
                     </select>
                     <button
+                      data-testid="btn-print"
                       onClick={handlePrint}
                       disabled={isPrinting || isExportingExcel}
                       className="flex-1 sm:flex-none px-3 py-2 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
@@ -2513,6 +2522,7 @@ export const ProjectView: React.FC = () => {
                       Print ({selectedTakeoffIds.size})
                     </button>
                     <button
+                      data-testid="btn-export-excel"
                       onClick={handleExportExcel}
                       disabled={isPrinting || isExportingExcel}
                       className="flex-1 sm:flex-none px-3 py-2 bg-accent-600 text-white rounded-lg text-xs font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
@@ -2540,6 +2550,7 @@ export const ProjectView: React.FC = () => {
                     </button>
                   )}
                   <button
+                    data-testid="btn-new-takeoff"
                     onClick={() => setShowTakeoffModal(true)}
                     className="flex-1 sm:flex-none px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                   >
@@ -2551,7 +2562,7 @@ export const ProjectView: React.FC = () => {
             </div>
             
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full border-collapse">
+              <table data-testid="takeoffs-table" className="w-full border-collapse">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800 text-left text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest border-b border-slate-200 dark:border-slate-700">
                     <th className="px-6 py-4 w-10">
@@ -2598,7 +2609,7 @@ export const ProjectView: React.FC = () => {
                       const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
                       return (
                         <React.Fragment key={takeoff.id}>
-                          <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                          <tr data-testid="takeoff-row" className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
                             <td className="px-6 py-4">
                               <input
                                 type="checkbox"
@@ -2647,6 +2658,7 @@ export const ProjectView: React.FC = () => {
                             <td className="px-6 py-4 text-right">
                               <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button
+                                  data-testid="btn-edit-takeoff"
                                   onClick={() => handleEditTakeoff(takeoff)}
                                   className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
                                   title="Edit Takeoff"
@@ -2654,6 +2666,7 @@ export const ProjectView: React.FC = () => {
                                   <Edit2 size={16} />
                                 </button>
                                 <button
+                                  data-testid="btn-delete-takeoff"
                                   onClick={() => handleDeleteTakeoff(takeoff.id)}
                                   className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
                                   title="Delete Takeoff"
@@ -2822,7 +2835,7 @@ export const ProjectView: React.FC = () => {
                 const renderCard = (takeoff: typeof totals[0]) => {
                   const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
                   return (
-                    <div key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                    <div data-testid="takeoff-row" key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <input
@@ -2836,12 +2849,14 @@ export const ProjectView: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-1">
                           <button
+                            data-testid="btn-edit-takeoff"
                             onClick={() => handleEditTakeoff(takeoff)}
                             className="p-1.5 text-slate-400 hover:text-accent-600"
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
+                            data-testid="btn-delete-takeoff"
                             onClick={() => handleDeleteTakeoff(takeoff.id)}
                             className="p-1.5 text-slate-400 hover:text-red-600"
                           >
@@ -3046,6 +3061,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDeleteTakeoff}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
               >
@@ -3082,6 +3098,7 @@ export const ProjectView: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
                 <input
+                  data-testid="edit-takeoff-name"
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
@@ -3180,6 +3197,7 @@ export const ProjectView: React.FC = () => {
 
               <div className="flex items-center gap-2 py-2">
                 <input
+                  data-testid="toggle-advanced-cost"
                   type="checkbox"
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
@@ -3237,6 +3255,7 @@ export const ProjectView: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-save-takeoff"
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-colors shadow-sm"
