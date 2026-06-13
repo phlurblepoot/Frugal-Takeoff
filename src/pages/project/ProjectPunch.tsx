@@ -1,6 +1,6 @@
 // src/pages/project/ProjectPunch.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, Download, ImageIcon } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
@@ -32,6 +32,17 @@ export const ProjectPunch: React.FC = () => {
     getPunchItems(projectId).then(setItems).catch(() => setItems([]));
   };
   useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus the create-form input when arriving via the command palette's "New punch item" action.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      const el = document.getElementById('new-punch-desc') as HTMLInputElement | null;
+      if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('new'); return p; }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const list = items ?? [];
   const done = list.filter(i => i.done).length;

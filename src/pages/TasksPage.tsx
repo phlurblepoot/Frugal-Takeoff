@@ -1,5 +1,6 @@
 // src/pages/TasksPage.tsx
 import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ListChecks, Plus, ImageIcon } from 'lucide-react';
 import {
   Task, TaskListItem, AssignableUser,
@@ -49,6 +50,17 @@ export const TasksPage: React.FC = () => {
     reload();
     getAssignableUsers().then(setUsers).catch(() => setUsers([]));
   }, []);
+
+  // Focus the create-form input when arriving via the command palette's "New task" action.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      const el = document.getElementById('new-task-title') as HTMLInputElement | null;
+      if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('new'); return p; }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const list = tasks ?? [];
 

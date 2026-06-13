@@ -1,6 +1,6 @@
 // src/pages/project/ProjectIssues.tsx
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Plus, Trash2, ImageIcon } from 'lucide-react';
 import {
   Issue, IssueListItem, getIssues, getIssue, createIssue, deleteIssue,
@@ -30,6 +30,17 @@ export const ProjectIssues: React.FC = () => {
     getIssues(projectId).then(setIssues).catch(() => setIssues([]));
   };
   useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus the create-form input when arriving via the command palette's "New issue" action.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      const el = document.getElementById('new-iss') as HTMLInputElement | null;
+      if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('new'); return p; }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const openIssue = async (id: string) => {
     try { setEditing(await getIssue(id)); } catch { toast('Failed to open issue', { type: 'error' }); }
