@@ -9,3 +9,7 @@ coverage/
 data/
 data.db
 .superpowers/
+
+# OMC tooling state
+.omc/
+docs/superpowers/.obsidian/
