@@ -13,6 +13,7 @@ import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
+import { ProjectPunch } from './pages/project/ProjectPunch';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
@@ -113,6 +114,7 @@ export default function App() {
             { path: 'documents', element: <ProjectDocuments /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },
+            { path: 'punch', element: <ProjectPunch /> },
             { path: 'issues', element: <ProjectIssues /> },
             { path: 'billing', element: <ProjectBilling /> },
             { path: 'page/:pageId', element: <CanvasView /> },

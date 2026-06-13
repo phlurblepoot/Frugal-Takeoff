@@ -87,11 +87,11 @@ describe('Sidebar — project mode', () => {
     renderProject('/project/p1');
     expect(screen.getByRole('button', { name: /All Projects/ })).toBeInTheDocument();
     expect(screen.getByText('Maple St Office')).toBeInTheDocument();
-    for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Notes', 'Time', 'Issues']) {
+    for (const label of ['Overview', 'Takeoff & Estimate', 'Documents', 'Punch & Checklists', 'Notes', 'Time', 'Issues']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // company nav is gone
-    expect(screen.queryByRole('button', { name: /Checklists/ })).not.toBeInTheDocument();
+    // company nav is gone (anchor so it doesn't match project 'Punch & Checklists')
+    expect(screen.queryByRole('button', { name: /^Checklists$/ })).not.toBeInTheDocument();
   });
 
   it('highlights the section matching the route', () => {
@@ -145,6 +145,12 @@ describe('Sidebar — project mode', () => {
     localStorage.setItem('user', JSON.stringify({ username: 'm', role: 'user' }));
     renderProject('/project/p1');
     expect(screen.getByRole('button', { name: /Issues/ })).toBeInTheDocument();
+  });
+
+  it('shows Punch & Checklists for non-admins (not admin-gated)', () => {
+    localStorage.setItem('user', JSON.stringify({ username: 'm', role: 'user' }));
+    renderProject('/project/p1');
+    expect(screen.getByRole('button', { name: /Punch & Checklists/ })).toBeInTheDocument();
   });
 
   it('hides the size toggles when locked', () => {
