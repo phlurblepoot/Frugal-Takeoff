@@ -15,6 +15,7 @@ import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectPunch } from './pages/project/ProjectPunch';
 import { ProjectProposal } from './pages/project/ProjectProposal';
+import { ProjectSettings } from './pages/project/ProjectSettings';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
@@ -119,6 +120,7 @@ export default function App() {
             { path: 'punch', element: <ProjectPunch /> },
             { path: 'issues', element: <ProjectIssues /> },
             { path: 'billing', element: <ProjectBilling /> },
+            { path: 'settings', element: <ProjectSettings /> },
             { path: 'page/:pageId', element: <CanvasView /> },
           ],
         },
