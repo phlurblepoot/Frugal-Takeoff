@@ -340,6 +340,27 @@ describe('GET /api/projects/:id/summary', () => {
     const res = await request(app).get('/api/projects/pi/summary');
     expect(res.body.openIssueCount).toBe(1); // one open, one resolved
   });
+
+  it('includes punchDone/punchTotal for non-admin users (ungated)', async () => {
+    await request(app).post('/api/projects').send({ ...PROJECT, id: 'pp' });
+    const punch = await request(app).post('/api/projects/pp/punch').send({ description: 'Fix crack', area: 'Kitchen' });
+    await request(app).patch(`/api/punch/${punch.body.id}`).send({ done: true });
+
+    // non-admin 'user' app sharing the same db
+    const userApp = express();
+    userApp.use(express.json());
+    registerDataRoutes(userApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u3', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+
+    const res = await request(userApp).get('/api/projects/pp/summary');
+    expect(res.status).toBe(200);
+    expect(res.body.punchDone).toBe(1);
+    expect(res.body.punchTotal).toBe(1);
+  });
 });
 
 describe('GET /api/activity?projectId=', () => {

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
 import { billingSummary } from './billingStore';
 import { countOpenIssues } from './issueStore';
+import { punchProgress } from './punchStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -261,6 +262,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
   }
 
   return rows.map(r => {
+    const pp = punchProgress(db, r.id);
     const base = {
       id: r.id,
       name: r.name ?? 'Untitled',
@@ -276,6 +278,8 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       takeoffCount: takeoffCounts.get(r.id) ?? 0,
       pageIds: pageIdsByProject.get(r.id) ?? [],
       openIssueCount: countOpenIssues(db, r.id),
+      punchDone: pp.done,
+      punchTotal: pp.total,
     };
     if (!includeBilling) return base;
     const bs = billingSummary(db, r.id);
