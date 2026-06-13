@@ -58,3 +58,39 @@ export function savePunchItem(db: Database.Database, id: string, input: PunchInp
   tx();
   return { version: newVersion };
 }
+
+export function setPunchDone(db: Database.Database, id: string, done: boolean): { done: boolean } {
+  const row = db.prepare('SELECT id FROM punch_items WHERE id = ?').get(id);
+  if (!row) throw new NotFoundError('Punch item not found');
+  db.prepare('UPDATE punch_items SET done = ?, version = version + 1 WHERE id = ?').run(done ? 1 : 0, id);
+  return { done };
+}
+
+export function deletePunchItem(db: Database.Database, id: string): void {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM punch_photos WHERE punchItemId = ?').run(id);
+    db.prepare('DELETE FROM punch_items WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+export function addPunchPhoto(db: Database.Database, itemId: string, fileId: string, stage: string): void {
+  if (!db.prepare('SELECT id FROM punch_items WHERE id = ?').get(itemId)) throw new NotFoundError('Punch item not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  if (!(PUNCH_STAGES as readonly string[]).includes(stage)) throw new ValidationError(`Invalid photo stage: ${stage}`);
+  const exists = db.prepare('SELECT id FROM punch_photos WHERE punchItemId = ? AND fileId = ? AND stage = ?').get(itemId, fileId, stage);
+  if (exists) return; // idempotent
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM punch_photos WHERE punchItemId = ?').get(itemId) as any).m;
+  db.prepare('INSERT INTO punch_photos (id, punchItemId, fileId, stage, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), itemId, fileId, stage, max + 1, Date.now());
+}
+
+export function removePunchPhoto(db: Database.Database, itemId: string, fileId: string): void {
+  db.prepare('DELETE FROM punch_photos WHERE punchItemId = ? AND fileId = ?').run(itemId, fileId);
+}
+
+export function punchProgress(db: Database.Database, projectId: string): { done: number; total: number } {
+  const total = (db.prepare('SELECT COUNT(*) c FROM punch_items WHERE projectId = ?').get(projectId) as any).c;
+  const done = (db.prepare('SELECT COUNT(*) c FROM punch_items WHERE projectId = ? AND done = 1').get(projectId) as any).c;
+  return { done, total };
+}

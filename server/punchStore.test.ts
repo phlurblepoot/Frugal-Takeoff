@@ -9,6 +9,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listPunchItems, getPunchItem, createPunchItem, savePunchItem,
+  setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto, punchProgress,
   ValidationError, ConflictError, NotFoundError,
 } from './punchStore';
 
@@ -66,5 +67,66 @@ describe('punchItems', () => {
     const item = getPunchItem(db, id)!;
     savePunchItem(db, id, { ...item, description: 'Updated' }); // advances to v2
     expect(() => savePunchItem(db, id, { ...item, description: 'Stale' })).toThrow(ConflictError); // still at v1
+  });
+});
+
+describe('setPunchDone', () => {
+  it('marks item done=true and bumps version to 2', () => {
+    const { id } = createPunchItem(db, 'p1', { description: 'Fix something' });
+    const result = setPunchDone(db, id, true);
+    expect(result.done).toBe(true);
+    const item = getPunchItem(db, id)!;
+    expect(item.done).toBe(1);
+    expect(item.version).toBe(2);
+  });
+
+  it('throws NotFoundError for unknown id', () => {
+    expect(() => setPunchDone(db, 'no-such-id', true)).toThrow(NotFoundError);
+  });
+});
+
+describe('addPunchPhoto / removePunchPhoto', () => {
+  it('addPunchPhoto is idempotent — same fileId+stage only stored once', () => {
+    const { id } = createPunchItem(db, 'p1', { description: 'Fix something' });
+    addPunchPhoto(db, id, 'f1', 'before');
+    addPunchPhoto(db, id, 'f1', 'before'); // duplicate
+    const item = getPunchItem(db, id)!;
+    expect(item.photos.length).toBe(1);
+    expect(item.photos[0].stage).toBe('before');
+  });
+
+  it('addPunchPhoto with invalid stage throws ValidationError', () => {
+    const { id } = createPunchItem(db, 'p1', { description: 'Fix something' });
+    expect(() => addPunchPhoto(db, id, 'f1', 'sideways')).toThrow(ValidationError);
+  });
+
+  it('removePunchPhoto removes the photo', () => {
+    const { id } = createPunchItem(db, 'p1', { description: 'Fix something' });
+    addPunchPhoto(db, id, 'f1', 'before');
+    removePunchPhoto(db, id, 'f1');
+    const item = getPunchItem(db, id)!;
+    expect(item.photos.length).toBe(0);
+  });
+});
+
+describe('deletePunchItem', () => {
+  it('deletes item and its photos; getPunchItem returns null and punch_photos are cleaned up', () => {
+    const { id } = createPunchItem(db, 'p1', { description: 'Fix something' });
+    addPunchPhoto(db, id, 'f1', 'before');
+    deletePunchItem(db, id);
+    expect(getPunchItem(db, id)).toBeNull();
+    const photoCount = (db.prepare('SELECT COUNT(*) c FROM punch_photos WHERE punchItemId = ?').get(id) as any).c;
+    expect(photoCount).toBe(0);
+  });
+});
+
+describe('punchProgress', () => {
+  it('returns done and total counts for a project', () => {
+    createPunchItem(db, 'p1', { area: 'Kitchen', description: 'Fix cabinet' });
+    const { id: id2 } = createPunchItem(db, 'p1', { area: 'Bath', description: 'Fix tub' });
+    setPunchDone(db, id2, true);
+    const progress = punchProgress(db, 'p1');
+    expect(progress.done).toBe(1);
+    expect(progress.total).toBe(2);
   });
 });
