@@ -171,7 +171,7 @@ export function MeasurementItem({
                 e.stopPropagation();
                 onDelete();
               }}
-              className="p-2 text-slate-400 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 active:scale-95 transition-all"
+              className="p-2 text-slate-400 hover:text-red-500 can-hover:md:opacity-0 can-hover:md:group-hover:opacity-100 active:scale-95 transition-all"
               title="Delete Measurement"
             >
               <Trash2 size={18} />

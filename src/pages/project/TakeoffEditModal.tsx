@@ -55,11 +55,11 @@ export function TakeoffEditModal({
 }: TakeoffEditModalProps) {
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-slate-100">
           <h3 className="text-lg font-semibold text-slate-900">Edit Measurement Takeoff</h3>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
             <input

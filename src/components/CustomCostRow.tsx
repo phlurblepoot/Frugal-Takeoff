@@ -21,7 +21,7 @@ export const CustomCostRow: React.FC<{
 
   return (
     <div className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-slate-200 shadow-sm">
-      <div className="flex gap-2 items-center">
+      <div className="flex flex-wrap gap-2 items-center">
         <select
           value={item.type}
           onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
@@ -47,7 +47,7 @@ export const CustomCostRow: React.FC<{
         </button>
       </div>
 
-      <div className="flex gap-2 items-center pl-2 border-l-2 border-accent-100">
+      <div className="flex flex-wrap gap-2 items-center pl-2 border-l-2 border-accent-100">
         {item.type === 'flat' && (
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>

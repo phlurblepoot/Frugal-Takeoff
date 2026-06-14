@@ -544,6 +544,11 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               </div>
             </div>
 
+            {/* Mobile note (Phase 8): the OCR region-select drag below uses
+                mouse events only (onMouseDown/Move/Up), so the rectangular
+                crop is desktop / tablet-mouse only. Phones are read-only for
+                the takeoff workflow and this is a secondary import affordance,
+                so touch/pointer support is intentionally out of scope here. */}
             <div
               className={`flex-grow overflow-hidden relative bg-slate-800 flex items-center justify-center ${
                 extractionType ? 'cursor-crosshair' : zoom > 1 ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'

@@ -111,6 +111,12 @@
   padding-top: env(safe-area-inset-top);
 }
 
+/* can-hover: gate hover-reveal affordances behind a pointer that can actually
+   hover. On touch devices (phones/tablets) `can-hover:opacity-0` is inert, so
+   buttons stay visible; on mouse devices they hide until hover. Use as
+   `can-hover:opacity-0 can-hover:group-hover:opacity-100`. */
+@custom-variant can-hover (@media (hover: hover) and (pointer: fine));
+
 /* ── Legacy utility classes (kept until Phases 3–5 restyle the screens) ── */
 @layer utilities {
   .glass {

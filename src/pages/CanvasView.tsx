@@ -75,6 +75,36 @@ const CanvasViewInner: React.FC = () => {
   }, [project, pageId, setPageName]);
   
   const [currentTool, setCurrentTool] = useState<Tool>('pan');
+
+  // Phone = read-only canvas (Phase 8). Matches the app shell's `isMobile`
+  // breakpoint (≤767px). On phones we keep pan / pinch-zoom / tap-select / view
+  // and the measurement sidebar, but disable drawing-tool SELECTION
+  // (Length/Area/Count/Region/Scale-draw). Tablets (≥md) keep full drawing.
+  const [isPhone, setIsPhone] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setIsPhone(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  const [readOnlyBannerDismissed, setReadOnlyBannerDismissed] = useState(false);
+  // If we cross into phone width while a drawing tool is active, fall back to
+  // pan so the canvas stays in a coherent read-only state.
+  useEffect(() => {
+    if (isPhone && currentTool !== 'pan') setCurrentTool('pan');
+  }, [isPhone, currentTool]);
+  // Touch devices don't surface `title` tooltips and finish drawing via
+  // double-tap rather than a keyboard, so the instruction copy adapts.
+  const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  const finishHint = isTouchDevice ? 'Double-tap to finish.' : 'Double-click or press Enter to finish.';
+  const READ_ONLY_MESSAGE = 'Viewing only on small screens — open this page on a tablet or computer to draw takeoffs.';
+  // Re-surface the banner if it was dismissed, so a tap on a locked tool always
+  // explains why nothing happened.
+  const handlePhoneToolBlocked = () => {
+    setReadOnlyBannerDismissed(false);
+    setToolDisabledMessage(READ_ONLY_MESSAGE);
+  };
+
   const [showScaleModal, setShowScaleModal] = useState(false);
   const [pendingPixelDistance, setPendingPixelDistance] = useState<number>(0);
   const [scaleInput, setScaleInput] = useState('10');
@@ -1135,15 +1165,18 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('scale')}
               icon={<Settings size={18} />}
               label="Set Scale"
+              disabled={isPhone}
+              onDisabledClick={handlePhoneToolBlocked}
             />
             <ToolButton
               active={currentTool === 'length'}
               onClick={() => setCurrentTool('length')}
               icon={<Ruler size={18} />}
               label="Length"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1153,9 +1186,10 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('area')}
               icon={<Square size={18} />}
               label="Area"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1165,9 +1199,10 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('count')}
               icon={<Hash size={18} />}
               label="Count"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1186,8 +1221,8 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('region')}
               icon={<Layers size={18} />}
               label="Region"
-              disabled={!page.isMultiRegion}
-              onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+              disabled={isPhone || !page.isMultiRegion}
+              onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
@@ -1651,6 +1686,26 @@ const CanvasViewInner: React.FC = () => {
         </div>
 
         <div data-testid="canvas-surface" className="flex-1 relative min-h-0">
+          {/* Phone read-only notice (Phase 8). Dismissible; only on phones. */}
+          {isPhone && !readOnlyBannerDismissed && (
+            <div
+              data-testid="canvas-readonly-banner"
+              className="absolute top-16 left-3 right-3 z-40 flex items-start gap-2 bg-amber-50/95 backdrop-blur border border-amber-200 text-amber-900 rounded-xl px-3 py-2.5 shadow-lg"
+            >
+              <Layers size={16} className="mt-0.5 shrink-0 text-amber-600" />
+              <span className="text-xs leading-snug flex-1">
+                Viewing only on small screens — open this page on a tablet or computer to draw takeoffs.
+              </span>
+              <button
+                onClick={() => setReadOnlyBannerDismissed(true)}
+                className="shrink-0 p-1 -m-1 text-amber-600 hover:text-amber-900 active:scale-90 transition-all"
+                aria-label="Dismiss"
+                title="Dismiss"
+              >
+                <span aria-hidden className="block w-4 h-4 leading-4 text-center font-bold">×</span>
+              </button>
+            </div>
+          )}
           {/* Floating Controls */}
           <div className={`absolute top-[58px] md:top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
             <div className="hidden md:flex pointer-events-auto items-center gap-2">
@@ -1689,13 +1744,14 @@ const CanvasViewInner: React.FC = () => {
               )}
             </div>
             
-            <div className={`pointer-events-auto flex items-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
+            <div className={`pointer-events-auto flex flex-wrap items-center justify-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
               <ToolButton
                 testId="tool-pan"
                 active={currentTool === 'pan'}
                 onClick={() => setCurrentTool('pan')}
                 icon={<Hand size={20} />}
                 label="Pan"
+                showLabel
               />
               <ToolButton
                 testId="tool-scale"
@@ -1703,6 +1759,9 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('scale')}
                 icon={<Settings size={20} />}
                 label="Set Scale"
+                showLabel
+                disabled={isPhone}
+                onDisabledClick={handlePhoneToolBlocked}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <ToolButton
@@ -1711,9 +1770,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('length')}
                 icon={<Ruler size={20} />}
                 label="Length"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
@@ -1724,9 +1785,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('area')}
                 icon={<Square size={20} />}
                 label="Area"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
@@ -1737,9 +1800,11 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('count')}
                 icon={<Hash size={20} />}
                 label="Count"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
@@ -1750,8 +1815,9 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('region')}
                 icon={<Layers size={20} />}
                 label="Region"
-                disabled={!page.isMultiRegion}
-                onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+                showLabel
+                disabled={isPhone || !page.isMultiRegion}
+                onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
@@ -1928,9 +1994,9 @@ const CanvasViewInner: React.FC = () => {
           {currentTool !== 'pan' && (
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/80 backdrop-blur text-white px-4 py-2 rounded-full text-xs md:text-sm shadow-lg pointer-events-none z-10 text-center max-w-[90vw]">
               {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
-              {currentTool === 'length' && "Click points to draw a line. Double-click or press Enter to finish."}
-              {currentTool === 'area' && "Click points to draw a polygon. Double-click or press Enter to finish."}
-              {currentTool === 'region' && "Click points to define a scale region. Double-click or press Enter to finish."}
+              {currentTool === 'length' && `Click points to draw a line. ${finishHint}`}
+              {currentTool === 'area' && `Click points to draw a polygon. ${finishHint}`}
+              {currentTool === 'region' && `Click points to define a scale region. ${finishHint}`}
             </div>
           )}
         </div>
@@ -2373,7 +2439,8 @@ function ToolButton({
   disabled = false,
   onDisabledClick,
   className = "",
-  testId
+  testId,
+  showLabel = false,
 }: {
   active: boolean;
   onClick: () => void;
@@ -2383,22 +2450,28 @@ function ToolButton({
   onDisabledClick?: () => void;
   className?: string;
   testId?: string;
+  /** When set, render a small visible text label beside the icon on touch
+      devices (where `title` tooltips don't appear). Hidden on hover-capable
+      pointers so the desktop toolbar stays icon-only and compact. */
+  showLabel?: boolean;
 }) {
   return (
     <button
       data-testid={testId}
       onClick={disabled ? onDisabledClick : onClick}
       title={label}
+      aria-label={label}
       className={`
-        flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
-        ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' : 
-          active 
-            ? 'bg-accent-50 border-accent-200 text-accent-700 shadow-sm' 
+        flex items-center justify-center gap-1.5 p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
+        ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' :
+          active
+            ? 'bg-accent-50 border-accent-200 text-accent-700 shadow-sm'
             : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}
         ${className}
       `}
     >
       {icon}
+      {showLabel && <span className="can-hover:hidden text-xs font-medium whitespace-nowrap">{label}</span>}
     </button>
   );
 }

@@ -311,7 +311,7 @@ export function ProjectPagesTab({
                           className={`absolute top-1.5 left-1.5 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
                             isPageSelected
                               ? 'bg-accent-600 border-accent-600 opacity-100'
-                              : 'bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100'
+                              : 'bg-white/80 border-slate-300 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
                           }`}
                           title={isPageSelected ? 'Deselect' : 'Select'}
                         >
@@ -382,7 +382,7 @@ export function ProjectPagesTab({
                                 className={`p-1 rounded transition-opacity ${
                                   isFavorite
                                     ? 'opacity-100'
-                                    : 'opacity-0 group-hover:opacity-100 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+                                    : 'opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 hover:bg-amber-50 dark:hover:bg-amber-900/20'
                                 }`}
                               >
                                 <Star
@@ -392,14 +392,14 @@ export function ProjectPagesTab({
                               </button>
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                                 title="Copy share link"
                               >
                                 <LinkIcon size={14} />
                               </button>
                               <button
                                 onClick={(e) => handleStartRenamePage(e, page)}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-0 group-hover:opacity-100 transition-opacity"
+                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                                 title="Rename"
                               >
                                 <Edit2 size={14} />
@@ -462,7 +462,7 @@ export function ProjectPagesTab({
                         className={`absolute top-2 left-2 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
                           isPageSelected
                             ? 'bg-accent-600 border-accent-600 opacity-100'
-                            : 'bg-white/80 border-slate-300 opacity-0 group-hover:opacity-100'
+                            : 'bg-white/80 border-slate-300 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
                         }`}
                         title={isPageSelected ? 'Deselect' : 'Select'}
                       >
@@ -475,7 +475,7 @@ export function ProjectPagesTab({
                         className={`absolute top-2 right-2 p-1 rounded-md transition-all ${
                           isFavorite
                             ? 'bg-white/80 opacity-100'
-                            : 'bg-white/0 opacity-0 group-hover:opacity-100 group-hover:bg-white/80'
+                            : 'bg-white/80 opacity-100 can-hover:bg-white/0 can-hover:opacity-0 can-hover:group-hover:opacity-100 can-hover:group-hover:bg-white/80 focus-visible:opacity-100'
                         }`}
                       >
                         <Star
@@ -539,7 +539,7 @@ export function ProjectPagesTab({
                             <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">
                               <HighlightedText text={page.name} term={searchTerm} />
                             </h3>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="flex items-center gap-0.5 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
                                 className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"

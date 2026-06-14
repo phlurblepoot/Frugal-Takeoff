@@ -305,7 +305,7 @@ export function MeasurementSidebar({
                             e.stopPropagation();
                             setTakeoffToDelete(takeoff);
                           }}
-                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
                           title="Delete Takeoff"
                         >
                           <Trash2 size={16} />
@@ -315,7 +315,7 @@ export function MeasurementSidebar({
                             e.stopPropagation();
                             handleEditTakeoff(takeoff);
                           }}
-                          className="text-slate-400 hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-slate-400 hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
                           title="Edit Takeoff"
                         >
                           <Edit2 size={16} />
