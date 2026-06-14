@@ -1,6 +1,7 @@
 // src/components/shell/AppShell.tsx
 import React, { useEffect, useState } from 'react';
 import { useLocation, matchPath } from 'react-router-dom';
+import { Menu, Search } from 'lucide-react';
 import { Sidebar, SidebarState } from './Sidebar';
 import { ProjectShellProvider } from '../../context/ProjectShellContext';
 
@@ -25,6 +26,18 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return () => mq.removeEventListener('change', handler);
   }, []);
 
+  // Mobile-only slide-in drawer state. Desktop never touches this.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  // Close the drawer whenever the route changes (covers nav-item clicks too,
+  // which navigate).
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [location.pathname]);
+  // Never leave the drawer "open" lingering when crossing back to desktop.
+  useEffect(() => {
+    if (!isMobile) setMobileSidebarOpen(false);
+  }, [isMobile]);
+
   const handleChange = (s: SidebarState) => {
     setSidebarState(s);
     localStorage.setItem(SIDEBAR_STORAGE_KEY, s);
@@ -35,13 +48,83 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const effectiveState: SidebarState = isCanvasPage ? 'collapsed' : sidebarState;
   const showSidebar = !isLoginPage && !(isMobile && isCanvasPage);
 
-  const marginLeft =
-    !showSidebar || effectiveState === 'hidden' ? 0 : effectiveState === 'collapsed' ? 64 : 208;
+  // On mobile the sidebar never consumes horizontal space on ANY route — it
+  // becomes an overlay drawer instead. Desktop keeps the inline-marginLeft offset.
+  const marginLeft = isMobile
+    ? 0
+    : !showSidebar || effectiveState === 'hidden'
+      ? 0
+      : effectiveState === 'collapsed'
+        ? 64
+        : 208;
+
+  // Mobile top bar: only for non-canvas routes (canvas has its own chrome) and
+  // only while logged in.
+  const showMobileTopBar = isMobile && !isCanvasPage && !isLoginPage;
 
   return (
     <ProjectShellProvider>
-      {showSidebar && <Sidebar state={effectiveState} onChange={handleChange} locked={isCanvasPage} />}
-      <div className="min-h-screen bg-surface" style={{ marginLeft, transition: 'margin-left 200ms' }}>
+      {showSidebar &&
+        (isMobile ? (
+          <>
+            {/* Dimmed backdrop behind the drawer */}
+            {mobileSidebarOpen && (
+              <div
+                className="fixed inset-0 z-[45] bg-black/50 md:hidden"
+                aria-hidden="true"
+                onClick={() => setMobileSidebarOpen(false)}
+              />
+            )}
+            {/* Slide-in overlay drawer (always expanded on mobile) */}
+            <div
+              className={`fixed inset-y-0 left-0 z-[46] md:hidden transition-transform duration-200 ${
+                mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+              }`}
+            >
+              <Sidebar
+                state="expanded"
+                onChange={handleChange}
+                locked
+                onNavigate={() => setMobileSidebarOpen(false)}
+              />
+            </div>
+          </>
+        ) : (
+          <Sidebar state={effectiveState} onChange={handleChange} locked={isCanvasPage} />
+        ))}
+
+      {showMobileTopBar && (
+        <header className="fixed top-0 inset-x-0 z-40 flex items-center gap-2 h-14 px-2 pt-safe bg-surface border-b border-edge md:hidden">
+          <button
+            onClick={() => setMobileSidebarOpen(true)}
+            aria-label="Open navigation"
+            className="flex items-center justify-center min-h-11 min-w-11 rounded-lg text-ink-soft hover:bg-hover active:bg-hover transition-colors"
+          >
+            <Menu size={20} />
+          </button>
+          <span className="flex-1 truncate font-semibold text-ink">Takeoff Pro</span>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+            aria-label="Search"
+            className="flex items-center justify-center min-h-11 min-w-11 rounded-lg text-ink-soft hover:bg-hover active:bg-hover transition-colors"
+          >
+            <Search size={20} />
+          </button>
+        </header>
+      )}
+
+      <div
+        className="min-h-screen bg-surface"
+        style={{
+          marginLeft,
+          transition: 'margin-left 200ms',
+          // Offset content below the fixed mobile top bar (h-14) plus the
+          // top safe-area inset it reserves via pt-safe.
+          ...(showMobileTopBar
+            ? { paddingTop: 'calc(3.5rem + env(safe-area-inset-top))' }
+            : {}),
+        }}
+      >
         {children}
       </div>
     </ProjectShellProvider>

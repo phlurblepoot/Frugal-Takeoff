@@ -69,7 +69,7 @@ const NavRow: React.FC<{
     onClick={onClick}
     title={!expanded ? label : undefined}
     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-      active ? 'glow-accent text-white' : 'text-ink-soft hover:bg-hover hover:text-ink'
+      active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink active:bg-hover'
     }`}
   >
     <Icon size={18} className="shrink-0" />
@@ -90,11 +90,15 @@ interface SidebarProps {
   onChange: (s: SidebarState) => void;
   // True on canvas routes: the rail is forced thin and the size toggles hide.
   locked?: boolean;
+  // Fired when a nav item is clicked — lets the mobile drawer close itself.
+  onNavigate?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = false }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = false, onNavigate }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  // Wrap navigation so the mobile drawer closes on selection.
+  const go = (path: string) => { navigate(path); onNavigate?.(); };
   const { mode, toggleMode } = useTheme();
   const { project } = useProjectShell();
   const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
@@ -117,7 +121,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
       <button
         onClick={() => onChange('collapsed')}
         title="Open navigation"
-        className="fixed top-4 left-4 z-50 p-2.5 bg-raised rounded-xl shadow-lg border border-edge text-ink-soft hover:bg-hover transition-colors"
+        className="fixed top-4 left-4 z-50 flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-2.5 bg-raised rounded-xl shadow-lg border border-edge text-ink-soft hover:bg-hover active:bg-hover transition-colors"
       >
         <Menu size={18} />
       </button>
@@ -136,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
           <button
             onClick={() => onChange(expanded ? 'collapsed' : 'expanded')}
             title={expanded ? 'Collapse' : 'Expand navigation'}
-            className="p-1.5 rounded-lg hover:bg-hover text-ink-soft transition-colors"
+            className="flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-1.5 rounded-lg hover:bg-hover active:bg-hover text-ink-soft transition-colors"
           >
             <Menu size={18} />
           </button>
@@ -147,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
           <button
             onClick={() => onChange('hidden')}
             title="Hide sidebar"
-            className="p-1.5 rounded-lg hover:bg-hover text-ink-faint transition-colors"
+            className="flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-1.5 rounded-lg hover:bg-hover active:bg-hover text-ink-faint transition-colors"
           >
             <PanelLeftClose size={18} />
           </button>
@@ -160,9 +164,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
           label="Search"
           Icon={Search}
           expanded={expanded}
-          onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
+          onClick={() => { onNavigate?.(); window.dispatchEvent(new CustomEvent('open-command-palette')); }}
           trailing={
-            <kbd className="text-[10px] font-mono text-ink-faint border border-edge rounded px-1 py-0.5">⌘K</kbd>
+            <kbd className="hidden md:inline-flex text-[10px] font-mono text-ink-faint border border-edge rounded px-1 py-0.5">⌘K</kbd>
           }
         />
         {projectId ? (
@@ -172,7 +176,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                 label="All Projects"
                 Icon={ArrowLeft}
                 expanded={expanded}
-                onClick={() => navigate('/projects')}
+                onClick={() => go('/projects')}
               />
             </div>
             {expanded && (
@@ -193,7 +197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                     Icon={item.Icon}
                     expanded={expanded}
                     active={item.match(location.pathname, base)}
-                    onClick={() => navigate(`${base}${item.path}`)}
+                    onClick={() => go(`${base}${item.path}`)}
                   />
                 );
               })}
@@ -210,7 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                   Icon={item.Icon}
                   expanded={expanded}
                   active={item.match(location.pathname)}
-                  onClick={() => navigate(item.path)}
+                  onClick={() => go(item.path)}
                 />
               ))}
             </div>
@@ -223,7 +227,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                   Icon={item.Icon}
                   expanded={expanded}
                   active={item.match(location.pathname)}
-                  onClick={() => navigate(item.path)}
+                  onClick={() => go(item.path)}
                 />
               ))}
             </div>
@@ -232,7 +236,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
       </div>
 
       {/* Footer */}
-      <div className="px-2 pb-3 pt-2 border-t border-edge space-y-0.5 shrink-0">
+      <div className="px-2 pb-3 pt-2 pb-safe border-t border-edge space-y-0.5 shrink-0">
         <NavRow
           label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
           Icon={mode === 'dark' ? Sun : Moon}
@@ -244,7 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
           Icon={Settings}
           expanded={expanded}
           active={location.pathname === '/settings'}
-          onClick={() => navigate('/settings')}
+          onClick={() => go('/settings')}
         />
         <button
           onClick={handleLogout}

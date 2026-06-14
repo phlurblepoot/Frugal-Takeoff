@@ -93,6 +93,24 @@
   box-shadow: 0 0 10px 0 color-mix(in oklab, var(--color-accent-500) 45%, transparent);
 }
 
+/* ── Mobile / touch helpers (Phase 8) ─────────────────────────────────────
+   no-scrollbar: hide the scrollbar on overflow-x-auto tab/toolbar rows.
+   pb-safe / pt-safe: honour iOS home-bar / notch safe-area insets. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
 /* ── Legacy utility classes (kept until Phases 3–5 restyle the screens) ── */
 @layer utilities {
   .glass {
