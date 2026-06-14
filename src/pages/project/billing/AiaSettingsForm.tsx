@@ -1,8 +1,9 @@
 // src/pages/project/billing/AiaSettingsForm.tsx
 import React, { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { AiaSettings, saveAiaSettings } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
-import { Button, Card, CardBody, CardHeader, Field, Input, Textarea } from '../../../components/ui';
+import { Button, Card, CardBody, Field, Input, Textarea } from '../../../components/ui';
 
 const numOrUndefined = (v: string): number | undefined => {
   const n = parseFloat(v);
@@ -28,6 +29,7 @@ export const AiaSettingsForm: React.FC<{
   const [architectProjectNumber, setArchitectProjectNumber] = useState(settings.architectProjectNumber ?? '');
   const [contractFor, setContractFor] = useState(settings.contractFor ?? '');
   const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -57,9 +59,27 @@ export const AiaSettingsForm: React.FC<{
 
   return (
     <Card className="mb-5">
-      <CardHeader title="AIA settings"
-        actions={<Button size="sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</Button>} />
-      <CardBody>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls="aia-settings-body"
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+      >
+        <div className="flex items-center gap-2">
+          {open ? (
+            <ChevronDown className="h-4 w-4 text-ink-soft" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-ink-soft" aria-hidden="true" />
+          )}
+          <div>
+            <h3 className="text-sm font-semibold text-ink">AIA settings</h3>
+            <p className="text-xs text-ink-soft">Owner, architect &amp; retainage — set once</p>
+          </div>
+        </div>
+      </button>
+      {open && (
+      <CardBody id="aia-settings-body" className="border-t border-edge">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Retainage % (work)" htmlFor="aia-ret">
             <Input id="aia-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} placeholder="10" />
@@ -95,7 +115,11 @@ export const AiaSettingsForm: React.FC<{
               placeholder="Description of the work covered by this contract" />
           </Field>
         </div>
+        <div className="mt-4 flex justify-end">
+          <Button size="sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</Button>
+        </div>
       </CardBody>
+      )}
     </Card>
   );
 };
