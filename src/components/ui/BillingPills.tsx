@@ -9,9 +9,11 @@ export const INVOICE_STATUS_META: Record<string, { label: string; tone: PillTone
 };
 
 export const CO_STATUS_META: Record<string, { label: string; tone: PillTone }> = {
-  pending:  { label: 'Pending',  tone: 'amber' },
+  draft:    { label: 'Draft',    tone: 'slate' },
+  sent:     { label: 'Sent',     tone: 'blue' },
   approved: { label: 'Approved', tone: 'green' },
   rejected: { label: 'Rejected', tone: 'red' },
+  pending:  { label: 'Pending',  tone: 'slate' }, // legacy rows (pre-Phase 9)
 };
 
 const pillFrom = (

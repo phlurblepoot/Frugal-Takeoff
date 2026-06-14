@@ -1,85 +1,106 @@
 // src/pages/project/billing/ChangeOrdersSection.tsx
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { FileText, Plus, Trash2 } from 'lucide-react';
 import {
-  ChangeOrderListItem,
-  getChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+  ChangeOrder, ChangeOrderListItem,
+  getChangeOrders, getChangeOrder, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import {
-  Button, Card, CardBody, CardHeader, Field, Input, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
+import { ChangeOrderEditor } from './ChangeOrderEditor';
+import { useProjectOutlet } from '../ProjectLayout';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
+  const confirm = useConfirm();
+  const { summary: projectSummary } = useProjectOutlet();
   const [changeOrders, setChangeOrders] = useState<ChangeOrderListItem[] | null>(null);
-  const [coNumber, setCoNumber] = useState('');
-  const [coDesc, setCoDesc] = useState('');
-  const [coAmount, setCoAmount] = useState('');
+  const [editing, setEditing] = useState<ChangeOrder | null>(null);
 
-  const load = () => {
+  const reload = () => {
     if (!projectId) return;
     getChangeOrders(projectId).then(setChangeOrders).catch(() => setChangeOrders([]));
   };
-  useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addChangeOrder = async () => {
+  const openChangeOrder = async (id: string) => {
+    try { setEditing(await getChangeOrder(id)); } catch { toast('Failed to open change order', { type: 'error' }); }
+  };
+  const newChangeOrder = async () => {
     if (!projectId) return;
-    const amount = parseFloat(coAmount);
-    if (!Number.isFinite(amount)) { toast('Enter an amount', { type: 'warning' }); return; }
     try {
-      await createChangeOrder(projectId, { number: coNumber || undefined, description: coDesc || undefined, amount });
-      setCoNumber(''); setCoDesc(''); setCoAmount(''); load();
+      const r = await createChangeOrder(projectId, {});
+      const co = await getChangeOrder(r.id);
+      setEditing(co);
+      reload();
       onChange?.();
-    } catch { toast('Failed to add change order', { type: 'error' }); }
+    } catch { toast('Failed to create change order', { type: 'error' }); }
+  };
+  const removeChangeOrder = async (id: string) => {
+    if (!(await confirm({ title: 'Delete change order?', message: 'This permanently removes the change order and its line items and photos.', tone: 'danger', confirmLabel: 'Delete' }))) return;
+    try { await deleteChangeOrder(id); reload(); onChange?.(); } catch { toast('Delete failed', { type: 'error' }); }
   };
   const coStatus = async (id: string, status: string) => {
-    try { await setChangeOrderStatus(id, status); load(); onChange?.(); } catch { toast('Update failed', { type: 'error' }); }
-  };
-  const removeCo = async (id: string) => {
-    try { await deleteChangeOrder(id); load(); onChange?.(); } catch { toast('Delete failed', { type: 'error' }); }
+    try { await setChangeOrderStatus(id, status); reload(); onChange?.(); } catch { toast('Update failed', { type: 'error' }); }
   };
 
   return (
-    <Card className="mb-5">
-      <CardHeader title="Change Orders" />
-      <CardBody>
-        <div className="mb-3 flex flex-wrap items-end gap-2">
-          <Field label="Number" htmlFor="co-num"><Input id="co-num" value={coNumber} onChange={e => setCoNumber(e.target.value)} className="w-28" /></Field>
-          <Field label="Description" htmlFor="co-desc"><Input id="co-desc" value={coDesc} onChange={e => setCoDesc(e.target.value)} className="w-56" /></Field>
-          <Field label="Amount" htmlFor="co-amt"><Input id="co-amt" type="number" value={coAmount} onChange={e => setCoAmount(e.target.value)} className="w-28" placeholder="0.00" /></Field>
-          <Button variant="secondary" onClick={addChangeOrder}><Plus size={14} />Add</Button>
-        </div>
-        {changeOrders === null ? (
-          <Skeleton className="h-9" />
-        ) : changeOrders.length === 0 ? (
-          <p className="text-sm text-ink-faint">No change orders. Approved change orders increase the contract value.</p>
-        ) : (
-          <Table>
-            <THead><TR><TH>Number</TH><TH>Description</TH><TH>Amount</TH><TH>Status</TH><TH></TH></TR></THead>
-            <TBody>
-              {changeOrders.map(co => (
-                <TR key={co.id}>
-                  <TD className="font-medium text-ink">{co.number || '—'}</TD>
-                  <TD className="text-ink-soft">{co.description || '—'}</TD>
-                  <TD className="text-ink-soft">{formatMoney(Math.round(co.amount * 100))}</TD>
-                  <TD><ChangeOrderStatusPill status={co.status} /></TD>
-                  <TD>
-                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                      {co.status !== 'approved' && <button onClick={() => coStatus(co.id, 'approved')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-green-700 hover:bg-green-50 dark:hover:bg-green-900/20">Approve</button>}
-                      {co.status !== 'rejected' && <button onClick={() => coStatus(co.id, 'rejected')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>}
-                      <button onClick={() => removeCo(co.id)} title="Delete" className="rounded p-1 text-ink-faint hover:text-red-600"><Trash2 size={13} /></button>
-                    </div>
-                  </TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        )}
-      </CardBody>
-    </Card>
+    <>
+      <Card className="mb-5">
+        <CardHeader title="Change Orders" actions={<Button size="sm" onClick={newChangeOrder}><Plus size={14} />New change order</Button>} />
+        <CardBody className="p-0">
+          {changeOrders === null ? (
+            <div className="space-y-2 p-4">{[0, 1].map(i => <Skeleton key={i} className="h-9" />)}</div>
+          ) : changeOrders.length === 0 ? (
+            <EmptyState icon={<FileText size={20} />} title="No change orders yet" description="Approved change orders increase the contract value." />
+          ) : (
+            <Table>
+              <THead><TR><TH>Number</TH><TH>Status</TH><TH>Amount</TH><TH>Date</TH><TH></TH></TR></THead>
+              <TBody>
+                {changeOrders.map(co => (
+                  <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
+                    <TD className="font-medium text-ink">CO-{co.number || '—'}</TD>
+                    <TD><ChangeOrderStatusPill status={co.status} /></TD>
+                    <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>
+                    <TD className="text-ink-soft">{co.date ? new Date(co.date).toLocaleDateString() : '—'}</TD>
+                    <TD onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-1">
+                        {co.status !== 'approved' && <button onClick={() => coStatus(co.id, 'approved')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-green-700 hover:bg-green-50 dark:hover:bg-green-900/20">Approve</button>}
+                        {co.status !== 'rejected' && <button onClick={() => coStatus(co.id, 'rejected')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>}
+                        <button onClick={() => removeChangeOrder(co.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
+                      </div>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          )}
+        </CardBody>
+      </Card>
+
+      {editing && (
+        <ChangeOrderEditor
+          key={`${editing.id}:${editing.version}`}
+          changeOrder={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            // reload the open change order (lines/photos/version) and the list
+            try { setEditing(await getChangeOrder(editing.id)); } catch { setEditing(null); }
+            reload();
+            onChange?.();
+          }}
+          projectName={projectSummary?.name ?? ''}
+          contractor={projectSummary?.contractor}
+          address={projectSummary?.address}
+          projectId={projectId ?? ''}
+        />
+      )}
+    </>
   );
 };
