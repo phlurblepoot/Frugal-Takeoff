@@ -1,6 +1,7 @@
 // src/pages/project/billing/AiaScheduleOfValues.tsx
-import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, Check, X, Pencil } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import * as XLSX from 'xlsx';
+import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle } from 'lucide-react';
 import {
   AiaSovLine, getSov, createSovLine, saveSovLine, deleteSovLine,
   seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate,
@@ -20,6 +21,8 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
   const confirm = useConfirm();
   const [lines, setLines] = useState<AiaSovLine[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // inline edit state
   const [editId, setEditId] = useState<string | null>(null);
@@ -76,6 +79,48 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
     } catch {
       toast('Failed to sync change orders', { type: 'error' });
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file || !projectId) { input.value = ''; return; }
+    setBusy(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) { toast('No sheet found in the file', { type: 'error' }); return; }
+      const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, blankrows: false });
+      const newLines: { description: string; scheduledValueCents: number }[] = [];
+      for (const row of rows) {
+        const description = String(row[0] ?? '').trim();
+        const value = Number(String(row[1] ?? '').replace(/[$,\s]/g, ''));
+        if (description === '' || !Number.isFinite(value)) continue;
+        newLines.push({ description, scheduledValueCents: Math.round(value * 100) });
+      }
+      if (newLines.length === 0) {
+        toast('No valid rows found — column A should be descriptions, column B the values', { type: 'error' });
+        return;
+      }
+      const hasOriginal = (lines ?? []).some(l => !isCo(l));
+      if (hasOriginal) {
+        const ok = await confirm({
+          title: 'Replace schedule of values?',
+          message: `Replace the schedule of values with ${newLines.length} line${newLines.length === 1 ? '' : 's'} from the sheet? Change-order lines are kept.`,
+          confirmLabel: 'Replace',
+        });
+        if (!ok) return;
+      }
+      await seedSov(projectId, newLines);
+      reload();
+      toast(`Imported ${newLines.length} line${newLines.length === 1 ? '' : 's'}`, { type: 'success' });
+    } catch {
+      toast('Failed to read sheet', { type: 'error' });
+    } finally {
+      input.value = '';
       setBusy(false);
     }
   };
@@ -145,11 +190,19 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
     <Card className="mb-5">
       <CardHeader title="Schedule of values"
         actions={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" onClick={seedFromEstimate} disabled={busy}>Seed from estimate</Button>
             <Button size="sm" variant="secondary" onClick={syncCos} disabled={busy}>Sync approved change orders</Button>
+            <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />Upload sheet</Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowHelp(v => !v)} aria-expanded={showHelp} aria-label="Schedule of values upload help"><HelpCircle size={16} /></Button>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUploadFile} />
           </div>
         } />
+      {showHelp && (
+        <p className="border-b border-edge px-4 py-3 text-sm text-ink-faint">
+          Upload an .xlsx where column A is the line description and column B is the scheduled value (in dollars). A header row is fine — it's skipped automatically. This replaces the current schedule of values (change-order lines are kept).
+        </p>
+      )}
       <CardBody className="p-0">
         {lines === null ? (
           <div className="space-y-2 p-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-9" />)}</div>
