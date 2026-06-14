@@ -190,7 +190,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
     <Card className="mb-5">
       <CardHeader title="Schedule of values"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="secondary" onClick={seedFromEstimate} disabled={busy}>Seed from estimate</Button>
             <Button size="sm" variant="secondary" onClick={syncCos} disabled={busy}>Sync approved change orders</Button>
             <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />Upload sheet</Button>
@@ -249,11 +249,11 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
 
         {/* Add line */}
         <div className="flex flex-wrap items-end gap-2 border-t border-edge p-4">
-          <Field label="Item no." htmlFor="sov-item"><Input id="sov-item" value={nItemNo} onChange={e => setNItemNo(e.target.value)} className="w-24" /></Field>
-          <Field label="Description" htmlFor="sov-desc"><Input id="sov-desc" value={nDesc} onChange={e => setNDesc(e.target.value)} className="w-56" /></Field>
-          <Field label="Scheduled value" htmlFor="sov-value"><Input id="sov-value" type="number" value={nValue} onChange={e => setNValue(e.target.value)} className="w-32" placeholder="0.00" /></Field>
-          <Field label="Retainage %" htmlFor="sov-ret"><Input id="sov-ret" type="number" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-28" placeholder="default" /></Field>
-          <Button variant="secondary" onClick={addLine}><Plus size={14} />Add line</Button>
+          <div className="w-full sm:w-auto"><Field label="Item no." htmlFor="sov-item"><Input id="sov-item" value={nItemNo} onChange={e => setNItemNo(e.target.value)} className="w-full sm:w-24" /></Field></div>
+          <div className="w-full sm:w-auto"><Field label="Description" htmlFor="sov-desc"><Input id="sov-desc" value={nDesc} onChange={e => setNDesc(e.target.value)} className="w-full sm:w-56" /></Field></div>
+          <div className="w-full sm:w-auto"><Field label="Scheduled value" htmlFor="sov-value"><Input id="sov-value" type="number" value={nValue} onChange={e => setNValue(e.target.value)} className="w-full sm:w-32" placeholder="0.00" /></Field></div>
+          <div className="w-full sm:w-auto"><Field label="Retainage %" htmlFor="sov-ret"><Input id="sov-ret" type="number" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-full sm:w-28" placeholder="default" /></Field></div>
+          <Button variant="secondary" onClick={addLine} className="w-full sm:w-auto"><Plus size={14} />Add line</Button>
         </div>
 
         {/* Totals */}

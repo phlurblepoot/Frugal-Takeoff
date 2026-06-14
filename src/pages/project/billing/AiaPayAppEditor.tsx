@@ -263,7 +263,10 @@ export const AiaPayAppEditor: React.FC<{
               <h4 className="text-sm font-semibold text-ink">G703 continuation sheet</h4>
               <span className="text-xs text-ink-faint">Save to recalc D / E / G / retainage</span>
             </div>
-            <div className="overflow-x-auto">
+            {/* Desktop: 10-col G703 grid. Owns its own bounded horizontal
+                scroll region so a horizontal touch-swipe works on tablets
+                without fighting the modal body's vertical scroll. */}
+            <div className="hidden overflow-x-auto md:block">
               <Table>
                 <THead>
                   <TR>
@@ -320,6 +323,77 @@ export const AiaPayAppEditor: React.FC<{
                   })}
                 </TBody>
               </Table>
+            </div>
+
+            {/* Phone: per-line stacked card editor. Renders the SAME g703 rows
+                and binds to the SAME edits/setEdit state + previewG memo as the
+                desktop table above — no parallel state and no duplicated math
+                (all computed values come from row.*Cents / previewG, identical
+                to the table). So the G702 summary reconciles identically. */}
+            <div className="space-y-3 md:hidden">
+              {data.g703.map(row => {
+                const e = edits[row.sovLineId] ?? { percentComplete: '0', storedMaterials: '0' };
+                return (
+                  <div key={row.sovLineId} className="rounded-lg border border-edge p-3">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="font-medium text-ink">
+                        {row.description}
+                        {row.isChangeOrder ? <span className="ml-2 rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-faint">CO</span> : null}
+                      </div>
+                      <div className="shrink-0 text-xs text-ink-faint">{row.itemNo || '—'}</div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                      <div className="text-ink-faint">Scheduled (C)</div>
+                      <div className="text-right tabular-nums text-ink-soft">{formatMoney(row.scheduledValueCents)}</div>
+                      <div className="text-ink-faint">Previous (D)</div>
+                      <div className="text-right tabular-nums text-ink-soft">{formatMoney(row.previousCents)}</div>
+                      <div className="text-ink-faint">This period (E)</div>
+                      <div className="text-right tabular-nums text-ink-soft">{formatMoney(row.thisPeriodCents)}</div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Field label="Stored (F)" htmlFor={`pa-stored-${row.sovLineId}`}>
+                        <Input
+                          id={`pa-stored-${row.sovLineId}`}
+                          type="number"
+                          className="text-right tabular-nums"
+                          value={e.storedMaterials}
+                          onChange={ev => setEdit(row.sovLineId, { storedMaterials: ev.target.value })}
+                          disabled={isFinalized}
+                          placeholder="0.00"
+                        />
+                      </Field>
+                      <Field label="% complete (G/C)" htmlFor={`pa-pct-${row.sovLineId}`}>
+                        <Input
+                          id={`pa-pct-${row.sovLineId}`}
+                          type="number"
+                          className="text-right tabular-nums"
+                          value={e.percentComplete}
+                          onChange={ev => setEdit(row.sovLineId, { percentComplete: ev.target.value })}
+                          disabled={isFinalized}
+                          min={0}
+                          max={100}
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-edge pt-3 text-sm">
+                      <div className="text-ink-faint">Total to date (G)</div>
+                      <div className="text-right tabular-nums text-ink-soft">
+                        {formatMoney(row.totalToDateCents)}
+                        {previewG[row.sovLineId] !== row.totalToDateCents && (
+                          <span className="ml-1 text-xs text-ink-faint" title="Unsaved preview">→ {formatMoney(previewG[row.sovLineId])}</span>
+                        )}
+                      </div>
+                      <div className="text-ink-faint">Balance</div>
+                      <div className="text-right tabular-nums text-ink-soft">{formatMoney(row.balanceToFinishCents)}</div>
+                      <div className="text-ink-faint">Retainage</div>
+                      <div className="text-right tabular-nums text-ink-soft">{formatMoney(row.retainageCents)}</div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
