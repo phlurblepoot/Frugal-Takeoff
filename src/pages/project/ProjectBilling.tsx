@@ -140,7 +140,14 @@ export const ProjectBilling: React.FC = () => {
         <PaymentsSection projectId={projectId} onChange={reloadSummary} />
       )}
       {activeTab === 'settings' && (
-        <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings ?? {}} onSaved={setAiaSettings} defaultOpen />
+        aiaSettings === null ? (
+          // AiaSettingsForm seeds its fields from props at mount only (no prop
+          // sync), so wait for the settings to load before mounting it —
+          // otherwise a direct reload on ?tab=settings would show defaults.
+          <Card className="mb-5"><CardBody><Skeleton className="h-10 w-full" /></CardBody></Card>
+        ) : (
+          <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} defaultOpen />
+        )
       )}
     </div>
   );
