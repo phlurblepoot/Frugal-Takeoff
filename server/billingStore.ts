@@ -7,14 +7,18 @@ export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
 
 export const INVOICE_STATUSES = ['draft', 'sent', 'paid'] as const;
-export const CHANGE_ORDER_STATUSES = ['pending', 'approved', 'rejected'] as const;
+// Phase 9 lifecycle: draft → sent → approved/rejected (only `approved` counts
+// toward the contract total). Legacy rows may carry status='pending' — READS of
+// such rows are tolerated everywhere; only new transitions (setChangeOrderStatus)
+// validate the input status against this set.
+export const CHANGE_ORDER_STATUSES = ['draft', 'sent', 'approved', 'rejected'] as const;
 
 // All money math is integer cents. Dollars are rounded to the nearest cent
 // (half-up) BEFORE summing, so float artefacts (0.1+0.2) never accumulate.
 export function toCents(dollars: number): number {
   return Math.round((Number(dollars) || 0) * 100);
 }
-export function sumCents(lines: { qty: number; unitPrice: number }[]): number {
+export function sumCents(lines: { qty?: number; unitPrice?: number }[]): number {
   return lines.reduce((acc, l) => acc + toCents((Number(l.qty) || 0) * (Number(l.unitPrice) || 0)), 0);
 }
 
@@ -179,34 +183,152 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
   return out;
 }
 
-interface ChangeOrderInput { number?: string; description?: string; amount?: number; status?: string; }
-
-export function listChangeOrders(db: Database.Database, projectId: string): any[] {
-  return db.prepare('SELECT * FROM change_orders WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
+// Change Orders mirror the invoice stack (Phase 9): line items + photos + a
+// versioned editable record + a lump-sum amount. The canonical persisted total
+// stays in change_orders.amount (REAL dollars) = (Σ line cents + lump-sum cents)/100,
+// written server-side on save, so billingSummary's contract-total sum and
+// aiaStore.syncChangeOrders (both read `amount`) keep working UNCHANGED with zero
+// cents drift (round(amount*100) === totalCents — exact for integer cents).
+interface ChangeOrderInput {
+  number?: string;
+  date?: number | null;
+  description?: string;
+  lumpSumAmount?: number;
+  scheduleImpactDays?: number | null;
+  // back-compat: legacy `amount` is ignored (amount is recomputed from lines+lump)
+  amount?: number;
+  status?: string;
+  lines?: LineInput[];
 }
 
-export function createChangeOrder(db: Database.Database, projectId: string, input: ChangeOrderInput): { id: string } {
+function coLineTotalsCents(db: Database.Database, changeOrderId: string): number {
+  const lines = db.prepare('SELECT qty, unitPrice FROM change_order_lines WHERE changeOrderId = ?').all(changeOrderId) as any[];
+  return sumCents(lines);
+}
+
+function writeChangeOrderLines(db: Database.Database, changeOrderId: string, lines: LineInput[]): void {
+  db.prepare('DELETE FROM change_order_lines WHERE changeOrderId = ?').run(changeOrderId);
+  const ins = db.prepare('INSERT INTO change_order_lines (id, changeOrderId, description, qty, unitPrice, sortOrder) VALUES (?, ?, ?, ?, ?, ?)');
+  lines.forEach((l, i) => ins.run(crypto.randomUUID(), changeOrderId, l.description ?? '', Number(l.qty) || 0, Number(l.unitPrice) || 0, i));
+}
+
+export function getChangeOrder(db: Database.Database, id: string): any | null {
+  const row = db.prepare('SELECT * FROM change_orders WHERE id = ?').get(id) as any;
+  if (!row) return null;
+  const lines = db.prepare('SELECT id, description, qty, unitPrice, sortOrder FROM change_order_lines WHERE changeOrderId = ? ORDER BY sortOrder').all(id);
+  const photos = db.prepare('SELECT id, fileId, sortOrder FROM change_order_photos WHERE changeOrderId = ? ORDER BY sortOrder, createdAt').all(id);
+  const lumpSumCents = toCents(row.lumpSumAmount);
+  const totalCents = coLineTotalsCents(db, id) + lumpSumCents;
+  return { ...row, lines, photos, totalCents, lumpSumCents };
+}
+
+export function listChangeOrders(db: Database.Database, projectId: string): any[] {
+  const rows = db.prepare('SELECT * FROM change_orders WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
+  return rows.map(r => {
+    const totalCents = coLineTotalsCents(db, r.id) + toCents(r.lumpSumAmount);
+    return { ...r, totalCents };
+  });
+}
+
+// Next per-project CO number: parse integers out of existing numbers, take the
+// max + 1, zero-padded to 3 (e.g. '001'). Honors an explicit input.number.
+function nextChangeOrderNumber(db: Database.Database, projectId: string): string {
+  const rows = db.prepare('SELECT number FROM change_orders WHERE projectId = ?').all(projectId) as { number: string | null }[];
+  let max = 0;
+  for (const r of rows) {
+    const m = String(r.number ?? '').match(/\d+/);
+    if (m) max = Math.max(max, parseInt(m[0], 10));
+  }
+  return String(max + 1).padStart(3, '0');
+}
+
+export function createChangeOrder(db: Database.Database, projectId: string, input: ChangeOrderInput): { id: string; version: number } {
   requireProject(db, projectId);
-  if (input.amount !== undefined && !Number.isFinite(input.amount)) throw new ValidationError('amount must be a finite number');
+  const lines = validateLines(input.lines);
+  if (input.lumpSumAmount !== undefined && !Number.isFinite(input.lumpSumAmount)) throw new ValidationError('lumpSumAmount must be a finite number');
   if (input.status !== undefined && !(CHANGE_ORDER_STATUSES as readonly string[]).includes(input.status)) {
     throw new ValidationError(`Invalid change order status: ${input.status}`);
   }
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, projectId, input.number ?? null, input.description ?? null, Number(input.amount) || 0, input.status ?? 'pending', Date.now());
-  return { id };
+  const tx = db.transaction(() => {
+    const number = input.number ?? nextChangeOrderNumber(db, projectId);
+    const lumpSumCents = toCents(input.lumpSumAmount);
+    const amount = (sumCents(lines) + lumpSumCents) / 100;
+    db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
+      .run(id, projectId, number, input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
+    writeChangeOrderLines(db, id, lines);
+  });
+  tx();
+  return { id, version: 1 };
 }
 
-export function setChangeOrderStatus(db: Database.Database, id: string, status: string): { status: string } {
+// Version-checked editable save (like saveInvoice). Replaces lines, recomputes
+// and stores `amount` = (Σ line cents + lump-sum cents)/100, bumps version.
+// Does NOT change status (that's a separate PATCH via setChangeOrderStatus).
+export function saveChangeOrder(db: Database.Database, id: string, input: ChangeOrderInput & { version?: number }): { version: number } {
+  const lines = validateLines(input.lines);
+  if (!Number.isInteger(input.version) || (input.version as number) < 1) {
+    throw new ValidationError('Missing or invalid version — reload the change order');
+  }
+  if (input.lumpSumAmount !== undefined && !Number.isFinite(input.lumpSumAmount)) throw new ValidationError('lumpSumAmount must be a finite number');
+  let newVersion = 0;
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(id) as { version: number } | undefined;
+    if (!row) throw new NotFoundError('Change order not found');
+    if (row.version !== input.version) throw new ConflictError(`Change order changed since it was loaded (server v${row.version}, payload v${input.version})`);
+    newVersion = row.version + 1;
+    const lumpSumCents = toCents(input.lumpSumAmount);
+    const amount = (sumCents(lines) + lumpSumCents) / 100;
+    db.prepare('UPDATE change_orders SET number = ?, date = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
+    writeChangeOrderLines(db, id, lines);
+  });
+  tx();
+  return { version: newVersion };
+}
+
+export function setChangeOrderStatus(db: Database.Database, id: string, status: string): { status: string; version: number } {
   if (!(CHANGE_ORDER_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid change order status: ${status}`);
-  const row = db.prepare('SELECT id FROM change_orders WHERE id = ?').get(id);
+  const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(id) as { version: number } | undefined;
   if (!row) throw new NotFoundError('Change order not found');
-  db.prepare('UPDATE change_orders SET status = ? WHERE id = ?').run(status, id);
-  return { status };
+  const newVersion = (row.version ?? 1) + 1;
+  db.prepare('UPDATE change_orders SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+  return { status, version: newVersion };
+}
+
+export function addChangeOrderPhoto(db: Database.Database, changeOrderId: string, fileId: string): void {
+  const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(changeOrderId) as { version: number } | undefined;
+  if (!row) throw new NotFoundError('Change order not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const exists = db.prepare('SELECT id FROM change_order_photos WHERE changeOrderId = ? AND fileId = ?').get(changeOrderId, fileId);
+  if (exists) return; // idempotent
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM change_order_photos WHERE changeOrderId = ?').get(changeOrderId) as any).m;
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO change_order_photos (id, changeOrderId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), changeOrderId, fileId, max + 1, Date.now());
+    db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+  });
+  tx();
+}
+
+export function removeChangeOrderPhoto(db: Database.Database, changeOrderId: string, fileId: string): void {
+  const tx = db.transaction(() => {
+    const r = db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ? AND fileId = ?').run(changeOrderId, fileId);
+    if (r.changes > 0) db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+  });
+  tx();
 }
 
 export function deleteChangeOrder(db: Database.Database, id: string): void {
-  db.prepare('DELETE FROM change_orders WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM change_order_lines WHERE changeOrderId = ?').run(id);
+    db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ?').run(id);
+    // Remove the synced AIA SOV line for this CO so deleting a CO never leaves an
+    // orphan schedule-of-values line (correctness fix over the prior behavior).
+    db.prepare('DELETE FROM aia_sov_lines WHERE changeOrderId = ?').run(id);
+    db.prepare('DELETE FROM change_orders WHERE id = ?').run(id);
+  });
+  tx();
 }
 
 // Contract rollup + invoice aggregates for a project (spec §4.1). All cents.

@@ -53,6 +53,8 @@ export const NEW_TABLES = [
   'invoice_lines',
   'payments',
   'change_orders',
+  'change_order_lines',
+  'change_order_photos',
   'punch_items',
   'punch_photos',
   'tasks',

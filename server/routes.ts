@@ -12,7 +12,8 @@ import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
   recordPayment, deletePayment, listProjectPayments, setInvoiceStatus,
-  listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+  listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+  addChangeOrderPhoto, removeChangeOrderPhoto,
   billingSummary,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
 } from './billingStore';
@@ -267,8 +268,24 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true, ...r });
     } catch (e) { billingErr(e, res); }
   });
+  app.get('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { const co = getChangeOrder(db, req.params.id); if (!co) return res.status(404).json({ error: 'Change order not found' }); res.json(co); } catch (e) { billingErr(e, res); }
+  });
+  app.put('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json({ success: true, ...saveChangeOrder(db, req.params.id, req.body) }); } catch (e) { billingErr(e, res); }
+  });
   app.delete('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
     try { deleteChangeOrder(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/change-orders/:id/photos', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addChangeOrderPhoto(db, req.params.id, req.body.fileId);
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/change-orders/:id/photos/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try { removeChangeOrderPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { billingErr(e, res); }
   });
 
   app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {

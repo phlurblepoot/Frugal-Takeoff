@@ -306,7 +306,7 @@ describe('GET /api/projects/:id/summary', () => {
   it('includes contractValueCents (base + approved COs) and invoiceCount', async () => {
     await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc' });
     db.prepare('UPDATE projects SET contractValue = 5000 WHERE id = ?').run('pc');
-    const co = await request(app).post('/api/projects/pc/change-orders').send({ number: 'CO-1', amount: 1000 });
+    const co = await request(app).post('/api/projects/pc/change-orders').send({ number: 'CO-1', lumpSumAmount: 1000 });
     await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
     await request(app).post('/api/projects/pc/invoices').send({ number: 'INV-1', lines: [] });
     const res = await request(app).get('/api/projects/pc/summary');
@@ -483,7 +483,7 @@ describe('deleteProject billing cascade', () => {
       .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
     const invoiceId = inv.body.id;
     await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: invoiceId, date: 1, amount: 50, method: 'check' });
-    await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', amount: 200 });
+    await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', lumpSumAmount: 200 });
     await request(app).delete('/api/projects/p1');
     // all billing rows gone
     for (const sql of [
@@ -539,7 +539,7 @@ describe('billing routes', () => {
     // set a base contract value via PATCH project
     await request(app).patch('/api/projects/p1').send({ version: 1, /* contractValue not in patch — set directly */ });
     db.prepare('UPDATE projects SET contractValue = 10000 WHERE id = ?').run('p1');
-    const co = await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', amount: 2000 });
+    const co = await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', lumpSumAmount: 2000 });
     await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
     const summary = await request(app).get('/api/projects/p1/billing-summary');
     expect(summary.body.contractValueCents).toBe(1200000); // 10000 + 2000
@@ -690,7 +690,7 @@ describe('AIA billing routes (admin-gated)', () => {
 
   it('SOV sync-change-orders appends approved COs as SOV lines', async () => {
     const co = await request(app).post('/api/projects/p1/change-orders')
-      .send({ number: '1', description: 'Extra scope', amount: 300 });
+      .send({ number: '1', description: 'Extra scope', lumpSumAmount: 300 });
     await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
     const sync = await request(app).post('/api/projects/p1/aia/sov/sync-change-orders').send({});
     expect(sync.status).toBe(200);

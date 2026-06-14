@@ -229,6 +229,8 @@ const FK_RELATIONS: Relation[] = [
   { child: 'invoice_lines', childCol: 'invoiceId', parent: 'invoices', parentCol: 'id' },
   // payments are polymorphic (targetType/targetId) — checked separately, not as a simple FK.
   { child: 'change_orders', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
+  { child: 'change_order_lines', childCol: 'changeOrderId', parent: 'change_orders', parentCol: 'id' },
+  { child: 'change_order_photos', childCol: 'changeOrderId', parent: 'change_orders', parentCol: 'id' },
   { child: 'punch_items', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'punch_photos', childCol: 'punchItemId', parent: 'punch_items', parentCol: 'id' },
   { child: 'task_photos', childCol: 'taskId', parent: 'tasks', parentCol: 'id' },
@@ -301,6 +303,7 @@ const PHOTO_TABLES: { table: string }[] = [
   { table: 'issue_photos' },
   { table: 'punch_photos' },
   { table: 'task_photos' },
+  { table: 'change_order_photos' },
 ];
 
 function checkPhotoFilesExist(db: Database.Database, dataDir: string): CheckResult {

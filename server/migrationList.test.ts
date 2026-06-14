@@ -154,6 +154,28 @@ describe('migration 8: billing', () => {
     }
     db.close();
   });
+
+  it('migration 14 adds CO columns + change_order_lines/photos (additive)', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const tables = tableNames(db);
+    for (const t of ['change_order_lines', 'change_order_photos']) {
+      expect(tables, `missing ${t}`).toContain(t);
+    }
+    const coCols = (db.prepare(`PRAGMA table_info(change_orders)`).all() as any[]).map(r => r.name);
+    for (const c of ['version', 'lumpSumAmount', 'scheduleImpactDays', 'date']) {
+      expect(coCols, `change_orders missing ${c}`).toContain(c);
+    }
+    const lineCols = (db.prepare(`PRAGMA table_info(change_order_lines)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'changeOrderId', 'description', 'qty', 'unitPrice', 'sortOrder']) {
+      expect(lineCols, `change_order_lines missing ${c}`).toContain(c);
+    }
+    const photoCols = (db.prepare(`PRAGMA table_info(change_order_photos)`).all() as any[]).map(r => r.name);
+    for (const c of ['id', 'changeOrderId', 'fileId', 'sortOrder', 'createdAt']) {
+      expect(photoCols, `change_order_photos missing ${c}`).toContain(c);
+    }
+    db.close();
+  });
 });
 
 describe('migration 9: issues', () => {

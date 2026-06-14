@@ -11,7 +11,8 @@ import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
-  listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder, billingSummary,
+  listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
+  deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
 } from './billingStore';
 
 let db: Database.Database;
@@ -185,12 +186,13 @@ describe('change orders + contract rollup', () => {
     db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1'); // $10k base
   });
 
-  it('creates change orders (pending by default) and rolls up only approved ones', () => {
-    createChangeOrder(db, 'p1', { number: 'CO-1', description: 'Extra outlets', amount: 1500 });
-    const co2 = createChangeOrder(db, 'p1', { number: 'CO-2', description: 'Demo', amount: 800 });
+  it('creates change orders (draft by default) and rolls up only approved ones', () => {
+    createChangeOrder(db, 'p1', { number: 'CO-1', description: 'Extra outlets', lumpSumAmount: 1500 });
+    const co2 = createChangeOrder(db, 'p1', { number: 'CO-2', description: 'Demo', lumpSumAmount: 800 });
+    expect(getChangeOrder(db, co2.id)!.status).toBe('draft'); // new lifecycle default
     let s = billingSummary(db, 'p1');
     expect(s.baseContractCents).toBe(1000000);
-    expect(s.approvedChangeCents).toBe(0); // both pending
+    expect(s.approvedChangeCents).toBe(0); // both draft
     expect(s.contractValueCents).toBe(1000000);
 
     setChangeOrderStatus(db, co2.id, 'approved');
@@ -210,11 +212,141 @@ describe('change orders + contract rollup', () => {
   });
 
   it('validates and lists change orders newest-first', () => {
-    expect(() => createChangeOrder(db, 'p1', { amount: 'x' as any })).toThrow(ValidationError);
+    expect(() => createChangeOrder(db, 'p1', { lumpSumAmount: 'x' as any })).toThrow(ValidationError);
     expect(() => setChangeOrderStatus(db, 'nope', 'approved')).toThrow(NotFoundError);
-    createChangeOrder(db, 'p1', { number: 'CO-1', amount: 1, description: 'a' });
-    createChangeOrder(db, 'p1', { number: 'CO-2', amount: 2, description: 'b' });
+    createChangeOrder(db, 'p1', { number: 'CO-1', lumpSumAmount: 1, description: 'a' });
+    createChangeOrder(db, 'p1', { number: 'CO-2', lumpSumAmount: 2, description: 'b' });
     expect(listChangeOrders(db, 'p1').map(c => c.number)).toEqual(['CO-2', 'CO-1']);
+  });
+});
+
+describe('change orders — line items, lump sum, version, photos (Phase 9)', () => {
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET contractValue = ? WHERE id = ?').run(10000, 'p1');
+  });
+
+  it('CO total = Σ lines (round-per-line) + lump sum; amount = totalCents/100 (exact)', () => {
+    const { id } = createChangeOrder(db, 'p1', {
+      number: '001',
+      lumpSumAmount: 25.5,
+      lines: [
+        { description: 'A', qty: 2, unitPrice: 50 },     // 100.00
+        { description: 'B', qty: 1, unitPrice: 25.5 },    // 25.50
+        { description: 'C', qty: 3, unitPrice: 0.1 },     // 0.30 (round-per-line)
+      ],
+    });
+    const co = getChangeOrder(db, id)!;
+    expect(co.lumpSumCents).toBe(2550);
+    expect(co.totalCents).toBe(10000 + 2550 + 30 + 2550); // lines 12580 + lump 2550 = 15130
+    // amount is the canonical rolled-up dollars read by billingSummary + SOV sync.
+    expect(co.amount).toBe(co.totalCents / 100);
+    // The invariant: zero cents drift round-tripping dollars→cents.
+    expect(Math.round(co.amount * 100)).toBe(co.totalCents);
+  });
+
+  it('approved CO amount flows into the contract total with no drift', () => {
+    const { id } = createChangeOrder(db, 'p1', {
+      lumpSumAmount: 0,
+      lines: [{ description: 'X', qty: 3, unitPrice: 33.33 }], // 99.99
+    });
+    setChangeOrderStatus(db, id, 'approved');
+    const co = getChangeOrder(db, id)!;
+    expect(co.totalCents).toBe(9999);
+    const s = billingSummary(db, 'p1');
+    expect(s.approvedChangeCents).toBe(9999); // exact — billingSummary reads amount
+    expect(s.contractTotalCents).toBe(1000000 + 9999);
+  });
+
+  it('saveChangeOrder is version-checked, replaces lines, recomputes amount, bumps version', () => {
+    const { id } = createChangeOrder(db, 'p1', { number: '001', lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    const co = getChangeOrder(db, id)!;
+    expect(co.version).toBe(1);
+    const saved = saveChangeOrder(db, id, {
+      version: co.version,
+      number: 'CO-001',
+      description: 'updated',
+      lumpSumAmount: 100,
+      scheduleImpactDays: 5,
+      lines: [{ description: 'B', qty: 2, unitPrice: 5 }], // 10.00
+    });
+    expect(saved.version).toBe(2);
+    const reloaded = getChangeOrder(db, id)!;
+    expect(reloaded.number).toBe('CO-001');
+    expect(reloaded.description).toBe('updated');
+    expect(reloaded.scheduleImpactDays).toBe(5);
+    expect(reloaded.lines).toHaveLength(1);
+    expect(reloaded.totalCents).toBe(1000 + 10000); // lines 10.00 + lump 100.00
+    expect(reloaded.amount).toBe(reloaded.totalCents / 100);
+    expect(Math.round(reloaded.amount * 100)).toBe(reloaded.totalCents);
+  });
+
+  it('saveChangeOrder throws ConflictError on a stale version', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0 });
+    saveChangeOrder(db, id, { version: 1, lumpSumAmount: 1 }); // now v2
+    expect(() => saveChangeOrder(db, id, { version: 1, lumpSumAmount: 2 })).toThrow(ConflictError);
+  });
+
+  it('saveChangeOrder does NOT change status', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0 });
+    setChangeOrderStatus(db, id, 'approved'); // v2, approved
+    const v = getChangeOrder(db, id)!.version;
+    saveChangeOrder(db, id, { version: v, lumpSumAmount: 50 });
+    expect(getChangeOrder(db, id)!.status).toBe('approved');
+  });
+
+  it('auto-numbers per project (001, 002, …) and honors an explicit override', () => {
+    const a = createChangeOrder(db, 'p1', {});
+    const b = createChangeOrder(db, 'p1', {});
+    expect(getChangeOrder(db, a.id)!.number).toBe('001');
+    expect(getChangeOrder(db, b.id)!.number).toBe('002');
+    const c = createChangeOrder(db, 'p1', { number: 'CO-99' });
+    expect(getChangeOrder(db, c.id)!.number).toBe('CO-99');
+    // next sequence parses the max int across all numbers (99) → 100
+    const d = createChangeOrder(db, 'p1', {});
+    expect(getChangeOrder(db, d.id)!.number).toBe('100');
+  });
+
+  it('status validation accepts the new set and tolerates reading legacy pending rows', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    expect(() => setChangeOrderStatus(db, id, 'sent')).not.toThrow();
+    expect(() => setChangeOrderStatus(db, id, 'approved')).not.toThrow();
+    expect(() => setChangeOrderStatus(db, id, 'rejected')).not.toThrow();
+    expect(() => setChangeOrderStatus(db, id, 'pending')).toThrow(ValidationError); // not a valid new transition
+    // A legacy pending row (written directly) must still READ without throwing.
+    db.prepare("UPDATE change_orders SET status = 'pending' WHERE id = ?").run(id);
+    expect(getChangeOrder(db, id)!.status).toBe('pending');
+    expect(listChangeOrders(db, 'p1').find(c => c.id === id)!.status).toBe('pending');
+  });
+
+  it('photos: idempotent add bumps version, remove bumps version', () => {
+    const { id } = createChangeOrder(db, 'p1', {});
+    addChangeOrderPhoto(db, id, 'file-1');
+    addChangeOrderPhoto(db, id, 'file-1'); // idempotent — no second row, no extra bump
+    let co = getChangeOrder(db, id)!;
+    expect(co.photos).toHaveLength(1);
+    expect(co.version).toBe(2); // 1 → +1 on the first add only
+    addChangeOrderPhoto(db, id, 'file-2');
+    co = getChangeOrder(db, id)!;
+    expect(co.photos).toHaveLength(2);
+    expect(co.version).toBe(3);
+    removeChangeOrderPhoto(db, id, 'file-1');
+    co = getChangeOrder(db, id)!;
+    expect(co.photos.map((p: any) => p.fileId)).toEqual(['file-2']);
+    expect(co.version).toBe(4);
+  });
+
+  it('deleteChangeOrder cascades lines, photos, and the synced SOV line', () => {
+    const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0, lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    addChangeOrderPhoto(db, id, 'file-1');
+    // Simulate a synced AIA SOV line keyed on this CO.
+    db.prepare(
+      'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, 1, ?, 0, 1, 1)'
+    ).run('sov-co', 'p1', 'CO', 1000, id);
+    deleteChangeOrder(db, id);
+    expect(getChangeOrder(db, id)).toBeNull();
+    expect((db.prepare('SELECT COUNT(*) c FROM change_order_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM change_order_photos WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE changeOrderId = ?').get(id) as any).c).toBe(0);
   });
 });
 
@@ -224,7 +356,7 @@ describe('billingSummary — SOV-derived contract total', () => {
       'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 1)'
     ).run(id, 'p1', id, valueCents, isCO, 0);
   const insApprovedCO = (num: string, dollars: number) => {
-    const co = createChangeOrder(db, 'p1', { number: num, amount: dollars });
+    const co = createChangeOrder(db, 'p1', { number: num, lumpSumAmount: dollars });
     setChangeOrderStatus(db, co.id, 'approved');
   };
 

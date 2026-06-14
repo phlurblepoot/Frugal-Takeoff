@@ -20,7 +20,7 @@ import { registerDataRoutes } from './server/routes';
 import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
 import { getDataUrlString } from './server/files';
 import { logActivity } from './server/activity';
-import { getInvoice } from './server/billingStore';
+import { getInvoice, getChangeOrder, setChangeOrderStatus } from './server/billingStore';
 import { getIssue, markIssueSent } from './server/issueStore';
 
 dotenv.config();
@@ -601,6 +601,33 @@ async function startServer() {
     } catch (e: any) {
       console.error('Error sending invoice:', e);
       res.status(500).json({ error: e.message || 'Failed to send invoice' });
+    }
+  });
+
+  // Send a change order request PDF via SMTP (admin only)
+  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const co = getChangeOrder(db, req.params.id);
+      if (!co) return res.status(404).json({ error: 'Change order not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const number = co.number ?? '';
+      await sendProjectEmail({
+        to,
+        subject: `Change Order Request ${number}`.trim(),
+        text: message || 'Please find the attached change order request.',
+        fileId,
+        attachmentName: `CO-${number || 'change-order'}.pdf`,
+      });
+      // Mark sent (best effort) — but never override an already approved/rejected CO.
+      try {
+        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
+      } catch { /* best effort */ }
+      logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending change order:', e);
+      res.status(500).json({ error: e.message || 'Failed to send change order' });
     }
   });
 

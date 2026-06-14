@@ -568,4 +568,43 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 14,
+    name: 'change-order-line-items-photos',
+    up({ db }) {
+      // Change Orders gain invoice-like capability (Phase 9): line items, photos,
+      // a version column (optimistic concurrency), and new fields (lumpSumAmount,
+      // scheduleImpactDays, date). PURELY ADDITIVE — new columns get defaults and
+      // two new tables are created; NO data rewrite. Existing change_orders rows
+      // keep their `amount` (the canonical rolled-up total read by billingSummary
+      // and aiaStore.syncChangeOrders), which now equals (Σ line cents + lump-sum
+      // cents)/100, written server-side on save. Legacy status='pending' rows stay
+      // valid (reads tolerate them; only new transitions use the new status set).
+      db.exec(`
+        ALTER TABLE change_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE change_orders ADD COLUMN lumpSumAmount REAL NOT NULL DEFAULT 0;
+        ALTER TABLE change_orders ADD COLUMN scheduleImpactDays INTEGER;
+        ALTER TABLE change_orders ADD COLUMN date INTEGER;
+
+        CREATE TABLE change_order_lines (
+          id TEXT PRIMARY KEY,
+          changeOrderId TEXT NOT NULL,
+          description TEXT,
+          qty REAL NOT NULL DEFAULT 1,
+          unitPrice REAL NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_change_order_lines_changeOrderId ON change_order_lines (changeOrderId);
+
+        CREATE TABLE change_order_photos (
+          id TEXT PRIMARY KEY,
+          changeOrderId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_change_order_photos_changeOrderId ON change_order_photos (changeOrderId);
+      `);
+    },
+  },
 ];
