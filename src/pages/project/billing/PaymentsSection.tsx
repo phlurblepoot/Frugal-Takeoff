@@ -107,19 +107,20 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
           <EmptyState title="No payments yet" description="Record a payment against an invoice or pay application." />
         ) : (
           <Table>
-            <THead><TR><TH>Date</TH><TH>Applied to</TH><TH>Method</TH><TH>Amount</TH><TH></TH></TR></THead>
+            <THead><TR><TH>Date</TH><TH>Applied to</TH><TH>Method</TH><TH>Note</TH><TH>Amount</TH><TH></TH></TR></THead>
             <TBody>
               {payments.map(p => (
                 <TR key={p.id}>
                   <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
                   <TD className="font-medium text-ink">{p.targetLabel || `${p.targetType} ${p.targetId}`}</TD>
                   <TD className="text-ink-soft">{p.method || '—'}</TD>
+                  <TD className="text-ink-soft max-w-[16rem] truncate" title={p.note || ''}>{p.note || '—'}</TD>
                   <TD className="text-ink-soft">{formatMoney(Math.round(p.amount * 100))}</TD>
                   <TD><button onClick={() => remove(p.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
                 </TR>
               ))}
               <TR>
-                <TD className="font-semibold text-ink" colSpan={3}>Total</TD>
+                <TD className="font-semibold text-ink" colSpan={4}>Total</TD>
                 <TD className="font-semibold text-ink">{formatMoney(total)}</TD>
                 <TD></TD>
               </TR>

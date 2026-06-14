@@ -296,10 +296,10 @@ export const AiaPayAppEditor: React.FC<{
                             placeholder="0.00"
                           />
                         </TD>
-                        <TD className="w-24">
+                        <TD className="w-32">
                           <Input
                             type="number"
-                            className="text-right tabular-nums"
+                            className="text-right tabular-nums w-full"
                             value={e.percentComplete}
                             onChange={ev => setEdit(row.sovLineId, { percentComplete: ev.target.value })}
                             disabled={isFinalized}
