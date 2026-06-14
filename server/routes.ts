@@ -34,6 +34,14 @@ import {
   ConflictError as TaskConflictError,
   NotFoundError as TaskNotFoundError,
 } from './taskStore';
+import {
+  listSovLines, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders,
+  listPayApps, createPayApp, getPayApp, savePayAppLines, setPayApp, deletePayApp,
+  computeG703, computeG702,
+  ValidationError as AiaValidationError,
+  ConflictError as AiaConflictError,
+  NotFoundError as AiaNotFoundError,
+} from './aiaStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -263,6 +271,95 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {
     try { res.json(billingSummary(db, req.params.id)); } catch (e) { billingErr(e, res); }
+  });
+
+  // ── AIA progress billing — G702/G703 (admin-only, like billing) ───────────
+  const aiaErr = (e: unknown, res: express.Response) => {
+    if (e instanceof AiaNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof AiaConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof AiaValidationError) return res.status(400).json({ error: e.message });
+    console.error('AIA route error:', e);
+    return res.status(500).json({ error: 'Internal server error' });
+  };
+
+  // Schedule of Values
+  app.get('/api/projects/:id/aia/sov', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(listSovLines(db, req.params.id)); } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/projects/:id/aia/sov', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(createSovLine(db, req.params.id, req.body)); } catch (e) { aiaErr(e, res); }
+  });
+  app.put('/api/aia/sov/:lineId', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json({ success: true, ...saveSovLine(db, req.params.lineId, req.body) }); } catch (e) { aiaErr(e, res); }
+  });
+  app.delete('/api/aia/sov/:lineId', authenticateToken, requireAdmin, (req, res) => {
+    try { deleteSovLine(db, req.params.lineId); res.json({ success: true }); } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/projects/:id/aia/sov/seed', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(seedSovLines(db, req.params.id, req.body?.lines)); } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/projects/:id/aia/sov/sync-change-orders', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(syncChangeOrders(db, req.params.id)); } catch (e) { aiaErr(e, res); }
+  });
+
+  // Pay applications (G702/G703)
+  app.get('/api/projects/:id/aia/pay-apps', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(listPayApps(db, req.params.id)); } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/projects/:id/aia/pay-apps', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      // A new pay app inherits the project's retainage defaults from aiaSettings.
+      // Explicit values in the request body take precedence over the settings.
+      const project = loadProject(db, req.params.id);
+      const settings = (project && project.aiaSettings) || {};
+      const input = { ...settings, ...req.body };
+      res.json(createPayApp(db, req.params.id, input));
+    } catch (e) { aiaErr(e, res); }
+  });
+  app.get('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const result = getPayApp(db, req.params.id);
+      if (!result) return res.status(404).json({ error: 'Pay application not found' });
+      const { lines, ...app } = result;
+      res.json({
+        app,
+        lines,
+        g703: computeG703(db, req.params.id),
+        g702: computeG702(db, req.params.id),
+      });
+    } catch (e) { aiaErr(e, res); }
+  });
+  app.put('/api/aia/pay-apps/:id/lines', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json({ success: true, ...savePayAppLines(db, req.params.id, req.body?.lines, req.body?.version) }); } catch (e) { aiaErr(e, res); }
+  });
+  app.patch('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json({ success: true, ...setPayApp(db, req.params.id, req.body) }); } catch (e) { aiaErr(e, res); }
+  });
+  app.delete('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
+    try { deletePayApp(db, req.params.id); res.json({ success: true }); } catch (e) { aiaErr(e, res); }
+  });
+
+  // AIA project settings (retainage defaults, architect, etc.) — stored in
+  // project meta.aiaSettings via the standard project load/save path.
+  app.get('/api/projects/:id/aia/settings', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const project = loadProject(db, req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      res.json(project.aiaSettings ?? {});
+    } catch (e) { aiaErr(e, res); }
+  });
+  app.put('/api/projects/:id/aia/settings', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const project = loadProject(db, req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      project.aiaSettings = { ...(project.aiaSettings ?? {}), ...req.body };
+      saveProject(db, req.params.id, project);
+      res.json(project.aiaSettings);
+    } catch (e) {
+      if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+      if (e instanceof ValidationError) return res.status(400).json({ error: e.message });
+      aiaErr(e, res);
+    }
   });
 
   // ── Issues (any authenticated user — field-created, spec §4.3) ────────────

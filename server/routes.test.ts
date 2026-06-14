@@ -560,6 +560,130 @@ describe('billing routes', () => {
   });
 });
 
+describe('AIA billing routes (admin-gated)', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  it('rejects non-admins with 403 (requireAdmin)', async () => {
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+    expect((await request(memberApp).get('/api/projects/p1/aia/sov')).status).toBe(403);
+    expect((await request(memberApp).post('/api/projects/p1/aia/sov').send({ description: 'X', scheduledValueCents: 1 })).status).toBe(403);
+    expect((await request(memberApp).get('/api/projects/p1/aia/settings')).status).toBe(403);
+  });
+
+  it('SOV create → list', async () => {
+    const create = await request(app).post('/api/projects/p1/aia/sov')
+      .send({ description: 'Drywall', scheduledValueCents: 50000 });
+    expect(create.status).toBe(200);
+    expect(create.body.id).toBeTruthy();
+    const list = await request(app).get('/api/projects/p1/aia/sov');
+    expect(list.status).toBe(200);
+    expect(list.body.length).toBe(1);
+    expect(list.body[0].description).toBe('Drywall');
+    expect(list.body[0].scheduledValueCents).toBe(50000);
+  });
+
+  it('SOV seed replaces estimate lines', async () => {
+    const seed = await request(app).post('/api/projects/p1/aia/sov/seed')
+      .send({ lines: [
+        { description: 'Framing', scheduledValueCents: 100000 },
+        { description: 'Paint', scheduledValueCents: 25000 },
+      ] });
+    expect(seed.status).toBe(200);
+    expect(seed.body.count).toBe(2);
+    const list = await request(app).get('/api/projects/p1/aia/sov');
+    expect(list.body.length).toBe(2);
+    expect(list.body.map((l: any) => l.description)).toEqual(['Framing', 'Paint']);
+  });
+
+  it('SOV sync-change-orders appends approved COs as SOV lines', async () => {
+    const co = await request(app).post('/api/projects/p1/change-orders')
+      .send({ number: '1', description: 'Extra scope', amount: 300 });
+    await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
+    const sync = await request(app).post('/api/projects/p1/aia/sov/sync-change-orders').send({});
+    expect(sync.status).toBe(200);
+    expect(sync.body.added).toBe(1);
+    const list = await request(app).get('/api/projects/p1/aia/sov');
+    const coLine = list.body.find((l: any) => l.isChangeOrder);
+    expect(coLine).toBeTruthy();
+    expect(coLine.scheduledValueCents).toBe(30000); // 300 * 100
+    // idempotent
+    const again = await request(app).post('/api/projects/p1/aia/sov/sync-change-orders').send({});
+    expect(again.body.added).toBe(0);
+  });
+
+  it('PUT SOV line is version-checked (409 version_conflict on stale)', async () => {
+    const id = (await request(app).post('/api/projects/p1/aia/sov')
+      .send({ description: 'D', scheduledValueCents: 1000 })).body.id;
+    const ok = await request(app).put(`/api/aia/sov/${id}`)
+      .send({ description: 'D2', scheduledValueCents: 2000, version: 1 });
+    expect(ok.status).toBe(200);
+    const stale = await request(app).put(`/api/aia/sov/${id}`)
+      .send({ description: 'Clobber', scheduledValueCents: 3000, version: 1 });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
+  });
+
+  it('pay app create → get returns app, lines, g702, g703', async () => {
+    await request(app).post('/api/projects/p1/aia/sov')
+      .send({ description: 'Work', scheduledValueCents: 100000 });
+    const create = await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    expect(create.status).toBe(200);
+    expect(create.body.id).toBeTruthy();
+    expect(create.body.number).toBe(1);
+    const list = await request(app).get('/api/projects/p1/aia/pay-apps');
+    expect(list.body.length).toBe(1);
+    const get = await request(app).get(`/api/aia/pay-apps/${create.body.id}`);
+    expect(get.status).toBe(200);
+    expect(get.body.app).toBeTruthy();
+    expect(Array.isArray(get.body.lines)).toBe(true);
+    expect(Array.isArray(get.body.g703)).toBe(true);
+    expect(get.body.g702).toHaveProperty('L1originalContractCents');
+    expect(get.body.g702.L1originalContractCents).toBe(100000);
+  });
+
+  it('GET unknown pay app → 404', async () => {
+    expect((await request(app).get('/api/aia/pay-apps/nope')).status).toBe(404);
+  });
+
+  it('PUT pay app lines is version-checked (200 then 409 on stale)', async () => {
+    const sovId = (await request(app).post('/api/projects/p1/aia/sov')
+      .send({ description: 'Work', scheduledValueCents: 100000 })).body.id;
+    const appId = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
+    const ok = await request(app).put(`/api/aia/pay-apps/${appId}/lines`)
+      .send({ version: 1, lines: [{ sovLineId: sovId, percentComplete: 50, storedMaterialsCents: 0 }] });
+    expect(ok.status).toBe(200);
+    expect(ok.body.success).toBe(true);
+    const stale = await request(app).put(`/api/aia/pay-apps/${appId}/lines`)
+      .send({ version: 1, lines: [{ sovLineId: sovId, percentComplete: 75, storedMaterialsCents: 0 }] });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
+  });
+
+  it('aia/settings round-trips via project meta', async () => {
+    const empty = await request(app).get('/api/projects/p1/aia/settings');
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual({});
+    const put = await request(app).put('/api/projects/p1/aia/settings')
+      .send({ retainagePercent: 5, storedRetainagePercent: 0, architect: 'AOR Inc' });
+    expect(put.status).toBe(200);
+    const get = await request(app).get('/api/projects/p1/aia/settings');
+    expect(get.body.retainagePercent).toBe(5);
+    expect(get.body.storedRetainagePercent).toBe(0);
+    expect(get.body.architect).toBe('AOR Inc');
+    // survives a project reload
+    expect(loadProject(db, 'p1').aiaSettings.retainagePercent).toBe(5);
+  });
+});
+
 describe('deleteProject issues cascade', () => {
   it('removes issues and issue_photos for the project', async () => {
     await request(app).post('/api/projects').send(PROJECT); // id p1
