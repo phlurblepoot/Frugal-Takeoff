@@ -52,7 +52,7 @@ export const Modal: React.FC<ModalProps> = ({
             role="dialog"
             aria-modal="true"
             aria-labelledby={title !== undefined ? labelId : undefined}
-            className={`flex max-h-[85vh] w-full ${WIDTHS[width]} flex-col rounded-xl border border-edge bg-raised shadow-xl`}
+            className={`flex max-h-[90dvh] w-full ${WIDTHS[width]} flex-col rounded-xl border border-edge bg-raised shadow-xl`}
             onClick={(e) => e.stopPropagation()}
           >
             {title !== undefined && (
@@ -61,15 +61,15 @@ export const Modal: React.FC<ModalProps> = ({
                 <button
                   onClick={onClose}
                   aria-label="Close dialog"
-                  className="rounded-lg p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink"
+                  className="flex min-h-11 min-w-11 items-center justify-center rounded-lg p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"
                 >
                   <X size={16} />
                 </button>
               </div>
             )}
-            <div className="overflow-y-auto px-5 py-4">{children}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
             {footer && (
-              <div className="flex shrink-0 justify-end gap-2 border-t border-edge px-5 py-4">
+              <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-edge px-5 py-4 pb-safe">
                 {footer}
               </div>
             )}
