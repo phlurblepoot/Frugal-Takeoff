@@ -75,9 +75,15 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                 onClick={() => setMobileSidebarOpen(false)}
               />
             )}
-            {/* Slide-in overlay drawer (always expanded on mobile) */}
+            {/* Slide-in overlay drawer (always expanded on mobile). The wrapper
+                MUST carry the sidebar's width (w-52): the inner <Sidebar> is
+                position:fixed and out of flow, so without an explicit width the
+                wrapper collapses to 0px and `-translate-x-full` (−100% of 0)
+                moves nothing — leaving the drawer stuck open. The wrapper's
+                translate makes it the containing block for the fixed child, so
+                the child slides with it. */}
             <div
-              className={`fixed inset-y-0 left-0 z-[46] md:hidden transition-transform duration-200 ${
+              className={`fixed inset-y-0 left-0 w-52 z-[46] md:hidden transition-transform duration-200 ${
                 mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
               }`}
             >
