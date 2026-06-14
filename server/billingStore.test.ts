@@ -217,3 +217,67 @@ describe('change orders + contract rollup', () => {
     expect(listChangeOrders(db, 'p1').map(c => c.number)).toEqual(['CO-2', 'CO-1']);
   });
 });
+
+describe('billingSummary — SOV-derived contract total', () => {
+  const insSov = (id: string, valueCents: number, isCO = 0) =>
+    db.prepare(
+      'INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, isChangeOrder, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, 1)'
+    ).run(id, 'p1', id, valueCents, isCO, 0);
+  const insApprovedCO = (num: string, dollars: number) => {
+    const co = createChangeOrder(db, 'p1', { number: num, amount: dollars });
+    setChangeOrderStatus(db, co.id, 'approved');
+  };
+
+  it('derives base + total from the SOV when one exists, even if contractValue=0', () => {
+    db.prepare('UPDATE projects SET contractValue = 0 WHERE id = ?').run('p1');
+    insSov('s1', 10000000);
+    insSov('s2', 5000000);
+    insApprovedCO('CO-1', 10000); // $10,000 → 1,000,000 cents
+    const s = billingSummary(db, 'p1');
+    expect(s.hasSov).toBe(true);
+    expect(s.sovOriginalCents).toBe(15000000);
+    expect(s.baseContractCents).toBe(15000000);
+    expect(s.approvedChangeCents).toBe(1000000);
+    expect(s.contractTotalCents).toBe(16000000);
+    expect(s.contractValueCents).toBe(16000000); // back-compat mirror
+  });
+
+  it('falls back to projects.contractValue when no SOV lines exist', () => {
+    db.prepare('UPDATE projects SET contractValue = 200000 WHERE id = ?').run('p1'); // $200k
+    insApprovedCO('CO-1', 10000); // $10k
+    const s = billingSummary(db, 'p1');
+    expect(s.hasSov).toBe(false);
+    expect(s.sovOriginalCents).toBe(0);
+    expect(s.baseContractCents).toBe(20000000);
+    expect(s.contractTotalCents).toBe(21000000);
+    expect(s.contractValueCents).toBe(21000000);
+  });
+
+  it('CO SOV lines (isChangeOrder=1) do not inflate the base or double-count', () => {
+    db.prepare('UPDATE projects SET contractValue = 0 WHERE id = ?').run('p1');
+    insSov('s1', 10000000); // original
+    insSov('s2', 5000000); // original
+    insSov('co-sov', 1000000, 1); // CO SOV line — must be ignored by base
+    insApprovedCO('CO-1', 10000); // $10k via change_orders — the single source for the CO
+    const s = billingSummary(db, 'p1');
+    expect(s.sovOriginalCents).toBe(15000000); // CO SOV line excluded
+    expect(s.baseContractCents).toBe(15000000);
+    expect(s.approvedChangeCents).toBe(1000000);
+    // total = original + approved change_orders ONCE (no +1,000,000 from co-sov)
+    expect(s.contractTotalCents).toBe(16000000);
+  });
+
+  it('splits paid amounts across invoices vs pay-apps', () => {
+    const inv = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice: 5000 }] });
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'draft', 1, 1)").run();
+    recordPayment(db, 'invoice', inv.id, { amount: 2000 }); // $2,000
+    recordPayment(db, 'payapp', 'app1', { amount: 1000 }); // $1,000
+    const s = billingSummary(db, 'p1');
+    expect(s.paid.invoicesCents).toBe(200000);
+    expect(s.paid.payAppsCents).toBe(100000);
+    expect(s.paidCents).toBe(200000); // back-compat = invoice payments
+    expect(s.invoiceTotalCents).toBe(500000);
+    expect(s.invoiceOutstandingCents).toBe(300000); // 500000 - 200000
+    expect(s.outstandingCents).toBe(300000);
+  });
+});

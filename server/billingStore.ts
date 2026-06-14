@@ -210,28 +210,68 @@ export function deleteChangeOrder(db: Database.Database, id: string): void {
 }
 
 // Contract rollup + invoice aggregates for a project (spec §4.1). All cents.
+//
+// CONTRACT TOTAL = baseContractCents + approvedChangeCents, where the base is
+// the AIA Schedule of Values original lines (isChangeOrder=0) when an SOV
+// exists, else the legacy projects.contractValue. Approved change orders are
+// added ONCE via change_orders — the CO SOV lines (isChangeOrder=1) are NOT
+// summed into the base, so there is no double-count.
 export function billingSummary(db: Database.Database, projectId: string): {
-  baseContractCents: number; approvedChangeCents: number; contractValueCents: number;
-  invoicedCents: number; paidCents: number; outstandingCents: number;
+  sovOriginalCents: number; hasSov: boolean;
+  baseContractCents: number; approvedChangeCents: number;
+  contractTotalCents: number; contractValueCents: number;
+  invoiceTotalCents: number; invoicedCents: number;
+  paid: { invoicesCents: number; payAppsCents: number };
+  paidCents: number;
+  invoiceOutstandingCents: number; outstandingCents: number;
   invoiceCount: number; changeOrderCount: number;
 } {
   const proj = db.prepare('SELECT contractValue FROM projects WHERE id = ?').get(projectId) as { contractValue: number | null } | undefined;
-  const baseContractCents = toCents(proj?.contractValue ?? 0);
+
+  // SOV original (non-CO) lines drive the base when an SOV exists.
+  const sovOriginalCents = (db.prepare(
+    'SELECT COALESCE(SUM(scheduledValueCents), 0) v FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0'
+  ).get(projectId) as { v: number }).v;
+  const sovCount = (db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE projectId = ?').get(projectId) as { c: number }).c;
+  const hasSov = sovCount > 0;
+  const baseContractCents = hasSov ? sovOriginalCents : toCents(proj?.contractValue ?? 0);
+
   const approvedRows = db.prepare(`SELECT amount FROM change_orders WHERE projectId = ? AND status = 'approved'`).all(projectId) as { amount: number }[];
   const approvedChangeCents = approvedRows.reduce((a, r) => a + toCents(r.amount), 0);
+  const contractTotalCents = baseContractCents + approvedChangeCents;
 
   const invoices = listInvoices(db, projectId);
-  const invoicedCents = invoices.reduce((a, i) => a + i.totalCents, 0);
-  const paidCents = invoices.reduce((a, i) => a + i.paidCents, 0);
+  const invoiceTotalCents = invoices.reduce((a, i) => a + i.totalCents, 0);
   const changeOrderCount = (db.prepare('SELECT COUNT(*) c FROM change_orders WHERE projectId = ?').get(projectId) as any).c;
 
+  // Paid splits: payments scoped to this project's invoices vs its pay-apps.
+  // amount is REAL dollars, so each row is rounded to cents before summing.
+  const invoicePayments = db.prepare(
+    `SELECT amount FROM payments WHERE targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)`
+  ).all(projectId) as { amount: number }[];
+  const payAppPayments = db.prepare(
+    `SELECT amount FROM payments WHERE targetType = 'payapp' AND targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?)`
+  ).all(projectId) as { amount: number }[];
+  const paid = {
+    invoicesCents: invoicePayments.reduce((a, p) => a + toCents(p.amount), 0),
+    payAppsCents: payAppPayments.reduce((a, p) => a + toCents(p.amount), 0),
+  };
+
+  const invoiceOutstandingCents = invoiceTotalCents - paid.invoicesCents;
+
   return {
+    sovOriginalCents,
+    hasSov,
     baseContractCents,
     approvedChangeCents,
-    contractValueCents: baseContractCents + approvedChangeCents,
-    invoicedCents,
-    paidCents,
-    outstandingCents: invoicedCents - paidCents,
+    contractTotalCents,
+    contractValueCents: contractTotalCents, // back-compat (SOV-derived total)
+    invoiceTotalCents,
+    invoicedCents: invoiceTotalCents, // back-compat
+    paid,
+    paidCents: paid.invoicesCents, // back-compat (payments against invoices)
+    invoiceOutstandingCents,
+    outstandingCents: invoiceOutstandingCents, // back-compat
     invoiceCount: invoices.length,
     changeOrderCount,
   };
