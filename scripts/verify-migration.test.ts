@@ -145,6 +145,21 @@ describe('verifyMigration — BROKEN cases', () => {
     expect(fk.detail).toContain('measurements.pageId');
   });
 
+  it('(c2) fkIntegrity FAILS on a payment with a dangling polymorphic target', () => {
+    const db = buildMigratedDb();
+    seedGraph(db);
+    db.prepare(
+      "INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES ('pay-bad', 'invoice', 'ghost-invoice', 1, 100, 'check', null, 1)"
+    ).run();
+    db.close();
+
+    const { checks, passed } = verifyMigration(dataDir);
+    expect(passed).toBe(false);
+    const fk = checks.find((c) => c.name === 'fkIntegrity')!;
+    expect(fk.status).toBe('fail');
+    expect(fk.detail).toContain('payments.targetId');
+  });
+
   it('(d) normalizationComplete FAILS on a project with non-null data', () => {
     const db = buildMigratedDb();
     seedGraph(db);
