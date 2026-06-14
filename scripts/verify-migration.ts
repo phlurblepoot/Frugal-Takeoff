@@ -227,7 +227,7 @@ const FK_RELATIONS: Relation[] = [
   { child: 'issue_photos', childCol: 'issueId', parent: 'issues', parentCol: 'id' },
   { child: 'invoices', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'invoice_lines', childCol: 'invoiceId', parent: 'invoices', parentCol: 'id' },
-  { child: 'payments', childCol: 'invoiceId', parent: 'invoices', parentCol: 'id' },
+  // payments are polymorphic (targetType/targetId) — checked separately, not as a simple FK.
   { child: 'change_orders', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'punch_items', childCol: 'projectId', parent: 'projects', parentCol: 'id' },
   { child: 'punch_photos', childCol: 'punchItemId', parent: 'punch_items', parentCol: 'id' },
@@ -249,17 +249,39 @@ function countBrokenFk(db: Database.Database, rel: Relation): number {
   return row?.c ?? 0;
 }
 
+// Payments are polymorphic: targetType 'invoice' → invoices.id, 'payapp' → aia_pay_apps.id.
+// Count rows whose (targetType,targetId) doesn't resolve to the right parent table.
+function countBrokenPaymentTargets(db: Database.Database): number {
+  if (!tableExists(db, 'payments')) return 0;
+  let broken = 0;
+  if (tableExists(db, 'invoices')) {
+    broken += (db.prepare(
+      `SELECT COUNT(*) AS c FROM payments WHERE targetType='invoice'
+         AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = payments.targetId)`
+    ).get() as { c: number }).c;
+  }
+  if (tableExists(db, 'aia_pay_apps')) {
+    broken += (db.prepare(
+      `SELECT COUNT(*) AS c FROM payments WHERE targetType='payapp'
+         AND NOT EXISTS (SELECT 1 FROM aia_pay_apps a WHERE a.id = payments.targetId)`
+    ).get() as { c: number }).c;
+  }
+  return broken;
+}
+
 function checkFkIntegrity(db: Database.Database): CheckResult {
   const broken: string[] = [];
   for (const rel of FK_RELATIONS) {
     const n = countBrokenFk(db, rel);
     if (n > 0) broken.push(`${rel.child}.${rel.childCol}→${rel.parent}.${rel.parentCol}: ${n}`);
   }
+  const brokenPayments = countBrokenPaymentTargets(db);
+  if (brokenPayments > 0) broken.push(`payments.targetId (polymorphic): ${brokenPayments}`);
   if (broken.length === 0) {
     return {
       name: 'fkIntegrity',
       status: 'pass',
-      detail: `all ${FK_RELATIONS.length} structural relations resolve`,
+      detail: `all ${FK_RELATIONS.length} structural relations + payment targets resolve`,
     };
   }
   return {
