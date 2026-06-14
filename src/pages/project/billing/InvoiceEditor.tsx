@@ -64,7 +64,7 @@ export const InvoiceEditor: React.FC<{
     const amount = parseFloat(payAmount);
     if (!(amount > 0)) { toast('Enter a positive amount', { type: 'warning' }); return; }
     try {
-      await recordPayment(invoice.id, { amount, method: payMethod });
+      await recordPayment(projectId, 'invoice', invoice.id, { amount, method: payMethod });
       toast('Payment recorded', { type: 'success' });
       setPayAmount('');
       onSaved(); // reloads the invoice (parent refetches)

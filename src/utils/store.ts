@@ -647,10 +647,14 @@ export interface InvoiceLine {
 }
 export interface Payment {
   id: string;
+  targetType: string;
+  targetId: string;
   date: number | null;
   amount: number;
   method: string | null;
   note: string | null;
+  createdAt: number;
+  targetLabel?: string;
 }
 export interface Invoice {
   id: string;
@@ -677,9 +681,20 @@ export interface ChangeOrder {
   amount: number; status: string; createdAt: number; // pending | approved | rejected
 }
 export interface BillingSummary {
-  baseContractCents: number; approvedChangeCents: number; contractValueCents: number;
-  invoicedCents: number; paidCents: number; outstandingCents: number;
-  invoiceCount: number; changeOrderCount: number;
+  sovOriginalCents: number;
+  hasSov: boolean;
+  baseContractCents: number;
+  approvedChangeCents: number;
+  contractTotalCents: number;
+  contractValueCents: number;
+  invoiceTotalCents: number;
+  invoicedCents: number;
+  paid: { invoicesCents: number; payAppsCents: number };
+  paidCents: number;
+  invoiceOutstandingCents: number;
+  outstandingCents: number;
+  invoiceCount: number;
+  changeOrderCount: number;
 }
 export interface InvoiceInput {
   number?: string; date?: number | null; terms?: string; status?: string;
@@ -717,9 +732,18 @@ export const setInvoiceStatus = async (id: string, status: string): Promise<{ ve
 export const deleteInvoice = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/invoices/${id}`); await handleResponse(res);
 };
-export const recordPayment = async (invoiceId: string, p: { amount: number; date?: number; method?: string; note?: string }): Promise<{ id: string }> => {
-  const res = await billingJson('POST', `/api/invoices/${invoiceId}/payments`, p);
+export const getProjectPayments = async (projectId: string): Promise<Payment[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/payments`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
+};
+export const recordPayment = async (
+  projectId: string,
+  targetType: 'invoice' | 'payapp',
+  targetId: string,
+  input: { amount: number; date?: number | null; method?: string; note?: string }
+): Promise<void> => {
+  const res = await billingJson('POST', `/api/projects/${projectId}/payments`, { targetType, targetId, ...input });
+  await handleResponse(res);
 };
 export const deletePayment = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/payments/${id}`); await handleResponse(res);
