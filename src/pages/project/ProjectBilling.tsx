@@ -1,6 +1,6 @@
 // src/pages/project/ProjectBilling.tsx
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { DollarSign, ShieldAlert } from 'lucide-react';
 import {
   BillingSummary, AiaSettings,
@@ -21,12 +21,37 @@ export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
+const BILLING_TABS = [
+  { value: 'sov', label: 'Schedule of Values' },
+  { value: 'change-orders', label: 'Change Orders' },
+  { value: 'pay-apps', label: 'Pay Applications' },
+  { value: 'invoices', label: 'Invoices' },
+  { value: 'payments', label: 'Payments' },
+  { value: 'settings', label: 'Settings' },
+] as const;
+
+type BillingTab = (typeof BILLING_TABS)[number]['value'];
+const BILLING_TAB_VALUES = BILLING_TABS.map(t => t.value) as readonly string[];
+
 export const ProjectBilling: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [aiaSettings, setAiaSettings] = useState<AiaSettings | null>(null);
 
   const admin = isAdmin();
+
+  const tabParam = searchParams.get('tab');
+  const activeTab: BillingTab = BILLING_TAB_VALUES.includes(tabParam ?? '')
+    ? (tabParam as BillingTab)
+    : 'sov';
+  const setActiveTab = (tab: BillingTab) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  };
 
   const reloadSummary = () => {
     if (!projectId || !admin) return;
@@ -38,6 +63,11 @@ export const ProjectBilling: React.FC = () => {
     getAiaSettings(projectId).then(setAiaSettings).catch(() => setAiaSettings({}));
   };
   useEffect(load, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh the always-visible summary totals whenever the active tab changes,
+  // so edits made in any tab (e.g. SOV / change orders affecting the contract
+  // total) are reflected without a manual reload.
+  useEffect(reloadSummary, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!admin) {
     return (
@@ -79,19 +109,39 @@ export const ProjectBilling: React.FC = () => {
         </CardBody>
       </Card>
 
-      {/* AIA G702/G703 */}
-      {aiaSettings && (
-        <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} />
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200 dark:border-slate-700 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+        {BILLING_TABS.map(tab => (
+          <button
+            key={tab.value}
+            onClick={() => setActiveTab(tab.value)}
+            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
+              activeTab === tab.value ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            {tab.label}
+            {activeTab === tab.value && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Active section */}
+      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} />}
+      {projectId && activeTab === 'change-orders' && (
+        <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
       )}
-      {projectId && <AiaScheduleOfValues projectId={projectId} />}
-      {projectId && <ChangeOrdersSection projectId={projectId} onChange={() => { load(); reloadSummary(); }} />}
-      {projectId && <AiaPayApplications projectId={projectId} />}
-
-      {/* Invoices */}
-      {projectId && <InvoicesSection projectId={projectId} onChange={reloadSummary} />}
-
-      {/* Payments */}
-      {projectId && <PaymentsSection projectId={projectId} onChange={reloadSummary} />}
+      {projectId && activeTab === 'pay-apps' && <AiaPayApplications projectId={projectId} />}
+      {projectId && activeTab === 'invoices' && (
+        <InvoicesSection projectId={projectId} onChange={reloadSummary} />
+      )}
+      {projectId && activeTab === 'payments' && (
+        <PaymentsSection projectId={projectId} onChange={reloadSummary} />
+      )}
+      {activeTab === 'settings' && (
+        <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings ?? {}} onSaved={setAiaSettings} defaultOpen />
+      )}
     </div>
   );
 };

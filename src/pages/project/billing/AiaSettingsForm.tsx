@@ -14,7 +14,8 @@ export const AiaSettingsForm: React.FC<{
   projectId: string;
   settings: AiaSettings;
   onSaved: (s: AiaSettings) => void;
-}> = ({ projectId, settings, onSaved }) => {
+  defaultOpen?: boolean;
+}> = ({ projectId, settings, onSaved, defaultOpen = false }) => {
   const { toast } = useToast();
   const [retainagePercent, setRetainagePercent] = useState(
     settings.retainagePercent != null ? String(settings.retainagePercent) : '10');
@@ -29,7 +30,7 @@ export const AiaSettingsForm: React.FC<{
   const [architectProjectNumber, setArchitectProjectNumber] = useState(settings.architectProjectNumber ?? '');
   const [contractFor, setContractFor] = useState(settings.contractFor ?? '');
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const handleSave = async () => {
     setSaving(true);
