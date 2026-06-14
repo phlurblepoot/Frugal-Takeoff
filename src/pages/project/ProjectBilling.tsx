@@ -19,6 +19,7 @@ import { InvoiceStatusPill, ChangeOrderStatusPill } from '../../components/ui/Bi
 import { InvoiceEditor } from './billing/InvoiceEditor';
 import { AiaSettingsForm } from './billing/AiaSettingsForm';
 import { AiaScheduleOfValues } from './billing/AiaScheduleOfValues';
+import { AiaPayApplications } from './billing/AiaPayApplications';
 import { useProjectOutlet } from './ProjectLayout';
 
 export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
@@ -153,7 +154,7 @@ export const ProjectBilling: React.FC = () => {
             <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} />
           )}
           {projectId && <AiaScheduleOfValues projectId={projectId} />}
-          {/* <AiaPayApplications projectId={projectId}/> added in Task 7 */}
+          {projectId && <AiaPayApplications projectId={projectId} />}
         </>
       ) : (
       <>

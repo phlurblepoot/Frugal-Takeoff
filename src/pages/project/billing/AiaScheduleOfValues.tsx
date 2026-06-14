@@ -211,8 +211,6 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
             <div className="text-ink-soft">Total scheduled value <span className="ml-2 font-semibold text-ink">{formatMoney(totalCents)}</span></div>
           </div>
         )}
-
-        {/* <AiaPayApplications projectId={projectId}/> added in Task 7 */}
       </CardBody>
     </Card>
   );
