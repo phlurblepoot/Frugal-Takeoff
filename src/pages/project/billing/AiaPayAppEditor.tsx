@@ -225,7 +225,7 @@ export const AiaPayAppEditor: React.FC<{
       open
       onClose={onClose}
       title={data ? `Application for payment #${data.app.number}` : 'Application for payment'}
-      width="lg"
+      width="full"
       footer={<>
         <Button variant="secondary" onClick={onClose}>Close</Button>
         <Button variant="secondary" onClick={handleExport} disabled={exporting}>{exporting ? 'Exporting…' : 'Export AIA Excel'}</Button>
@@ -255,8 +255,10 @@ export const AiaPayAppEditor: React.FC<{
             <Field label="Retainage % (stored)" htmlFor="pa-sret"><Input id="pa-sret" type="number" value={storedRetainagePercent} onChange={e => setStoredRetainagePercent(e.target.value)} disabled={isFinalized} /></Field>
           </div>
 
+          {/* G703 grid + G702 summary side-by-side on wide layouts */}
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
           {/* G703 continuation sheet */}
-          <div>
+          <div className="min-w-0">
             <div className="mb-2 flex items-center justify-between">
               <h4 className="text-sm font-semibold text-ink">G703 continuation sheet</h4>
               <span className="text-xs text-ink-faint">Save to recalc D / E / G / retainage</span>
@@ -265,10 +267,10 @@ export const AiaPayAppEditor: React.FC<{
               <Table>
                 <THead>
                   <TR>
-                    <TH>Item</TH><TH>Description</TH>
-                    <TH>Scheduled (C)</TH><TH>Previous (D)</TH><TH>This period (E)</TH>
-                    <TH>Stored (F)</TH><TH>% (G/C)</TH><TH>Total to date (G)</TH>
-                    <TH>Balance</TH><TH>Retainage</TH>
+                    <TH className="w-16">Item</TH><TH className="min-w-[14rem]">Description</TH>
+                    <TH className="text-right">Scheduled (C)</TH><TH className="text-right">Previous (D)</TH><TH className="text-right">This period (E)</TH>
+                    <TH className="text-right">Stored (F)</TH><TH className="text-right">% (G/C)</TH><TH className="text-right">Total to date (G)</TH>
+                    <TH className="text-right">Balance</TH><TH className="text-right">Retainage</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -281,21 +283,23 @@ export const AiaPayAppEditor: React.FC<{
                           {row.description}
                           {row.isChangeOrder ? <span className="ml-2 rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-faint">CO</span> : null}
                         </TD>
-                        <TD className="text-ink-soft">{formatMoney(row.scheduledValueCents)}</TD>
-                        <TD className="text-ink-soft">{formatMoney(row.previousCents)}</TD>
-                        <TD className="text-ink-soft">{formatMoney(row.thisPeriodCents)}</TD>
-                        <TD className="w-28">
+                        <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.scheduledValueCents)}</TD>
+                        <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.previousCents)}</TD>
+                        <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.thisPeriodCents)}</TD>
+                        <TD className="w-32">
                           <Input
                             type="number"
+                            className="text-right tabular-nums"
                             value={e.storedMaterials}
                             onChange={ev => setEdit(row.sovLineId, { storedMaterials: ev.target.value })}
                             disabled={isFinalized}
                             placeholder="0.00"
                           />
                         </TD>
-                        <TD className="w-20">
+                        <TD className="w-24">
                           <Input
                             type="number"
+                            className="text-right tabular-nums"
                             value={e.percentComplete}
                             onChange={ev => setEdit(row.sovLineId, { percentComplete: ev.target.value })}
                             disabled={isFinalized}
@@ -303,14 +307,14 @@ export const AiaPayAppEditor: React.FC<{
                             max={100}
                           />
                         </TD>
-                        <TD className="text-ink-soft">
+                        <TD className="text-right tabular-nums text-ink-soft">
                           {formatMoney(row.totalToDateCents)}
                           {previewG[row.sovLineId] !== row.totalToDateCents && (
                             <span className="ml-1 text-xs text-ink-faint" title="Unsaved preview">→ {formatMoney(previewG[row.sovLineId])}</span>
                           )}
                         </TD>
-                        <TD className="text-ink-soft">{formatMoney(row.balanceToFinishCents)}</TD>
-                        <TD className="text-ink-soft">{formatMoney(row.retainageCents)}</TD>
+                        <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.balanceToFinishCents)}</TD>
+                        <TD className="text-right tabular-nums text-ink-soft">{formatMoney(row.retainageCents)}</TD>
                       </TR>
                     );
                   })}
@@ -321,7 +325,7 @@ export const AiaPayAppEditor: React.FC<{
 
           {/* G702 summary */}
           {g702 && (
-            <div className="rounded-lg border border-edge p-4">
+            <div className="h-fit rounded-lg border border-edge p-4">
               <h4 className="mb-3 text-sm font-semibold text-ink">G702 application summary</h4>
               <dl className="space-y-1.5 text-sm">
                 <Row label="1. Original contract sum" value={g702.L1originalContractCents} />
@@ -352,6 +356,7 @@ export const AiaPayAppEditor: React.FC<{
               </div>
             </div>
           )}
+          </div>
         </div>
       )}
     </Modal>
