@@ -69,8 +69,8 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
                   <TD><ChangeOrderStatusPill status={co.status} /></TD>
                   <TD>
                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                      {co.status !== 'approved' && <button onClick={() => coStatus(co.id, 'approved')} className="rounded px-2 py-0.5 text-xs text-green-700 hover:bg-green-50 dark:hover:bg-green-900/20">Approve</button>}
-                      {co.status !== 'rejected' && <button onClick={() => coStatus(co.id, 'rejected')} className="rounded px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>}
+                      {co.status !== 'approved' && <button onClick={() => coStatus(co.id, 'approved')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-green-700 hover:bg-green-50 dark:hover:bg-green-900/20">Approve</button>}
+                      {co.status !== 'rejected' && <button onClick={() => coStatus(co.id, 'rejected')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>}
                       <button onClick={() => removeCo(co.id)} title="Delete" className="rounded p-1 text-ink-faint hover:text-red-600"><Trash2 size={13} /></button>
                     </div>
                   </TD>

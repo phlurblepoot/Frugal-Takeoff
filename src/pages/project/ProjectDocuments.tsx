@@ -173,6 +173,8 @@ export const ProjectDocuments: React.FC = () => {
           action={<Button onClick={() => inputRef.current?.click()}><Upload size={15} />Upload</Button>}
         />
       ) : (
+        <>
+        <div className="hidden md:block">
         <Table>
           <THead>
             <TR><TH>Name</TH><TH>Kind</TH><TH>Size</TH><TH>Version</TH><TH>Added</TH><TH className="text-right">Actions</TH></TR>
@@ -236,6 +238,74 @@ export const ProjectDocuments: React.FC = () => {
             ))}
           </TBody>
         </Table>
+        </div>
+
+        {/* Mobile document cards — same `visible` data + handlers as the table. */}
+        <ul className="space-y-3 md:hidden">
+          {visible.map(f => (
+            <li key={f.id} className="rounded-xl border border-edge bg-raised p-3">
+              <button
+                type="button"
+                onClick={() => handleOpen(f)}
+                className="block w-full text-left"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium text-ink break-words">{f.name ?? f.id}</span>
+                  <StatusPill>{f.kind}</StatusPill>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-soft">
+                  <span>{formatBytes(f.size)}</span>
+                  <span>v{f.versionNumber}</span>
+                  <span>{new Date(f.createdAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+              <div className="mt-2 flex items-center gap-1 border-t border-edge pt-2">
+                <button onClick={() => handleHistory(f)} title="Version history"
+                  className="flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink">
+                  <History size={16} />
+                </button>
+                <button
+                  onClick={async () => {
+                    try { downloadBlob(await fetchFileBlob(f.id), f.name ?? f.id); }
+                    catch { toast('Download failed', { type: 'error' }); }
+                  }}
+                  title="Download"
+                  className="flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink"
+                >
+                  <Download size={16} />
+                </button>
+              </div>
+              {historyFor === f.id && (
+                <div className="mt-2 rounded-lg bg-sunken/50 p-2">
+                  {versions === null ? (
+                    <Skeleton className="h-6 w-48" />
+                  ) : versions.length <= 1 ? (
+                    <span className="text-xs text-ink-faint">No earlier versions.</span>
+                  ) : (
+                    <ul className="space-y-1">
+                      {versions.slice(1).map(v => (
+                        <li key={v.id} className="flex items-center gap-3 text-xs text-ink-soft">
+                          <span>v{v.versionNumber}</span>
+                          <span>{new Date(v.createdAt).toLocaleString()}</span>
+                          <button
+                            onClick={async () => {
+                              try { downloadBlob(await fetchFileBlob(v.id), `${f.name ?? f.id} (v${v.versionNumber})`); }
+                              catch { toast('Download failed', { type: 'error' }); }
+                            }}
+                            className="text-accent-600 hover:underline"
+                          >
+                            download
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+        </>
       )}
     </div>
   );

@@ -65,11 +65,11 @@ export const ProjectIssues: React.FC = () => {
 
       <Card className="mb-5">
         <CardBody>
-          <div className="flex items-end gap-2">
+          <div className="flex flex-wrap items-end gap-2">
             <Field label="New issue" htmlFor="new-iss">
               <Input id="new-iss" value={newTitle} onChange={e => setNewTitle(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addIssue(); }}
-                placeholder="Short description of the deficiency" className="w-80" />
+                placeholder="Short description of the deficiency" className="flex-1 min-w-[12rem] w-full sm:w-auto" />
             </Field>
             <Button onClick={addIssue}><Plus size={15} />Add issue</Button>
           </div>

@@ -106,7 +106,7 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
                   <div key={p.id} className="group relative">
                     <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
                     <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                      className="absolute right-1 top-1 rounded-md bg-black/50 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100">
+                      className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                       <Trash2 size={12} />
                     </button>
                   </div>

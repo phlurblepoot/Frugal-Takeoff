@@ -96,7 +96,7 @@ export const ProjectOverview: React.FC = () => {
                     Bid due {fmtDate(summary.bidDueDate)}
                   </div>
                 )}
-                <div className="flex items-center gap-4 pt-1 text-ink-soft">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1 text-ink-soft">
                   <span className="flex items-center gap-1.5"><FileText size={14} className="text-ink-faint" />{summary.pageCount} pages</span>
                   <span className="flex items-center gap-1.5"><Ruler size={14} className="text-ink-faint" />{summary.takeoffCount} takeoffs</span>
                   <span className="flex items-center gap-1.5"><AlertCircle size={14} className="text-ink-faint" />{summary.openIssueCount} open issue{summary.openIssueCount === 1 ? '' : 's'}</span>

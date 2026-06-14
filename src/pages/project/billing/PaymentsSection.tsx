@@ -72,7 +72,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
       <CardBody>
         <div className="mb-4 flex flex-wrap items-end gap-2">
           <Field label="Applied to" htmlFor="pay-target">
-            <Select id="pay-target" value={target} onChange={e => setTarget(e.target.value)} className="w-56">
+            <Select id="pay-target" value={target} onChange={e => setTarget(e.target.value)} className="w-full sm:w-56">
               <option value="">Select target…</option>
               {invoices.length > 0 && (
                 <optgroup label="Invoices">

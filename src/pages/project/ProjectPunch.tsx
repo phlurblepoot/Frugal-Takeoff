@@ -142,7 +142,7 @@ export const ProjectPunch: React.FC = () => {
               <Input id="new-punch-desc" value={newDesc}
                 onChange={e => setNewDesc(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addItem(); }}
-                placeholder="Describe the item to fix" className="w-80" />
+                placeholder="Describe the item to fix" className="w-full sm:w-auto flex-1" />
             </Field>
             <Button onClick={addItem} disabled={!newDesc.trim()}><Plus size={15} />Add</Button>
           </div>
@@ -170,7 +170,7 @@ export const ProjectPunch: React.FC = () => {
                       <li key={item.id} className="flex items-center gap-3 py-2">
                         <input type="checkbox" checked={!!item.done}
                           onChange={() => toggleDone(item)}
-                          className="size-4 shrink-0 rounded border-edge-strong accent-accent-600"
+                          className="size-5 shrink-0 rounded border-edge-strong accent-accent-600"
                           aria-label={item.done ? 'Mark not done' : 'Mark done'} />
                         <button type="button" onClick={() => openItem(item.id)}
                           className="flex flex-1 items-center gap-2 text-left">
