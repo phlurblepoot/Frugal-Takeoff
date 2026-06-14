@@ -3,7 +3,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AiaPayApp, AiaPayAppLine, AiaG703Row, AiaG702,
   getPayApp, savePayAppLines, setPayApp,
+  getProject, getSettings, getAiaSettings, getSov,
 } from '../../../utils/store';
+import { exportAiaXlsx } from './aiaExcel';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import {
@@ -31,6 +33,7 @@ export const AiaPayAppEditor: React.FC<{
 
   const [data, setData] = useState<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Editable per-line inputs, seeded once per load (re-seeded on reload).
   const [edits, setEdits] = useState<Record<string, EditLine>>({});
@@ -126,10 +129,60 @@ export const AiaPayAppEditor: React.FC<{
     }
   };
 
-  // Task 8 implements the AIA Excel export.
-  const handleExport = () => {
-    // TODO(Task 8): exportAiaXlsx
-    toast('AIA Excel export coming soon', { type: 'info' });
+  // Faithful AIA G702/G703 recreation export (default mode). A template-fill
+  // mode is a separate, later task.
+  const handleExport = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      const projectId = data.app.projectId;
+      const [project, settings, aiaSettings, sovLines] = await Promise.all([
+        getProject(projectId),
+        getSettings(),
+        getAiaSettings(projectId),
+        getSov(projectId),
+      ]);
+
+      // Resolve logo to a data URL the same way Invoice/Proposal exports do.
+      let logoDataUrl: string | undefined;
+      const logoUrl = settings.logoUrl;
+      if (logoUrl) {
+        if (logoUrl.startsWith('data:')) {
+          logoDataUrl = logoUrl;
+        } else {
+          try {
+            const resp = await fetch(logoUrl);
+            const blob = await resp.blob();
+            logoDataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch { /* skip logo on fetch error */ }
+        }
+      }
+
+      await exportAiaXlsx({
+        projectName: project?.name ?? 'Project',
+        company: {
+          name: settings.companyName || settings.appName,
+          address: settings.companyAddress,
+          phone: settings.companyPhone,
+          email: settings.companyEmail,
+          logoDataUrl,
+        },
+        aiaSettings,
+        app: data.app,
+        sovLines,
+        g702: data.g702,
+        g703: data.g703,
+      });
+    } catch {
+      toast('Excel export failed', { type: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   // Light client-side preview of Total to Date (G = scheduled*% /100 + stored).
@@ -156,7 +209,7 @@ export const AiaPayAppEditor: React.FC<{
       width="lg"
       footer={<>
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="secondary" onClick={handleExport}>Export AIA Excel</Button>
+        <Button variant="secondary" onClick={handleExport} disabled={exporting}>{exporting ? 'Exporting…' : 'Export AIA Excel'}</Button>
         {!isFinalized && (
           <Button variant="secondary" onClick={handleFinalize} disabled={saving}>Finalize</Button>
         )}
