@@ -3,9 +3,10 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { DollarSign, FileText, Plus, Trash2, ShieldAlert } from 'lucide-react';
 import {
-  BillingSummary, ChangeOrder, Invoice, InvoiceListItem,
+  BillingSummary, ChangeOrder, Invoice, InvoiceListItem, AiaSettings,
   getBillingSummary, getInvoices, getInvoice, createInvoice, deleteInvoice, setInvoiceStatus,
   getChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+  getAiaSettings, saveAiaSettings,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
 import { useToast } from '../../components/Toast';
@@ -16,6 +17,8 @@ import {
 } from '../../components/ui';
 import { InvoiceStatusPill, ChangeOrderStatusPill } from '../../components/ui/BillingPills';
 import { InvoiceEditor } from './billing/InvoiceEditor';
+import { AiaSettingsForm } from './billing/AiaSettingsForm';
+import { AiaScheduleOfValues } from './billing/AiaScheduleOfValues';
 import { useProjectOutlet } from './ProjectLayout';
 
 export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
@@ -31,6 +34,7 @@ export const ProjectBilling: React.FC = () => {
   const [invoices, setInvoices] = useState<InvoiceListItem[] | null>(null);
   const [changeOrders, setChangeOrders] = useState<ChangeOrder[] | null>(null);
   const [editing, setEditing] = useState<Invoice | null>(null);
+  const [aiaSettings, setAiaSettings] = useState<AiaSettings | null>(null);
   const [coNumber, setCoNumber] = useState('');
   const [coDesc, setCoDesc] = useState('');
   const [coAmount, setCoAmount] = useState('');
@@ -42,6 +46,7 @@ export const ProjectBilling: React.FC = () => {
     getBillingSummary(projectId).then(setSummary).catch(() => setSummary(null));
     getInvoices(projectId).then(setInvoices).catch(() => setInvoices([]));
     getChangeOrders(projectId).then(setChangeOrders).catch(() => setChangeOrders([]));
+    getAiaSettings(projectId).then(setAiaSettings).catch(() => setAiaSettings({}));
   };
   useEffect(load, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -90,9 +95,33 @@ export const ProjectBilling: React.FC = () => {
     try { await deleteChangeOrder(id); load(); } catch { toast('Delete failed', { type: 'error' }); }
   };
 
+  const billingMode = aiaSettings?.billingMode === 'aia' ? 'aia' : 'standard';
+  const setBillingMode = async (mode: 'standard' | 'aia') => {
+    if (!projectId || mode === billingMode) return;
+    const base = aiaSettings ?? {};
+    const next: AiaSettings = { ...base, billingMode: mode };
+    setAiaSettings(next); // optimistic
+    try { await saveAiaSettings(projectId, next); }
+    catch { toast('Failed to switch billing mode', { type: 'error' }); setAiaSettings(base); }
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
-      <h1 className="mb-4 text-xl font-bold text-ink">Billing</h1>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-bold text-ink">Billing</h1>
+        <div className="inline-flex rounded-lg border border-edge p-0.5">
+          <button
+            onClick={() => setBillingMode('standard')}
+            aria-pressed={billingMode === 'standard'}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${billingMode === 'standard' ? 'bg-accent text-white' : 'text-ink-soft hover:bg-hover'}`}
+          >Standard invoices</button>
+          <button
+            onClick={() => setBillingMode('aia')}
+            aria-pressed={billingMode === 'aia'}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${billingMode === 'aia' ? 'bg-accent text-white' : 'text-ink-soft hover:bg-hover'}`}
+          >AIA G702/G703</button>
+        </div>
+      </div>
 
       {/* Contract rollup */}
       <Card className="mb-5">
@@ -118,6 +147,16 @@ export const ProjectBilling: React.FC = () => {
         </CardBody>
       </Card>
 
+      {billingMode === 'aia' ? (
+        <>
+          {aiaSettings && (
+            <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} />
+          )}
+          {projectId && <AiaScheduleOfValues projectId={projectId} />}
+          {/* <AiaPayApplications projectId={projectId}/> added in Task 7 */}
+        </>
+      ) : (
+      <>
       {/* Invoices */}
       <Card className="mb-5">
         <CardHeader title="Invoices" actions={<Button size="sm" onClick={newInvoice}><Plus size={14} />New invoice</Button>} />
@@ -183,6 +222,8 @@ export const ProjectBilling: React.FC = () => {
           )}
         </CardBody>
       </Card>
+      </>
+      )}
 
       {editing && (
         <InvoiceEditor
