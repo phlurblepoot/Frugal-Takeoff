@@ -120,11 +120,11 @@ const ProjectCard: React.FC<{
           <span className="flex items-center gap-1"><Ruler size={12} />{p.takeoffCount}</span>
         </div>
         <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
-          <button onClick={() => setEditing(true)} title="Rename" className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink"><Edit2 size={13} /></button>
-          <button onClick={onArchiveToggle} title={p.archived ? 'Restore' : 'Archive'} className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink">
+          <button onClick={() => setEditing(true)} title="Rename" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"><Edit2 size={13} /></button>
+          <button onClick={onArchiveToggle} title={p.archived ? 'Restore' : 'Archive'} className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0">
             {p.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
           </button>
-          <button onClick={onDelete} title="Delete" className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"><Trash2 size={13} /></button>
+          <button onClick={onDelete} title="Delete" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-red-50 hover:text-red-600 active:bg-red-100 dark:hover:bg-red-900/20 dark:hover:text-red-400 dark:active:bg-red-900/30 md:min-h-0 md:min-w-0"><Trash2 size={13} /></button>
         </div>
       </div>
     </Card>
@@ -245,7 +245,7 @@ export const ProjectsPage: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-ink">Projects</h1>
         <Button onClick={() => navigate('/new')}><Plus size={16} />New Project</Button>
       </div>

@@ -836,7 +836,7 @@ export const NewProject: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end gap-3">
+            <div className="mt-8 pt-6 border-t border-slate-100 flex flex-wrap justify-end gap-3">
               <Link
                 to="/projects"
                 className="px-6 py-3 rounded-xl font-medium text-slate-600 hover:bg-slate-100 transition-colors"

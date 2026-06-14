@@ -590,8 +590,8 @@ const EmailTab: React.FC = () => {
         </div>
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 grid grid-cols-3 gap-4">
-              <div className="col-span-2">
+            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
                 <label className={labelCls}>SMTP Server</label>
                 <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
               </div>
@@ -1225,12 +1225,12 @@ export const Settings: React.FC = () => {
         <div className="flex flex-col md:flex-row gap-8">
           {/* Sidebar */}
           <aside className="w-full md:w-64 shrink-0">
-            <nav className="space-y-1">
+            <nav className="flex overflow-x-auto no-scrollbar gap-1 md:flex-col md:overflow-visible md:space-y-1 md:gap-0">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all whitespace-nowrap shrink-0 md:w-full ${
                     activeTab === tab.id
                       ? 'bg-accent-600 text-white shadow-md'
                       : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
