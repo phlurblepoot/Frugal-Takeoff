@@ -676,9 +676,55 @@ export interface InvoiceListItem {
   status: string; terms: string | null; version: number; createdAt: number;
   totalCents: number; paidCents: number; balanceCents: number;
 }
+export interface ChangeOrderLine {
+  id?: string;
+  description: string;
+  qty: number;
+  unitPrice: number;
+}
+export interface COPhoto {
+  id: string;
+  fileId: string;
+  sortOrder: number;
+}
 export interface ChangeOrder {
-  id: string; projectId: string; number: string | null; description: string | null;
-  amount: number; status: string; createdAt: number; // pending | approved | rejected
+  id: string;
+  projectId: string;
+  number: string | null;
+  date: number | null;
+  description: string | null;
+  lumpSumAmount: number;
+  scheduleImpactDays: number | null;
+  status: string; // draft | sent | approved | rejected (legacy: pending)
+  version: number;
+  createdAt: number;
+  amount: number; // canonical rolled-up dollar total (= (Σ line cents + lump-sum cents)/100)
+  lines: ChangeOrderLine[];
+  photos: COPhoto[];
+  totalCents: number;
+  lumpSumCents: number;
+}
+export interface ChangeOrderListItem {
+  id: string;
+  projectId: string;
+  number: string | null;
+  date: number | null;
+  description: string | null;
+  lumpSumAmount: number;
+  scheduleImpactDays: number | null;
+  status: string;
+  version: number;
+  createdAt: number;
+  amount: number;
+  totalCents: number;
+}
+export interface ChangeOrderInput {
+  number?: string;
+  date?: number | null;
+  description?: string;
+  lumpSumAmount?: number;
+  scheduleImpactDays?: number | null;
+  lines?: { description: string; qty: number; unitPrice: number }[];
 }
 export interface BillingSummary {
   sovOriginalCents: number;
@@ -748,12 +794,26 @@ export const recordPayment = async (
 export const deletePayment = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/payments/${id}`); await handleResponse(res);
 };
-export const getChangeOrders = async (projectId: string): Promise<ChangeOrder[]> => {
+export const getChangeOrders = async (projectId: string): Promise<ChangeOrderListItem[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/change-orders`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createChangeOrder = async (projectId: string, co: { number?: string; description?: string; amount: number }): Promise<{ id: string }> => {
-  const res = await billingJson('POST', `/api/projects/${projectId}/change-orders`, co);
+export const getChangeOrder = async (id: string): Promise<ChangeOrder> => {
+  const res = await fetchWithRetry(`/api/change-orders/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+// The server ignores any passed `amount` — the total is rolled up server-side
+// from lumpSumAmount + lines. (Legacy callers may still pass `amount`; harmless.)
+export const createChangeOrder = async (
+  projectId: string,
+  input?: ChangeOrderInput & { amount?: number }
+): Promise<{ id: string; version: number }> => {
+  const res = await billingJson('POST', `/api/projects/${projectId}/change-orders`, input ?? {});
+  await handleResponse(res); return res.json();
+};
+export const saveChangeOrder = async (id: string, changeOrder: ChangeOrder): Promise<{ version: number }> => {
+  const res = await billingJson('PUT', `/api/change-orders/${id}`, changeOrder);
+  if (res.status === 409) throw new ConflictError(id);
   await handleResponse(res); return res.json();
 };
 export const setChangeOrderStatus = async (id: string, status: string): Promise<void> => {
@@ -761,6 +821,15 @@ export const setChangeOrderStatus = async (id: string, status: string): Promise<
 };
 export const deleteChangeOrder = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${id}`); await handleResponse(res);
+};
+export const addCOPhoto = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/change-orders/${coId}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const sendChangeOrder = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+  const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res);
 };
 export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });

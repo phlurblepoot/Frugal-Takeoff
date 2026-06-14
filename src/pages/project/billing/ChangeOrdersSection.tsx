@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import {
-  ChangeOrder,
+  ChangeOrderListItem,
   getChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
 } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
@@ -15,7 +15,7 @@ import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
-  const [changeOrders, setChangeOrders] = useState<ChangeOrder[] | null>(null);
+  const [changeOrders, setChangeOrders] = useState<ChangeOrderListItem[] | null>(null);
   const [coNumber, setCoNumber] = useState('');
   const [coDesc, setCoDesc] = useState('');
   const [coAmount, setCoAmount] = useState('');
