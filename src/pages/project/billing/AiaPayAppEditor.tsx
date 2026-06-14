@@ -3,9 +3,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AiaPayApp, AiaPayAppLine, AiaG703Row, AiaG702,
   getPayApp, savePayAppLines, setPayApp,
-  getProject, getSettings, getAiaSettings, getSov,
+  getProject, getSettings, getAiaSettings, getSov, getFile,
 } from '../../../utils/store';
-import { exportAiaXlsx } from './aiaExcel';
+import { exportAiaXlsx, type AiaTemplateMapping } from './aiaExcel';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import {
@@ -129,8 +129,10 @@ export const AiaPayAppEditor: React.FC<{
     }
   };
 
-  // Faithful AIA G702/G703 recreation export (default mode). A template-fill
-  // mode is a separate, later task.
+  // AIA G702/G703 export. If the admin has configured an app-wide template
+  // (settings.aiaTemplateFileId + aiaTemplateMapping), that template's cells
+  // are filled; otherwise the built-in recreation is used. A template that's
+  // configured but fails to load falls back to the recreation with a toast.
   const handleExport = async () => {
     if (!data) return;
     setExporting(true);
@@ -163,6 +165,23 @@ export const AiaPayAppEditor: React.FC<{
         }
       }
 
+      // Resolve an admin-configured template (best-effort: fall back to the
+      // recreation on any load/parse error so export always works).
+      let template: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping } | undefined;
+      const templateFileId = settings.aiaTemplateFileId;
+      if (templateFileId) {
+        try {
+          const dataUrl = await getFile(templateFileId);
+          if (!dataUrl) throw new Error('template file missing');
+          const buf = await (await fetch(dataUrl)).arrayBuffer();
+          const mapping = JSON.parse(settings.aiaTemplateMapping || '{}') as AiaTemplateMapping;
+          template = { templateBuf: buf, mapping };
+        } catch {
+          toast('AIA template failed to load — exporting standard G702/G703 instead', { type: 'error' });
+          template = undefined;
+        }
+      }
+
       await exportAiaXlsx({
         projectName: project?.name ?? 'Project',
         company: {
@@ -177,7 +196,7 @@ export const AiaPayAppEditor: React.FC<{
         sovLines,
         g702: data.g702,
         g703: data.g703,
-      });
+      }, template);
     } catch {
       toast('Excel export failed', { type: 'error' });
     } finally {

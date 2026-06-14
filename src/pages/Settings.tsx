@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
@@ -867,9 +867,255 @@ const StorageTab: React.FC = () => {
   );
 };
 
+// ── AIA Export Template tab ────────────────────────────────────────────────────
+
+// Default mapping — sensible starting point the admin edits rather than a blank
+// form. Mirrors AiaTemplateMapping in aiaExcel.ts (kept structural to avoid a
+// runtime dependency on the lazy-loaded exceljs module).
+interface AiaMapping {
+  g702Sheet: string;
+  cells: Record<string, string>;
+  g703Sheet: string;
+  g703StartRow: number;
+  g703Cols: Record<string, string>;
+  moneyAsDollars: boolean;
+}
+
+const G702_CELL_FIELDS: { key: string; label: string }[] = [
+  { key: 'ownerName', label: 'Owner name' },
+  { key: 'ownerAddress', label: 'Owner address' },
+  { key: 'projectName', label: 'Project name' },
+  { key: 'contractorName', label: 'Contractor name' },
+  { key: 'architectName', label: 'Architect name' },
+  { key: 'contractFor', label: 'Contract for' },
+  { key: 'applicationNo', label: 'Application no.' },
+  { key: 'periodTo', label: 'Period to' },
+  { key: 'applicationDate', label: 'Application date' },
+  { key: 'contractDate', label: 'Contract date' },
+  { key: 'ownerProjectNumber', label: 'Owner project no.' },
+  { key: 'architectProjectNumber', label: 'Architect project no.' },
+  { key: 'retainageWorkPct', label: 'Retainage % (work)' },
+  { key: 'retainageStoredPct', label: 'Retainage % (stored)' },
+  { key: 'L1', label: 'Line 1 — Original contract sum' },
+  { key: 'L2', label: 'Line 2 — Net change orders' },
+  { key: 'L3', label: 'Line 3 — Contract sum to date' },
+  { key: 'L4', label: 'Line 4 — Total completed & stored' },
+  { key: 'L5a', label: 'Line 5a — Retainage (work)' },
+  { key: 'L5b', label: 'Line 5b — Retainage (stored)' },
+  { key: 'L5', label: 'Line 5 — Total retainage' },
+  { key: 'L6', label: 'Line 6 — Earned less retainage' },
+  { key: 'L7', label: 'Line 7 — Less previous certificates' },
+  { key: 'L8', label: 'Line 8 — Current payment due' },
+  { key: 'L9', label: 'Line 9 — Balance to finish' },
+  { key: 'coAdditions', label: 'CO additions' },
+  { key: 'coDeductions', label: 'CO deductions' },
+  { key: 'coNet', label: 'CO net change' },
+];
+
+const G703_COL_FIELDS: { key: string; label: string }[] = [
+  { key: 'itemNo', label: 'Item no.' },
+  { key: 'description', label: 'Description' },
+  { key: 'scheduledValue', label: 'Scheduled value (C)' },
+  { key: 'previous', label: 'Previous (D)' },
+  { key: 'thisPeriod', label: 'This period (E)' },
+  { key: 'stored', label: 'Stored (F)' },
+  { key: 'total', label: 'Total to date (G)' },
+  { key: 'percent', label: '% (G/C)' },
+  { key: 'balance', label: 'Balance (I)' },
+  { key: 'retainage', label: 'Retainage (J)' },
+];
+
+const DEFAULT_AIA_MAPPING: AiaMapping = {
+  g702Sheet: 'G702',
+  cells: {},
+  g703Sheet: 'G703',
+  g703StartRow: 2,
+  g703Cols: {
+    itemNo: 'A', description: 'B', scheduledValue: 'C', previous: 'D',
+    thisPeriod: 'E', stored: 'F', total: 'G', percent: 'H', balance: 'I', retainage: 'J',
+  },
+  moneyAsDollars: true,
+};
+
+const AiaTemplateTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [templateFileId, setTemplateFileId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [mapping, setMapping] = useState<AiaMapping>(DEFAULT_AIA_MAPPING);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getSettings();
+        if (s.aiaTemplateFileId) setTemplateFileId(s.aiaTemplateFileId);
+        if (s.aiaTemplateName) setTemplateName(s.aiaTemplateName);
+        if (s.aiaTemplateMapping) {
+          try {
+            const parsed = JSON.parse(s.aiaTemplateMapping);
+            setMapping({ ...DEFAULT_AIA_MAPPING, ...parsed,
+              cells: { ...parsed.cells }, g703Cols: { ...DEFAULT_AIA_MAPPING.g703Cols, ...parsed.g703Cols } });
+          } catch { /* keep defaults on parse error */ }
+        }
+      } catch { /* ignore */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  const setCell = (key: string, val: string) =>
+    setMapping(m => ({ ...m, cells: { ...m.cells, [key]: val } }));
+  const setCol = (key: string, val: string) =>
+    setMapping(m => ({ ...m, g703Cols: { ...m.g703Cols, [key]: val } }));
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const id = `aia-template-${crypto.randomUUID()}`;
+        await saveFile(id, reader.result as string);
+        await saveSettings({ aiaTemplateFileId: id, aiaTemplateName: file.name });
+        setTemplateFileId(id);
+        setTemplateName(file.name);
+        toast('Template uploaded', { type: 'success' });
+      } catch {
+        toast('Failed to upload template', { type: 'error' });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ''; // allow re-uploading the same filename
+  };
+
+  const handleRemove = async () => {
+    const ok = await confirm({
+      title: 'Remove template',
+      message: 'Remove the configured AIA template? Exports will revert to the standard generated G702/G703.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await saveSettings({ aiaTemplateFileId: '', aiaTemplateName: '' });
+      setTemplateFileId('');
+      setTemplateName('');
+      toast('Template removed', { type: 'success' });
+    } catch {
+      toast('Failed to remove template', { type: 'error' });
+    }
+  };
+
+  const handleSaveMapping = async () => {
+    setSaving(true);
+    try {
+      await saveSettings({ aiaTemplateMapping: JSON.stringify(mapping) });
+      toast('Mapping saved', { type: 'success' });
+    } catch {
+      toast('Failed to save mapping', { type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileSpreadsheet size={20} className="text-accent-600" /> AIA Export Template
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Upload your AIA G702/G703 .xlsx and map each value to the cell it should fill. Leave a cell blank to skip it. When no template is set, the app generates a standard G702/G703.
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleUpload} className="hidden" id="aia-template-upload" />
+            <label htmlFor="aia-template-upload"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer transition-all shadow-sm">
+              <FileSpreadsheet size={16} /> {templateFileId ? 'Replace Template' : 'Upload .xlsx Template'}
+            </label>
+            {templateFileId ? (
+              <>
+                <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1.5">
+                  <CheckCircle size={15} /> {templateName || 'Template configured'}
+                </span>
+                <button onClick={handleRemove} className="text-sm text-red-500 hover:text-red-600 font-medium flex items-center gap-1">
+                  <Trash2 size={14} /> Remove
+                </button>
+              </>
+            ) : (
+              <span className="text-sm text-slate-500 dark:text-slate-400">No template configured — using the standard generated export.</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">G702 — Sheet & Cell Mapping</h3>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="max-w-xs">
+            <label className={labelCls}>G702 sheet name</label>
+            <input className={inputCls} value={mapping.g702Sheet} onChange={e => setMapping(m => ({ ...m, g702Sheet: e.target.value }))} placeholder="G702 or 1" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {G702_CELL_FIELDS.map(f => (
+              <div key={f.key}>
+                <label className={labelCls}>{f.label}</label>
+                <input className={inputCls} value={mapping.cells[f.key] || ''} onChange={e => setCell(f.key, e.target.value)} placeholder="e.g. F20" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">G703 — Continuation Sheet Mapping</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Each schedule-of-values line writes into a row, starting at the start row. Provide the column letter for each value.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+            <div>
+              <label className={labelCls}>G703 sheet name</label>
+              <input className={inputCls} value={mapping.g703Sheet} onChange={e => setMapping(m => ({ ...m, g703Sheet: e.target.value }))} placeholder="G703 or 1" />
+            </div>
+            <div>
+              <label className={labelCls}>First data row</label>
+              <input className={inputCls} type="number" min={1} value={mapping.g703StartRow}
+                onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            {G703_COL_FIELDS.map(f => (
+              <div key={f.key}>
+                <label className={labelCls}>{f.label}</label>
+                <input className={inputCls} value={mapping.g703Cols[f.key] || ''} onChange={e => setCol(f.key, e.target.value)} placeholder="e.g. C" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button onClick={handleSaveMapping} disabled={saving}
+          className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+          <Save size={16} /> {saving ? 'Saving…' : 'Save Mapping'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'changelog';
+type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -937,6 +1183,7 @@ export const Settings: React.FC = () => {
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
     { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
+    { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
   ];
@@ -1101,6 +1348,8 @@ export const Settings: React.FC = () => {
             {activeTab === 'email' && isAdmin && <EmailTab />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
+
+            {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 
             {activeTab === 'users' && isAdmin && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">

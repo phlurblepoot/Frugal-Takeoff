@@ -12,7 +12,10 @@
 // Money is stored as INTEGER CENTS everywhere; convert to dollars ONLY at the
 // cell value (cents / 100) paired with a `$#,##0.00` number format.
 
-import ExcelJS from 'exceljs';
+// exceljs is LAZY-LOADED (dynamic import inside the build functions) so it
+// stays out of the main bundle and only downloads when the user actually
+// exports. Types are imported type-only (erased at build time).
+import type ExcelJS from 'exceljs';
 import type { AiaSettings, AiaPayApp, AiaSovLine, AiaG702, AiaG703Row } from '../../../utils/store';
 
 export interface AiaExportCtx {
@@ -23,6 +26,33 @@ export interface AiaExportCtx {
   sovLines: AiaSovLine[];
   g702: AiaG702;
   g703: AiaG703Row[];
+}
+
+// ---------------------------------------------------------------------------
+// Template-fill mode — admin uploads their own AIA G702/G703 .xlsx and a cell
+// mapping; we only SET values into the mapped cells, preserving the template's
+// existing formatting, formulas, and any cells we don't touch.
+// ---------------------------------------------------------------------------
+export interface AiaTemplateMapping {
+  g702Sheet: string; // worksheet name (or '1' / '' for the first sheet)
+  cells: {
+    ownerName?: string; ownerAddress?: string; projectName?: string;
+    contractorName?: string; architectName?: string; contractFor?: string;
+    applicationNo?: string; periodTo?: string; applicationDate?: string;
+    contractDate?: string; ownerProjectNumber?: string; architectProjectNumber?: string;
+    retainageWorkPct?: string; retainageStoredPct?: string;
+    L1?: string; L2?: string; L3?: string; L4?: string;
+    L5a?: string; L5b?: string; L5?: string; L6?: string; L7?: string; L8?: string; L9?: string;
+    coAdditions?: string; coDeductions?: string; coNet?: string;
+  };
+  g703Sheet: string;
+  g703StartRow: number; // first data row (1-based)
+  g703Cols: {
+    itemNo?: string; description?: string; scheduledValue?: string; previous?: string;
+    thisPeriod?: string; stored?: string; total?: string; percent?: string;
+    balance?: string; retainage?: string;
+  };
+  moneyAsDollars: boolean; // true → write cents/100 as a number
 }
 
 const MONEY_FMT = '$#,##0.00';
@@ -361,7 +391,8 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): void {
 // Builds the full two-sheet workbook. Pure builder — no DOM / download here so
 // an alternate (template-fill) builder can sit beside it.
 export async function buildAiaWorkbook(ctx: AiaExportCtx): Promise<ExcelJS.Workbook> {
-  const wb = new ExcelJS.Workbook();
+  const { default: ExcelJSlib } = await import('exceljs');
+  const wb = new ExcelJSlib.Workbook();
   wb.creator = ctx.company.name ?? 'Frugal Takeoff';
   wb.created = new Date();
   buildG702(wb, ctx);
@@ -369,13 +400,120 @@ export async function buildAiaWorkbook(ctx: AiaExportCtx): Promise<ExcelJS.Workb
   return wb;
 }
 
+// Resolve a worksheet by name; fall back to the first sheet when the name is
+// blank, '1', or not found. Returns undefined only if the workbook is empty.
+function resolveSheet(wb: ExcelJS.Workbook, name: string): ExcelJS.Worksheet | undefined {
+  const trimmed = (name || '').trim();
+  if (trimmed && trimmed !== '1') {
+    const byName = wb.getWorksheet(trimmed);
+    if (byName) return byName;
+  }
+  return wb.worksheets[0];
+}
+
+// Set a single cell's value, swallowing any error from a malformed cell ref so
+// one bad mapping entry can never abort the whole export. Never touches styles.
+function setMapped(ws: ExcelJS.Worksheet | undefined, ref: string | undefined, value: ExcelJS.CellValue): void {
+  if (!ws || !ref || !ref.trim()) return;
+  try {
+    ws.getCell(ref.trim()).value = value;
+  } catch { /* skip invalid cell ref */ }
+}
+
+// Fills an admin-supplied AIA template workbook. Only writes the mapped cells;
+// the template's own formatting / formulas / totals rows are left intact.
+export async function buildAiaWorkbookFromTemplate(
+  templateBuf: ArrayBuffer,
+  mapping: AiaTemplateMapping,
+  ctx: AiaExportCtx,
+): Promise<ExcelJS.Workbook> {
+  const { default: ExcelJSlib } = await import('exceljs');
+  const wb = new ExcelJSlib.Workbook();
+  await wb.xlsx.load(templateBuf);
+
+  const asDollars = mapping.moneyAsDollars !== false; // default true
+  const money = (cents: number): number => (asDollars ? dollars(cents) : (cents || 0));
+
+  // ── G702 header + certificate lines ──────────────────────────────────────
+  const g702ws = resolveSheet(wb, mapping.g702Sheet);
+  const c = mapping.cells || {};
+  const a = ctx.aiaSettings;
+  const g = ctx.g702;
+  const app = ctx.app;
+
+  setMapped(g702ws, c.ownerName, a.ownerName ?? '');
+  setMapped(g702ws, c.ownerAddress, a.ownerAddress ?? '');
+  setMapped(g702ws, c.projectName, ctx.projectName);
+  setMapped(g702ws, c.contractorName, ctx.company.name ?? '');
+  setMapped(g702ws, c.architectName, a.architectName ?? '');
+  setMapped(g702ws, c.contractFor, a.contractFor ?? '');
+  setMapped(g702ws, c.applicationNo, app.number);
+  setMapped(g702ws, c.periodTo, app.periodTo ?? '');
+  setMapped(g702ws, c.applicationDate, app.applicationDate ?? '');
+  setMapped(g702ws, c.contractDate, a.contractDate ?? '');
+  setMapped(g702ws, c.ownerProjectNumber, a.ownerProjectNumber ?? '');
+  setMapped(g702ws, c.architectProjectNumber, a.architectProjectNumber ?? '');
+  setMapped(g702ws, c.retainageWorkPct, app.retainagePercent);
+  setMapped(g702ws, c.retainageStoredPct, app.storedRetainagePercent);
+
+  setMapped(g702ws, c.L1, money(g.L1originalContractCents));
+  setMapped(g702ws, c.L2, money(g.L2changeOrdersCents));
+  setMapped(g702ws, c.L3, money(g.L3contractSumToDateCents));
+  setMapped(g702ws, c.L4, money(g.L4totalCompletedStoredCents));
+  setMapped(g702ws, c.L5a, money(g.L5aRetainageWorkCents));
+  setMapped(g702ws, c.L5b, money(g.L5bRetainageStoredCents));
+  setMapped(g702ws, c.L5, money(g.L5retainageCents));
+  setMapped(g702ws, c.L6, money(g.L6earnedLessRetainageCents));
+  setMapped(g702ws, c.L7, money(g.L7lessPreviousCents));
+  setMapped(g702ws, c.L8, money(g.L8currentPaymentDueCents));
+  setMapped(g702ws, c.L9, money(g.L9balanceToFinishCents));
+  setMapped(g702ws, c.coAdditions, money(g.changeOrders.additionsCents));
+  setMapped(g702ws, c.coDeductions, money(g.changeOrders.deductionsCents));
+  setMapped(g702ws, c.coNet, money(g.changeOrders.netCents));
+
+  // ── G703 continuation rows (per-line only; no totals row) ────────────────
+  const g703ws = resolveSheet(wb, mapping.g703Sheet);
+  const cols = mapping.g703Cols || {};
+  const startRow = Number.isFinite(mapping.g703StartRow) && mapping.g703StartRow > 0
+    ? Math.floor(mapping.g703StartRow)
+    : 1;
+
+  ctx.g703.forEach((row, i) => {
+    const rowNum = startRow + i;
+    const at = (col: string | undefined): string | undefined => (col && col.trim() ? `${col.trim()}${rowNum}` : undefined);
+    const pct = row.scheduledValueCents > 0
+      ? row.totalToDateCents / row.scheduledValueCents
+      : (row.percentComplete || 0) / 100;
+
+    setMapped(g703ws, at(cols.itemNo), row.itemNo ?? '');
+    setMapped(g703ws, at(cols.description), row.description);
+    setMapped(g703ws, at(cols.scheduledValue), money(row.scheduledValueCents));
+    setMapped(g703ws, at(cols.previous), money(row.previousCents));
+    setMapped(g703ws, at(cols.thisPeriod), money(row.thisPeriodCents));
+    setMapped(g703ws, at(cols.stored), money(row.storedCents));
+    setMapped(g703ws, at(cols.total), money(row.totalToDateCents));
+    setMapped(g703ws, at(cols.percent), pct);
+    setMapped(g703ws, at(cols.balance), money(row.balanceToFinishCents));
+    setMapped(g703ws, at(cols.retainage), money(row.retainageCents));
+  });
+
+  return wb;
+}
+
 function sanitizeFilename(name: string): string {
   return (name || 'project').replace(/[^a-zA-Z0-9 _.-]+/g, '_').replace(/\s+/g, '_').slice(0, 80) || 'project';
 }
 
-// Builds the workbook and triggers a browser download.
-export async function exportAiaXlsx(ctx: AiaExportCtx): Promise<void> {
-  const wb = await buildAiaWorkbook(ctx);
+// Builds the workbook and triggers a browser download. When a configured
+// template + mapping are supplied, the admin template is filled instead of the
+// built-in recreation; otherwise the recreation is the fallback.
+export async function exportAiaXlsx(
+  ctx: AiaExportCtx,
+  template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
+): Promise<void> {
+  const wb = template
+    ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
+    : await buildAiaWorkbook(ctx);
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
