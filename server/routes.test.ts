@@ -482,7 +482,7 @@ describe('deleteProject billing cascade', () => {
     const inv = await request(app).post('/api/projects/p1/invoices')
       .send({ number: 'INV-1', date: 1, terms: 'Net 30', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
     const invoiceId = inv.body.id;
-    await request(app).post(`/api/invoices/${invoiceId}/payments`).send({ date: 1, amount: 50, method: 'check' });
+    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: invoiceId, date: 1, amount: 50, method: 'check' });
     await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', description: 'Extra', amount: 200 });
     await request(app).delete('/api/projects/p1');
     // all billing rows gone
@@ -492,7 +492,7 @@ describe('deleteProject billing cascade', () => {
     ]) {
       expect((db.prepare(sql).get('p1') as any).c).toBe(0);
     }
-    expect((db.prepare('SELECT COUNT(*) c FROM payments WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) c FROM payments WHERE targetType = 'invoice' AND targetId IN (SELECT id FROM invoices WHERE projectId = ?)").get('p1') as any).c).toBe(0);
     expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines WHERE invoiceId IN (SELECT id FROM invoices WHERE projectId = ?)').get('p1') as any).c).toBe(0);
   });
 });
@@ -528,7 +528,7 @@ describe('billing routes', () => {
 
   it('payments round-trip and affect balance', async () => {
     const id = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] })).body.id;
-    const pay = await request(app).post(`/api/invoices/${id}/payments`).send({ amount: 40, method: 'check' });
+    const pay = await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: id, amount: 40, method: 'check' });
     expect(pay.status).toBe(200);
     expect((await request(app).get(`/api/invoices/${id}`)).body.balanceCents).toBe(6000);
     await request(app).delete(`/api/payments/${pay.body.id}`).expect(200);
@@ -557,6 +557,90 @@ describe('billing routes', () => {
     });
     expect((await request(memberApp).get('/api/projects/p1/invoices')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
+  });
+});
+
+describe('unified project payment routes (admin-gated)', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  it('rejects non-admins with 403 on GET + POST', async () => {
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+    });
+    expect((await request(memberApp).get('/api/projects/p1/payments')).status).toBe(403);
+    expect((await request(memberApp).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: 'x', amount: 1 })).status).toBe(403);
+  });
+
+  it('records payments against invoice and pay-app targets; lists both with labels', async () => {
+    const invId = (await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] })).body.id;
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'Work', scheduledValueCents: 100000 });
+    const appId = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
+
+    const payInv = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: invId, amount: 40, method: 'check' });
+    expect(payInv.status).toBe(200);
+    const payApp = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'payapp', targetId: appId, amount: 75, method: 'ach' });
+    expect(payApp.status).toBe(200);
+
+    const list = await request(app).get('/api/projects/p1/payments');
+    expect(list.status).toBe(200);
+    expect(list.body.length).toBe(2);
+    const labels = list.body.map((p: any) => p.targetLabel);
+    expect(labels.some((l: string) => /INV-1/.test(l))).toBe(true);
+    expect(labels.some((l: string) => /Application #1/.test(l))).toBe(true);
+  });
+
+  it('bad targetType → 400', async () => {
+    const invId = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] })).body.id;
+    const res = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'bogus', targetId: invId, amount: 10 });
+    expect(res.status).toBe(400);
+  });
+
+  it('missing/unknown targetId → 404', async () => {
+    const res = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: 'does-not-exist', amount: 10 });
+    expect(res.status).toBe(404);
+  });
+
+  it('amount <= 0 → 400', async () => {
+    const invId = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] })).body.id;
+    const res = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: invId, amount: 0 });
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE /api/payments/:id removes it', async () => {
+    const invId = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [] })).body.id;
+    const pay = await request(app).post('/api/projects/p1/payments')
+      .send({ targetType: 'invoice', targetId: invId, amount: 25 });
+    expect(pay.status).toBe(200);
+    await request(app).delete(`/api/payments/${pay.body.id}`).expect(200);
+    expect((await request(app).get('/api/projects/p1/payments')).body.length).toBe(0);
+  });
+
+  it('billing summary reflects paid splits (invoicesCents / payAppsCents)', async () => {
+    const invId = (await request(app).post('/api/projects/p1/invoices')
+      .send({ number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 1000 }] })).body.id;
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'Work', scheduledValueCents: 100000 });
+    const appId = (await request(app).post('/api/projects/p1/aia/pay-apps').send({})).body.id;
+
+    await request(app).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: invId, amount: 300 });
+    await request(app).post('/api/projects/p1/payments').send({ targetType: 'payapp', targetId: appId, amount: 125 });
+
+    const summary = await request(app).get('/api/projects/p1/billing-summary');
+    expect(summary.status).toBe(200);
+    expect(summary.body.paid.invoicesCents).toBe(30000);
+    expect(summary.body.paid.payAppsCents).toBe(12500);
   });
 });
 

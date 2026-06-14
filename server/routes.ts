@@ -11,7 +11,7 @@ import { pathFor, statFile, deleteFileContent } from './fileStore';
 import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
-  recordPayment, deletePayment, setInvoiceStatus,
+  recordPayment, deletePayment, listProjectPayments, setInvoiceStatus,
   listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   billingSummary,
   ValidationError as BillingValidationError, ConflictError as BillingConflictError, NotFoundError as BillingNotFoundError,
@@ -235,11 +235,13 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { deleteInvoice(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
   });
 
-  app.post('/api/invoices/:id/payments', authenticateToken, requireAdmin, (req, res) => {
+  app.get('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
+    try { res.json(listProjectPayments(db, req.params.id)); } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try {
-      const r = recordPayment(db, 'invoice', req.params.id, req.body);
-      const invRow = db.prepare('SELECT projectId FROM invoices WHERE id = ?').get(req.params.id) as any;
-      logActivity(db, { projectId: invRow?.projectId, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
+      const r = recordPayment(db, req.body?.targetType, req.body?.targetId, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
       res.json(r);
     } catch (e) { billingErr(e, res); }
   });
