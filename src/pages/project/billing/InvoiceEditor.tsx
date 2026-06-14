@@ -1,10 +1,10 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, recordPayment, deletePayment, saveInvoice, getSettings, sendInvoice, uploadProjectFile } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getSettings, sendInvoice, uploadProjectFile } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Select, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { buildInvoicePdf, resolveAccentRgb } from './invoicePdf';
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
@@ -27,8 +27,6 @@ export const InvoiceEditor: React.FC<{
   const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
-  const [payAmount, setPayAmount] = useState('');
-  const [payMethod, setPayMethod] = useState('check');
   const [sendTo, setSendTo] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -58,17 +56,6 @@ export const InvoiceEditor: React.FC<{
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleAddPayment = async () => {
-    const amount = parseFloat(payAmount);
-    if (!(amount > 0)) { toast('Enter a positive amount', { type: 'warning' }); return; }
-    try {
-      await recordPayment(projectId, 'invoice', invoice.id, { amount, method: payMethod });
-      toast('Payment recorded', { type: 'success' });
-      setPayAmount('');
-      onSaved(); // reloads the invoice (parent refetches)
-    } catch { toast('Failed to record payment', { type: 'error' }); }
   };
 
   const buildBytes = async (): Promise<Uint8Array> => {
@@ -197,28 +184,9 @@ export const InvoiceEditor: React.FC<{
         </div>
       </div>
 
-      <div className="mt-4 border-t border-edge pt-3">
-        <h4 className="mb-2 text-sm font-semibold text-ink">Payments</h4>
-        {invoice.payments.length > 0 && (
-          <ul className="mb-2 space-y-1 text-sm">
-            {invoice.payments.map(p => (
-              <li key={p.id} className="flex items-center justify-between text-ink-soft">
-                <span>{formatMoney(Math.round(p.amount * 100))}{p.method ? ` · ${p.method}` : ''}{p.date ? ` · ${new Date(p.date).toLocaleDateString()}` : ''}</span>
-                <button onClick={async () => { await deletePayment(p.id); onSaved(); }} title="Delete payment" className="text-ink-faint hover:text-red-600"><Trash2 size={13} /></button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex items-end gap-2">
-          <Field label="Amount" htmlFor="pay-amt"><Input id="pay-amt" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder="0.00" /></Field>
-          <Field label="Method" htmlFor="pay-method">
-            <Select id="pay-method" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
-              <option value="check">Check</option><option value="card">Card</option><option value="cash">Cash</option><option value="ach">ACH</option><option value="other">Other</option>
-            </Select>
-          </Field>
-          <Button variant="secondary" onClick={handleAddPayment}>Record payment</Button>
-        </div>
-      </div>
+      <p className="mt-4 border-t border-edge pt-3 text-sm text-ink-faint">
+        Record payments in the Payments section below.
+      </p>
     </Modal>
   );
 };

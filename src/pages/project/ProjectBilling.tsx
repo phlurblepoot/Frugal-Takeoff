@@ -6,7 +6,7 @@ import {
   BillingSummary, ChangeOrder, Invoice, InvoiceListItem, AiaSettings,
   getBillingSummary, getInvoices, getInvoice, createInvoice, deleteInvoice, setInvoiceStatus,
   getChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
-  getAiaSettings, saveAiaSettings,
+  getAiaSettings,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
 import { useToast } from '../../components/Toast';
@@ -20,6 +20,7 @@ import { InvoiceEditor } from './billing/InvoiceEditor';
 import { AiaSettingsForm } from './billing/AiaSettingsForm';
 import { AiaScheduleOfValues } from './billing/AiaScheduleOfValues';
 import { AiaPayApplications } from './billing/AiaPayApplications';
+import { PaymentsSection } from './billing/PaymentsSection';
 import { useProjectOutlet } from './ProjectLayout';
 
 export { lineCents, draftTotalCents } from './billing/InvoiceEditor';
@@ -42,9 +43,13 @@ export const ProjectBilling: React.FC = () => {
 
   const admin = isAdmin();
 
-  const load = () => {
+  const reloadSummary = () => {
     if (!projectId || !admin) return;
     getBillingSummary(projectId).then(setSummary).catch(() => setSummary(null));
+  };
+  const load = () => {
+    if (!projectId || !admin) return;
+    reloadSummary();
     getInvoices(projectId).then(setInvoices).catch(() => setInvoices([]));
     getChangeOrders(projectId).then(setChangeOrders).catch(() => setChangeOrders([]));
     getAiaSettings(projectId).then(setAiaSettings).catch(() => setAiaSettings({}));
@@ -96,47 +101,26 @@ export const ProjectBilling: React.FC = () => {
     try { await deleteChangeOrder(id); load(); } catch { toast('Delete failed', { type: 'error' }); }
   };
 
-  const billingMode = aiaSettings?.billingMode === 'aia' ? 'aia' : 'standard';
-  const setBillingMode = async (mode: 'standard' | 'aia') => {
-    if (!projectId || mode === billingMode) return;
-    const base = aiaSettings ?? {};
-    const next: AiaSettings = { ...base, billingMode: mode };
-    setAiaSettings(next); // optimistic
-    try { await saveAiaSettings(projectId, next); }
-    catch { toast('Failed to switch billing mode', { type: 'error' }); setAiaSettings(base); }
-  };
-
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-ink">Billing</h1>
-        <div className="inline-flex rounded-lg border border-edge p-0.5">
-          <button
-            onClick={() => setBillingMode('standard')}
-            aria-pressed={billingMode === 'standard'}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${billingMode === 'standard' ? 'bg-accent text-white' : 'text-ink-soft hover:bg-hover'}`}
-          >Standard invoices</button>
-          <button
-            onClick={() => setBillingMode('aia')}
-            aria-pressed={billingMode === 'aia'}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${billingMode === 'aia' ? 'bg-accent text-white' : 'text-ink-soft hover:bg-hover'}`}
-          >AIA G702/G703</button>
-        </div>
       </div>
 
-      {/* Contract rollup */}
+      {/* Summary */}
       <Card className="mb-5">
-        <CardHeader title="Contract" actions={<DollarSign size={15} className="text-ink-faint" />} />
+        <CardHeader title="Summary" actions={<DollarSign size={15} className="text-ink-faint" />} />
         <CardBody>
           {summary === null ? (
             <Skeleton className="h-10 w-full" />
           ) : (
-            <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-5">
               {[
-                ['Contract value', summary.contractValueCents],
-                ['Invoiced', summary.invoicedCents],
-                ['Paid', summary.paidCents],
-                ['Outstanding', summary.outstandingCents],
+                ['Contract total', summary.contractTotalCents],
+                ['Invoiced', summary.invoiceTotalCents],
+                ['Paid (contract)', summary.paid.payAppsCents],
+                ['Paid (invoices)', summary.paid.invoicesCents],
+                ['Invoice outstanding', summary.invoiceOutstandingCents],
               ].map(([label, cents]) => (
                 <div key={label as string}>
                   <div className="text-ink-faint">{label}</div>
@@ -148,16 +132,13 @@ export const ProjectBilling: React.FC = () => {
         </CardBody>
       </Card>
 
-      {billingMode === 'aia' ? (
-        <>
-          {aiaSettings && (
-            <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} />
-          )}
-          {projectId && <AiaScheduleOfValues projectId={projectId} />}
-          {projectId && <AiaPayApplications projectId={projectId} />}
-        </>
-      ) : (
-      <>
+      {/* AIA G702/G703 */}
+      {aiaSettings && (
+        <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} />
+      )}
+      {projectId && <AiaScheduleOfValues projectId={projectId} />}
+      {projectId && <AiaPayApplications projectId={projectId} />}
+
       {/* Invoices */}
       <Card className="mb-5">
         <CardHeader title="Invoices" actions={<Button size="sm" onClick={newInvoice}><Plus size={14} />New invoice</Button>} />
@@ -186,7 +167,7 @@ export const ProjectBilling: React.FC = () => {
       </Card>
 
       {/* Change orders */}
-      <Card>
+      <Card className="mb-5">
         <CardHeader title="Change orders" />
         <CardBody>
           <div className="mb-3 flex flex-wrap items-end gap-2">
@@ -223,8 +204,9 @@ export const ProjectBilling: React.FC = () => {
           )}
         </CardBody>
       </Card>
-      </>
-      )}
+
+      {/* Payments */}
+      {projectId && <PaymentsSection projectId={projectId} onChange={reloadSummary} />}
 
       {editing && (
         <InvoiceEditor
