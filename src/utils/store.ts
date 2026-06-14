@@ -1,4 +1,6 @@
 import { Project, TakeoffTemplate, SmtpSettings, ProjectNote } from '../types';
+import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
+import { calculateTakeoffTotalCost } from './math';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -922,4 +924,147 @@ export const addTaskPhoto = async (taskId: string, fileId: string, stage: string
 };
 export const removeTaskPhoto = async (taskId: string, fileId: string): Promise<void> => {
   const res = await taskJson('DELETE', `/api/tasks/${taskId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+
+// ── Phase 7: AIA progress billing (G702/G703 — Schedule of Values) ─────────────
+// Money is INTEGER CENTS end-to-end; formatting/division happens in the UI.
+
+export interface AiaSovLine {
+  id: string; projectId: string; itemNo: string | null; description: string;
+  scheduledValueCents: number; retainagePercent: number | null;
+  isChangeOrder: number; changeOrderId: string | null;
+  sortOrder: number; version: number; createdAt: number;
+}
+export interface AiaPayApp {
+  id: string; projectId: string; number: number;
+  periodTo: string | null; applicationDate: string | null;
+  retainagePercent: number; storedRetainagePercent: number;
+  status: string; version: number; createdAt: number;
+}
+export interface AiaPayAppLine {
+  id: string; payAppId: string; sovLineId: string;
+  percentComplete: number; storedMaterialsCents: number; createdAt: number;
+}
+// Mirrors server/aiaStore.ts G703Row.
+export interface AiaG703Row {
+  sovLineId: string; itemNo: string | null; description: string;
+  isChangeOrder: number; scheduledValueCents: number;
+  previousCents: number; thisPeriodCents: number; storedCents: number;
+  totalToDateCents: number; percentComplete: number;
+  balanceToFinishCents: number; retainageCents: number;
+}
+// Mirrors server/aiaStore.ts G702.
+export interface AiaG702 {
+  L1originalContractCents: number;
+  L2changeOrdersCents: number;
+  L3contractSumToDateCents: number;
+  L4totalCompletedStoredCents: number;
+  L5aRetainageWorkCents: number;
+  L5bRetainageStoredCents: number;
+  L5retainageCents: number;
+  L6earnedLessRetainageCents: number;
+  L7lessPreviousCents: number;
+  L8currentPaymentDueCents: number;
+  L9balanceToFinishCents: number;
+  changeOrders: { additionsCents: number; deductionsCents: number; netCents: number };
+}
+export interface AiaSettings {
+  billingMode?: string; retainagePercent?: number; storedRetainagePercent?: number;
+  ownerName?: string; ownerAddress?: string;
+  architectName?: string; architectAddress?: string;
+  contractDate?: string; ownerProjectNumber?: string; architectProjectNumber?: string;
+  contractFor?: string;
+}
+
+const aiaJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+// Schedule of Values
+export const getSov = async (projectId: string): Promise<AiaSovLine[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/aia/sov`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createSovLine = async (projectId: string, input: { itemNo?: string | null; description: string; scheduledValueCents: number; retainagePercent?: number | null }): Promise<{ id: string }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov`, input);
+  await handleResponse(res); return res.json();
+};
+export const saveSovLine = async (id: string, line: AiaSovLine): Promise<{ version: number }> => {
+  const res = await aiaJson('PUT', `/api/aia/sov/${id}`, {
+    itemNo: line.itemNo, description: line.description,
+    scheduledValueCents: line.scheduledValueCents, retainagePercent: line.retainagePercent,
+    version: line.version,
+  });
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const deleteSovLine = async (id: string): Promise<void> => {
+  const res = await aiaJson('DELETE', `/api/aia/sov/${id}`); await handleResponse(res);
+};
+export const seedSov = async (projectId: string, lines: { description: string; scheduledValueCents: number; itemNo?: string }[]): Promise<{ count: number }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/seed`, { lines });
+  await handleResponse(res); return res.json();
+};
+export const syncChangeOrders = async (projectId: string): Promise<{ added: number }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/sync-change-orders`);
+  await handleResponse(res); return res.json();
+};
+
+// Pay applications
+export const getPayApps = async (projectId: string): Promise<AiaPayApp[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/aia/pay-apps`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createPayApp = async (projectId: string, input: { periodTo?: string; applicationDate?: string; retainagePercent?: number; storedRetainagePercent?: number }): Promise<{ id: string; number: number }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/pay-apps`, input);
+  await handleResponse(res); return res.json();
+};
+export const getPayApp = async (id: string): Promise<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }> => {
+  const res = await fetchWithRetry(`/api/aia/pay-apps/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const savePayAppLines = async (payAppId: string, lines: { sovLineId: string; percentComplete: number; storedMaterialsCents: number }[], version: number): Promise<{ version: number }> => {
+  const res = await aiaJson('PUT', `/api/aia/pay-apps/${payAppId}/lines`, { lines, version });
+  if (res.status === 409) throw new ConflictError(payAppId);
+  await handleResponse(res); return res.json();
+};
+export const setPayApp = async (id: string, patch: Partial<{ periodTo: string | null; applicationDate: string | null; status: string; retainagePercent: number; storedRetainagePercent: number }>): Promise<{ version: number }> => {
+  const res = await aiaJson('PATCH', `/api/aia/pay-apps/${id}`, patch);
+  await handleResponse(res); return res.json();
+};
+export const deletePayApp = async (id: string): Promise<void> => {
+  const res = await aiaJson('DELETE', `/api/aia/pay-apps/${id}`); await handleResponse(res);
+};
+
+// Settings
+export const getAiaSettings = async (projectId: string): Promise<AiaSettings> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/aia/settings`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const saveAiaSettings = async (projectId: string, settings: AiaSettings): Promise<void> => {
+  const res = await aiaJson('PUT', `/api/projects/${projectId}/aia/settings`, settings);
+  await handleResponse(res);
+};
+
+// Derive a Schedule of Values seed from the project's estimate (takeoffs grouped
+// by price package). Cost is in DOLLARS from calculateTakeoffTotalCost; converted
+// to integer cents here. Groups with zero total cost are skipped.
+export const computeSovSeedFromEstimate = (project: Project): { description: string; scheduledValueCents: number }[] => {
+  const currentPageIds = new Set(project.pages.map(p => p.id));
+  const totals = computeTakeoffTotals(project, currentPageIds);
+
+  const groups = new Map<string, number>(); // package -> dollars
+  for (const takeoff of totals) {
+    const pkg = takeoff.pricePackage && takeoff.pricePackage.trim() ? takeoff.pricePackage : 'Uncategorized';
+    const cost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
+    groups.set(pkg, (groups.get(pkg) ?? 0) + cost);
+  }
+
+  return Array.from(groups.entries())
+    .map(([description, dollars]) => ({ description, scheduledValueCents: Math.round(dollars * 100) }))
+    .filter(g => g.scheduledValueCents > 0)
+    .sort((a, b) => a.description.localeCompare(b.description));
 };
