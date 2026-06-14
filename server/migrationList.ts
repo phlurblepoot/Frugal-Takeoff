@@ -536,4 +536,36 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 13,
+    name: 'payments-polymorphic',
+    up({ db }) {
+      // A payment now targets an invoice OR an AIA pay application (Phase 7b).
+      // SQLite cannot drop the NOT NULL invoiceId in place, so the table is
+      // rebuilt: every existing row is copied and backfilled to an 'invoice'
+      // target (non-destructive). Money stays REAL dollars (billingStore
+      // computes integer cents). Runs inside the framework transaction.
+      const exists = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='payments'`
+      ).get();
+      if (!exists) return;
+      db.exec(`
+        CREATE TABLE payments_new (
+          id TEXT PRIMARY KEY,
+          targetType TEXT NOT NULL,
+          targetId TEXT NOT NULL,
+          date INTEGER,
+          amount REAL NOT NULL DEFAULT 0,
+          method TEXT,
+          note TEXT,
+          createdAt INTEGER NOT NULL
+        );
+        INSERT INTO payments_new (id, targetType, targetId, date, amount, method, note, createdAt)
+          SELECT id, 'invoice', invoiceId, date, amount, method, note, createdAt FROM payments;
+        DROP TABLE payments;
+        ALTER TABLE payments_new RENAME TO payments;
+        CREATE INDEX idx_payments_target ON payments (targetType, targetId);
+      `);
+    },
+  },
 ];

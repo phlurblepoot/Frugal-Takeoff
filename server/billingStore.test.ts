@@ -10,7 +10,7 @@ import { migrations } from './migrationList';
 import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
-  recordPayment, deletePayment, setInvoiceStatus,
+  recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
   listChangeOrders, createChangeOrder, setChangeOrderStatus, deleteChangeOrder, billingSummary,
 } from './billingStore';
 
@@ -100,8 +100,8 @@ describe('invoices', () => {
 describe('payments + status', () => {
   it('records and deletes payments; balance reflects them', () => {
     const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
-    const p1 = recordPayment(db, id, { date: 1, amount: 40, method: 'check', note: 'deposit' });
-    recordPayment(db, id, { date: 2, amount: 25.5, method: 'card' });
+    const p1 = recordPayment(db, 'invoice', id, { date: 1, amount: 40, method: 'check', note: 'deposit' });
+    recordPayment(db, 'invoice', id, { date: 2, amount: 25.5, method: 'card' });
     let inv = getInvoice(db, id)!;
     expect(inv.paidCents).toBe(6550);
     expect(inv.balanceCents).toBe(3450);
@@ -112,13 +112,63 @@ describe('payments + status', () => {
 
   it('rejects invalid payment amounts and unknown invoices', () => {
     const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
-    expect(() => recordPayment(db, id, { amount: -5 })).toThrow(ValidationError);
-    expect(() => recordPayment(db, 'nope', { amount: 5 })).toThrow(NotFoundError);
+    expect(() => recordPayment(db, 'invoice', id, { amount: -5 })).toThrow(ValidationError);
+    expect(() => recordPayment(db, 'invoice', 'nope', { amount: 5 })).toThrow(NotFoundError);
   });
 
   it('rejects non-finite payment amounts', () => {
     const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
-    expect(() => recordPayment(db, id, { amount: 1e400 })).toThrow(ValidationError);
+    expect(() => recordPayment(db, 'invoice', id, { amount: 1e400 })).toThrow(ValidationError);
+  });
+
+  it('rejects bad target type and missing pay-app targets', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    expect(() => recordPayment(db, 'galaxy' as any, id, { amount: 5 })).toThrow(ValidationError);
+    expect(() => recordPayment(db, 'payapp', 'nope', { amount: 5 })).toThrow(NotFoundError);
+  });
+
+  it('records payments against an AIA pay application and sums them', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 3, 'draft', 1, 1)").run();
+    recordPayment(db, 'payapp', 'app1', { date: 1, amount: 1000, method: 'wire' });
+    recordPayment(db, 'payapp', 'app1', { date: 2, amount: 250.25 });
+    expect(paidCentsFor(db, 'payapp', 'app1')).toBe(125025);
+    // invoice payments are isolated from payapp payments
+    const inv = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    recordPayment(db, 'invoice', inv.id, { amount: 10 });
+    expect(paidCentsFor(db, 'invoice', inv.id)).toBe(1000);
+    expect(paidCentsFor(db, 'payapp', 'app1')).toBe(125025);
+  });
+
+  it('getInvoice shows only its own invoice payments', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'draft', 1, 1)").run();
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    recordPayment(db, 'invoice', id, { amount: 10 });
+    recordPayment(db, 'payapp', 'app1', { amount: 99 });
+    expect(getInvoice(db, id)!.payments).toHaveLength(1);
+    expect(getInvoice(db, id)!.paidCents).toBe(1000);
+  });
+
+  it('deletePayApp removes its payments', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 1, 'draft', 1, 1)").run();
+    recordPayment(db, 'payapp', 'app1', { amount: 50 });
+    db.prepare('DELETE FROM aia_pay_apps WHERE id = ?').run('app1'); // standalone; cascade tested in aiaStore
+    // listProjectPayments still excludes orphan-target rows that no longer match a project pay-app
+    expect(listProjectPayments(db, 'p1')).toHaveLength(0);
+  });
+
+  it('listProjectPayments returns invoice + payapp payments with labels, newest-first', () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'p1', 7, 'draft', 1, 1)").run();
+    const inv = createInvoice(db, 'p1', { number: 'INV-9', lines: [] });
+    recordPayment(db, 'invoice', inv.id, { date: 10, amount: 100 });
+    recordPayment(db, 'payapp', 'app1', { date: 20, amount: 200 });
+    const list = listProjectPayments(db, 'p1');
+    expect(list).toHaveLength(2);
+    // date DESC → payapp (20) first
+    expect(list[0].targetType).toBe('payapp');
+    expect(list[0].targetLabel).toBe('Application #7');
+    expect(list[0].amount).toBe(200);
+    expect(list[1].targetType).toBe('invoice');
+    expect(list[1].targetLabel).toBe('Invoice INV-9');
   });
 
   it('setInvoiceStatus validates the value and bumps version', () => {
@@ -151,7 +201,7 @@ describe('change orders + contract rollup', () => {
 
   it('summary aggregates invoiced + paid + balance across invoices', () => {
     const inv = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice: 500 }] });
-    recordPayment(db, inv.id, { amount: 200 });
+    recordPayment(db, 'invoice', inv.id, { amount: 200 });
     const s = billingSummary(db, 'p1');
     expect(s.invoicedCents).toBe(50000);
     expect(s.paidCents).toBe(20000);

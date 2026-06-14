@@ -324,6 +324,7 @@ export function setPayApp(db: Database.Database, id: string, patch: PayAppPatch)
 
 export function deletePayApp(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
+    db.prepare("DELETE FROM payments WHERE targetType = 'payapp' AND targetId = ?").run(id);
     db.prepare('DELETE FROM aia_pay_app_lines WHERE payAppId = ?').run(id);
     db.prepare('DELETE FROM aia_pay_apps WHERE id = ?').run(id);
   });

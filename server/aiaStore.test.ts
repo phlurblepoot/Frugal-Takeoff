@@ -370,6 +370,16 @@ describe('deletePayApp', () => {
     const remaining = db.prepare('SELECT COUNT(*) c FROM aia_pay_app_lines WHERE payAppId = ?').get(a.id) as any;
     expect(remaining.c).toBe(0);
   });
+
+  it('cascades its payments', () => {
+    setupTwoLines();
+    const a = createPayApp(db, 'p1', {});
+    db.prepare('INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run('pay1', 'payapp', a.id, 500, 1);
+    deletePayApp(db, a.id);
+    const remaining = db.prepare("SELECT COUNT(*) c FROM payments WHERE targetType = 'payapp' AND targetId = ?").get(a.id) as any;
+    expect(remaining.c).toBe(0);
+  });
 });
 
 describe('computeG703 / computeG702 — exact cents', () => {

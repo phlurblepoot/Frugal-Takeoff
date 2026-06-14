@@ -237,7 +237,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.post('/api/invoices/:id/payments', authenticateToken, requireAdmin, (req, res) => {
     try {
-      const r = recordPayment(db, req.params.id, req.body);
+      const r = recordPayment(db, 'invoice', req.params.id, req.body);
       const invRow = db.prepare('SELECT projectId FROM invoices WHERE id = ?').get(req.params.id) as any;
       logActivity(db, { projectId: invRow?.projectId, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
       res.json(r);

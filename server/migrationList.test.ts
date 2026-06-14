@@ -290,3 +290,33 @@ describe('migration 12: aia-billing', () => {
     db.close();
   });
 });
+
+describe('migration 13: payments-polymorphic', () => {
+  it('rebuilds payments to targetType/targetId and backfills existing rows to invoice targets', () => {
+    const db = openDb(':memory:');
+    // migrate through 12 so the old (invoiceId-keyed) payments table exists
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 12));
+    const preCols = columnNames(db, 'payments');
+    expect(preCols).toContain('invoiceId');
+    db.prepare('INSERT INTO payments (id, invoiceId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('pay1', 'inv-A', 100, 40, 'check', 'deposit', 500);
+
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 13));
+
+    const cols = columnNames(db, 'payments');
+    for (const c of ['id', 'targetType', 'targetId', 'date', 'amount', 'method', 'note', 'createdAt']) {
+      expect(cols, `payments missing ${c}`).toContain(c);
+    }
+    expect(cols).not.toContain('invoiceId');
+
+    const row = db.prepare('SELECT * FROM payments WHERE id = ?').get('pay1') as any;
+    expect(row.targetType).toBe('invoice');
+    expect(row.targetId).toBe('inv-A');
+    expect(row.amount).toBe(40);
+    expect(row.method).toBe('check');
+    expect(row.note).toBe('deposit');
+    expect(row.date).toBe(100);
+    expect(row.createdAt).toBe(500);
+    db.close();
+  });
+});

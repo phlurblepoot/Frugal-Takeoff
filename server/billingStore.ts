@@ -37,8 +37,11 @@ function validateLines(lines: any): LineInput[] {
   return lines;
 }
 
-function paidCentsFor(db: Database.Database, invoiceId: string): number {
-  const rows = db.prepare('SELECT amount FROM payments WHERE invoiceId = ?').all(invoiceId) as { amount: number }[];
+export const PAYMENT_TARGET_TYPES = ['invoice', 'payapp'] as const;
+export type PaymentTargetType = (typeof PAYMENT_TARGET_TYPES)[number];
+
+export function paidCentsFor(db: Database.Database, targetType: PaymentTargetType, targetId: string): number {
+  const rows = db.prepare('SELECT amount FROM payments WHERE targetType = ? AND targetId = ?').all(targetType, targetId) as { amount: number }[];
   return rows.reduce((acc, p) => acc + toCents(p.amount), 0);
 }
 
@@ -58,8 +61,8 @@ export function getInvoice(db: Database.Database, id: string): any | null {
   if (!row) return null;
   const lines = db.prepare('SELECT id, description, qty, unitPrice, sortOrder FROM invoice_lines WHERE invoiceId = ? ORDER BY sortOrder').all(id);
   const totalCents = lineTotalsCents(db, id);
-  const paidCents = paidCentsFor(db, id);
-  const payments = db.prepare('SELECT id, date, amount, method, note FROM payments WHERE invoiceId = ? ORDER BY date').all(id);
+  const paidCents = paidCentsFor(db, 'invoice', id);
+  const payments = db.prepare("SELECT id, date, amount, method, note FROM payments WHERE targetType = 'invoice' AND targetId = ? ORDER BY date").all(id);
   return { ...row, lines, payments, totalCents, paidCents, balanceCents: totalCents - paidCents };
 }
 
@@ -67,7 +70,7 @@ export function listInvoices(db: Database.Database, projectId: string): any[] {
   const rows = db.prepare('SELECT * FROM invoices WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
   return rows.map(r => {
     const totalCents = lineTotalsCents(db, r.id);
-    const paidCents = paidCentsFor(db, r.id);
+    const paidCents = paidCentsFor(db, 'invoice', r.id);
     return { ...r, totalCents, paidCents, balanceCents: totalCents - paidCents };
   });
 }
@@ -112,7 +115,7 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
 
 export function deleteInvoice(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM payments WHERE invoiceId = ?').run(id);
+    db.prepare("DELETE FROM payments WHERE targetType = 'invoice' AND targetId = ?").run(id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId = ?').run(id);
     db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
   });
@@ -121,18 +124,43 @@ export function deleteInvoice(db: Database.Database, id: string): void {
 
 interface PaymentInput { date?: number | null; amount?: number; method?: string; note?: string; }
 
-export function recordPayment(db: Database.Database, invoiceId: string, input: PaymentInput): { id: string } {
-  const inv = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId);
-  if (!inv) throw new NotFoundError('Invoice not found');
+// A payment targets an invoice OR an AIA pay application (polymorphic, migration 13).
+export function recordPayment(db: Database.Database, targetType: string, targetId: string, input: PaymentInput): { id: string } {
+  if (!(PAYMENT_TARGET_TYPES as readonly string[]).includes(targetType)) {
+    throw new ValidationError(`Invalid payment target type: ${targetType}`);
+  }
+  const table = targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
+  const target = db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(targetId);
+  if (!target) throw new NotFoundError(targetType === 'invoice' ? 'Invoice not found' : 'Pay application not found');
   if (!Number.isFinite(input.amount) || (input.amount as number) <= 0) throw new ValidationError('Payment amount must be a positive number');
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO payments (id, invoiceId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, invoiceId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());
+  db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, targetType, targetId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());
   return { id };
 }
 
 export function deletePayment(db: Database.Database, id: string): void {
   db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+}
+
+// All payments across a project's invoices AND pay applications, with a resolved
+// human label per target. Money fields are passed through (amount REAL dollars).
+export function listProjectPayments(db: Database.Database, projectId: string): any[] {
+  return db.prepare(`
+    SELECT p.id, p.targetType, p.targetId, p.date, p.amount, p.method, p.note, p.createdAt,
+           CASE
+             WHEN p.targetType = 'invoice' THEN
+               CASE WHEN i.number IS NOT NULL AND i.number <> '' THEN 'Invoice ' || i.number ELSE 'Invoice' END
+             WHEN p.targetType = 'payapp' THEN 'Application #' || a.number
+             ELSE NULL
+           END AS targetLabel
+    FROM payments p
+    LEFT JOIN invoices i ON p.targetType = 'invoice' AND p.targetId = i.id
+    LEFT JOIN aia_pay_apps a ON p.targetType = 'payapp' AND p.targetId = a.id
+    WHERE (p.targetType = 'invoice' AND p.targetId IN (SELECT id FROM invoices WHERE projectId = ?))
+       OR (p.targetType = 'payapp' AND p.targetId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?))
+    ORDER BY p.date DESC, p.createdAt DESC, p.rowid DESC
+  `).all(projectId, projectId) as any[];
 }
 
 // Status-only change (draft→sent→paid or back). Version-checked like saveInvoice

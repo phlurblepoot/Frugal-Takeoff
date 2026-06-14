@@ -230,4 +230,14 @@ describe('createProject / listProjects / deleteProject', () => {
     expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_apps WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
     expect((db.prepare(`SELECT COUNT(*) as c FROM aia_pay_app_lines WHERE id = 'pl1'`).get() as any).c).toBe(0);
   });
+
+  it('delete cascades polymorphic payments for both invoices and pay-apps', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    db.prepare(`INSERT INTO invoices (id, projectId, status, version, createdAt) VALUES ('inv1', 'proj1', 'draft', 1, 1)`).run();
+    db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES ('app1', 'proj1', 1, 'draft', 1, 1)`).run();
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('payi', 'invoice', 'inv1', 10, 1)`).run();
+    db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('paya', 'payapp', 'app1', 20, 1)`).run();
+    deleteProject(db, dir, 'proj1');
+    expect((db.prepare(`SELECT COUNT(*) as c FROM payments`).get() as any).c).toBe(0);
+  });
 });
