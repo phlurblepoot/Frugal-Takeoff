@@ -1,6 +1,7 @@
 // server/routes.ts
 import express from 'express';
 import fsSync from 'fs';
+import nodemailer from 'nodemailer';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
@@ -19,7 +20,7 @@ import {
 } from './billingStore';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
-  addPhoto, removePhoto,
+  addPhoto, removePhoto, markIssueSent,
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
 import {
@@ -947,6 +948,259 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Failed to delete draft' });
+    }
+  });
+}
+
+// ── Email send routes ────────────────────────────────────────────────────────
+// Extracted from server.ts so the four send routes (invoice/change-order/issue/
+// proposal) and the shared sendProjectEmail helper can be exercised by tests with
+// a stubbed transporter. The transporter itself is built from settings (SMTP-
+// absent → null → sends become no-ops), exactly as before.
+
+export interface EmailRouteDeps {
+  db: Database.Database;
+  dataDir: string;
+  authenticateToken: express.RequestHandler;
+  requireAdmin: express.RequestHandler;
+  // Returns a ready-to-use transporter, or null when SMTP isn't configured.
+  // Injectable so tests can stub the transport and inspect mailOptions.
+  buildTransporter: () => nodemailer.Transporter | null;
+}
+
+// Sends one or more stored files as attachments via SMTP. Throws on
+// misconfiguration/failure. cc/bcc are added only when non-blank (trimmed).
+// Unreadable attachment ids are skipped silently.
+export async function sendProjectEmail(
+  db: Database.Database,
+  dataDir: string,
+  buildTransporter: () => nodemailer.Transporter | null,
+  opts: {
+    to: string;
+    cc?: string;
+    bcc?: string;
+    subject: string;
+    text: string;
+    attachments: Array<{ fileId: string; attachmentName: string }>;
+    inReplyTo?: string;
+  },
+): Promise<void> {
+  const transport = buildTransporter();
+  if (!transport) throw new Error('SMTP not configured');
+  const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+  const smtpCfg: Record<string, string> = {};
+  smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
+  // Build the attachment list: read each fileId's bytes; skip any that fail.
+  const builtAttachments: NonNullable<nodemailer.SendMailOptions['attachments']> = [];
+  for (const att of opts.attachments) {
+    const dataUrl = getDataUrlString(db, dataDir, att.fileId);
+    if (!dataUrl) continue; // skip unreadable attachments silently
+    const base64Data = dataUrl.split(',')[1];
+    const mimeType = dataUrl.split(';')[0].replace('data:', '');
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    builtAttachments.push({ filename: att.attachmentName, content: fileBuffer, contentType: mimeType });
+  }
+  const mailOptions: nodemailer.SendMailOptions = {
+    from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+    to: opts.to,
+    subject: opts.subject,
+    text: opts.text,
+    attachments: builtAttachments,
+  };
+  const cc = opts.cc?.trim();
+  if (cc) mailOptions.cc = cc;
+  const bcc = opts.bcc?.trim();
+  if (bcc) mailOptions.bcc = bcc;
+  if (opts.inReplyTo) { mailOptions.inReplyTo = opts.inReplyTo; mailOptions.references = opts.inReplyTo; }
+  await transport.sendMail(mailOptions);
+}
+
+// Builds the attachment list for a send route: the primary generated PDF followed
+// by any caller-supplied extra files. Unresolved extra ids are skipped silently;
+// each resolved id is named from its file metadata.
+export function buildSendAttachments(
+  db: Database.Database,
+  primary: { fileId: string; attachmentName: string },
+  attachmentFileIds: unknown,
+): Array<{ fileId: string; attachmentName: string }> {
+  const list = [primary];
+  if (Array.isArray(attachmentFileIds)) {
+    for (const id of attachmentFileIds) {
+      if (typeof id !== 'string' || !id) continue;
+      const meta = getMeta(db, id);
+      if (!meta) continue; // skip unresolved ids silently
+      list.push({ fileId: id, attachmentName: meta.name || 'attachment' });
+    }
+  }
+  return list;
+}
+
+interface SendBody {
+  to?: string;
+  fileId: string;
+  message?: string;
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  body?: string;
+  attachmentFileIds?: string[];
+}
+
+export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps): void {
+  const { db, dataDir, authenticateToken, requireAdmin, buildTransporter } = deps;
+  const send = (opts: Parameters<typeof sendProjectEmail>[3]) =>
+    sendProjectEmail(db, dataDir, buildTransporter, opts);
+
+  // SMTP settings (stored in settings table under smtp.* keys)
+  app.get('/api/email/smtp', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+      const cfg: Record<string, string> = {};
+      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
+      res.json(cfg);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch SMTP settings' });
+    }
+  });
+
+  app.post('/api/email/smtp', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const cfg = req.body as Record<string, string>;
+      const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to save SMTP settings' });
+    }
+  });
+
+  app.post('/api/email/test-smtp', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const transport = buildTransporter();
+      if (!transport) return res.status(400).json({ error: 'SMTP not configured' });
+      await transport.verify();
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || 'SMTP connection failed' });
+    }
+  });
+
+  // Send a proposal as a reply to the email stored on a project
+  app.post('/api/projects/:id/send-proposal', authenticateToken, async (req, res) => {
+    try {
+      const project = loadProject(db, req.params.id);
+      if (!project) return res.status(404).json({ error: 'Project not found' });
+      if (!project.email) return res.status(400).json({ error: 'Project has no associated email to reply to' });
+
+      const { fileId, message, to, cc, bcc, subject: subjectIn, body, attachmentFileIds } = req.body as SendBody;
+      const toAddress = (typeof to === 'string' && to.trim()) ? to.trim() : (project.email.from || '');
+      if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
+
+      const subject = subjectIn?.trim() || (project.email.subject ? `Re: ${project.email.subject}` : 'Proposal');
+
+      await send({
+        to: toAddress,
+        cc,
+        bcc,
+        subject,
+        text: body ?? message ?? 'Please find the attached proposal.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: 'Proposal.pdf' }, attachmentFileIds),
+        inReplyTo: project.email.messageId || undefined,
+      });
+
+      logActivity(db, {
+        projectId: req.params.id, userId: (req as any).user?.id,
+        type: 'proposal_sent', message: `Proposal emailed for "${project.name ?? 'Untitled'}"`,
+      });
+
+      // Reload after the SMTP await so a concurrent edit during the send can't
+      // make the version-checked save fail and strand a sent proposal. With no
+      // await between this load and the save, nothing can interleave.
+      const fresh = loadProject(db, req.params.id) ?? project;
+      const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
+      saveProject(db, req.params.id, updatedProject);
+      res.json(loadProject(db, req.params.id));
+    } catch (error: any) {
+      console.error('Error sending project proposal:', error);
+      res.status(500).json({ error: error.message || 'Failed to send proposal' });
+    }
+  });
+
+  // Send an invoice PDF via SMTP (admin only)
+  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const inv = getInvoice(db, req.params.id);
+      if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await send({
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || `Invoice ${inv.number ?? ''}`.trim(),
+        text: body ?? message ?? 'Please find the attached invoice.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: `${inv.number || 'invoice'}.pdf` }, attachmentFileIds),
+      });
+      // mark sent (best effort) + log
+      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
+      logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending invoice:', e);
+      res.status(500).json({ error: e.message || 'Failed to send invoice' });
+    }
+  });
+
+  // Send a change order request PDF via SMTP (admin only)
+  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const co = getChangeOrder(db, req.params.id);
+      if (!co) return res.status(404).json({ error: 'Change order not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const number = co.number ?? '';
+      await send({
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || `Change Order Request ${number}`.trim(),
+        text: body ?? message ?? 'Please find the attached change order request.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: `CO-${number || 'change-order'}.pdf` }, attachmentFileIds),
+      });
+      // Mark sent (best effort) — but never override an already approved/rejected CO.
+      try {
+        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
+      } catch { /* best effort */ }
+      logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending change order:', e);
+      res.status(500).json({ error: e.message || 'Failed to send change order' });
+    }
+  });
+
+  // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
+  app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const iss = getIssue(db, req.params.id);
+      if (!iss) return res.status(404).json({ error: 'Issue not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const padded = String(iss.number).padStart(3, '0');
+      await send({
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || `Issue ISS-${padded}${iss.title ? ` — ${iss.title}` : ''}`,
+        text: body ?? message ?? 'Please find the attached issue report.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: `ISS-${padded}.pdf` }, attachmentFileIds),
+      });
+      try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
+      logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${padded} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending issue:', e);
+      res.status(500).json({ error: e.message || 'Failed to send issue' });
     }
   });
 }
