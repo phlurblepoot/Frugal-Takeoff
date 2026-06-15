@@ -9,7 +9,9 @@ import {
   dataUrlToUint8Array,
   HIGHLIGHT_QUALITY_PRESETS,
   getProposalPrefsKey,
+  resolveGrandTotal,
 } from './proposalGenerator';
+import type { ProposalOptions, TakeoffTotals } from './proposalGenerator';
 
 // ── hexToRgb ────────────────────────────────────────────────────────────────
 // NOTE: hexToRgb returns 0-1 RGB components for pdf-lib's rgb(), NOT 0-255.
@@ -138,5 +140,59 @@ describe('getProposalPrefsKey', () => {
     // characterization: JSON.parse throws → catch returns "proposal-prefs-default"
     localStorage.setItem('user', 'not-json{{{');
     expect(getProposalPrefsKey()).toBe('proposal-prefs-default');
+  });
+});
+
+// ── resolveGrandTotal ─────────────────────────────────────────────────────────
+describe('resolveGrandTotal', () => {
+  // Minimal ProposalOptions — only priceMode / fixedPriceTotal matter here.
+  const baseOptions = (over: Partial<ProposalOptions> = {}): ProposalOptions => ({
+    includeCostDetail: false,
+    includeHighlights: false,
+    headerColor: '#000000',
+    coverNotes: '',
+    fontFamily: 'helvetica',
+    validUntil: '',
+    terms: '',
+    includeSignature: false,
+    includeTakeoffList: false,
+    customTitle: '',
+    highlightQuality: 'standard',
+    ...over,
+  });
+
+  // Minimal TakeoffTotals stub: simple-cost path → costPerUnit * totalRealValue.
+  const stub = (totalRealValue: number, costPerUnit: number): TakeoffTotals =>
+    ({ totalRealValue, costPerUnit, pageBreakdown: [] } as unknown as TakeoffTotals);
+
+  it('fixed mode returns fixedPriceTotal', () => {
+    const result = resolveGrandTotal(baseOptions({ priceMode: 'fixed', fixedPriceTotal: 12345 }), [
+      stub(100, 5), // would be 500 in takeoff mode — must be ignored
+    ]);
+    expect(result).toBe(12345);
+  });
+
+  it('fixed mode with undefined fixedPriceTotal returns 0', () => {
+    const result = resolveGrandTotal(baseOptions({ priceMode: 'fixed' }), [stub(100, 5)]);
+    expect(result).toBe(0);
+  });
+
+  it('takeoffs mode sums calculateTakeoffTotalCost across the list', () => {
+    // 10*2=20 + 3*4=12 + 5*5=25  →  57
+    const result = resolveGrandTotal(baseOptions({ priceMode: 'takeoffs' }), [
+      stub(10, 2),
+      stub(3, 4),
+      stub(5, 5),
+    ]);
+    expect(result).toBe(57);
+  });
+
+  it('undefined priceMode defaults to takeoffs-mode summing', () => {
+    const result = resolveGrandTotal(baseOptions(), [stub(10, 2), stub(3, 4)]);
+    expect(result).toBe(32);
+  });
+
+  it('takeoffs mode over empty list returns 0', () => {
+    expect(resolveGrandTotal(baseOptions({ priceMode: 'takeoffs' }), [])).toBe(0);
   });
 });

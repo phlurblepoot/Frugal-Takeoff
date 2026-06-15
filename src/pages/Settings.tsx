@@ -18,6 +18,18 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.1',
+    date: 'June 15, 2026',
+    changes: [
+      'Email everywhere: invoices, change orders, issue reports, and proposals now open a full email composer instead of a single "To" box. You get a To field with an "Add Cc/Bcc" option, an editable subject and message (both prefilled with a sensible default for the document), and the ability to attach extra files alongside the generated PDF.',
+      'Proposals — set price: you can now create a proposal with a fixed lump-sum price instead of pricing from takeoff measurements, for jobs quoted from a site visit. Switch the proposal to "Set price", enter the total, and describe the scope in the cover notes — the proposal PDF shows your price with no takeoff table.',
+      'Proposals — photos: attach site photos to a proposal. They are saved on the project and appended to the generated proposal PDF as extra pages.',
+      'Proposals — send by email on any project: the "Send proposal" option is now available on every project, not just ones created from an incoming bid email. Proposals created from a bid email still send as a threaded reply.',
+      'Project list organization: the projects board now has a separate group for each stage (Estimating, Proposal Sent, Awarded, In Progress, Punch List, Complete, Lost) instead of three lumped groups; a sort control (last updated, date added, name, or bid due date) that is remembered; a "Recently opened" row at the top for quick access; and the bid due date now shows only on projects that are still in the estimating stage.',
+      'Fix: saving SMTP email settings failed with a "save failed" error — the secure/port values weren\'t stored correctly. Saving now works, so outgoing email can be configured.',
+    ],
+  },
+  {
     version: '2.0',
     date: 'June 15, 2026',
     changes: [

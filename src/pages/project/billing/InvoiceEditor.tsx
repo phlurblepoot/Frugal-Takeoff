@@ -5,6 +5,7 @@ import { Invoice, InvoiceLine, saveInvoice, getSettings, sendInvoice, uploadProj
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { EmailComposer } from '../../../components/EmailComposer';
 import { buildInvoicePdf, resolveAccentRgb } from './invoicePdf';
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
@@ -27,8 +28,7 @@ export const InvoiceEditor: React.FC<{
   const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
-  const [sendTo, setSendTo] = useState('');
-  const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false);
 
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
@@ -109,26 +109,6 @@ export const InvoiceEditor: React.FC<{
     } catch { toast('PDF generation failed', { type: 'error' }); }
   };
 
-  const handleSend = async () => {
-    if (!sendTo.trim() || !/\S+@\S+\.\S+/.test(sendTo.trim())) {
-      toast('Enter a valid email address', { type: 'warning' });
-      return;
-    }
-    setSending(true);
-    try {
-      const bytes = await buildBytes();
-      const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
-      // The PDF is uploaded as a project document before sending; if the send
-      // fails the file remains in Documents (project-attributed), and a retry
-      // uploads another — acceptable for v1.
-      const fileId = await uploadProjectFile(projectId, file, 'invoice');
-      await sendInvoice(invoice.id, { to: sendTo.trim(), fileId, message: 'Please find the attached invoice.' });
-      toast('Invoice sent', { type: 'success' });
-      onSaved();
-    } catch { toast('Failed to send invoice', { type: 'error' }); }
-    finally { setSending(false); }
-  };
-
   return (
     <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
@@ -174,19 +154,33 @@ export const InvoiceEditor: React.FC<{
 
       <div className="mt-4 border-t border-edge pt-3">
         <h4 className="mb-2 text-sm font-semibold text-ink">Send invoice</h4>
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <Field label="To" htmlFor="send-to">
-              <Input id="send-to" type="email" value={sendTo} onChange={e => setSendTo(e.target.value)} placeholder="recipient@example.com" />
-            </Field>
-          </div>
-          <Button onClick={handleSend} disabled={sending}>{sending ? 'Sending…' : 'Send invoice'}</Button>
-        </div>
+        <Button onClick={() => setComposing(true)}>Send invoice</Button>
       </div>
 
       <p className="mt-4 border-t border-edge pt-3 text-sm text-ink-faint">
         Record payments in the Payments section below.
       </p>
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={projectId}
+        title="Send invoice"
+        primaryAttachmentName={`${invoice.number || 'invoice'}.pdf`}
+        defaultSubject={`Invoice ${invoice.number} — ${projectName}`}
+        defaultBody={`Hello,\n\nPlease find attached Invoice ${invoice.number} for ${projectName}.\n\nThank you.`}
+        onSend={async (m) => {
+          const bytes = await buildBytes();
+          const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
+          // The PDF is uploaded as a project document before sending; if the send
+          // fails the file remains in Documents (project-attributed), and a retry
+          // uploads another — acceptable for v1.
+          const fileId = await uploadProjectFile(projectId, file, 'invoice');
+          await sendInvoice(invoice.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
+          toast('Invoice sent', { type: 'success' });
+          onSaved();
+        }}
+      />
     </Modal>
   );
 };

@@ -268,7 +268,13 @@ export const getActivePages = async (): Promise<string[]> => {
 export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
   const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });
   await handleResponse(res);
-  return await res.json();
+  // Values are stored as strings; normalize the typed fields so the form's
+  // boolean toggle / numeric port round-trip correctly.
+  const raw = await res.json() as Record<string, string>;
+  const out: Partial<SmtpSettings> = { ...(raw as Partial<SmtpSettings>) };
+  if ('secure' in raw) out.secure = raw.secure === 'true';
+  if (raw.port) out.port = Number(raw.port); else delete (out as Partial<SmtpSettings>).port;
+  return out;
 };
 
 export const saveSmtpSettings = async (cfg: Partial<SmtpSettings>): Promise<void> => {
@@ -285,11 +291,14 @@ export const testSmtpConnection = async (): Promise<void> => {
   await handleResponse(res);
 };
 
-export const sendProjectProposal = async (projectId: string, fileId: string, message?: string): Promise<Project> => {
+export const sendProjectProposal = async (
+  projectId: string,
+  payload: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }
+): Promise<Project> => {
   const res = await fetch(`/api/projects/${projectId}/send-proposal`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify({ fileId, message }),
+    body: JSON.stringify(payload),
   });
   await handleResponse(res);
   return await res.json();
@@ -828,14 +837,14 @@ export const addCOPhoto = async (coId: string, fileId: string): Promise<void> =>
 export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendChangeOrder = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+export const sendChangeOrder = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res);
 };
 export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const sendInvoice = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+export const sendInvoice = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
 };
@@ -897,7 +906,7 @@ export const addIssuePhoto = async (issueId: string, fileId: string): Promise<vo
 export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
   const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendIssue = async (id: string, payload: { to: string; fileId: string; message?: string }): Promise<void> => {
+export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
 };
 

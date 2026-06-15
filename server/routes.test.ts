@@ -10,7 +10,7 @@ import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
-import { registerDataRoutes } from './routes';
+import { registerDataRoutes, registerEmailRoutes } from './routes';
 
 let db: Database.Database;
 let dir: string;
@@ -959,5 +959,252 @@ describe('users-list + task routes (auth-only, not admin-gated)', () => {
     expect(bad.status).toBe(400);
     const get = await request(userApp).get(`/api/tasks/${id}`);
     expect(get.body.photos.some((p: any) => p.fileId === 'f1')).toBe(true);
+  });
+});
+
+describe('email send routes', () => {
+  // Records every mailOptions passed to the stubbed transporter.
+  let sent: any[];
+  // When true, buildTransporter returns null → SMTP-absent no-op path.
+  let smtpAbsent: boolean;
+  let emailApp: express.Express;
+
+  const buildEmailApp = (role: 'admin' | 'member') => {
+    const a = express();
+    a.use(express.json({ limit: '50mb' }));
+    registerEmailRoutes(a, {
+      db,
+      dataDir: dir,
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      buildTransporter: () => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
+    });
+    return a;
+  };
+
+  beforeEach(async () => {
+    sent = [];
+    smtpAbsent = false;
+    // from-header settings (sendProjectEmail reads smtp.* for the From address)
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('smtp.fromAddress', 'noreply@example.com');
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('smtp.fromName', 'Frugal');
+    emailApp = buildEmailApp('admin');
+    // emailApp only has the email routes; create the project + files via the data-routes app (shared db).
+    await request(app).post('/api/projects').send(PROJECT);
+    // Primary PDF + two extra attachments, stored with metadata
+    await request(app).post('/api/files/primary?projectId=p1&kind=invoice&name=primary.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('PDFPRIMARY'));
+    await request(app).post('/api/files/extra1?projectId=p1&kind=email-attachment&name=Spec.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('SPECBYTES'));
+    await request(app).post('/api/files/extra2?projectId=p1&kind=email-attachment&name=Photo.jpg').set('Content-Type', 'image/jpeg').send(Buffer.from('JPEGBYTES'));
+  });
+
+  const makeInvoice = async () =>
+    (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] })).body.id;
+
+  it('smtp save: coerces boolean/number values to strings so SQLite can bind them', async () => {
+    // The client sends `secure` as a boolean and `port` as a number; SQLite can
+    // only bind strings/numbers/null, so the route must coerce before binding.
+    const res = await request(emailApp).post('/api/email/smtp').send({
+      host: 'smtp.example.com', port: 465, secure: true, username: 'u', password: 'p',
+    });
+    expect(res.status).toBe(200);
+    const saved = (await request(emailApp).get('/api/email/smtp')).body;
+    expect(saved.secure).toBe('true');
+    expect(saved.port).toBe('465');
+    expect(saved.host).toBe('smtp.example.com');
+  });
+
+  it('invoice send: accepts cc/bcc/subject/body + multiple attachments; forwards them; marks sent', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({
+      to: 'client@example.com',
+      cc: ' cc@example.com ',
+      bcc: 'bcc@example.com',
+      subject: 'Custom Subject',
+      body: 'Custom body text',
+      fileId: 'primary',
+      attachmentFileIds: ['extra1', 'extra2'],
+    });
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const m = sent[0];
+    expect(m.to).toBe('client@example.com');
+    expect(m.cc).toBe('cc@example.com');   // trimmed
+    expect(m.bcc).toBe('bcc@example.com');
+    expect(m.subject).toBe('Custom Subject');
+    expect(m.text).toBe('Custom body text');
+    expect(m.from).toContain('noreply@example.com');
+    // primary + two extras, named from metadata
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
+    expect(m.attachments[0].content.toString()).toBe('PDFPRIMARY');
+    expect(m.attachments[1].contentType).toBe('application/pdf');
+    expect(m.attachments[2].contentType).toBe('image/jpeg');
+    // status side-effect fired
+    expect((await request(app).get(`/api/invoices/${id}`)).body.status).toBe('sent');
+  });
+
+  it('invoice send: omits cc/bcc when blank; falls back to default subject/body; single attachment', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({
+      to: 'client@example.com', cc: '   ', bcc: '', subject: '   ', body: undefined, fileId: 'primary',
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect('cc' in m).toBe(false);
+    expect('bcc' in m).toBe(false);
+    expect(m.subject).toBe('Invoice INV-1');
+    expect(m.text).toBe('Please find the attached invoice.');
+    expect(m.attachments).toHaveLength(1);
+  });
+
+  it('invoice send: legacy "message" still works as the body alias', async () => {
+    const id = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', message: 'legacy body' });
+    expect(sent[0].text).toBe('legacy body');
+  });
+
+  it('invoice send: unresolved attachment ids are skipped silently', async () => {
+    const id = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id}/send`).send({
+      to: 'a@b.com', fileId: 'primary', attachmentFileIds: ['extra1', 'does-not-exist', 'extra2'],
+    });
+    expect(sent[0].attachments.map((a: any) => a.filename)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
+  });
+
+  it('invoice send: requires to + fileId', async () => {
+    const id = await makeInvoice();
+    expect((await request(emailApp).post(`/api/invoices/${id}/send`).send({ fileId: 'primary' })).status).toBe(400);
+    expect((await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com' })).status).toBe(400);
+  });
+
+  it('invoice send: non-admin gets 403', async () => {
+    const id = await makeInvoice();
+    const memberApp = buildEmailApp('member');
+    expect((await request(memberApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(403);
+  });
+
+  it('SMTP-absent: send throws "SMTP not configured" → 500, no side-effect', async () => {
+    const id = await makeInvoice();
+    smtpAbsent = true;
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/SMTP not configured/);
+    expect(sent).toHaveLength(0);
+    expect((await request(app).get(`/api/invoices/${id}`)).body.status).not.toBe('sent');
+  });
+
+  it('change-order send: default subject/name + cc/bcc + extras; admin-gated', async () => {
+    const co = (await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-9', description: 'Extra work', lumpSumAmount: 100 })).body;
+    const res = await request(emailApp).post(`/api/change-orders/${co.id}/send`).send({
+      to: 'gc@example.com', cc: 'pm@example.com', fileId: 'primary', attachmentFileIds: ['extra1'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Change Order Request CO-9');
+    expect(m.cc).toBe('pm@example.com');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['CO-CO-9.pdf', 'Spec.pdf']);
+    expect((await request(app).get(`/api/change-orders/${co.id}`)).body.status).toBe('sent');
+    // non-admin blocked
+    const memberApp = buildEmailApp('member');
+    expect((await request(memberApp).post(`/api/change-orders/${co.id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(403);
+  });
+
+  it('issue send: authenticated non-admin allowed; default ISS subject/name; cc/bcc + extras', async () => {
+    const iss = (await request(app).post('/api/projects/p1/issues').send({ title: 'Crack' })).body;
+    const memberApp = buildEmailApp('member'); // NOT admin-gated
+    const res = await request(memberApp).post(`/api/issues/${iss.id}/send`).send({
+      to: 'gc@example.com', bcc: 'log@example.com', fileId: 'primary', attachmentFileIds: ['extra2'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Issue ISS-001 — Crack');
+    expect(m.bcc).toBe('log@example.com');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['ISS-001.pdf', 'Photo.jpg']);
+  });
+
+  it('proposal send: to override + custom subject/body + extras; inReplyTo threaded; sets proposalSentAt', async () => {
+    // project with an associated email to reply to
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe', createdAt: 5,
+      pages: [{ id: 'pgE', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+      email: { from: 'reply@example.com', fromName: 'Owner', subject: 'Bid request', messageId: '<msg-1@x>' },
+    });
+    const res = await request(emailApp).post('/api/projects/pe/send-proposal').send({
+      to: 'override@example.com', cc: 'cc@example.com', subject: 'Our Proposal', body: 'See attached.',
+      fileId: 'primary', attachmentFileIds: ['extra1'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.to).toBe('override@example.com');
+    expect(m.cc).toBe('cc@example.com');
+    expect(m.subject).toBe('Our Proposal');
+    expect(m.text).toBe('See attached.');
+    expect(m.inReplyTo).toBe('<msg-1@x>');
+    expect(m.references).toBe('<msg-1@x>');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf', 'Spec.pdf']);
+    // proposal side-effects persisted
+    const fresh = loadProject(db, 'pe');
+    expect(fresh.proposalFileId).toBe('primary');
+    expect(typeof fresh.proposalSentAt).toBe('number');
+  });
+
+  it('proposal send: falls back to project email "from" + Re: subject when no overrides', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe2', createdAt: 6,
+      pages: [{ id: 'pgE2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+      email: { from: 'reply@example.com', subject: 'Bid request', messageId: '<msg-2@x>' },
+    });
+    await request(emailApp).post('/api/projects/pe2/send-proposal').send({ fileId: 'primary' });
+    const m = sent[0];
+    expect(m.to).toBe('reply@example.com');
+    expect(m.subject).toBe('Re: Bid request');
+    expect(m.text).toBe('Please find the attached proposal.');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf']);
+  });
+
+  it('proposal send: project WITHOUT email sends with an explicit "to" (no 400); cc/bcc/subject/body forwarded; proposalSentAt persisted', async () => {
+    // A manually-created project — no inbound bid email at all.
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe3', name: 'Manual Job', createdAt: 7,
+      pages: [{ id: 'pgE3', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    const res = await request(emailApp).post('/api/projects/pe3/send-proposal').send({
+      to: ' client@new.com ', cc: 'cc@new.com', bcc: 'bcc@new.com',
+      subject: 'Your Proposal', body: 'Attached for review.',
+      fileId: 'primary', attachmentFileIds: ['extra1'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.to).toBe('client@new.com'); // trimmed
+    expect(m.cc).toBe('cc@new.com');
+    expect(m.bcc).toBe('bcc@new.com');
+    expect(m.subject).toBe('Your Proposal');
+    expect(m.text).toBe('Attached for review.');
+    // no bid email → not threaded
+    expect(m.inReplyTo).toBeUndefined();
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf', 'Spec.pdf']);
+    // proposal side-effects persisted
+    const fresh = loadProject(db, 'pe3');
+    expect(fresh.proposalFileId).toBe('primary');
+    expect(typeof fresh.proposalSentAt).toBe('number');
+  });
+
+  it('proposal send: project WITHOUT email defaults subject to "Proposal — <name>"', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe4', name: 'Manual Job', createdAt: 8,
+      pages: [{ id: 'pgE4', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    await request(emailApp).post('/api/projects/pe4/send-proposal').send({ to: 'client@new.com', fileId: 'primary' });
+    expect(sent[0].subject).toBe('Proposal — Manual Job');
+  });
+
+  it('proposal send: project WITHOUT email AND no "to" → 400, no send', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe5', name: 'Manual Job', createdAt: 9,
+      pages: [{ id: 'pgE5', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    const res = await request(emailApp).post('/api/projects/pe5/send-proposal').send({ fileId: 'primary' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('No recipient address');
+    expect(sent).toHaveLength(0);
   });
 });

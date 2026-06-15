@@ -16,12 +16,7 @@ import nodemailer from "nodemailer";
 import { openDb } from './server/db';
 import { runMigrations } from './server/migrations';
 import { migrations } from './server/migrationList';
-import { registerDataRoutes } from './server/routes';
-import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
-import { getDataUrlString } from './server/files';
-import { logActivity } from './server/activity';
-import { getInvoice, getChangeOrder, setChangeOrderStatus } from './server/billingStore';
-import { getIssue, markIssueSent } from './server/issueStore';
+import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 
 dotenv.config();
 
@@ -461,7 +456,7 @@ async function startServer() {
 
   // ── Email API ──────────────────────────────────────────────────────────────
 
-  // Helper: build SMTP transporter from settings
+  // Helper: build SMTP transporter from settings (null when not configured).
   function buildTransporter() {
     const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
     const cfg: Record<string, string> = {};
@@ -475,183 +470,17 @@ async function startServer() {
     });
   }
 
-  // Sends a stored file as a PDF attachment via SMTP. Returns nothing; throws on
-  // misconfiguration/failure. Shared by proposal + invoice + (later) issue sends.
-  async function sendProjectEmail(opts: {
-    to: string;
-    subject: string;
-    text: string;
-    fileId: string;
-    attachmentName: string;
-    inReplyTo?: string;
-  }): Promise<void> {
-    const transport = buildTransporter();
-    if (!transport) throw new Error('SMTP not configured');
-    const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-    const smtpCfg: Record<string, string> = {};
-    smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
-    const dataUrl = getDataUrlString(db, DATA_DIR, opts.fileId);
-    if (!dataUrl) throw new Error('Attachment file not found');
-    const base64Data = dataUrl.split(',')[1];
-    const mimeType = dataUrl.split(';')[0].replace('data:', '');
-    const fileBuffer = Buffer.from(base64Data, 'base64');
-    const mailOptions: nodemailer.SendMailOptions = {
-      from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
-      to: opts.to,
-      subject: opts.subject,
-      text: opts.text,
-      attachments: [{ filename: opts.attachmentName, content: fileBuffer, contentType: mimeType }],
-    };
-    if (opts.inReplyTo) { mailOptions.inReplyTo = opts.inReplyTo; mailOptions.references = opts.inReplyTo; }
-    await transport.sendMail(mailOptions);
-  }
-
-  // SMTP settings (stored in settings table under smtp.* keys)
-  app.get("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-      const cfg: Record<string, string> = {};
-      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
-      res.json(cfg);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch SMTP settings" });
-    }
-  });
-
-  app.post("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const cfg = req.body as Record<string, string>;
-      const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to save SMTP settings" });
-    }
-  });
-
-  app.post("/api/email/test-smtp", authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const transport = buildTransporter();
-      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
-      await transport.verify();
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || "SMTP connection failed" });
-    }
-  });
-
-  // Send a proposal as a reply to the email stored on a project
-  app.post("/api/projects/:id/send-proposal", authenticateToken, async (req, res) => {
-    try {
-      const project = loadProject(db, req.params.id);
-      if (!project) return res.status(404).json({ error: "Project not found" });
-      if (!project.email) return res.status(400).json({ error: "Project has no associated email to reply to" });
-
-      const { fileId, message } = req.body as { fileId: string; message?: string };
-      const toAddress = project.email.from || '';
-      if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
-
-      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
-
-      await sendProjectEmail({
-        to: toAddress,
-        subject,
-        text: message || 'Please find the attached proposal.',
-        fileId,
-        attachmentName: 'proposal.pdf',
-        inReplyTo: project.email.messageId || undefined,
-      });
-
-      logActivity(db, {
-        projectId: req.params.id, userId: (req as any).user?.id,
-        type: 'proposal_sent', message: `Proposal emailed for "${project.name ?? 'Untitled'}"`,
-      });
-
-      // Reload after the SMTP await so a concurrent edit during the send can't
-      // make the version-checked save fail and strand a sent proposal. With no
-      // await between this load and the save, nothing can interleave.
-      const fresh = loadProject(db, req.params.id) ?? project;
-      const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
-      storeSaveProject(db, req.params.id, updatedProject);
-      res.json(loadProject(db, req.params.id));
-    } catch (error: any) {
-      console.error("Error sending project proposal:", error);
-      res.status(500).json({ error: error.message || "Failed to send proposal" });
-    }
-  });
-
-  // Send an invoice PDF via SMTP (admin only)
-  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const inv = getInvoice(db, req.params.id);
-      if (!inv) return res.status(404).json({ error: 'Invoice not found' });
-      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      await sendProjectEmail({
-        to,
-        subject: `Invoice ${inv.number ?? ''}`.trim(),
-        text: message || 'Please find the attached invoice.',
-        fileId,
-        attachmentName: `${inv.number || 'invoice'}.pdf`,
-      });
-      // mark sent (best effort) + log
-      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
-      logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending invoice:', e);
-      res.status(500).json({ error: e.message || 'Failed to send invoice' });
-    }
-  });
-
-  // Send a change order request PDF via SMTP (admin only)
-  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const co = getChangeOrder(db, req.params.id);
-      if (!co) return res.status(404).json({ error: 'Change order not found' });
-      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      const number = co.number ?? '';
-      await sendProjectEmail({
-        to,
-        subject: `Change Order Request ${number}`.trim(),
-        text: message || 'Please find the attached change order request.',
-        fileId,
-        attachmentName: `CO-${number || 'change-order'}.pdf`,
-      });
-      // Mark sent (best effort) — but never override an already approved/rejected CO.
-      try {
-        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
-      } catch { /* best effort */ }
-      logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending change order:', e);
-      res.status(500).json({ error: e.message || 'Failed to send change order' });
-    }
-  });
-
-  // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
-  app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
-    try {
-      const iss = getIssue(db, req.params.id);
-      if (!iss) return res.status(404).json({ error: 'Issue not found' });
-      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      await sendProjectEmail({
-        to,
-        subject: `Issue ISS-${String(iss.number).padStart(3, '0')}${iss.title ? ` — ${iss.title}` : ''}`,
-        text: message || 'Please find the attached issue report.',
-        fileId,
-        attachmentName: `ISS-${String(iss.number).padStart(3, '0')}.pdf`,
-      });
-      try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
-      logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${String(iss.number).padStart(3, '0')} emailed to ${to}` });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending issue:', e);
-      res.status(500).json({ error: e.message || 'Failed to send issue' });
-    }
+  // The SMTP-settings routes + the four send routes (proposal/invoice/change-
+  // order/issue) and the shared sendProjectEmail helper now live in
+  // server/routes.ts so they can be unit-tested with a stubbed transporter.
+  // SMTP-absent still no-ops: buildTransporter() returns null → sends throw
+  // "SMTP not configured", exactly as before.
+  registerEmailRoutes(app, {
+    db,
+    dataDir: DATA_DIR,
+    authenticateToken,
+    requireAdmin,
+    buildTransporter,
   });
 
   // WebSocket Logic

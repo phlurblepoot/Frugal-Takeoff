@@ -9,6 +9,7 @@ import {
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { EmailComposer } from '../../../components/EmailComposer';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { buildChangeOrderPdf, resolveAccentRgb } from './changeOrderPdf';
 import { lineCents, draftTotalCents } from './InvoiceEditor';
@@ -33,8 +34,7 @@ export const ChangeOrderEditor: React.FC<{
     co.scheduleImpactDays === null || co.scheduleImpactDays === undefined ? '' : String(co.scheduleImpactDays)
   );
   const [saving, setSaving] = useState(false);
-  const [sendTo, setSendTo] = useState('');
-  const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -148,26 +148,6 @@ export const ChangeOrderEditor: React.FC<{
     } catch { toast('PDF generation failed', { type: 'error' }); }
   };
 
-  const handleSend = async () => {
-    if (!sendTo.trim() || !/\S+@\S+\.\S+/.test(sendTo.trim())) {
-      toast('Enter a valid email address', { type: 'warning' });
-      return;
-    }
-    setSending(true);
-    try {
-      const bytes = await buildBytes();
-      const file = new File([bytes], `CO-${co.number || 'change-order'}.pdf`, { type: 'application/pdf' });
-      // The PDF is uploaded as a project document before sending; if the send
-      // fails the file remains in Documents (project-attributed), and a retry
-      // uploads another — acceptable for v1.
-      const fileId = await uploadProjectFile(projectId, file, 'change-order');
-      await sendChangeOrder(co.id, { to: sendTo.trim(), fileId });
-      toast('Change order request sent', { type: 'success' });
-      onSaved();
-    } catch { toast('Failed to send change order', { type: 'error' }); }
-    finally { setSending(false); }
-  };
-
   const changeStatus = async (status: string) => {
     try { await setChangeOrderStatus(co.id, status); onSaved(); } catch { toast('Status update failed', { type: 'error' }); }
   };
@@ -257,15 +237,29 @@ export const ChangeOrderEditor: React.FC<{
 
       <div className="mt-4 border-t border-edge pt-3">
         <h4 className="mb-2 text-sm font-semibold text-ink">Send change order request</h4>
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <Field label="To" htmlFor="co-send-to">
-              <Input id="co-send-to" type="email" value={sendTo} onChange={e => setSendTo(e.target.value)} placeholder="recipient@example.com" />
-            </Field>
-          </div>
-          <Button onClick={handleSend} disabled={sending}>{sending ? 'Sending…' : 'Send request'}</Button>
-        </div>
+        <Button onClick={() => setComposing(true)}>Send request</Button>
       </div>
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={projectId}
+        title="Send change order request"
+        primaryAttachmentName={`CO-${co.number || 'change-order'}.pdf`}
+        defaultSubject={`Change Order Request CO-${co.number} — ${projectName}`}
+        defaultBody={`Hello,\n\nPlease find attached Change Order Request CO-${co.number} for ${projectName}${co.description ? ', covering: ' + co.description : ''}.\n\nPlease review and approve at your convenience.\n\nThank you.`}
+        onSend={async (m) => {
+          const bytes = await buildBytes();
+          const file = new File([bytes], `CO-${co.number || 'change-order'}.pdf`, { type: 'application/pdf' });
+          // The PDF is uploaded as a project document before sending; if the send
+          // fails the file remains in Documents (project-attributed), and a retry
+          // uploads another — acceptable for v1.
+          const fileId = await uploadProjectFile(projectId, file, 'change-order');
+          await sendChangeOrder(co.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
+          toast('Change order request sent', { type: 'success' });
+          onSaved();
+        }}
+      />
     </Modal>
   );
 };
