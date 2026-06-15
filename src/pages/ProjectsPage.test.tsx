@@ -1,6 +1,6 @@
 // src/pages/ProjectsPage.test.tsx
 import { describe, it, expect } from 'vitest';
-import { groupSummaries } from './ProjectsPage';
+import { groupSummaries, sortProjects } from './ProjectsPage';
 import type { ProjectSummary } from '../utils/store';
 
 const mk = (over: Partial<ProjectSummary>): ProjectSummary => ({
@@ -10,7 +10,7 @@ const mk = (over: Partial<ProjectSummary>): ProjectSummary => ({
 });
 
 describe('groupSummaries', () => {
-  it('buckets statuses into the three pipeline groups', () => {
+  it('gives every lifecycle stage its own group, in workflow order', () => {
     const groups = groupSummaries([
       mk({ id: 'a', status: 'estimating' }),
       mk({ id: 'b', status: 'proposal_sent' }),
@@ -20,10 +20,14 @@ describe('groupSummaries', () => {
       mk({ id: 'f', status: 'complete' }),
       mk({ id: 'g', status: 'lost' }),
     ]);
-    expect(groups.map(g => g.id)).toEqual(['estimating', 'active', 'closed']);
-    expect(groups[0].projects.map(p => p.id).sort()).toEqual(['a', 'b']);
-    expect(groups[1].projects.map(p => p.id).sort()).toEqual(['c', 'd', 'e']);
-    expect(groups[2].projects.map(p => p.id).sort()).toEqual(['f', 'g']);
+    expect(groups.map(g => g.id)).toEqual([
+      'estimating', 'proposal_sent', 'awarded', 'in_progress', 'punch_list', 'complete', 'lost',
+    ]);
+    // estimating and proposal_sent are now separate groups.
+    expect(groups[0].projects.map(p => p.id)).toEqual(['a']);
+    expect(groups[1].projects.map(p => p.id)).toEqual(['b']);
+    expect(groups[2].projects.map(p => p.id)).toEqual(['c']);
+    expect(groups[6].projects.map(p => p.id)).toEqual(['g']);
   });
 
   it('drops archived projects and folds unknown statuses into Estimating', () => {
@@ -31,19 +35,30 @@ describe('groupSummaries', () => {
       mk({ id: 'a', status: 'awarded', archived: true }),
       mk({ id: 'b', status: 'something_weird' }),
     ]);
-    expect(groups[1].projects).toHaveLength(0);
+    expect(groups.find(g => g.id === 'awarded')!.projects).toHaveLength(0);
+    expect(groups[0].id).toBe('estimating');
     expect(groups[0].projects.map(p => p.id)).toEqual(['b']);
   });
 
-  it('sorts Estimating by due date (undated last) and Active by recency', () => {
+  it('applies the chosen sort within each group (default: last updated)', () => {
     const groups = groupSummaries([
-      mk({ id: 'late', status: 'estimating', bidDueDate: 200 }),
-      mk({ id: 'none', status: 'estimating', bidDueDate: null }),
-      mk({ id: 'soon', status: 'estimating', bidDueDate: 100 }),
       mk({ id: 'old', status: 'awarded', updatedAt: 10 }),
       mk({ id: 'new', status: 'awarded', updatedAt: 20 }),
     ]);
-    expect(groups[0].projects.map(p => p.id)).toEqual(['soon', 'late', 'none']);
-    expect(groups[1].projects.map(p => p.id)).toEqual(['new', 'old']);
+    expect(groups.find(g => g.id === 'awarded')!.projects.map(p => p.id)).toEqual(['new', 'old']);
+  });
+});
+
+describe('sortProjects', () => {
+  it('sorts by name, date added, last updated, and bid due (undated last)', () => {
+    const list = [
+      mk({ id: 'b', name: 'Beta', createdAt: 100, updatedAt: 5, bidDueDate: 200 }),
+      mk({ id: 'a', name: 'Alpha', createdAt: 300, updatedAt: 50, bidDueDate: null }),
+      mk({ id: 'c', name: 'Gamma', createdAt: 200, updatedAt: 30, bidDueDate: 100 }),
+    ];
+    expect(sortProjects(list, 'name').map(p => p.id)).toEqual(['a', 'b', 'c']);
+    expect(sortProjects(list, 'created').map(p => p.id)).toEqual(['a', 'c', 'b']);
+    expect(sortProjects(list, 'updated').map(p => p.id)).toEqual(['a', 'c', 'b']);
+    expect(sortProjects(list, 'bidDue').map(p => p.id)).toEqual(['c', 'b', 'a']);
   });
 });
