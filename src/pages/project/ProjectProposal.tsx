@@ -4,14 +4,15 @@
 // (proposalGenerator.ts) end-to-end — no PDF logic is forked here. The legacy
 // proposal UI inside ProjectView still coexists during Phase 5b; it'll be
 // removed in Task 4. Both call the same computeTakeoffTotals + generateProposalPdf.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send } from 'lucide-react';
+import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
 import { Project, Printout } from '../../types';
 import {
   getProject, saveProject, saveFile, getFile, deleteFile, getSettings,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
+  uploadProjectFile, getImageUrl,
 } from '../../utils/store';
 import { computeRevisionModel } from '../../utils/planSets';
 import {
@@ -44,6 +45,15 @@ export const ProjectProposal: React.FC = () => {
 
   // Takeoff selection — defaults to ALL takeoffs checked.
   const [selectedTakeoffIds, setSelectedTakeoffIds] = useState<Set<string>>(new Set());
+
+  // Price mode — 'takeoffs' prices from selected takeoffs (default, unchanged
+  // behavior); 'fixed' is a lump-sum total entered by hand (site-visit pricing).
+  const [priceMode, setPriceMode] = useState<'takeoffs' | 'fixed'>('takeoffs');
+  const [fixedPrice, setFixedPrice] = useState('');
+
+  // Photo upload state.
+  const photoRef = useRef<HTMLInputElement>(null);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
 
   // Proposal options (ported from ProjectView's proposal state).
   const [customTitle, setCustomTitle] = useState('');
@@ -96,6 +106,8 @@ export const ProjectProposal: React.FC = () => {
         if (p.includeSignature  != null)  setIncludeSignature(p.includeSignature);
         if (p.includeTakeoffList != null) setIncludeTakeoffList(p.includeTakeoffList);
         if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+        if (p.priceMode === 'fixed' || p.priceMode === 'takeoffs') setPriceMode(p.priceMode);
+        if (typeof p.fixedPrice === 'string') setFixedPrice(p.fixedPrice);
       }
     } catch { /* ignore corrupt data */ }
 
@@ -107,6 +119,8 @@ export const ProjectProposal: React.FC = () => {
       if (prefs['proposal-includeSignature']  != null)  setIncludeSignature(prefs['proposal-includeSignature'] === 'true');
       if (prefs['proposal-includeTakeoffList'] != null) setIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
       if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-priceMode'] === 'fixed' || prefs['proposal-priceMode'] === 'takeoffs') setPriceMode(prefs['proposal-priceMode'] as 'takeoffs' | 'fixed');
+      if (prefs['proposal-fixedPrice'] != null)         setFixedPrice(prefs['proposal-fixedPrice']);
     }).catch(() => { /* offline — localStorage values already applied */ });
   }, []);
 
@@ -121,6 +135,8 @@ export const ProjectProposal: React.FC = () => {
         includeSignature,
         includeTakeoffList,
         highlightQuality,
+        priceMode,
+        fixedPrice,
       }));
     } catch { /* ignore quota errors */ }
     saveUserPreferences({
@@ -131,8 +147,10 @@ export const ProjectProposal: React.FC = () => {
       'proposal-includeSignature':  String(includeSignature),
       'proposal-includeTakeoffList': String(includeTakeoffList),
       'proposal-highlightQuality':  highlightQuality,
+      'proposal-priceMode':         priceMode,
+      'proposal-fixedPrice':        fixedPrice,
     }).catch(() => {});
-  }, [headerColor, fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality]);
+  }, [headerColor, fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality, priceMode, fixedPrice]);
 
   const toggleTakeoff = (id: string) => {
     setSelectedTakeoffIds(prev => {
@@ -144,7 +162,14 @@ export const ProjectProposal: React.FC = () => {
 
   // ── Generate ────────────────────────────────────────────────────────────────
   const handleGenerate = async () => {
-    if (!project || selectedTakeoffIds.size === 0) {
+    if (!project) return;
+    if (priceMode === 'fixed') {
+      const n = Number(fixedPrice);
+      if (!Number.isFinite(n) || n < 0) {
+        toast('Enter a proposal price', { type: 'warning' });
+        return;
+      }
+    } else if (selectedTakeoffIds.size === 0) {
       toast('Select at least one takeoff', { type: 'warning' });
       return;
     }
@@ -152,6 +177,14 @@ export const ProjectProposal: React.FC = () => {
     setProgress('Building cover page…');
     try {
       const settings = await getSettings();
+      // Resolve persisted proposal photos to data URLs (skip any that fail).
+      const photoDataUrls: string[] = [];
+      for (const id of project.proposalPhotoIds || []) {
+        try {
+          const url = await getFile(id);
+          if (url) photoDataUrls.push(url);
+        } catch { /* skip unreadable photo */ }
+      }
       const options: ProposalOptions = {
         includeCostDetail,
         includeHighlights,
@@ -164,6 +197,9 @@ export const ProjectProposal: React.FC = () => {
         includeTakeoffList,
         customTitle,
         highlightQuality,
+        priceMode,
+        fixedPriceTotal: Number(fixedPrice) || 0,
+        photoDataUrls,
       };
       const totals = computeTakeoffTotals(project, currentPageIds);
       const { pdfBytes, suggestedName } = await generateProposalPdf(
@@ -254,6 +290,49 @@ export const ProjectProposal: React.FC = () => {
     }
   };
 
+  // ── Proposal photos (mirror the printout add/delete save+reload pattern) ─────
+  // Uploads happen one at a time, accumulating ids into the latest project
+  // snapshot, then a single version-checked saveProject + reload (re-fetches the
+  // canonical version, so the next save won't 409).
+  const handleAddPhotos = async (list: FileList | null) => {
+    if (!project || !list || !list.length) return;
+    setUploadingPhotos(true);
+    const newIds: string[] = [];
+    let ok = 0;
+    for (const f of Array.from(list)) {
+      try {
+        const fileId = await uploadProjectFile(project.id, f, 'proposal-photo');
+        newIds.push(fileId);
+        ok++;
+      } catch { /* keep going */ }
+    }
+    if (photoRef.current) photoRef.current.value = '';
+    try {
+      if (newIds.length) {
+        const updated = { ...project, proposalPhotoIds: [...(project.proposalPhotoIds || []), ...newIds] };
+        await saveProject(updated);
+        reload();
+      }
+      if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
+    } catch {
+      toast('Failed to save photos', { type: 'error' });
+    } finally {
+      setUploadingPhotos(false);
+    }
+  };
+
+  const handleRemovePhoto = async (fileId: string) => {
+    if (!project) return;
+    const updated = { ...project, proposalPhotoIds: (project.proposalPhotoIds || []).filter(id => id !== fileId) };
+    try {
+      await saveProject(updated);
+      try { await deleteFile(fileId); } catch { /* best effort */ }
+      reload();
+    } catch {
+      toast('Failed to remove photo', { type: 'error' });
+    }
+  };
+
   if (loading) {
     return (
       <div className="mx-auto max-w-5xl px-4 py-6 md:px-8 space-y-4">
@@ -279,31 +358,75 @@ export const ProjectProposal: React.FC = () => {
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8 space-y-6">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-bold text-ink">Proposal</h1>
-        <Button onClick={handleGenerate} disabled={busy || selectedTakeoffIds.size === 0}>
+        <Button onClick={handleGenerate} disabled={busy || (priceMode === 'takeoffs' && selectedTakeoffIds.size === 0)}>
           {busy ? <><RefreshCw size={15} className="animate-spin" />{progress || 'Generating…'}</> : <><FileText size={15} />Generate proposal</>}
         </Button>
       </div>
 
-      {/* Takeoff selection */}
+      {/* Pricing */}
       <Card>
-        <CardHeader title="Takeoffs to include" />
+        <CardHeader title="Pricing" />
         <CardBody>
-          {project.takeoffs.length === 0 ? (
-            <p className="text-sm text-ink-faint">No takeoffs on this project yet.</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {project.takeoffs.map(t => (
-                <Checkbox
-                  key={t.id}
-                  label={t.name}
-                  checked={selectedTakeoffIds.has(t.id)}
-                  onChange={() => toggleTakeoff(t.id)}
+          <div className="inline-flex rounded-lg border border-edge p-0.5">
+            <button
+              type="button"
+              onClick={() => setPriceMode('takeoffs')}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${priceMode === 'takeoffs' ? 'bg-accent-600 text-white' : 'text-ink-faint hover:text-ink'}`}
+              aria-pressed={priceMode === 'takeoffs'}
+            >
+              Price from takeoffs
+            </button>
+            <button
+              type="button"
+              onClick={() => setPriceMode('fixed')}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${priceMode === 'fixed' ? 'bg-accent-600 text-white' : 'text-ink-faint hover:text-ink'}`}
+              aria-pressed={priceMode === 'fixed'}
+            >
+              Set price
+            </button>
+          </div>
+
+          {priceMode === 'fixed' && (
+            <div className="mt-4 max-w-xs">
+              <Field label="Proposal price" htmlFor="prop-fixed" hint="Lump-sum total shown on the cover">
+                <Input
+                  id="prop-fixed"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  value={fixedPrice}
+                  onChange={e => setFixedPrice(e.target.value)}
+                  placeholder="0.00"
                 />
-              ))}
+              </Field>
             </div>
           )}
         </CardBody>
       </Card>
+
+      {/* Takeoff selection */}
+      {priceMode === 'takeoffs' && (
+        <Card>
+          <CardHeader title="Takeoffs to include" />
+          <CardBody>
+            {project.takeoffs.length === 0 ? (
+              <p className="text-sm text-ink-faint">No takeoffs on this project yet.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {project.takeoffs.map(t => (
+                  <Checkbox
+                    key={t.id}
+                    label={t.name}
+                    checked={selectedTakeoffIds.has(t.id)}
+                    onChange={() => toggleTakeoff(t.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      )}
 
       {/* Proposal options */}
       <Card>
@@ -349,11 +472,54 @@ export const ProjectProposal: React.FC = () => {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
-            <Checkbox label="Include takeoff list" checked={includeTakeoffList} onChange={e => setIncludeTakeoffList(e.target.checked)} />
-            <Checkbox label="Include cost detail" checked={includeCostDetail} onChange={e => setIncludeCostDetail(e.target.checked)} />
+            {priceMode === 'takeoffs' && (
+              <>
+                <Checkbox label="Include takeoff list" checked={includeTakeoffList} onChange={e => setIncludeTakeoffList(e.target.checked)} />
+                <Checkbox label="Include cost detail" checked={includeCostDetail} onChange={e => setIncludeCostDetail(e.target.checked)} />
+              </>
+            )}
             <Checkbox label="Include highlighted plans" checked={includeHighlights} onChange={e => setIncludeHighlights(e.target.checked)} />
             <Checkbox label="Include signature block" checked={includeSignature} onChange={e => setIncludeSignature(e.target.checked)} />
           </div>
+        </CardBody>
+      </Card>
+
+      {/* Photos — appended as pages to every generated proposal PDF */}
+      <Card>
+        <CardHeader title="Photos" />
+        <CardBody>
+          <p className="mb-3 text-sm text-ink-faint">
+            Photos are appended as pages to every generated proposal PDF.
+          </p>
+          <input
+            ref={photoRef}
+            type="file"
+            accept="image/*"
+            multiple
+            capture="environment"
+            className="hidden"
+            onChange={e => handleAddPhotos(e.target.files)}
+          />
+          <Button variant="secondary" onClick={() => photoRef.current?.click()} disabled={uploadingPhotos}>
+            {uploadingPhotos ? <><RefreshCw size={15} className="animate-spin" />Uploading…</> : <><Camera size={15} />Add photos</>}
+          </Button>
+
+          {(project.proposalPhotoIds || []).length > 0 && (
+            <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {(project.proposalPhotoIds || []).map(fileId => (
+                <div key={fileId} className="group relative">
+                  <img src={getImageUrl(fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
+                  <button
+                    onClick={() => handleRemovePhoto(fileId)}
+                    title="Remove"
+                    className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </CardBody>
       </Card>
 
@@ -385,40 +551,41 @@ export const ProjectProposal: React.FC = () => {
         </CardBody>
       </Card>
 
-      {/* Send proposal — only when the project came from a bid email */}
-      {project.email && (
-        <Card>
-          <CardHeader title="Send proposal" />
-          <CardBody>
-            {project.proposalSentAt && (
-              <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-300">
-                Proposal sent {new Date(project.proposalSentAt).toLocaleString()}
-              </div>
-            )}
+      {/* Send proposal — available on every project (explicit recipient when
+          there's no inbound bid email to reply to). */}
+      <Card>
+        <CardHeader title="Send proposal" />
+        <CardBody>
+          {project.proposalSentAt && (
+            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+              Proposal sent {new Date(project.proposalSentAt).toLocaleString()}
+            </div>
+          )}
+          {project.email && (
             <p className="mb-3 text-xs text-ink-faint">
               Replying to {project.email.fromName || project.email.from} · Re: {project.email.subject}
             </p>
-            <div className="grid grid-cols-1 gap-4">
-              <Field label="Attach proposal" htmlFor="send-file">
-                <Select id="send-file" value={sendFileId} onChange={e => setSendFileId(e.target.value)}>
-                  <option value="">— Select a printout —</option>
-                  {pdfPrintouts.map(pr => (
-                    <option key={pr.fileId} value={pr.fileId}>{pr.name}</option>
-                  ))}
-                </Select>
-              </Field>
-              {pdfPrintouts.length === 0 && (
-                <p className="text-xs text-ink-faint">No PDF printouts yet. Generate one above first.</p>
-              )}
-              <div>
-                <Button onClick={() => setComposing(true)} disabled={!sendFileId}>
-                  <Send size={15} />Send proposal
-                </Button>
-              </div>
+          )}
+          <div className="grid grid-cols-1 gap-4">
+            <Field label="Attach proposal" htmlFor="send-file">
+              <Select id="send-file" value={sendFileId} onChange={e => setSendFileId(e.target.value)}>
+                <option value="">— Select a printout —</option>
+                {pdfPrintouts.map(pr => (
+                  <option key={pr.fileId} value={pr.fileId}>{pr.name}</option>
+                ))}
+              </Select>
+            </Field>
+            {pdfPrintouts.length === 0 && (
+              <p className="text-xs text-ink-faint">No PDF printouts yet. Generate one above first.</p>
+            )}
+            <div>
+              <Button onClick={() => setComposing(true)} disabled={!sendFileId}>
+                <Send size={15} />Send proposal
+              </Button>
             </div>
-          </CardBody>
-        </Card>
-      )}
+          </div>
+        </CardBody>
+      </Card>
 
       <EmailComposer
         open={composing}
