@@ -1099,13 +1099,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     try {
       const project = loadProject(db, req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      if (!project.email) return res.status(400).json({ error: 'Project has no associated email to reply to' });
 
       const { fileId, message, to, cc, bcc, subject: subjectIn, body, attachmentFileIds } = req.body as SendBody;
-      const toAddress = (typeof to === 'string' && to.trim()) ? to.trim() : (project.email.from || '');
-      if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
+      const toAddress = (typeof to === 'string' && to.trim()) ? to.trim() : (project.email?.from || '');
+      if (!toAddress) return res.status(400).json({ error: 'No recipient address' });
 
-      const subject = subjectIn?.trim() || (project.email.subject ? `Re: ${project.email.subject}` : 'Proposal');
+      const subject = subjectIn?.trim() || (project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name ?? 'Untitled'}`);
 
       await send({
         to: toAddress,
@@ -1114,7 +1113,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         subject,
         text: body ?? message ?? 'Please find the attached proposal.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: 'Proposal.pdf' }, attachmentFileIds),
-        inReplyTo: project.email.messageId || undefined,
+        inReplyTo: project.email?.messageId || undefined,
       });
 
       logActivity(db, {

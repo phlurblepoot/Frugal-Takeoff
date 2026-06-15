@@ -1160,4 +1160,51 @@ describe('email send routes', () => {
     expect(m.text).toBe('Please find the attached proposal.');
     expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf']);
   });
+
+  it('proposal send: project WITHOUT email sends with an explicit "to" (no 400); cc/bcc/subject/body forwarded; proposalSentAt persisted', async () => {
+    // A manually-created project — no inbound bid email at all.
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe3', name: 'Manual Job', createdAt: 7,
+      pages: [{ id: 'pgE3', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    const res = await request(emailApp).post('/api/projects/pe3/send-proposal').send({
+      to: ' client@new.com ', cc: 'cc@new.com', bcc: 'bcc@new.com',
+      subject: 'Your Proposal', body: 'Attached for review.',
+      fileId: 'primary', attachmentFileIds: ['extra1'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.to).toBe('client@new.com'); // trimmed
+    expect(m.cc).toBe('cc@new.com');
+    expect(m.bcc).toBe('bcc@new.com');
+    expect(m.subject).toBe('Your Proposal');
+    expect(m.text).toBe('Attached for review.');
+    // no bid email → not threaded
+    expect(m.inReplyTo).toBeUndefined();
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf', 'Spec.pdf']);
+    // proposal side-effects persisted
+    const fresh = loadProject(db, 'pe3');
+    expect(fresh.proposalFileId).toBe('primary');
+    expect(typeof fresh.proposalSentAt).toBe('number');
+  });
+
+  it('proposal send: project WITHOUT email defaults subject to "Proposal — <name>"', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe4', name: 'Manual Job', createdAt: 8,
+      pages: [{ id: 'pgE4', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    await request(emailApp).post('/api/projects/pe4/send-proposal').send({ to: 'client@new.com', fileId: 'primary' });
+    expect(sent[0].subject).toBe('Proposal — Manual Job');
+  });
+
+  it('proposal send: project WITHOUT email AND no "to" → 400, no send', async () => {
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pe5', name: 'Manual Job', createdAt: 9,
+      pages: [{ id: 'pgE5', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    const res = await request(emailApp).post('/api/projects/pe5/send-proposal').send({ fileId: 'primary' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('No recipient address');
+    expect(sent).toHaveLength(0);
+  });
 });
