@@ -165,7 +165,9 @@ export const ProjectProposal: React.FC = () => {
     if (!project) return;
     if (priceMode === 'fixed') {
       const n = Number(fixedPrice);
-      if (!Number.isFinite(n) || n < 0) {
+      // Require a positive price — an empty field parses to 0, which would
+      // silently produce a $0 proposal.
+      if (fixedPrice.trim() === '' || !Number.isFinite(n) || n <= 0) {
         toast('Enter a proposal price', { type: 'warning' });
         return;
       }
