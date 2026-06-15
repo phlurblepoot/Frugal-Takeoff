@@ -28,6 +28,7 @@ import { useShareLink } from '../../components/ShareLinkModal';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Textarea, Select, Checkbox, Skeleton,
 } from '../../components/ui';
+import { EmailComposer } from '../../components/EmailComposer';
 
 export const ProjectProposal: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -59,8 +60,7 @@ export const ProjectProposal: React.FC = () => {
 
   // Send-proposal controls.
   const [sendFileId, setSendFileId] = useState('');
-  const [sendMessage, setSendMessage] = useState('');
-  const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false);
 
   const reload = () => {
     if (!projectId) return;
@@ -254,23 +254,6 @@ export const ProjectProposal: React.FC = () => {
     }
   };
 
-  // ── Send proposal ───────────────────────────────────────────────────────────
-  const handleSend = async () => {
-    if (!project || !sendFileId) return;
-    setSending(true);
-    try {
-      const updated = await sendProjectProposal(project.id, { fileId: sendFileId, body: sendMessage || undefined });
-      setProject(updated);
-      setSendFileId('');
-      setSendMessage('');
-      toast('Proposal sent', { type: 'success' });
-    } catch (e: any) {
-      toast('Failed to send: ' + (e?.message || 'Unknown error'), { type: 'error' });
-    } finally {
-      setSending(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="mx-auto max-w-5xl px-4 py-6 md:px-8 space-y-4">
@@ -427,19 +410,35 @@ export const ProjectProposal: React.FC = () => {
               {pdfPrintouts.length === 0 && (
                 <p className="text-xs text-ink-faint">No PDF printouts yet. Generate one above first.</p>
               )}
-              <Field label="Message" htmlFor="send-msg" hint="Optional">
-                <Textarea id="send-msg" rows={4} value={sendMessage} onChange={e => setSendMessage(e.target.value)}
-                  placeholder="Please find our proposal attached. Don't hesitate to reach out with any questions." />
-              </Field>
               <div>
-                <Button onClick={handleSend} disabled={sending || !sendFileId}>
-                  {sending ? <><RefreshCw size={15} className="animate-spin" />Sending…</> : <><Send size={15} />Send proposal</>}
+                <Button onClick={() => setComposing(true)} disabled={!sendFileId}>
+                  <Send size={15} />Send proposal
                 </Button>
               </div>
             </div>
           </CardBody>
         </Card>
       )}
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={project.id}
+        title="Send proposal"
+        primaryAttachmentName={pdfPrintouts.find(pr => pr.fileId === sendFileId)?.name || 'Proposal.pdf'}
+        defaultTo={project.email?.from || ''}
+        defaultSubject={project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`}
+        defaultBody={`Please find our proposal attached. Don't hesitate to reach out with any questions.`}
+        onSend={async (m) => {
+          const updated = await sendProjectProposal(project.id, {
+            to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+            fileId: sendFileId, attachmentFileIds: m.attachmentFileIds,
+          });
+          setProject(updated);
+          setSendFileId('');
+          toast('Proposal sent', { type: 'success' });
+        }}
+      />
     </div>
   );
 };

@@ -4,6 +4,7 @@ import { Camera, Trash2 } from 'lucide-react';
 import { Issue, saveIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, uploadProjectFile, getImageUrl, getSettings, fetchFileBlob, sendIssue } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
+import { EmailComposer } from '../../../components/EmailComposer';
 import { IssueStatusPill, ISSUE_STATUS_META } from '../../../components/ui/IssueStatusPill';
 import { buildIssuePdf } from './issuePdf';
 import { resolveAccentRgb } from '../billing/invoicePdf';
@@ -79,26 +80,15 @@ export const IssueEditor: React.FC<{
     } catch { toast('Failed to generate report', { type: 'error' }); }
   };
 
-  const [sendTo, setSendTo] = useState('');
-  const [sending, setSending] = useState(false);
-  const handleSend = async () => {
+  const [composing, setComposing] = useState(false);
+  const padded = String(issue.number).padStart(3, '0');
+  // Save-first guard: don't open the composer with unsaved title/description edits.
+  const openComposer = () => {
     if (title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '')) {
       toast('Save your changes before sending', { type: 'warning' });
       return;
     }
-    if (!sendTo.trim() || !/\S+@\S+\.\S+/.test(sendTo.trim())) { toast('Enter a valid email address', { type: 'warning' }); return; }
-    setSending(true);
-    try {
-      const bytes = await buildIssueBytes();
-      const file = new File([bytes], `ISS-${String(issue.number).padStart(3, '0')}.pdf`, { type: 'application/pdf' });
-      // Uploaded as a project document before sending; a failed send leaves it in
-      // Documents (project-attributed), and a retry uploads another — fine for v1.
-      const fileId = await uploadProjectFile(projectId, file, 'issue');
-      await sendIssue(issue.id, { to: sendTo.trim(), fileId });
-      toast('Issue report sent', { type: 'success' });
-      onSaved();
-    } catch { toast('Failed to send report', { type: 'error' }); }
-    finally { setSending(false); }
+    setComposing(true);
   };
 
   const handleSave = async () => {
@@ -164,10 +154,29 @@ export const IssueEditor: React.FC<{
         )}
       </div>
       <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-edge pt-3">
-        <Field label="Send report to" htmlFor="iss-to"><Input id="iss-to" type="email" value={sendTo} onChange={e => setSendTo(e.target.value)} placeholder="contractor@example.com" className="w-64" /></Field>
-        <Button variant="secondary" onClick={handleSend} disabled={sending}>{sending ? 'Sending…' : 'Send report'}</Button>
+        <Button variant="secondary" onClick={openComposer}>Send report</Button>
         <Button variant="ghost" onClick={handleDownload}>Download PDF</Button>
       </div>
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={projectId}
+        title="Send issue report"
+        primaryAttachmentName={`ISS-${padded}.pdf`}
+        defaultSubject={`Issue Report ISS-${padded} — ${projectName}`}
+        defaultBody={`Hello,\n\nPlease find attached Issue Report ISS-${padded}${issue.title ? ' — ' + issue.title : ''} for ${projectName}.\n\nThank you.`}
+        onSend={async (m) => {
+          const bytes = await buildIssueBytes();
+          const file = new File([bytes], `ISS-${padded}.pdf`, { type: 'application/pdf' });
+          // Uploaded as a project document before sending; a failed send leaves it in
+          // Documents (project-attributed), and a retry uploads another — fine for v1.
+          const fileId = await uploadProjectFile(projectId, file, 'issue');
+          await sendIssue(issue.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
+          toast('Issue report sent', { type: 'success' });
+          onSaved();
+        }}
+      />
     </Modal>
   );
 };
