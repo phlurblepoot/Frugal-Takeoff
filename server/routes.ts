@@ -990,16 +990,22 @@ export async function sendProjectEmail(
   const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
   const smtpCfg: Record<string, string> = {};
   smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
-  // Build the attachment list: read each fileId's bytes; skip any that fail.
+  // Build the attachment list: read each fileId's bytes. The first entry is the
+  // primary document (the generated PDF) — if it can't be read, fail loudly so
+  // we never send a document email with no document. Extra attachments are
+  // best-effort and skipped if unreadable.
   const builtAttachments: NonNullable<nodemailer.SendMailOptions['attachments']> = [];
-  for (const att of opts.attachments) {
+  opts.attachments.forEach((att, i) => {
     const dataUrl = getDataUrlString(db, dataDir, att.fileId);
-    if (!dataUrl) continue; // skip unreadable attachments silently
+    if (!dataUrl) {
+      if (i === 0) throw new Error('Attachment file not found');
+      return; // skip unreadable extra attachments silently
+    }
     const base64Data = dataUrl.split(',')[1];
     const mimeType = dataUrl.split(';')[0].replace('data:', '');
     const fileBuffer = Buffer.from(base64Data, 'base64');
     builtAttachments.push({ filename: att.attachmentName, content: fileBuffer, contentType: mimeType });
-  }
+  });
   const mailOptions: nodemailer.SendMailOptions = {
     from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
     to: opts.to,
