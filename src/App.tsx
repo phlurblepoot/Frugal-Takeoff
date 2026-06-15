@@ -1,15 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { createBrowserRouter, RouterProvider, Outlet, useLocation, matchPath } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
-import { ProjectsList } from './pages/ProjectsList';
+import { Dashboard } from './pages/Dashboard';
+import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
 import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
+import { ProjectLayout } from './pages/project/ProjectLayout';
+import { ProjectOverview } from './pages/project/ProjectOverview';
+import { ProjectDocuments } from './pages/project/ProjectDocuments';
+import { ProjectNotes } from './pages/project/ProjectNotes';
+import { ProjectTime } from './pages/project/ProjectTime';
+import { ProjectBilling } from './pages/project/ProjectBilling';
+import { ProjectIssues } from './pages/project/ProjectIssues';
+import { ProjectPunch } from './pages/project/ProjectPunch';
+import { ProjectProposal } from './pages/project/ProjectProposal';
+import { ProjectSettings } from './pages/project/ProjectSettings';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
 import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
-import { ChecklistEditor } from './pages/ChecklistEditor';
+import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
@@ -20,58 +31,27 @@ import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ShareProvider } from './components/ShareLinkModal';
 import { CommandPalette } from './components/CommandPalette';
-import { SideDock, DockState } from './components/SideDock';
+import { AppShell } from './components/shell/AppShell';
+import ProjectConflictListener from './components/ProjectConflictListener';
 import { getSettings } from './utils/store';
-
-const DOCK_STORAGE_KEY = 'sideDockState';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const location = useLocation();
   const isLoginPage = location.pathname === '/login';
 
-  const [dockState, setDockState] = useState<DockState>(() => {
-    const saved = localStorage.getItem(DOCK_STORAGE_KEY) as DockState | null;
-    return saved && ['expanded', 'collapsed', 'hidden'].includes(saved) ? saved : 'collapsed';
-  });
-
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-
-  const handleDockChange = (s: DockState) => {
-    setDockState(s);
-    localStorage.setItem(DOCK_STORAGE_KEY, s);
-  };
-
-  const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
-
-  const marginLeft = (isLoginPage || (isMobile && isCanvasPage))
-    ? 0
-    : dockState === 'hidden'
-    ? 0
-    : dockState === 'collapsed'
-    ? 64
-    : 208;
-
   return (
     <ToastProvider>
+      <ProjectConflictListener />
       <ConfirmProvider>
         <ShareProvider>
           <CollaborationProvider>
             <NotesProvider>
-              <SideDock state={dockState} onChange={handleDockChange} />
               {!isLoginPage && <CommandPalette />}
-              <div
-                style={{ marginLeft, transition: 'margin-left 200ms' }}
-              >
+              <AppShell>
                 <UserPresenceOverlay />
                 <NotesOverlay />
                 <Outlet context={{ appName, logoUrl }} />
-              </div>
+              </AppShell>
             </NotesProvider>
           </CollaborationProvider>
         </ShareProvider>
@@ -113,7 +93,15 @@ export default function App() {
         },
         {
           index: true,
-          element: <ProjectsList appName={appName} logoUrl={logoUrl} />,
+          element: <Navigate to="/dashboard" replace />,
+        },
+        {
+          path: 'dashboard',
+          element: <Dashboard />,
+        },
+        {
+          path: 'projects',
+          element: <ProjectsPage />,
         },
         {
           path: 'new',
@@ -121,27 +109,44 @@ export default function App() {
         },
         {
           path: 'project/:projectId',
-          element: <ProjectView />,
-        },
-        {
-          path: 'project/:projectId/page/:pageId',
-          element: <CanvasView />,
+          element: <ProjectLayout />,
+          children: [
+            { index: true, element: <ProjectOverview /> },
+            { path: 'takeoff', element: <ProjectView /> },
+            { path: 'proposal', element: <ProjectProposal /> },
+            { path: 'documents', element: <ProjectDocuments /> },
+            { path: 'notes', element: <ProjectNotes /> },
+            { path: 'time', element: <ProjectTime /> },
+            { path: 'punch', element: <ProjectPunch /> },
+            { path: 'issues', element: <ProjectIssues /> },
+            { path: 'billing', element: <ProjectBilling /> },
+            { path: 'settings', element: <ProjectSettings /> },
+            { path: 'page/:pageId', element: <CanvasView /> },
+          ],
         },
         {
           path: 'settings',
           element: <Settings />,
         },
         {
-          path: 'pdf-editor',
+          path: 'tools/pdf',
           element: <PdfEditor />,
         },
         {
-          path: 'spreadsheet-editor',
+          path: 'tools/sheets',
           element: <SpreadsheetEditor />,
         },
         {
-          path: 'checklist',
-          element: <ChecklistEditor />,
+          path: 'pdf-editor',
+          element: <Navigate to="/tools/pdf" replace />,
+        },
+        {
+          path: 'spreadsheet-editor',
+          element: <Navigate to="/tools/sheets" replace />,
+        },
+        {
+          path: 'tasks',
+          element: <TasksPage />,
         },
         {
           path: 'time',

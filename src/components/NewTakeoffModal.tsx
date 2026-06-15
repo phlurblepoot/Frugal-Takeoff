@@ -295,6 +295,7 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
             <input
+              data-testid="takeoff-name-input"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -464,6 +465,7 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
             Cancel
           </button>
           <button
+            data-testid="btn-create-takeoff"
             onClick={handleSubmit}
             disabled={!name.trim()}
             className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"

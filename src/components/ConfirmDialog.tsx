@@ -87,7 +87,7 @@ export const ConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ child
                   </div>
                 </div>
               </div>
-              <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900/40 flex justify-end gap-3">
+              <div className="px-6 py-4 pb-safe bg-slate-50 dark:bg-slate-900/40 flex flex-wrap justify-end gap-3">
                 <button
                   onClick={() => close(false)}
                   className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all"

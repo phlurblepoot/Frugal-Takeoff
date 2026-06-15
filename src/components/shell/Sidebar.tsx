@@ -1,0 +1,269 @@
+// src/components/shell/Sidebar.tsx
+import React from 'react';
+import { useLocation, useNavigate, matchPath } from 'react-router-dom';
+import {
+  Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
+  FileEdit, Sheet, Settings, LogOut, Sun, Moon,
+  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
+  ClipboardCheck, FileText, SlidersHorizontal,
+} from 'lucide-react';
+import { useTheme } from '../../context/ThemeContext';
+import { useProjectShell } from '../../context/ProjectShellContext';
+
+export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
+
+interface NavEntry {
+  id: string;
+  label: string;
+  Icon: React.FC<{ size?: number; className?: string }>;
+  path: string;
+  match: (pathname: string) => boolean;
+}
+
+const WORKSPACE_NAV: NavEntry[] = [
+  { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard, path: '/dashboard', match: p => p === '/' || p.startsWith('/dashboard') },
+  { id: 'projects', label: 'Projects', Icon: FolderKanban, path: '/projects', match: p => p.startsWith('/projects') || p === '/new' || p.startsWith('/project') },
+  { id: 'tasks', label: 'Tasks', Icon: ListTodo, path: '/tasks', match: p => p.startsWith('/tasks') },
+  { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
+];
+
+const TOOLS_NAV: NavEntry[] = [
+  { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/tools/pdf', match: p => p.startsWith('/tools/pdf') || p.startsWith('/pdf-editor') },
+  { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/tools/sheets', match: p => p.startsWith('/tools/sheets') || p.startsWith('/spreadsheet-editor') },
+];
+
+// Project sections (spec §4.2), Phase 3b edition: real nested routes.
+// 'Takeoff & Estimate' keeps its internal ?tab= sub-tabs; Punch/Issues/Billing
+// arrive in Phase 4; Project Settings in Phase 5.
+const PROJECT_NAV: {
+  id: string;
+  label: string;
+  Icon: NavEntry['Icon'];
+  path: string;
+  match: (pathname: string, base: string) => boolean;
+  adminOnly?: boolean;
+}[] = [
+  { id: 'overview',  label: 'Overview',           Icon: LayoutGrid,  path: '',           match: (p, b) => p === b },
+  { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,       path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
+  { id: 'proposal',  label: 'Proposal',           Icon: FileText,    path: '/proposal',  match: (p, b) => p.startsWith(`${b}/proposal`) },
+  { id: 'documents', label: 'Documents',          Icon: FolderOpen,  path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
+  { id: 'punch',     label: 'Punch & Checklists', Icon: ClipboardCheck, path: '/punch',  match: (p, b) => p.startsWith(`${b}/punch`) },
+  { id: 'notes',     label: 'Notes',              Icon: StickyNote,  path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
+  { id: 'time',      label: 'Time',               Icon: Clock,       path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
+  { id: 'issues',    label: 'Issues',             Icon: AlertCircle, path: '/issues',    match: (p, b) => p.startsWith(`${b}/issues`) },
+  { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
+  { id: 'settings',  label: 'Project Settings',   Icon: SlidersHorizontal, path: '/settings', match: (p, b) => p.startsWith(`${b}/settings`), adminOnly: true },
+];
+
+// Row used by every nav item. The active item gets the glow treatment —
+// spec §5 rule 2: glow is for primary buttons, active nav, progress bars only.
+const NavRow: React.FC<{
+  label: string;
+  Icon: NavEntry['Icon'];
+  active?: boolean;
+  expanded: boolean;
+  onClick: () => void;
+  trailing?: React.ReactNode;
+}> = ({ label, Icon, active = false, expanded, onClick, trailing }) => (
+  <button
+    onClick={onClick}
+    title={!expanded ? label : undefined}
+    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+      active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink active:bg-hover'
+    }`}
+  >
+    <Icon size={18} className="shrink-0" />
+    {expanded && <span className="flex-1 truncate text-left">{label}</span>}
+    {expanded && trailing}
+  </button>
+);
+
+const SectionLabel: React.FC<{ show: boolean; children: React.ReactNode }> = ({ show, children }) =>
+  show ? (
+    <p className="px-3 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+      {children}
+    </p>
+  ) : null;
+
+interface SidebarProps {
+  state: SidebarState;
+  onChange: (s: SidebarState) => void;
+  // True on canvas routes: the rail is forced thin and the size toggles hide.
+  locked?: boolean;
+  // Fired when a nav item is clicked — lets the mobile drawer close itself.
+  onNavigate?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = false, onNavigate }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Wrap navigation so the mobile drawer closes on selection.
+  const go = (path: string) => { navigate(path); onNavigate?.(); };
+  const { mode, toggleMode } = useTheme();
+  const { project } = useProjectShell();
+  const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
+  const projectId = projectMatch?.params.projectId;
+
+  if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
+
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'admin';
+  const expanded = state === 'expanded';
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.href = '/login';
+  };
+
+  if (state === 'hidden') {
+    return (
+      <button
+        onClick={() => onChange('collapsed')}
+        title="Open navigation"
+        className="fixed top-4 left-4 z-50 flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-2.5 bg-raised rounded-xl shadow-lg border border-edge text-ink-soft hover:bg-hover active:bg-hover transition-colors"
+      >
+        <Menu size={18} />
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className={`fixed left-0 top-0 h-full z-40 flex flex-col bg-surface border-r border-edge overflow-hidden transition-all duration-200 ${
+        expanded ? 'w-52' : 'w-16'
+      }`}
+    >
+      {/* Header */}
+      <div className={`flex items-center h-14 px-3 border-b border-edge shrink-0 ${expanded ? 'justify-between' : 'justify-center'}`}>
+        {!locked ? (
+          <button
+            onClick={() => onChange(expanded ? 'collapsed' : 'expanded')}
+            title={expanded ? 'Collapse' : 'Expand navigation'}
+            className="flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-1.5 rounded-lg hover:bg-hover active:bg-hover text-ink-soft transition-colors"
+          >
+            <Menu size={18} />
+          </button>
+        ) : (
+          <div className="p-1.5 text-ink-faint"><Menu size={18} /></div>
+        )}
+        {expanded && !locked && (
+          <button
+            onClick={() => onChange('hidden')}
+            title="Hide sidebar"
+            className="flex items-center justify-center min-h-11 min-w-11 md:min-h-0 md:min-w-0 p-1.5 rounded-lg hover:bg-hover active:bg-hover text-ink-faint transition-colors"
+          >
+            <PanelLeftClose size={18} />
+          </button>
+        )}
+      </div>
+
+      {/* Nav */}
+      <div className="flex-1 py-2 px-2 overflow-y-auto">
+        <NavRow
+          label="Search"
+          Icon={Search}
+          expanded={expanded}
+          onClick={() => { onNavigate?.(); window.dispatchEvent(new CustomEvent('open-command-palette')); }}
+          trailing={
+            <kbd className="hidden md:inline-flex text-[10px] font-mono text-ink-faint border border-edge rounded px-1 py-0.5">⌘K</kbd>
+          }
+        />
+        {projectId ? (
+          <>
+            <div className="pt-2">
+              <NavRow
+                label="All Projects"
+                Icon={ArrowLeft}
+                expanded={expanded}
+                onClick={() => go('/projects')}
+              />
+            </div>
+            {expanded && (
+              <p
+                className="px-3 pt-3 pb-1 text-sm font-semibold text-ink truncate"
+                title={project && project.id === projectId ? project.name : undefined}
+              >
+                {project && project.id === projectId ? project.name : 'Project'}
+              </p>
+            )}
+            <div className="space-y-0.5">
+              {PROJECT_NAV.filter(item => !item.adminOnly || isAdmin).map(item => {
+                const base = `/project/${projectId}`;
+                return (
+                  <NavRow
+                    key={item.id}
+                    label={item.label}
+                    Icon={item.Icon}
+                    expanded={expanded}
+                    active={item.match(location.pathname, base)}
+                    onClick={() => go(`${base}${item.path}`)}
+                  />
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <>
+            <SectionLabel show={expanded}>Workspace</SectionLabel>
+            <div className="space-y-0.5">
+              {WORKSPACE_NAV.map(item => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  Icon={item.Icon}
+                  expanded={expanded}
+                  active={item.match(location.pathname)}
+                  onClick={() => go(item.path)}
+                />
+              ))}
+            </div>
+            <SectionLabel show={expanded}>Tools</SectionLabel>
+            <div className="space-y-0.5">
+              {TOOLS_NAV.map(item => (
+                <NavRow
+                  key={item.id}
+                  label={item.label}
+                  Icon={item.Icon}
+                  expanded={expanded}
+                  active={item.match(location.pathname)}
+                  onClick={() => go(item.path)}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-2 pb-3 pt-2 pb-safe border-t border-edge space-y-0.5 shrink-0">
+        <NavRow
+          label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
+          Icon={mode === 'dark' ? Sun : Moon}
+          expanded={expanded}
+          onClick={toggleMode}
+        />
+        <NavRow
+          label="Settings"
+          Icon={Settings}
+          expanded={expanded}
+          active={location.pathname === '/settings'}
+          onClick={() => go('/settings')}
+        />
+        <button
+          onClick={handleLogout}
+          title={!expanded ? `${user.username || 'User'} — Logout` : undefined}
+          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-ink-soft hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+        >
+          <LogOut size={18} className="shrink-0" />
+          {expanded && (
+            <div className="text-left min-w-0">
+              <p className="text-sm font-medium truncate">{user.username || 'User'}</p>
+              <p className="text-[11px] text-ink-faint">Logout</p>
+            </div>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};

@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Search, FolderOpen, FileText, Ruler, Mail, Plus, Home, Settings as SettingsIcon,
-  FileSpreadsheet, CheckSquare, Clock, CornerDownLeft, X, Keyboard,
+  Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
+  FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
+  AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
 } from 'lucide-react';
-import { searchAll, SearchResult } from '../utils/store';
+import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
+import { useToast } from './Toast';
 
 type Action = {
   id: string;
@@ -23,7 +25,6 @@ const typeIcon = (type: SearchResult['type']) => {
     case 'project': return <FolderOpen size={16} />;
     case 'page': return <FileText size={16} />;
     case 'takeoff': return <Ruler size={16} />;
-    case 'bid': return <Mail size={16} />;
   }
 };
 
@@ -31,7 +32,6 @@ const typeLabel: Record<SearchResult['type'], string> = {
   project: 'Project',
   page: 'Page',
   takeoff: 'Takeoff',
-  bid: 'Bid',
 };
 
 const isTyping = () => {
@@ -46,6 +46,7 @@ const isTyping = () => {
 export const CommandPalette: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -54,22 +55,70 @@ export const CommandPalette: React.FC = () => {
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const reqId = useRef(0);
+  const clockInFlight = useRef(false);
 
   // On the canvas page the single-key shortcuts belong to the drawing tools, so
   // only the modifier-based palette shortcut is active there.
   const onCanvas = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
 
+  // Project context: when inside a project, the palette offers contextual actions.
+  const projMatch = matchPath('/project/:projectId/*', location.pathname) || matchPath('/project/:projectId', location.pathname);
+  const projectId = projMatch?.params?.projectId as string | undefined;
+  const isAdmin = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; } })();
+
   const close = useCallback(() => { setOpen(false); setQuery(''); setResults([]); setSelected(0); }, []);
 
   const staticActions: Action[] = useMemo(() => [
     { id: 'a:new', type: 'action', title: 'New project', icon: <Plus size={16} />, run: () => navigate('/new') },
-    { id: 'a:home', type: 'action', title: 'Dashboard', icon: <Home size={16} />, run: () => navigate('/') },
+    { id: 'a:home', type: 'action', title: 'Dashboard', icon: <Home size={16} />, run: () => navigate('/dashboard') },
+    { id: 'a:projects', type: 'action', title: 'Projects', icon: <FolderOpen size={16} />, run: () => navigate('/projects') },
     { id: 'a:settings', type: 'action', title: 'Settings', icon: <SettingsIcon size={16} />, run: () => navigate('/settings') },
-    { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/pdf-editor') },
-    { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/spreadsheet-editor') },
-    { id: 'a:checklist', type: 'action', title: 'Checklists', icon: <CheckSquare size={16} />, run: () => navigate('/checklist') },
+    { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/tools/pdf') },
+    { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
+    { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
-  ], [navigate]);
+    {
+      id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,
+      run: async () => {
+        if (clockInFlight.current) return;
+        clockInFlight.current = true;
+        try {
+          const entries = await getMyTimeEntries();
+          const open = entries.find(e => e.clockOut === null);
+          if (open) { await clockOut(); toast('Clocked out', { type: 'success' }); }
+          else { await clockIn(); toast('Clocked in', { type: 'success' }); }
+        } catch { toast('Clock action failed', { type: 'error' }); }
+        finally { clockInFlight.current = false; }
+      },
+    },
+  ], [navigate, toast]);
+
+  // Contextual actions: surfaced only when the user is inside a project.
+  const contextualActions: Action[] = useMemo(() => {
+    if (!projectId) return [];
+    const actions: Action[] = [
+      { id: 'ctx:new-issue', type: 'action' as const, title: 'New issue', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues?new=1`) },
+      { id: 'ctx:new-punch', type: 'action' as const, title: 'New punch item', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch?new=1`) },
+      { id: 'ctx:new-task', type: 'action' as const, title: 'New task', subtitle: 'Project', icon: <ListTodo size={16} />, run: () => navigate('/tasks?new=1') },
+      { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
+      { id: 'ctx:overview', type: 'action' as const, title: 'Project overview', subtitle: 'Project', icon: <LayoutGrid size={16} />, run: () => navigate(`/project/${projectId}`) },
+      { id: 'ctx:takeoff', type: 'action' as const, title: 'Takeoff & estimate', subtitle: 'Project', icon: <Ruler size={16} />, run: () => navigate(`/project/${projectId}/takeoff`) },
+      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/project/${projectId}/documents`) },
+      { id: 'ctx:punch', type: 'action' as const, title: 'Punch & checklists', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch`) },
+      { id: 'ctx:issues', type: 'action' as const, title: 'Issues', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues`) },
+      { id: 'ctx:time', type: 'action' as const, title: 'Time', subtitle: 'Project', icon: <Clock size={16} />, run: () => navigate(`/project/${projectId}/time`) },
+      { id: 'ctx:notes', type: 'action' as const, title: 'Notes', subtitle: 'Project', icon: <StickyNote size={16} />, run: () => navigate(`/project/${projectId}/notes`) },
+    ];
+    if (isAdmin) {
+      actions.push(
+        { id: 'ctx:billing', type: 'action' as const, title: 'Billing', subtitle: 'Project', icon: <DollarSign size={16} />, run: () => navigate(`/project/${projectId}/billing`) },
+        { id: 'ctx:settings', type: 'action' as const, title: 'Project settings', subtitle: 'Project', icon: <SlidersHorizontal size={16} />, run: () => navigate(`/project/${projectId}/settings`) },
+      );
+    }
+    return actions;
+  }, [projectId, isAdmin, navigate]);
+
+  const allActions = useMemo(() => [...contextualActions, ...staticActions], [contextualActions, staticActions]);
 
   // Debounced search.
   useEffect(() => {
@@ -93,9 +142,9 @@ export const CommandPalette: React.FC = () => {
 
   const filteredActions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return staticActions;
-    return staticActions.filter(a => a.title.toLowerCase().includes(q));
-  }, [staticActions, query]);
+    if (!q) return allActions;
+    return allActions.filter(a => a.title.toLowerCase().includes(q));
+  }, [allActions, query]);
 
   const items: Item[] = useMemo(
     () => [...filteredActions, ...results.map(r => ({ ...r, icon: typeIcon(r.type) }))],
@@ -110,8 +159,7 @@ export const CommandPalette: React.FC = () => {
     switch (item.type) {
       case 'project': navigate(`/project/${item.projectId}`); break;
       case 'page': navigate(`/project/${item.projectId}/page/${item.pageId}`); break;
-      case 'takeoff': navigate(`/project/${item.projectId}`, { state: { activeTab: 'takeoffs' } }); break;
-      case 'bid': navigate('/?tab=bids'); break;
+      case 'takeoff': navigate(`/project/${item.projectId}/takeoff?tab=takeoffs`); break;
     }
   }, [close, navigate]);
 
@@ -184,7 +232,7 @@ export const CommandPalette: React.FC = () => {
                   ref={inputRef}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search projects, pages, takeoffs, bids…"
+                  placeholder="Search projects, pages, takeoffs…"
                   aria-label="Search"
                   className="flex-1 py-4 bg-transparent outline-none text-slate-900 dark:text-white placeholder-slate-400 text-sm"
                 />

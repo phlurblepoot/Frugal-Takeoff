@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { Workbook } from '@fortune-sheet/react';
 import type { Sheet as FortuneSheet } from '@fortune-sheet/core';
 import '@fortune-sheet/react/dist/index.css';
@@ -7,14 +7,17 @@ import * as XLSX from 'xlsx';
 import {
   FolderOpen, Save, Download, X, Plus, FileSpreadsheet, Loader2,
 } from 'lucide-react';
-import { saveFile } from '../utils/store';
+import {
+  getFileMeta, fetchFileBlob, saveFileVersion, getDraft, putDraft, deleteDraft,
+} from '../utils/store';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface PrintoutSource {
   projectId: string;
-  printoutId: string;
+  printoutId?: string;
   fileId: string;
 }
 
@@ -134,13 +137,6 @@ const fortuneSheetsToXlsxBytes = (sheets: FortuneSheet[]): Uint8Array => {
   return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as Uint8Array;
 };
 
-const bytesToDataUrl = (bytes: Uint8Array): string => {
-  const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return `data:${mime};base64,${btoa(binary)}`;
-};
-
 const downloadFile = (bytes: Uint8Array, name: string) => {
   const blob = new Blob([bytes], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -159,7 +155,9 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 
 export const SpreadsheetEditor: React.FC = () => {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const [tabs, setTabs] = useState<FileTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -208,7 +206,15 @@ export const SpreadsheetEditor: React.FC = () => {
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => saveStateToIDB(), 1500);
+    saveTimerRef.current = setTimeout(() => {
+      saveStateToIDB();
+      // Mirror the active file-backed tab to a server draft.
+      const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+      const fileId = tab?.source?.fileId;
+      if (fileId) {
+        putDraft(fileId, 'sheet', JSON.stringify({ sheets: currentSheetsRef.current })).catch(() => {});
+      }
+    }, 1500);
   }, [saveStateToIDB]);
 
   // ── FortuneSheet onChange ─────────────────────────────────────────────────
@@ -224,6 +230,25 @@ export const SpreadsheetEditor: React.FC = () => {
 
   // ── Open a file ───────────────────────────────────────────────────────────
 
+  // Build a tab directly from FortuneSheet JSON (no xlsx parse) and make it
+  // active. Shared by the xlsx-ingest path and the draft-restore path.
+  const addTabFromSheets = useCallback(
+    (fileName: string, sheets: FortuneSheet[], source?: PrintoutSource) => {
+      const tabId = uid();
+      const newTab: FileTab = { id: tabId, fileName, sheets, source };
+
+      const updated = [...tabsRef.current, newTab];
+      setTabs(updated);
+      tabsRef.current = updated;
+      setActiveTabId(tabId);
+      activeTabIdRef.current = tabId;
+      setCurrentSheets(sheets);
+      currentSheetsRef.current = sheets;
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
   const openXlsx = useCallback(
     async (file: File, source?: PrintoutSource) => {
       setLoading(true);
@@ -231,18 +256,7 @@ export const SpreadsheetEditor: React.FC = () => {
         const buf = await file.arrayBuffer();
         const sheets = xlsxToFortuneSheets(buf);
         if (!sheets.length) throw new Error('No sheets found');
-
-        const tabId = uid();
-        const newTab: FileTab = { id: tabId, fileName: file.name, sheets, source };
-
-        const updated = [...tabsRef.current, newTab];
-        setTabs(updated);
-        tabsRef.current = updated;
-        setActiveTabId(tabId);
-        activeTabIdRef.current = tabId;
-        setCurrentSheets(sheets);
-        currentSheetsRef.current = sheets;
-        scheduleSave();
+        addTabFromSheets(file.name, sheets, source);
       } catch (err) {
         console.error('Failed to open file', err);
         toast('Failed to open file', { type: 'error' });
@@ -250,7 +264,7 @@ export const SpreadsheetEditor: React.FC = () => {
         setLoading(false);
       }
     },
-    [scheduleSave, toast],
+    [addTabFromSheets, toast],
   );
 
   // ── Auto-open + IDB restore on mount ──────────────────────────────────────
@@ -282,6 +296,56 @@ export const SpreadsheetEditor: React.FC = () => {
           tabsRef.current = restoredTabs;
         }
         await openXlsx(incoming, state?.source);
+        return;
+      }
+
+      // Entry by file id (?fileId=) — Documents/Printouts open files by reference.
+      const fileIdParam = searchParams.get('fileId');
+      if (fileIdParam) {
+        if (restoredTabs.length) {
+          setTabs(restoredTabs);
+          tabsRef.current = restoredTabs;
+        }
+        try {
+          const [meta, blob, draft] = await Promise.all([
+            getFileMeta(fileIdParam),
+            fetchFileBlob(fileIdParam),
+            getDraft(fileIdParam).catch(() => null),
+          ]);
+          const base = meta?.name || `file-${fileIdParam}`;
+          const fname = base.toLowerCase().endsWith('.xlsx') ? base : `${base}.xlsx`;
+          const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId: fileIdParam };
+
+          let draftSheets: FortuneSheet[] | null = null;
+          if (draft?.kind === 'sheet') {
+            try {
+              const parsed = JSON.parse(draft.data) as { sheets?: FortuneSheet[] };
+              if (parsed.sheets?.length) {
+                const restore = await confirm({
+                  title: 'Restore draft?',
+                  message: 'You have unsaved spreadsheet changes from a previous session. Restore them?',
+                  confirmLabel: 'Restore',
+                  cancelLabel: 'Discard',
+                });
+                if (restore) draftSheets = parsed.sheets;
+                else deleteDraft(fileIdParam).catch(() => {});
+              }
+            } catch { /* unreadable draft — ignore */ }
+          }
+
+          if (draftSheets) {
+            // FortuneSheet JSON alone reconstructs the tab — skip xlsx parsing.
+            addTabFromSheets(fname, draftSheets, src);
+          } else {
+            const f = new File([blob], fname, {
+              type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            });
+            await openXlsx(f, src);
+          }
+        } catch (e) {
+          console.error('Failed to open file by id:', e);
+          toast('Could not open the file', { type: 'error' });
+        }
         return;
       }
 
@@ -371,8 +435,11 @@ export const SpreadsheetEditor: React.FC = () => {
     try {
       const bytes = fortuneSheetsToXlsxBytes(currentSheetsRef.current);
       if (activeTab.source) {
-        await saveFile(activeTab.source.fileId, bytesToDataUrl(bytes));
-        toast('Saved to Printouts', { type: 'success' });
+        await saveFileVersion(activeTab.source.fileId, new Blob([bytes], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }));
+        deleteDraft(activeTab.source.fileId).catch(() => {});
+        toast('Saved — new version created', { type: 'success' });
       } else {
         downloadFile(bytes, activeTab.fileName);
       }

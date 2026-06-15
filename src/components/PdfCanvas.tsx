@@ -217,6 +217,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const lastCenterRef = useRef<Point | null>(null);
   const zoomRafRef = useRef<number | null>(null);
 
+  // Long-press → context menu (touch tablets). A timer armed on touchstart over
+  // a measurement opens the existing context menu (delete/copy/paste) at the
+  // touch point; any move or lift cancels it. Mirrors the desktop right-click.
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFiredRef = useRef(false);
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+  useEffect(() => () => cancelLongPress(), []);
+
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
@@ -1309,6 +1322,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           }}
           onTap={(e) => {
             e.cancelBubble = true;
+            // A long-press already opened the context menu — don't also select.
+            if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
             if (activePoints.length === 0) {
               if (isMultiSelectMode) {
                 onMultiSelectToggle?.(m.id, m.type);
@@ -1322,6 +1337,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             e.cancelBubble = true;
             setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: m.id });
           }}
+          onTouchStart={(e) => {
+            // Arm long-press only for a single-finger touch (two fingers = pinch
+            // zoom). Capture the touch point now; fire the context menu after the
+            // hold delay if the finger hasn't moved or lifted.
+            if (e.evt.touches && e.evt.touches.length !== 1) { cancelLongPress(); return; }
+            const touch = e.evt.touches?.[0];
+            if (!touch) { cancelLongPress(); return; }
+            const x = touch.clientX;
+            const y = touch.clientY;
+            longPressFiredRef.current = false;
+            cancelLongPress();
+            longPressTimerRef.current = setTimeout(() => {
+              longPressFiredRef.current = true;
+              longPressTimerRef.current = null;
+              setContextMenu({ x, y, measurementId: m.id });
+            }, 500);
+          }}
+          onTouchMove={cancelLongPress}
+          onTouchEnd={cancelLongPress}
           name="measurement-group"
         >
           {m.type === 'count' ? (
@@ -2042,6 +2076,29 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           onContextMenu={(e) => {
             e.evt.preventDefault();
             setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: null });
+          }}
+          onDblTap={(e) => {
+            // Touch equivalent of pressing Enter: double-tapping the empty
+            // stage finishes the in-progress length/area segment (or closes a
+            // region). Mirrors the keyboard Enter handler. Only acts on the
+            // background — double-taps on a Line still insert a vertex.
+            const onBackground = e.target === stageRef.current || e.target.name() === 'backgroundImage';
+            if (!onBackground) return;
+            if (activePoints.length <= 1) return;
+            if (currentTool === 'length' || currentTool === 'area') {
+              finalizeSegment();
+            } else if (currentTool === 'region' && activePoints.length > 2) {
+              const newRegion: ScaleRegion = {
+                id: uuidv4(),
+                name: `Region ${scaleRegions.length + 1}`,
+                points: [...activePoints],
+                scaleConfig: null,
+                color: '#8b5cf6',
+              };
+              onAddRegion?.(newRegion);
+              setActivePoints([]);
+              setMousePos(null);
+            }
           }}
           onDragEnd={(e) => {
             if (e.target === e.currentTarget) {

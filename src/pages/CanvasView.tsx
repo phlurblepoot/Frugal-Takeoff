@@ -1,15 +1,21 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Edit2, Hash, Undo, Redo, ChevronLeft, ChevronRight, ChevronDown, ChevronsDownUp, ChevronsUpDown, Menu, StickyNote, HelpCircle, Search, BoxSelect, GitMerge, AlignStartVertical, AlignEndVertical } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
+import { ScaleCalibrationModal } from '../components/canvas/ScaleCalibrationModal';
+import { KeyboardShortcutsModal } from '../components/canvas/KeyboardShortcutsModal';
+import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
+import { MeasurementSidebar } from '../components/canvas/MeasurementSidebar';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, formatRealValue, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
+import { CustomCostRow } from '../components/CustomCostRow';
+import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -35,165 +41,6 @@ const STANDARD_SCALES = [
   { label: '1" = 100\'', pixelDistance: 144, realWorldDistance: 100, unit: 'ft' },
   { label: '1" = 200\'', pixelDistance: 144, realWorldDistance: 200, unit: 'ft' },
 ];
-
-const CustomCostRow: React.FC<{
-  item: any;
-  index: number;
-  unitLabel: string;
-  onChange: (index: number, updated: any) => void;
-  onRemove: (index: number) => void;
-}> = ({ item, index, unitLabel, onChange, onRemove }) => {
-  const handleMathBlur = (field: string, value: string) => {
-    if (value.startsWith('=')) {
-      const result = evaluateMathExpression(value);
-      if (result !== null) {
-        onChange(index, { ...item, [field]: result.toString() });
-      }
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-slate-200 shadow-sm">
-      <div className="flex gap-2 items-center">
-        <select
-          value={item.type}
-          onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
-          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50"
-        >
-          <option value="flat">Flat Cost</option>
-          <option value="yield">Material Yield</option>
-          <option value="unit">Cost per {unitLabel}</option>
-          <option value="amount_per_units">Rate per {unitLabel}s</option>
-        </select>
-        <input
-          type="text"
-          value={item.name}
-          onChange={(e) => onChange(index, { ...item, name: e.target.value })}
-          placeholder="Line Name"
-          className="flex-1 text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
-        />
-        <button
-          onClick={() => onRemove(index)}
-          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-      
-      <div className="flex gap-2 items-center pl-2 border-l-2 border-accent-100">
-        {item.type === 'flat' && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
-            <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
-              <input
-                type="text"
-                value={item.cost || '0'}
-                onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
-                onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-            </div>
-          </div>
-        )}
-        
-        {item.type === 'yield' && (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield:</span>
-              <input
-                type="text"
-                value={item.yield || '0'}
-                onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
-                onBlur={(e) => handleMathBlur('yield', e.target.value)}
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-              <span className="text-[10px] text-slate-500">{unitLabel} per unit</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
-              <input
-                type="text"
-                value={item.unit || ''}
-                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
-                placeholder="e.g. bags"
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
-              <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
-                <input
-                  type="text"
-                  value={item.cost || '0'}
-                  onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
-                  onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                  className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                />
-              </div>
-            </div>
-          </>
-        )}
-
-        {item.type === 'unit' && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}:</span>
-            <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
-              <input
-                type="text"
-                value={item.costPerUnit || '0'}
-                onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
-                onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
-                className="w-24 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-            </div>
-          </div>
-        )}
-
-        {item.type === 'amount_per_units' && (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount:</span>
-              <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
-                <input
-                  type="text"
-                  value={item.amount || '0'}
-                  onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
-                  onBlur={(e) => handleMathBlur('amount', e.target.value)}
-                  className="w-20 text-xs border border-slate-300 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Per:</span>
-              <input
-                type="text"
-                value={item.perUnits || '0'}
-                onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
-                onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
-                className="w-16 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-              <span className="text-[10px] text-slate-500">{unitLabel}s</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
-              <input
-                type="text"
-                value={item.unit || ''}
-                onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
-                placeholder="e.g. days"
-                className="w-20 text-xs border border-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500"
-              />
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-};
 
 const CanvasViewInner: React.FC = () => {
   const { toast } = useToast();
@@ -228,6 +75,36 @@ const CanvasViewInner: React.FC = () => {
   }, [project, pageId, setPageName]);
   
   const [currentTool, setCurrentTool] = useState<Tool>('pan');
+
+  // Phone = read-only canvas (Phase 8). Matches the app shell's `isMobile`
+  // breakpoint (≤767px). On phones we keep pan / pinch-zoom / tap-select / view
+  // and the measurement sidebar, but disable drawing-tool SELECTION
+  // (Length/Area/Count/Region/Scale-draw). Tablets (≥md) keep full drawing.
+  const [isPhone, setIsPhone] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setIsPhone(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  const [readOnlyBannerDismissed, setReadOnlyBannerDismissed] = useState(false);
+  // If we cross into phone width while a drawing tool is active, fall back to
+  // pan so the canvas stays in a coherent read-only state.
+  useEffect(() => {
+    if (isPhone && currentTool !== 'pan') setCurrentTool('pan');
+  }, [isPhone, currentTool]);
+  // Touch devices don't surface `title` tooltips and finish drawing via
+  // double-tap rather than a keyboard, so the instruction copy adapts.
+  const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  const finishHint = isTouchDevice ? 'Double-tap to finish.' : 'Double-click or press Enter to finish.';
+  const READ_ONLY_MESSAGE = 'Viewing only on small screens — open this page on a tablet or computer to draw takeoffs.';
+  // Re-surface the banner if it was dismissed, so a tap on a locked tool always
+  // explains why nothing happened.
+  const handlePhoneToolBlocked = () => {
+    setReadOnlyBannerDismissed(false);
+    setToolDisabledMessage(READ_ONLY_MESSAGE);
+  };
+
   const [showScaleModal, setShowScaleModal] = useState(false);
   const [pendingPixelDistance, setPendingPixelDistance] = useState<number>(0);
   const [scaleInput, setScaleInput] = useState('10');
@@ -255,13 +132,6 @@ const CanvasViewInner: React.FC = () => {
 
   const [showCurrentPageOnly, setShowCurrentPageOnly] = useState(false);
 
-  type HistoryAction =
-    | { type: 'add'; measurement: Measurement }
-    | { type: 'delete'; measurement: Measurement }
-    | { type: 'update'; measurementId: string; before: Partial<Measurement>; after: Partial<Measurement> };
-
-  const [history, setHistory] = useState<HistoryAction[]>([]);
-  const [redoStack, setRedoStack] = useState<HistoryAction[]>([]);
   const [measurementFilter, setMeasurementFilter] = useState('');
   const [showPageJump, setShowPageJump] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
@@ -302,32 +172,6 @@ const CanvasViewInner: React.FC = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-
-  const pushToHistory = (action: HistoryAction) => {
-    setHistory(prev => [...prev, action].slice(-50));
-    setRedoStack([]);
-  };
-
-  const applyAction = (action: HistoryAction, direction: 'undo' | 'redo') => {
-    if (!page) return;
-    if (action.type === 'add') {
-      if (direction === 'undo') {
-        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
-        if (selectedMeasurementId === action.measurement.id) setSelectedMeasurementId(null);
-      } else {
-        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
-      }
-    } else if (action.type === 'delete') {
-      if (direction === 'undo') {
-        savePageUpdates({ measurements: [...page.measurements, action.measurement] });
-      } else {
-        savePageUpdates({ measurements: page.measurements.filter(m => m.id !== action.measurement.id) });
-      }
-    } else if (action.type === 'update') {
-      const patch = direction === 'undo' ? action.before : action.after;
-      savePageUpdates({ measurements: page.measurements.map(m => m.id === action.measurementId ? { ...m, ...patch } : m) });
-    }
-  };
 
   const handleCopy = () => {
     if (!selectedMeasurementId) return;
@@ -371,24 +215,6 @@ const CanvasViewInner: React.FC = () => {
     } catch (err) {
       console.error('Failed to parse copied measurement', err);
     }
-  };
-
-  const handleUndo = () => {
-    if (history.length === 0 || !page) return;
-    const lastAction = history[history.length - 1];
-    setHistory(prev => prev.slice(0, -1));
-    setRedoStack(prev => [...prev, lastAction]);
-    applyAction(lastAction, 'undo');
-    toast('Undone', { type: 'info', duration: 1500 });
-  };
-
-  const handleRedo = () => {
-    if (redoStack.length === 0 || !page) return;
-    const action = redoStack[redoStack.length - 1];
-    setRedoStack(prev => prev.slice(0, -1));
-    setHistory(prev => [...prev, action]);
-    applyAction(action, 'redo');
-    toast('Redone', { type: 'info', duration: 1500 });
   };
 
   const handleMultiSelectToggle = (id: string, type: string) => {
@@ -516,6 +342,28 @@ const CanvasViewInner: React.FC = () => {
     setTemplates(data);
   };
 
+  const savePageUpdates = async (updates: Partial<ProjectPage>) => {
+    if (!project || !page) return;
+
+    const updatedPage = { ...page, ...updates };
+    const updatedProject = {
+      ...project,
+      pages: project.pages.map(p => p.id === page.id ? updatedPage : p)
+    };
+
+    setPage(updatedPage);
+    setProject(updatedProject);
+    await saveProject(updatedProject);
+  };
+
+  const { history, redoStack, pushToHistory, undo, redo, reset: resetHistory } = useMeasurementHistory({
+    page,
+    selectedMeasurementId,
+    setSelectedMeasurementId,
+    savePageUpdates,
+    toast,
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't intercept if user is typing in an input or textarea
@@ -592,17 +440,17 @@ const CanvasViewInner: React.FC = () => {
       // Redo must be checked before Undo (Shift+Z vs Z)
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
         e.preventDefault();
-        handleRedo();
+        redo();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
         e.preventDefault();
-        handleRedo();
+        redo();
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
-        handleUndo();
+        undo();
       }
 
       // Arrow key page navigation
@@ -648,13 +496,13 @@ const CanvasViewInner: React.FC = () => {
     setIsLoading(true);
     const proj = await getProject(pId);
     if (!proj) {
-      navigate('/');
+      navigate('/projects');
       return;
     }
 
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
-      navigate(`/project/${pId}`);
+      navigate(`/project/${pId}/takeoff`);
       return;
     }
 
@@ -667,7 +515,7 @@ const CanvasViewInner: React.FC = () => {
     setPage(pg);
     setImageUrl(imgUrl);
     setSelectedMeasurementId(null);
-    setHistory([]);
+    resetHistory();
     
     // Set default takeoff if available
     if (proj.takeoffs.length > 0) {
@@ -677,20 +525,6 @@ const CanvasViewInner: React.FC = () => {
     }
     
     setIsLoading(false);
-  };
-
-  const savePageUpdates = async (updates: Partial<ProjectPage>) => {
-    if (!project || !page) return;
-    
-    const updatedPage = { ...page, ...updates };
-    const updatedProject = {
-      ...project,
-      pages: project.pages.map(p => p.id === page.id ? updatedPage : p)
-    };
-    
-    setPage(updatedPage);
-    setProject(updatedProject);
-    await saveProject(updatedProject);
   };
 
   // Other pages in the project that this page can reference. Filters out
@@ -1248,7 +1082,7 @@ const CanvasViewInner: React.FC = () => {
           <div className="w-full md:w-80 flex flex-col h-full overflow-y-auto overflow-x-hidden">
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
               <div className="flex items-center justify-between mb-4">
-                <Link to={`/project/${project.id}`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
+                <Link to={`/project/${project.id}/takeoff`} className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors font-medium text-sm">
                   <ArrowLeft size={16} />
                   <span className="md:inline">Back to Project</span>
                 </Link>
@@ -1331,15 +1165,18 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('scale')}
               icon={<Settings size={18} />}
               label="Set Scale"
+              disabled={isPhone}
+              onDisabledClick={handlePhoneToolBlocked}
             />
             <ToolButton
               active={currentTool === 'length'}
               onClick={() => setCurrentTool('length')}
               icon={<Ruler size={18} />}
               label="Length"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1349,9 +1186,10 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('area')}
               icon={<Square size={18} />}
               label="Area"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1361,9 +1199,10 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('count')}
               icon={<Hash size={18} />}
               label="Count"
-              disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
               onDisabledClick={() => {
-                if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                if (isPhone) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
               }}
@@ -1382,12 +1221,12 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('region')}
               icon={<Layers size={18} />}
               label="Region"
-              disabled={!page.isMultiRegion}
-              onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+              disabled={isPhone || !page.isMultiRegion}
+              onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
-              onClick={handleUndo}
+              onClick={undo}
               disabled={history.length === 0}
               className={`p-2 rounded-lg transition-colors ${
                 history.length === 0
@@ -1399,7 +1238,7 @@ const CanvasViewInner: React.FC = () => {
               <Undo size={18} />
             </button>
             <button
-              onClick={handleRedo}
+              onClick={redo}
               disabled={redoStack.length === 0}
               className={`p-2 rounded-lg transition-colors ${
                 redoStack.length === 0
@@ -1846,14 +1685,34 @@ const CanvasViewInner: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex-1 relative min-h-0">
+        <div data-testid="canvas-surface" className="flex-1 relative min-h-0">
+          {/* Phone read-only notice (Phase 8). Dismissible; only on phones. */}
+          {isPhone && !readOnlyBannerDismissed && (
+            <div
+              data-testid="canvas-readonly-banner"
+              className="absolute top-16 left-3 right-3 z-40 flex items-start gap-2 bg-amber-50/95 backdrop-blur border border-amber-200 text-amber-900 rounded-xl px-3 py-2.5 shadow-lg"
+            >
+              <Layers size={16} className="mt-0.5 shrink-0 text-amber-600" />
+              <span className="text-xs leading-snug flex-1">
+                Viewing only on small screens — open this page on a tablet or computer to draw takeoffs.
+              </span>
+              <button
+                onClick={() => setReadOnlyBannerDismissed(true)}
+                className="shrink-0 p-1 -m-1 text-amber-600 hover:text-amber-900 active:scale-90 transition-all"
+                aria-label="Dismiss"
+                title="Dismiss"
+              >
+                <span aria-hidden className="block w-4 h-4 leading-4 text-center font-bold">×</span>
+              </button>
+            </div>
+          )}
           {/* Floating Controls */}
           <div className={`absolute top-[58px] md:top-4 left-4 right-4 z-30 pointer-events-none flex items-center justify-between transition-opacity ${isLeftSidebarOpen || isRightSidebarOpen ? 'opacity-0 md:opacity-100' : 'opacity-100'}`}>
             <div className="hidden md:flex pointer-events-auto items-center gap-2">
               {!isLeftSidebarOpen && (
                 <>
-                  <Link 
-                    to={`/project/${project.id}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`} 
+                  <Link
+                    to={`/project/${project.id}/takeoff${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
                     className="inline-flex items-center gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:text-slate-900 shadow-sm transition-all font-medium text-sm"
                   >
                     <ArrowLeft size={16} />
@@ -1885,52 +1744,67 @@ const CanvasViewInner: React.FC = () => {
               )}
             </div>
             
-            <div className={`pointer-events-auto flex items-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
+            <div className={`pointer-events-auto flex flex-wrap items-center justify-center gap-1 md:gap-2 bg-white/90 backdrop-blur border border-slate-200 rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
               <ToolButton
+                testId="tool-pan"
                 active={currentTool === 'pan'}
                 onClick={() => setCurrentTool('pan')}
                 icon={<Hand size={20} />}
                 label="Pan"
+                showLabel
               />
               <ToolButton
+                testId="tool-scale"
                 active={currentTool === 'scale'}
                 onClick={() => setCurrentTool('scale')}
                 icon={<Settings size={20} />}
                 label="Set Scale"
+                showLabel
+                disabled={isPhone}
+                onDisabledClick={handlePhoneToolBlocked}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <ToolButton
+                testId="tool-length"
                 active={currentTool === 'length'}
                 onClick={() => setCurrentTool('length')}
                 icon={<Ruler size={20} />}
                 label="Length"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
               />
               <ToolButton
+                testId="tool-area"
                 active={currentTool === 'area'}
                 onClick={() => setCurrentTool('area')}
                 icon={<Square size={20} />}
                 label="Area"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
               />
               <ToolButton
+                testId="tool-count"
                 active={currentTool === 'count'}
                 onClick={() => setCurrentTool('count')}
                 icon={<Hash size={20} />}
                 label="Count"
-                disabled={!page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+                showLabel
+                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
                 onDisabledClick={() => {
-                  if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  if (isPhone) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
                 }}
@@ -1941,12 +1815,14 @@ const CanvasViewInner: React.FC = () => {
                 onClick={() => setCurrentTool('region')}
                 icon={<Layers size={20} />}
                 label="Region"
-                disabled={!page.isMultiRegion}
-                onDisabledClick={() => setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+                showLabel
+                disabled={isPhone || !page.isMultiRegion}
+                onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
-                onClick={handleUndo}
+                data-testid="btn-undo"
+                onClick={undo}
                 disabled={history.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   history.length === 0
@@ -1958,7 +1834,8 @@ const CanvasViewInner: React.FC = () => {
                 <Undo size={20} />
               </button>
               <button
-                onClick={handleRedo}
+                data-testid="btn-redo"
+                onClick={redo}
                 disabled={redoStack.length === 0}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${
                   redoStack.length === 0
@@ -1978,6 +1855,7 @@ const CanvasViewInner: React.FC = () => {
               </button>
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
+                data-testid="btn-multi-select-toggle"
                 onClick={() => { setIsMultiSelectMode(m => !m); if (isMultiSelectMode) setMultiSelectedIds(new Set()); }}
                 className={`p-2 rounded-lg transition-colors flex-shrink-0 active:scale-95 ${isMultiSelectMode ? 'bg-amber-500 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-amber-600'}`}
                 title="Multi-select (Ctrl+click on desktop)"
@@ -2101,8 +1979,8 @@ const CanvasViewInner: React.FC = () => {
             remoteUsers={users}
             onCursorMove={sendCursor}
             currentUserId={socket?.id}
-            onUndo={handleUndo}
-            onRedo={handleRedo}
+            onUndo={undo}
+            onRedo={redo}
             onCopy={selectedMeasurementId ? handleCopy : undefined}
             onPaste={handlePaste}
             hasCopied={!!localStorage.getItem('copiedMeasurement')}
@@ -2116,469 +1994,58 @@ const CanvasViewInner: React.FC = () => {
           {currentTool !== 'pan' && (
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/80 backdrop-blur text-white px-4 py-2 rounded-full text-xs md:text-sm shadow-lg pointer-events-none z-10 text-center max-w-[90vw]">
               {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
-              {currentTool === 'length' && "Click points to draw a line. Double-click or press Enter to finish."}
-              {currentTool === 'area' && "Click points to draw a polygon. Double-click or press Enter to finish."}
-              {currentTool === 'region' && "Click points to define a scale region. Double-click or press Enter to finish."}
+              {currentTool === 'length' && `Click points to draw a line. ${finishHint}`}
+              {currentTool === 'area' && `Click points to draw a polygon. ${finishHint}`}
+              {currentTool === 'region' && `Click points to define a scale region. ${finishHint}`}
             </div>
           )}
         </div>
       </div>
 
-      {/* Right Sidebar Wrapper */}
-      {isRightSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-slate-900/20 backdrop-blur-[1px] z-40 md:hidden"
-          onClick={() => setIsRightSidebarOpen(false)}
-        />
-      )}
-      <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}`}>
-        <button
-          onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
-        >
-          {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-        </button>
-        <div className={`bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
-          <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20">
-            <div className="flex items-center justify-between mb-3 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsRightSidebarOpen(false)}
-                  className="md:hidden p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
-                >
-                  <ChevronRight size={20} />
-                </button>
-                <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Takeoffs & Measurements</h2>
-              </div>
-              <div className="flex items-center gap-3">
-                {(() => {
-                  const anyExpanded = project.takeoffs.some(t => expandedTakeoffs[t.id] !== false);
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next: Record<string, boolean> = {};
-                        project.takeoffs.forEach(t => { next[t.id] = !anyExpanded; });
-                        setExpandedTakeoffs(next);
-                      }}
-                      title={anyExpanded ? 'Collapse all takeoffs' : 'Expand all takeoffs'}
-                      className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors"
-                    >
-                      {anyExpanded ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
-                    </button>
-                  );
-                })()}
-                <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showCurrentPageOnly}
-                    onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
-                    className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
-                  />
-                  <span className="hidden sm:inline">Current page only</span>
-                  <span className="sm:hidden">Page only</span>
-                </label>
-                {page.scaleConfig && (
-                  <button
-                    onClick={() => setShowTakeoffModal(true)}
-                    className="text-xs flex items-center gap-1 text-accent-600 dark:text-accent-400 hover:text-accent-700 font-medium bg-accent-50 dark:bg-accent-900/30 hover:bg-accent-100 dark:hover:bg-accent-900/50 px-2 py-1 rounded transition-colors"
-                  >
-                    <Plus size={12} />
-                    New
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Measurement filter */}
-            <div className="mb-3 flex-shrink-0 relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                value={measurementFilter}
-                onChange={(e) => setMeasurementFilter(e.target.value)}
-                placeholder="Filter takeoffs & measurements..."
-                className="w-full text-xs border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
-              />
-            </div>
-
-            {!page.scaleConfig && (
-              <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-lg text-sm text-amber-700 dark:text-amber-400">
-                Please set the scale on the left sidebar.
-              </div>
-            )}
-
-            {/* Multi-select merge banner */}
-            {multiSelectedIds.size > 0 && (
-              <div className="mb-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-xl p-3 flex-shrink-0">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                      {multiSelectedIds.size} selected
-                    </p>
-                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
-                      {(() => {
-                        const types = [...multiSelectedIds].map(id => page.measurements.find(m => m.id === id)?.type).filter(Boolean);
-                        const allSame = types.every(t => t === types[0]);
-                        if (!allSame) return 'Mixed types — cannot merge';
-                        return selectedMeasurementId ? 'Will merge into selected measurement' : 'Will create a new measurement';
-                      })()}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <button
-                      onClick={() => { setMultiSelectedIds(new Set()); setIsMultiSelectMode(false); }}
-                      className="text-xs text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 px-2 py-1 rounded"
-                    >
-                      Clear
-                    </button>
-                    {multiSelectedIds.size >= 2 && (
-                      <button
-                        onClick={handleMergeSelected}
-                        className="text-sm font-semibold bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 active:scale-95 transition-all"
-                      >
-                        <GitMerge size={14} />
-                        Merge
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Takeoff Totals */}
-            {(() => {
-              const filteredTakeoffs = takeoffTotals.filter(takeoff => {
-                if (!measurementFilter) return true;
-                const fl = measurementFilter.toLowerCase();
-                if (takeoff.name.toLowerCase().includes(fl)) return true;
-                return (showCurrentPageOnly ? pageVersions : project.pages).some(p =>
-                  p.measurements.some(m => m.takeoffId === takeoff.id && m.name.toLowerCase().includes(fl))
-                );
-              });
-
-              const packageOrder: string[] = [];
-              const packageMap: Record<string, typeof filteredTakeoffs> = {};
-              const ungrouped: typeof filteredTakeoffs = [];
-              for (const t of filteredTakeoffs) {
-                if (t.pricePackage) {
-                  if (!packageMap[t.pricePackage]) {
-                    packageMap[t.pricePackage] = [];
-                    packageOrder.push(t.pricePackage);
-                  }
-                  packageMap[t.pricePackage].push(t);
-                } else {
-                  ungrouped.push(t);
-                }
-              }
-
-              const renderTakeoffCard = (takeoff: typeof filteredTakeoffs[0]) => {
-              const isActive = selectedTakeoffId === takeoff.id;
-              const isExpanded = expandedTakeoffs[takeoff.id] !== false; // Default to expanded
-
-              return (
-                <div
-                  key={takeoff.id}
-                  className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
-                  style={{ borderLeftColor: takeoff.color }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.currentTarget.classList.add('ring-2', 'ring-accent-400', 'ring-inset');
-                  }}
-                  onDragLeave={(e) => {
-                    e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
-                    const measurementId = e.dataTransfer.getData('text/plain');
-                    const measurement = (showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === measurementId);
-                    
-                    if (measurement) {
-                      if (takeoff.type === 'count' && measurement.type !== 'count') {
-                        toast('Cannot drop non-count measurements into a count takeoff.', { type: 'warning' });
-                        return;
-                      }
-                      if (takeoff.type !== 'count' && measurement.type === 'count') {
-                        toast('Cannot drop count measurements into a non-count takeoff.', { type: 'warning' });
-                        return;
-                      }
-                      if (takeoff.type === 'length' && measurement.type === 'area') {
-                        toast('Cannot drop area measurements into a linear takeoff.', { type: 'warning' });
-                        return;
-                      }
-                      
-                      updateMeasurement(measurementId, { takeoffId: takeoff.id, color: takeoff.color });
-                    }
-                  }}
-                >
-                  <div 
-                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
-                    onClick={() => {
-                      if (isActive) {
-                        setSelectedTakeoffId(null);
-                      } else {
-                        setSelectedTakeoffId(takeoff.id);
-                        setSelectedColor(takeoff.color);
-                        if (takeoff.type === 'length') setCurrentTool('length');
-                        else if (takeoff.type === 'area') setCurrentTool('area');
-                        else if (takeoff.type === 'count') setCurrentTool('count');
-                      }
-                    }}
-                  >
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
-                        }}
-                        className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded transition-colors active:scale-95 shrink-0"
-                      >
-                        {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                      </button>
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>{takeoff.name}</span>
-                      <div className="flex items-center gap-0.5 shrink-0">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setTakeoffToDelete(takeoff);
-                          }}
-                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
-                          title="Delete Takeoff"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEditTakeoff(takeoff);
-                          }}
-                          className="text-slate-400 hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors md:opacity-0 md:group-hover/header:opacity-100 active:scale-95"
-                          title="Edit Takeoff"
-                        >
-                          <Edit2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end shrink-0 ml-2">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
-                        {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
-                      </span>
-                      {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
-                        <div className="flex flex-col items-end mt-1">
-                          {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff)
-                            .split('\n')
-                            .slice(1)
-                            .map((line, i) => (
-                              <span key={i} className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-tight text-right">
-                                {line}
-                              </span>
-                            ))
-                          }
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {isExpanded && takeoff.type !== 'count' && (
-                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
-                      <button
-                        onClick={() => openNewMeasurementModal(takeoff.id)}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-b border-dashed border-slate-200 dark:border-slate-700 transition-colors"
-                      >
-                        <Plus size={14} />
-                        New Measurement
-                      </button>
-                      {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
-                        p.measurements
-                          .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
-                          .map(m => (
-                            <MeasurementItem
-                              key={m.id}
-                              measurement={m}
-                              scaleConfig={p.scaleConfig}
-                              takeoffType={takeoff.type}
-                              onDelete={() => deleteMeasurement(m.id, p.id)}
-                              selected={selectedMeasurementId === m.id}
-                              onSelect={() => selectMeasurement(m)}
-                              onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
-                              onEditHeights={() => setHeightsModalMeasurementId(m.id)}
-                              takeoff={takeoff}
-                              pageName={showCurrentPageOnly ? undefined : p.name}
-                              pageId={p.id}
-                              projectId={project.id}
-                              planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
-                              pageIds={project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id)}
-                            />
-                          ))
-                      )}
-                    </div>
-                  )}
-                  {isExpanded && takeoff.type === 'count' && (
-                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
-                      {(showCurrentPageOnly ? pageVersions : project.pages).map(p => {
-                        const count = p.measurements.filter(m => m.takeoffId === takeoff.id).length;
-                        if (count === 0) return null;
-                        return (
-                          <div key={p.id} className="p-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                            <Link 
-                              to={`/project/${project.id}/page/${p.id}`}
-                              state={{ pageIds: project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id) }}
-                              className="text-sm font-medium text-accent-600 dark:text-accent-400 hover:text-accent-800 dark:hover:text-accent-300 hover:underline truncate"
-                            >
-                              {p.name}
-                            </Link>
-                            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full">
-                              {count}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-              };
-
-              return (
-                <>
-                  {packageOrder.map(pkg => (
-                    <React.Fragment key={`pkg-${pkg}`}>
-                      <div className="px-2 pt-3 pb-1">
-                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
-                      </div>
-                      {packageMap[pkg].map(renderTakeoffCard)}
-                    </React.Fragment>
-                  ))}
-                  {ungrouped.map(renderTakeoffCard)}
-                </>
-              );
-            })()}
-
-            {/* Ungrouped Measurements */}
-            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
-              .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
-              <div 
-                className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.currentTarget.classList.add('ring-2', 'ring-accent-400', 'ring-inset');
-                }}
-                onDragLeave={(e) => {
-                  e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
-                  const measurementId = e.dataTransfer.getData('text/plain');
-                  if (measurementId) {
-                    updateMeasurement(measurementId, { takeoffId: undefined });
-                  }
-                }}
-              >
-                <div 
-                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
-                  onClick={() => setSelectedTakeoffId(null)}
-                >
-                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
-                </div>
-                <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
-                  {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
-                    p.measurements
-                      .filter(m => !m.takeoffId)
-                      .map(m => (
-                        <MeasurementItem 
-                          key={m.id} 
-                          measurement={m} 
-                          scaleConfig={p.scaleConfig} 
-                          takeoffType={undefined}
-                          onDelete={() => deleteMeasurement(m.id, p.id)}
-                          selected={selectedMeasurementId === m.id}
-                          onSelect={() => selectMeasurement(m)}
-                          onRename={(newName) => updateMeasurement(m.id, { name: newName }, p.id)}
-                          onEditHeights={() => setHeightsModalMeasurementId(m.id)}
-                          pageName={showCurrentPageOnly ? undefined : p.name}
-                          pageId={p.id}
-                          projectId={project.id}
-                          planSetName={m.planSetId ? project.planSets?.find(ps => ps.id === m.planSetId)?.name : undefined}
-                          pageIds={project.pages.filter(pg => pg.measurements.some(m => !m.takeoffId)).map(pg => pg.id)}
-                        />
-                      ))
-                  )}
-                </div>
-              </div>
-            )}
-
-            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).length === 0 && (
-              <p className="text-sm text-slate-500 italic text-center py-4">No measurements yet.</p>
-            )}
-          </div>
-        </div>
-      </div>
+      <MeasurementSidebar
+        project={project}
+        page={page}
+        pageVersions={pageVersions}
+        takeoffTotals={takeoffTotals}
+        aggregatedMeasurements={aggregatedMeasurements}
+        isRightSidebarOpen={isRightSidebarOpen}
+        setIsRightSidebarOpen={setIsRightSidebarOpen}
+        showCurrentPageOnly={showCurrentPageOnly}
+        setShowCurrentPageOnly={setShowCurrentPageOnly}
+        measurementFilter={measurementFilter}
+        setMeasurementFilter={setMeasurementFilter}
+        expandedTakeoffs={expandedTakeoffs}
+        setExpandedTakeoffs={setExpandedTakeoffs}
+        selectedTakeoffId={selectedTakeoffId}
+        setSelectedTakeoffId={setSelectedTakeoffId}
+        selectedMeasurementId={selectedMeasurementId}
+        multiSelectedIds={multiSelectedIds}
+        setMultiSelectedIds={setMultiSelectedIds}
+        setIsMultiSelectMode={setIsMultiSelectMode}
+        setSelectedColor={setSelectedColor}
+        setCurrentTool={setCurrentTool}
+        setShowTakeoffModal={setShowTakeoffModal}
+        setTakeoffToDelete={setTakeoffToDelete}
+        setHeightsModalMeasurementId={setHeightsModalMeasurementId}
+        selectMeasurement={selectMeasurement}
+        updateMeasurement={updateMeasurement}
+        deleteMeasurement={deleteMeasurement}
+        handleEditTakeoff={handleEditTakeoff}
+        handleMergeSelected={handleMergeSelected}
+        openNewMeasurementModal={openNewMeasurementModal}
+        toast={toast}
+      />
 
       {/* Scale Modal */}
-      {showScaleModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-              <h3 className="font-semibold text-slate-800 dark:text-slate-200">Set Scale</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                Enter the real-world distance for the line you just drew.
-                {(scaleUnit === 'ft' || scaleUnit === 'in') && (
-                  <span className="block mt-1 text-xs text-slate-500">
-                    You can use fractions and feet/inches (e.g., 3' 4 1/2", 3.5, 4 1/2")
-                  </span>
-                )}
-              </p>
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Distance</label>
-                  <input
-                    type="text"
-                    value={scaleInput}
-                    onChange={(e) => setScaleInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') confirmScale();
-                    }}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
-                    autoFocus
-                  />
-                </div>
-                <div className="w-24">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Unit</label>
-                  <select
-                    value={scaleUnit}
-                    onChange={(e) => setScaleUnit(e.target.value)}
-                    className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="ft">ft</option>
-                    <option value="in">in</option>
-                    <option value="m">m</option>
-                    <option value="cm">cm</option>
-                    <option value="mm">mm</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
-              <button
-                onClick={() => setShowScaleModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-lg transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmScale}
-                className="px-4 py-2 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 active:scale-95 rounded-lg transition-all"
-              >
-                Set Scale
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ScaleCalibrationModal
+        open={showScaleModal}
+        scaleInput={scaleInput}
+        onScaleInputChange={setScaleInput}
+        scaleUnit={scaleUnit}
+        onScaleUnitChange={setScaleUnit}
+        onApply={confirmScale}
+        onClose={() => setShowScaleModal(false)}
+      />
 
       {/* New Measurement Modal */}
       {newMeasurementModal && (() => {
@@ -2675,6 +2142,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDeleteMeasurement}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 active:scale-95 rounded-xl transition-all shadow-sm"
               >
@@ -2724,6 +2192,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-confirm-delete"
                 onClick={confirmDeleteTakeoff}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl transition-colors shadow-sm"
               >
@@ -2745,6 +2214,7 @@ const CanvasViewInner: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
                 <input
+                  data-testid="edit-takeoff-name"
                   type="text"
                   value={editTakeoffName}
                   onChange={(e) => setEditTakeoffName(e.target.value)}
@@ -2828,6 +2298,7 @@ const CanvasViewInner: React.FC = () => {
 
               <div className="flex items-center gap-2 py-2">
                 <input
+                  data-testid="toggle-advanced-cost"
                   type="checkbox"
                   id="isEditTakeoffAdvanced"
                   checked={isEditTakeoffAdvanced}
@@ -2858,6 +2329,7 @@ const CanvasViewInner: React.FC = () => {
                         item={cost}
                         index={idx}
                         unitLabel={UNIT_LABELS[editTakeoffUnit as keyof typeof UNIT_LABELS] || editTakeoffUnit || 'unit'}
+                        unitPlaceholder="e.g. days"
                         onChange={(index, updated) => {
                           const newCosts = [...editTakeoffCustomCosts];
                           newCosts[index] = updated;
@@ -2880,6 +2352,7 @@ const CanvasViewInner: React.FC = () => {
                 Cancel
               </button>
               <button
+                data-testid="btn-save-takeoff"
                 onClick={handleSaveEditTakeoff}
                 disabled={!editTakeoffName}
                 className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 rounded-xl transition-all shadow-sm"
@@ -2903,83 +2376,9 @@ const CanvasViewInner: React.FC = () => {
         />
       )}
       {/* Keyboard Shortcuts Help Modal */}
-      {showShortcutsHelp && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4" onClick={() => setShowShortcutsHelp(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-accent-100 flex items-center justify-center text-accent-600">
-                  <HelpCircle size={20} />
-                </div>
-                <h3 className="text-lg font-semibold text-slate-900">Keyboard Shortcuts</h3>
-              </div>
-              <button onClick={() => setShowShortcutsHelp(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="overflow-y-auto max-h-[60vh]">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Key</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {[
-                    ['?', 'Show this help'],
-                    ['Escape', 'Cancel / close modal / deselect'],
-                    ['Ctrl+Z', 'Undo'],
-                    ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'],
-                    ['Delete', 'Delete selected measurement'],
-                    ['Backspace (while drawing)', 'Remove last point'],
-                    ['P', 'Resume/extend selected measurement (or segment)'],
-                    ['Ctrl+C', 'Copy measurement'],
-                    ['Ctrl+V', 'Paste measurement'],
-                    ['← / →', 'Previous / next page'],
-                    ['Enter', 'Finish current measurement'],
-                    ['A (while drawing)', 'Toggle arc mode'],
-                  ].map(([key, action]) => (
-                    <tr key={key} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-3 font-mono text-xs text-accent-700 bg-accent-50/50 whitespace-nowrap">{key}</td>
-                      <td className="px-6 py-3 text-slate-700">{action}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 text-center">
-              <p className="text-xs text-slate-400">Press <span className="font-mono">Escape</span> or click outside to close</p>
-            </div>
-          </div>
-        </div>
-      )}
+      <KeyboardShortcutsModal open={showShortcutsHelp} onClose={() => setShowShortcutsHelp(false)} />
       {/* Tool Disabled Message Modal */}
-      {toolDisabledMessage && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                <Settings size={20} />
-              </div>
-              <h3 className="text-lg font-semibold text-slate-900">Tool Restricted</h3>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-slate-600">
-                {toolDisabledMessage}
-              </p>
-            </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
-              <button
-                onClick={() => setToolDisabledMessage(null)}
-                className="px-5 py-2.5 text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 rounded-xl transition-colors shadow-sm"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ToolDisabledModal message={toolDisabledMessage} onClose={() => setToolDisabledMessage(null)} />
     </div>
   );
 };
@@ -3032,236 +2431,48 @@ export const CanvasView: React.FC = () => {
   );
 };
 
-function ToolButton({ 
-  active, 
-  onClick, 
-  icon, 
-  label, 
+function ToolButton({
+  active,
+  onClick,
+  icon,
+  label,
   disabled = false,
   onDisabledClick,
-  className = ""
-}: { 
-  active: boolean; 
-  onClick: () => void; 
-  icon: React.ReactNode; 
+  className = "",
+  testId,
+  showLabel = false,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
   label: string;
   disabled?: boolean;
   onDisabledClick?: () => void;
   className?: string;
+  testId?: string;
+  /** When set, render a small visible text label beside the icon on touch
+      devices (where `title` tooltips don't appear). Hidden on hover-capable
+      pointers so the desktop toolbar stays icon-only and compact. */
+  showLabel?: boolean;
 }) {
   return (
     <button
+      data-testid={testId}
       onClick={disabled ? onDisabledClick : onClick}
       title={label}
+      aria-label={label}
       className={`
-        flex items-center justify-center p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
-        ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' : 
-          active 
-            ? 'bg-accent-50 border-accent-200 text-accent-700 shadow-sm' 
+        flex items-center justify-center gap-1.5 p-2 md:p-2.5 rounded-lg border transition-all active:scale-95
+        ${disabled ? 'opacity-50 bg-slate-50 border-slate-200 text-slate-400' :
+          active
+            ? 'bg-accent-50 border-accent-200 text-accent-700 shadow-sm'
             : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'}
         ${className}
       `}
     >
       {icon}
+      {showLabel && <span className="can-hover:hidden text-xs font-medium whitespace-nowrap">{label}</span>}
     </button>
-  );
-}
-
-function MeasurementItem({ 
-  measurement, 
-  scaleConfig, 
-  takeoffType,
-  takeoff,
-  onDelete,
-  selected,
-  onSelect,
-  onRename,
-  onEditHeights,
-  pageName,
-  pageId,
-  projectId,
-  planSetName,
-  pageIds
-}: { 
-  measurement: Measurement;
-  scaleConfig: ScaleConfig | null;
-  takeoffType?: string;
-  takeoff?: MeasurementTakeoff;
-  onDelete: () => void;
-  selected: boolean;
-  onSelect: () => void;
-  onRename: (name: string) => void;
-  onEditHeights?: () => void;
-  pageName?: string;
-  pageId?: string;
-  projectId?: string;
-  planSetName?: string;
-  pageIds?: string[];
-}) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(measurement.name);
-  const rowRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (selected && rowRef.current) {
-      rowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [selected]);
-
-  const handleSaveName = () => {
-    if (editName.trim()) {
-      onRename(editName.trim());
-    } else {
-      setEditName(measurement.name);
-    }
-    setIsEditing(false);
-  };
-
-  return (
-    <div
-      ref={rowRef}
-      data-measurement-id={measurement.id}
-      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
-      onClick={onSelect}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', measurement.id);
-        e.dataTransfer.effectAllowed = 'move';
-      }}
-    >
-      {selected && (
-        <span className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-950 text-[9px] font-bold uppercase tracking-wider shadow-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-700 animate-pulse" />
-          Active
-        </span>
-      )}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {!measurement.takeoffId && (
-            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: measurement.color }} />
-          )}
-          <div className="flex flex-col flex-1 min-w-0">
-            {isEditing ? (
-              <input
-                type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                onBlur={handleSaveName}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSaveName();
-                  if (e.key === 'Escape') {
-                    setEditName(measurement.name);
-                    setIsEditing(false);
-                  }
-                }}
-                className="text-sm border border-accent-300 rounded px-1 py-0.5 w-full focus:outline-none focus:ring-1 focus:ring-accent-500"
-                autoFocus
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span
-                className="text-sm text-slate-700 dark:text-slate-300 break-words whitespace-normal hover:text-accent-600 dark:hover:text-accent-400"
-                onDoubleClick={(e) => {
-                  e.stopPropagation();
-                  setIsEditing(true);
-                }}
-                title="Double-click to rename"
-              >
-                {measurement.name}
-              </span>
-            )}
-            {pageName && pageId && projectId && (
-              <Link
-                to={`/project/${projectId}/page/${pageId}`}
-                state={{ pageIds }}
-                className="text-[10px] text-accent-500 hover:text-accent-700 hover:underline font-medium uppercase tracking-wide truncate"
-                onClick={(e) => e.stopPropagation()}
-              >
-                Page: {pageName}
-              </Link>
-            )}
-            {pageName && (!pageId || !projectId) && (
-              <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide truncate">
-                Page: {pageName}
-              </span>
-            )}
-            {planSetName && (
-              <span className="text-[10px] text-purple-500 font-medium uppercase tracking-wide truncate">
-                Set: {planSetName}
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0 ml-2">
-          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
-            {measurement.type === 'count'
-              ? formatMeasurement(1, 'count', scaleConfig, takeoff)
-              : (() => {
-                  const allPts = [
-                    expandArcPoints(measurement.points, measurement.arcMidIndices),
-                    ...(measurement.segments ?? []).map(s => expandArcPoints(s.points, s.arcMidIndices)),
-                  ];
-                  return measurement.type === 'length'
-                    ? (takeoffType === 'area'
-                        ? formatMeasurement(
-                            allPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, measurement.heights || [], measurement.isTwoSided || false, scaleConfig), 0),
-                            'area', scaleConfig, takeoff)
-                        : formatMeasurement(
-                            allPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0),
-                            'length', scaleConfig, takeoff))
-                    : formatMeasurement(
-                        allPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0),
-                        'area', scaleConfig, takeoff);
-                })()
-            }
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsEditing(true);
-              }}
-              className="md:hidden p-2 text-slate-400 hover:text-accent-500 active:scale-95 transition-all"
-              title="Rename Measurement"
-            >
-              <Edit2 size={18} />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="p-2 text-slate-400 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 active:scale-95 transition-all"
-              title="Delete Measurement"
-            >
-              <Trash2 size={18} />
-            </button>
-          </div>
-        </div>
-      </div>
-      
-      {selected && !isEditing && (
-        <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
-          <span className="text-xs text-slate-500 italic">Drag to move to another takeoff</span>
-          <div className="ml-auto flex items-center gap-3">
-            {takeoffType === 'area' && measurement.type === 'length' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onEditHeights?.(); }}
-                className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
-              >
-                <Edit2 size={10} /> Edit Heights
-              </button>
-            )}
-            <button
-              onClick={() => setIsEditing(true)}
-              className="text-xs text-accent-600 hover:text-accent-800 flex items-center gap-1"
-            >
-              <Edit2 size={10} /> Rename
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
 

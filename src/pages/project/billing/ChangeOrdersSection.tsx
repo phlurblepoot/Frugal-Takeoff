@@ -1,0 +1,106 @@
+// src/pages/project/billing/ChangeOrdersSection.tsx
+import React, { useEffect, useState } from 'react';
+import { FileText, Plus, Trash2 } from 'lucide-react';
+import {
+  ChangeOrder, ChangeOrderListItem,
+  getChangeOrders, getChangeOrder, createChangeOrder, setChangeOrderStatus, deleteChangeOrder,
+} from '../../../utils/store';
+import { formatMoney } from '../../../utils/money';
+import { useToast } from '../../../components/Toast';
+import { useConfirm } from '../../../components/ConfirmDialog';
+import {
+  Button, Card, CardBody, CardHeader, EmptyState, Skeleton,
+  Table, TBody, TD, TH, THead, TR,
+} from '../../../components/ui';
+import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
+import { ChangeOrderEditor } from './ChangeOrderEditor';
+import { useProjectOutlet } from '../ProjectLayout';
+
+export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const { summary: projectSummary } = useProjectOutlet();
+  const [changeOrders, setChangeOrders] = useState<ChangeOrderListItem[] | null>(null);
+  const [editing, setEditing] = useState<ChangeOrder | null>(null);
+
+  const reload = () => {
+    if (!projectId) return;
+    getChangeOrders(projectId).then(setChangeOrders).catch(() => setChangeOrders([]));
+  };
+  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openChangeOrder = async (id: string) => {
+    try { setEditing(await getChangeOrder(id)); } catch { toast('Failed to open change order', { type: 'error' }); }
+  };
+  const newChangeOrder = async () => {
+    if (!projectId) return;
+    try {
+      const r = await createChangeOrder(projectId, {});
+      const co = await getChangeOrder(r.id);
+      setEditing(co);
+      reload();
+      onChange?.();
+    } catch { toast('Failed to create change order', { type: 'error' }); }
+  };
+  const removeChangeOrder = async (id: string) => {
+    if (!(await confirm({ title: 'Delete change order?', message: 'This permanently removes the change order and its line items and photos.', tone: 'danger', confirmLabel: 'Delete' }))) return;
+    try { await deleteChangeOrder(id); reload(); onChange?.(); } catch { toast('Delete failed', { type: 'error' }); }
+  };
+  const coStatus = async (id: string, status: string) => {
+    try { await setChangeOrderStatus(id, status); reload(); onChange?.(); } catch { toast('Update failed', { type: 'error' }); }
+  };
+
+  return (
+    <>
+      <Card className="mb-5">
+        <CardHeader title="Change Orders" actions={<Button size="sm" onClick={newChangeOrder}><Plus size={14} />New change order</Button>} />
+        <CardBody className="p-0">
+          {changeOrders === null ? (
+            <div className="space-y-2 p-4">{[0, 1].map(i => <Skeleton key={i} className="h-9" />)}</div>
+          ) : changeOrders.length === 0 ? (
+            <EmptyState icon={<FileText size={20} />} title="No change orders yet" description="Approved change orders increase the contract value." />
+          ) : (
+            <Table>
+              <THead><TR><TH>Number</TH><TH>Status</TH><TH>Amount</TH><TH>Date</TH><TH></TH></TR></THead>
+              <TBody>
+                {changeOrders.map(co => (
+                  <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
+                    <TD className="font-medium text-ink">CO-{co.number || '—'}</TD>
+                    <TD><ChangeOrderStatusPill status={co.status} /></TD>
+                    <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>
+                    <TD className="text-ink-soft">{co.date ? new Date(co.date).toLocaleDateString() : '—'}</TD>
+                    <TD onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-1">
+                        {co.status !== 'approved' && <button onClick={() => coStatus(co.id, 'approved')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-green-700 hover:bg-green-50 dark:hover:bg-green-900/20">Approve</button>}
+                        {co.status !== 'rejected' && <button onClick={() => coStatus(co.id, 'rejected')} className="rounded px-3 py-1.5 min-h-[36px] text-xs text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>}
+                        <button onClick={() => removeChangeOrder(co.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
+                      </div>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          )}
+        </CardBody>
+      </Card>
+
+      {editing && (
+        <ChangeOrderEditor
+          key={`${editing.id}:${editing.version}`}
+          changeOrder={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            // reload the open change order (lines/photos/version) and the list
+            try { setEditing(await getChangeOrder(editing.id)); } catch { setEditing(null); }
+            reload();
+            onChange?.();
+          }}
+          projectName={projectSummary?.name ?? ''}
+          contractor={projectSummary?.contractor}
+          address={projectSummary?.address}
+          projectId={projectId ?? ''}
+        />
+      )}
+    </>
+  );
+};

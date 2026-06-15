@@ -3,8 +3,13 @@
 /* ── Dark mode class variant ──────────────────────────────────────────── */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ── Accent colour scale (JS overrides at runtime for colour picker) ──── */
+/* ── Type scale + accent colour scale ─────────────────────────────────── */
+/* JS overrides the accent vars at runtime for the colour picker
+   (ThemeContext.applyAccent). --font-sans changes the app-wide default. */
 @theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
   --color-accent-50:  oklch(0.97 0.012 264);
   --color-accent-100: oklch(0.93 0.032 264);
   --color-accent-200: oklch(0.87 0.065 264);
@@ -17,27 +22,102 @@
   --color-accent-900: oklch(0.28 0.14  264);
 }
 
-/* ── Semantic surface tokens ──────────────────────────────────────────── */
+/* ── Semantic design tokens (spec §5) ─────────────────────────────────────
+   NEW IN PHASE 2. Every surface/border/text colour should come from these.
+   Light and dark are both first-class: each token is defined per theme below,
+   and the generated utilities (bg-surface, bg-raised, border-edge, text-ink,
+   text-ink-soft, …) resolve the variable at render time. */
+@theme inline {
+  --color-surface:     var(--surface);      /* page background          */
+  --color-raised:      var(--raised);       /* cards, popovers, modals  */
+  --color-sunken:      var(--sunken);       /* inset wells, table heads */
+  --color-hover:       var(--hover);        /* hover wash — use as hover:bg-hover, not bare bg-hover */
+  --color-edge:        var(--edge);         /* default 1px borders      */
+  --color-edge-strong: var(--edge-strong);  /* emphasised borders       */
+  --color-ink:         var(--ink);          /* primary text             */
+  --color-ink-soft:    var(--ink-soft);     /* secondary text           */
+  --color-ink-faint:   var(--ink-faint);    /* placeholder / disabled   */
+}
+
 :root {
+  --surface:     #f8fafc;
+  --raised:      #ffffff;
+  --sunken:      #f1f5f9;
+  --hover:       #eef2f7;
+  --edge:        #e2e8f0;
+  --edge-strong: #cbd5e1;
+  --ink:         #0f172a;
+  --ink-soft:    #475569;
+  --ink-faint:   #94a3b8;
+
+  /* Legacy aliases — pre-Phase-2 classes (theme-page/theme-card) resolve to
+     the same tokens, so old screens track theme changes automatically. */
+  --surface-bg:  var(--surface);
+  --card-bg:     var(--raised);
+  --card-border: var(--edge);
+
   --glass-bg:     rgba(255, 255, 255, 0.72);
   --glass-border: rgba(255, 255, 255, 0.40);
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
   --glass-blur:   blur(16px);
-  --surface-bg:   #f8fafc;
-  --card-bg:      #ffffff;
-  --card-border:  #e2e8f0;
 }
 
 .dark {
+  --surface:     #0f172a;
+  --raised:      #1e293b;
+  --sunken:      #0b1220;
+  --hover:       #334155;
+  --edge:        #334155;
+  --edge-strong: #475569;
+  --ink:         #f1f5f9;
+  --ink-soft:    #94a3b8;
+  --ink-faint:   #64748b;
+
   --glass-bg:     rgba(15, 23, 42, 0.75);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.40);
-  --surface-bg:   #0f172a;
-  --card-bg:      #1e293b;
-  --card-border:  #334155;
 }
 
-/* ── Glass utility classes ────────────────────────────────────────────── */
+/* ── Glow accents (spec §5 rule 2) ────────────────────────────────────────
+   NEW IN PHASE 2. Reserved for exactly three things: primary buttons, the
+   active nav item, and progress bars. Nothing else may use these. */
+@utility glow-accent {
+  background-image: linear-gradient(to bottom, var(--color-accent-500), var(--color-accent-600));
+  box-shadow:
+    0 1px 2px 0 rgb(0 0 0 / 0.25),
+    0 0 14px 0 color-mix(in oklab, var(--color-accent-500) 35%, transparent);
+}
+
+@utility glow-bar {
+  background-image: linear-gradient(to right, var(--color-accent-400), var(--color-accent-600));
+  box-shadow: 0 0 10px 0 color-mix(in oklab, var(--color-accent-500) 45%, transparent);
+}
+
+/* ── Mobile / touch helpers (Phase 8) ─────────────────────────────────────
+   no-scrollbar: hide the scrollbar on overflow-x-auto tab/toolbar rows.
+   pb-safe / pt-safe: honour iOS home-bar / notch safe-area insets. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* can-hover: gate hover-reveal affordances behind a pointer that can actually
+   hover. On touch devices (phones/tablets) `can-hover:opacity-0` is inert, so
+   buttons stay visible; on mouse devices they hide until hover. Use as
+   `can-hover:opacity-0 can-hover:group-hover:opacity-100`. */
+@custom-variant can-hover (@media (hover: hover) and (pointer: fine));
+
+/* ── Legacy utility classes (kept until Phases 3–5 restyle the screens) ── */
 @layer utilities {
   .glass {
     background: var(--glass-bg);

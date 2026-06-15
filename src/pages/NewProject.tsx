@@ -3,7 +3,7 @@ import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage } from '../types';
-import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getImage, deleteBid, getAllProjects, getBids } from '../utils/store';
+import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getAllProjects } from '../utils/store';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
@@ -62,13 +62,10 @@ export const NewProject: React.FC = () => {
   useEffect(() => {
     const fetchContractors = async () => {
       try {
-        const [projects, bids] = await Promise.all([getAllProjects(), getBids()]);
+        const projects = await getAllProjects();
         const contractors = new Set<string>();
         projects.forEach(p => {
           if (p.contractor) contractors.add(p.contractor);
-        });
-        bids.forEach(b => {
-          if (b.contractor) contractors.add(b.contractor);
         });
         setAllContractors(Array.from(contractors).sort());
       } catch (error) {
@@ -602,27 +599,9 @@ export const NewProject: React.FC = () => {
 
       project.pages = updatedServerPages;
 
-      // If converted from a bid, move the email thread onto the project so the
-      // pipeline entry can be deleted while keeping the conversation history.
-      const state = location.state as {
-        fromBidId?: string;
-        fromBidEmail?: import('../types').BidEmail;
-        fromBidEmails?: import('../types').BidEmail[];
-        fromBidProposalFileId?: string;
-        fromBidProposalSentAt?: number;
-      } | null;
-      if (state?.fromBidEmail) project.email = state.fromBidEmail;
-      if (state?.fromBidEmails) project.emails = state.fromBidEmails;
-      if (state?.fromBidProposalFileId) project.proposalFileId = state.fromBidProposalFileId;
-      if (state?.fromBidProposalSentAt) project.proposalSentAt = state.fromBidProposalSentAt;
-
       await saveProject(project);
 
-      if (state?.fromBidId) {
-        await deleteBid(state.fromBidId);
-      }
-
-      navigate(`/project/${projectId}`);
+      navigate(`/project/${projectId}/takeoff`);
     } catch (error) {
       console.error('Error saving project:', error);
       toast('Failed to save project.', { type: 'error' });
@@ -660,7 +639,7 @@ export const NewProject: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
       <div className="max-w-2xl mx-auto">
-        <Link to="/" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
+        <Link to="/projects" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
@@ -857,9 +836,9 @@ export const NewProject: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end gap-3">
+            <div className="mt-8 pt-6 border-t border-slate-100 flex flex-wrap justify-end gap-3">
               <Link
-                to="/"
+                to="/projects"
                 className="px-6 py-3 rounded-xl font-medium text-slate-600 hover:bg-slate-100 transition-colors"
               >
                 Cancel

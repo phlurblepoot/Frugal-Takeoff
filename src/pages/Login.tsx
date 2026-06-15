@@ -30,7 +30,7 @@ export const Login: React.FC = () => {
 
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      navigate('/');
+      navigate('/dashboard');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -39,7 +39,7 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen theme-page flex items-center justify-center p-4 font-sans
+    <div className="min-h-screen overflow-y-auto theme-page flex items-center justify-center p-4 font-sans
                     bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50
                     dark:from-slate-950 dark:via-slate-900 dark:to-slate-800">
       <motion.div

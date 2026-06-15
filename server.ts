@@ -6,15 +6,22 @@ import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
 import dotenv from "dotenv";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
-import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
+import { openDb } from './server/db';
+import { runMigrations } from './server/migrations';
+import { migrations } from './server/migrationList';
+import { registerDataRoutes } from './server/routes';
+import { loadProject, saveProject as storeSaveProject } from './server/projectStore';
+import { getDataUrlString } from './server/files';
+import { logActivity } from './server/activity';
+import { getInvoice, getChangeOrder, setChangeOrderStatus } from './server/billingStore';
+import { getIssue, markIssueSent } from './server/issueStore';
 
 dotenv.config();
 
@@ -22,56 +29,6 @@ const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "app.db");
 
 let db: Database.Database;
-
-// Every file a project owns lives in the images table, keyed by an id that the
-// project JSON points at. Walk those references so storage usage can attribute
-// image bytes back to the project that uses them.
-function collectProjectImageIds(project: any): string[] {
-  const ids = new Set<string>();
-  const add = (v: any) => { if (typeof v === 'string' && v) ids.add(v); };
-  for (const p of project?.pages || []) {
-    add(p.imageId);
-    add(p.thumbnailId);
-    add(p.sourcePdfFileId);
-  }
-  for (const p of project?.printouts || []) add(p.fileId);
-  add(project?.proposalFileId);
-  const emails = [...(project?.email ? [project.email] : []), ...(project?.emails || [])];
-  for (const e of emails) for (const aid of e?.attachmentIds || []) add(aid);
-  return [...ids];
-}
-
-// Conservative reference collector for orphan detection: walks every JSON blob
-// (projects, bids, checklists, notes) and records every string value, plus any
-// id embedded in an /api/images/:id or /api/files/:id URL. An image is only an
-// orphan if its id appears in none of these, so in-use files are never flagged.
-function collectAllReferencedImageIds(): Set<string> {
-  const referenced = new Set<string>();
-  const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
-  const addString = (s: string) => {
-    referenced.add(s);
-    let m: RegExpExecArray | null;
-    urlRe.lastIndex = 0;
-    while ((m = urlRe.exec(s)) !== null) {
-      try { referenced.add(decodeURIComponent(m[1])); } catch { referenced.add(m[1]); }
-    }
-  };
-  const walk = (v: any) => {
-    if (v == null) return;
-    if (typeof v === 'string') { addString(v); return; }
-    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
-    if (typeof v === 'object') { for (const k in v) walk(v[k]); return; }
-  };
-  for (const table of ['projects', 'bids', 'checklists', 'notes']) {
-    let rows: { data: string }[] = [];
-    try { rows = db.prepare(`SELECT data FROM ${table}`).all() as { data: string }[]; } catch { continue; }
-    for (const r of rows) {
-      if (!r.data) continue;
-      try { walk(JSON.parse(r.data)); } catch { addString(r.data); }
-    }
-  }
-  return referenced;
-}
 
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -109,85 +66,8 @@ function initDb() {
       process.exit(1);
     }
 
-    db = new Database(DB_FILE);
-    
-    // Use DELETE journal mode instead of WAL to prevent issues with Unraid's FUSE filesystem (/mnt/user)
-    // WAL mode requires mmap which can fail on network shares or FUSE mounts
-    db.pragma('journal_mode = DELETE');
-    
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        data TEXT,
-        createdAt INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS images (
-        id TEXT PRIMARY KEY,
-        data TEXT
-      );
-      CREATE TABLE IF NOT EXISTS templates (
-        id TEXT PRIMARY KEY,
-        data TEXT
-      );
-      CREATE TABLE IF NOT EXISTS bids (
-        id TEXT PRIMARY KEY,
-        data TEXT,
-        createdAt INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT,
-        role TEXT
-      );
-      CREATE TABLE IF NOT EXISTS notes (
-        id TEXT PRIMARY KEY,
-        projectId TEXT,
-        data TEXT,
-        createdAt INTEGER,
-        updatedAt INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      );
-      CREATE TABLE IF NOT EXISTS user_preferences (
-        userId TEXT NOT NULL,
-        key    TEXT NOT NULL,
-        value  TEXT,
-        UNIQUE(userId, key)
-      );
-      CREATE TABLE IF NOT EXISTS shares (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        resourceId TEXT NOT NULL,
-        name TEXT,
-        createdAt INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS checklists (
-        id TEXT PRIMARY KEY,
-        data TEXT,
-        createdAt INTEGER
-      );
-      CREATE TABLE IF NOT EXISTS email_accounts (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        createdAt INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS time_entries (
-        id TEXT PRIMARY KEY,
-        userId TEXT NOT NULL,
-        projectId TEXT,
-        clockIn INTEGER NOT NULL,
-        clockOut INTEGER,
-        description TEXT,
-        createdAt INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_time_entries_userId ON time_entries (userId);
-      CREATE INDEX IF NOT EXISTS idx_notes_projectId ON notes (projectId);
-      CREATE INDEX IF NOT EXISTS idx_projects_createdAt ON projects (createdAt);
-      CREATE INDEX IF NOT EXISTS idx_bids_createdAt ON bids (createdAt);
-    `);
+    db = openDb(DB_FILE);
+    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true });
 
     // Initialize default settings
     const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };
@@ -203,8 +83,6 @@ function initDb() {
         'admin-id-123', 'admin', hash, 'admin'
       );
     }
-
-    migrateOldData();
   } catch (error) {
     console.error(`\n================================================================`);
     console.error(`❌ FATAL ERROR: Failed to initialize SQLite database at ${DB_FILE}`);
@@ -214,64 +92,7 @@ function initDb() {
   }
 }
 
-function migrateOldData() {
-  const PROJECTS_DIR = path.join(DATA_DIR, "projects");
-  const IMAGES_DIR = path.join(DATA_DIR, "images");
-  const TEMPLATES_FILE = path.join(DATA_DIR, "templates.json");
-
-  // Migrate projects
-  try {
-    if (fsSync.existsSync(PROJECTS_DIR)) {
-      const files = fsSync.readdirSync(PROJECTS_DIR);
-      const insertProject = db.prepare('INSERT OR IGNORE INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
-      for (const file of files) {
-        if (file.endsWith(".json")) {
-          const data = fsSync.readFileSync(path.join(PROJECTS_DIR, file), "utf-8");
-          const project = JSON.parse(data);
-          insertProject.run(project.id, data, project.createdAt || Date.now());
-        }
-      }
-      fsSync.renameSync(PROJECTS_DIR, path.join(DATA_DIR, "projects_migrated"));
-    }
-  } catch (e) {
-    console.error("Failed to migrate projects", e);
-  }
-
-  // Migrate images
-  try {
-    if (fsSync.existsSync(IMAGES_DIR)) {
-      const files = fsSync.readdirSync(IMAGES_DIR);
-      const insertImage = db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)');
-      for (const file of files) {
-        if (file.endsWith(".txt")) {
-          const data = fsSync.readFileSync(path.join(IMAGES_DIR, file), "utf-8");
-          const id = file.replace('.txt', '');
-          insertImage.run(id, data);
-        }
-      }
-      fsSync.renameSync(IMAGES_DIR, path.join(DATA_DIR, "images_migrated"));
-    }
-  } catch (e) {
-    console.error("Failed to migrate images", e);
-  }
-
-  // Migrate templates
-  try {
-    if (fsSync.existsSync(TEMPLATES_FILE)) {
-      const data = fsSync.readFileSync(TEMPLATES_FILE, "utf-8");
-      const templates = JSON.parse(data);
-      const insertTemplate = db.prepare('INSERT OR IGNORE INTO templates (id, data) VALUES (?, ?)');
-      for (const t of templates) {
-        insertTemplate.run(t.id, JSON.stringify(t));
-      }
-      fsSync.renameSync(TEMPLATES_FILE, path.join(DATA_DIR, "templates_migrated.json"));
-    }
-  } catch (e) {
-    console.error("Failed to migrate templates", e);
-  }
-}
-
-const users: Record<string, { id: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string }> = {};
+const users: Record<string, { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number }> = {};
 
 async function startServer() {
   await ensureDirs();
@@ -338,9 +159,25 @@ async function startServer() {
     next();
   };
 
+  registerDataRoutes(app, {
+    db,
+    dataDir: DATA_DIR,
+    dbFile: DB_FILE,
+    authenticateToken,
+    requireAdmin,
+    verifyToken: (token: string) => {
+      try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+    },
+  });
+
+  // The Playwright e2e harness logs in many times per run (per-worker session +
+  // a few explicit logins per spec), which would trip a 10/min cap. Detect the
+  // e2e store (set via STORAGE_PATH=.e2e-data in playwright.config.ts) and lift
+  // the cap there. Production behavior is unchanged.
+  const isE2E = (process.env.STORAGE_PATH ?? '').includes('.e2e-data');
   const loginLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 10,
+    max: isE2E ? 100000 : 10,
     message: { error: 'Too many login attempts. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -428,239 +265,6 @@ async function startServer() {
     }
   });
 
-  // API Routes
-  app.get("/api/projects", authenticateToken, (req, res) => {
-    try {
-      const stmt = db.prepare('SELECT data FROM projects ORDER BY createdAt DESC');
-      const rows = stmt.all() as { data: string }[];
-      const projects = rows.map(row => JSON.parse(row.data));
-      res.json(projects);
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-      res.status(500).json({ error: "Failed to fetch projects" });
-    }
-  });
-
-  app.get("/api/projects/:id", authenticateToken, (req, res) => {
-    try {
-      const stmt = db.prepare('SELECT data FROM projects WHERE id = ?');
-      const row = stmt.get(req.params.id) as { data: string } | undefined;
-      if (!row) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-      res.json(JSON.parse(row.data));
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch project" });
-    }
-  });
-
-  app.post("/api/projects", authenticateToken, (req, res) => {
-    try {
-      const project = req.body;
-      const stmt = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
-      stmt.run(project.id, JSON.stringify(project), project.createdAt || Date.now());
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error creating project:", error);
-      res.status(500).json({ error: "Failed to create project" });
-    }
-  });
-
-  app.put("/api/projects/:id", authenticateToken, (req, res) => {
-    try {
-      const project = req.body;
-      
-      try {
-        const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
-        const row = stmtGet.get(req.params.id) as { data: string } | undefined;
-        if (row) {
-          const oldProject = JSON.parse(row.data);
-          
-          const newImageIds = new Set([
-            ...(project.pages?.map((p: any) => p.imageId) || []),
-            ...(project.printouts?.map((p: any) => p.fileId) || [])
-          ]);
-
-          const oldImageIds = [
-            ...(oldProject.pages?.map((p: any) => p.imageId) || []),
-            ...(oldProject.printouts?.map((p: any) => p.fileId) || [])
-          ];
-
-          const removedIds = oldImageIds.filter((id: string) => id && !newImageIds.has(id));
-          if (removedIds.length > 0) {
-            const placeholders = removedIds.map(() => '?').join(', ');
-            db.prepare(`DELETE FROM images WHERE id IN (${placeholders})`).run(...removedIds);
-          }
-        }
-      } catch (e) {
-        // Ignore if old project doesn't exist or error occurs during cleanup
-      }
-
-      const stmt = db.prepare('UPDATE projects SET data = ? WHERE id = ?');
-      const result = stmt.run(JSON.stringify(project), req.params.id);
-      
-      if (result.changes === 0) {
-        // If it didn't exist, insert it
-        const insertStmt = db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)');
-        insertStmt.run(project.id, JSON.stringify(project), project.createdAt || Date.now());
-      }
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error updating project:", error);
-      res.status(500).json({ error: "Failed to update project" });
-    }
-  });
-
-  app.delete("/api/projects/:id", authenticateToken, (req, res) => {
-    try {
-      const stmtGet = db.prepare('SELECT data FROM projects WHERE id = ?');
-      const row = stmtGet.get(req.params.id) as { data: string } | undefined;
-
-      db.transaction(() => {
-        if (row) {
-          try {
-            const project = JSON.parse(row.data);
-            const imageIds = [
-              ...(project.pages?.map((p: any) => p.imageId) || []),
-              ...(project.printouts?.map((p: any) => p.fileId) || [])
-            ].filter(Boolean);
-
-            if (imageIds.length > 0) {
-              const placeholders = imageIds.map(() => '?').join(', ');
-              db.prepare(`DELETE FROM images WHERE id IN (${placeholders})`).run(...imageIds);
-            }
-          } catch (e) {
-            // Ignore parse errors during cleanup
-          }
-        }
-        db.prepare('DELETE FROM projects WHERE id = ?').run(req.params.id);
-      })();
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting project:", error);
-      res.status(500).json({ error: "Failed to delete project" });
-    }
-  });
-
-  app.get("/api/projects/:id/storage", authenticateToken, (req, res) => {
-    try {
-      const row = db.prepare('SELECT data FROM projects WHERE id = ?').get(req.params.id) as { data: string } | undefined;
-      if (!row) {
-        return res.status(404).json({ error: "Project not found" });
-      }
-      let project: any = {};
-      try { project = JSON.parse(row.data); } catch { /* ignore */ }
-
-      const dataBytes = Buffer.byteLength(row.data, 'utf8');
-
-      const ids = collectProjectImageIds(project);
-      let imageBytes = 0;
-      let imageCount = 0;
-      if (ids.length > 0) {
-        const placeholders = ids.map(() => '?').join(', ');
-        const r = db.prepare(
-          `SELECT COUNT(*) as count, COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM images WHERE id IN (${placeholders})`
-        ).get(...ids) as { count: number; bytes: number };
-        imageBytes = r.bytes;
-        imageCount = r.count;
-      }
-
-      const noteRow = db.prepare(
-        'SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM notes WHERE projectId = ?'
-      ).get(req.params.id) as { bytes: number };
-
-      res.json({
-        totalBytes: dataBytes + imageBytes + noteRow.bytes,
-        dataBytes,
-        imageBytes,
-        noteBytes: noteRow.bytes,
-        imageCount,
-      });
-    } catch (error) {
-      console.error("Error computing project storage:", error);
-      res.status(500).json({ error: "Failed to compute project storage" });
-    }
-  });
-
-  app.get("/api/images/:id", authenticateToken, (req, res) => {
-    try {
-      const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
-      const row = stmt.get(req.params.id) as { data: string } | undefined;
-      if (!row) {
-        return res.status(404).json({ error: "Image not found" });
-      }
-      res.json({ data: row.data });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch image" });
-    }
-  });
-
-  app.get("/api/images/:id/raw", (req, res) => {
-    try {
-      const stmt = db.prepare('SELECT data FROM images WHERE id = ?');
-      const row = stmt.get(req.params.id) as { data: string } | undefined;
-      if (!row || !row.data) {
-        return res.status(404).send("Image not found");
-      }
-      
-      const matches = row.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
-      if (!matches || matches.length !== 3) {
-        return res.status(400).send("Invalid image data");
-      }
-      
-      const contentType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      
-      res.set('Content-Type', contentType);
-      res.set('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-      res.send(buffer);
-    } catch (error) {
-      res.status(500).send("Failed to fetch image");
-    }
-  });
-
-  app.post("/api/images", authenticateToken, (req, res) => {
-    try {
-      const { id, data } = req.body;
-      const stmt = db.prepare('INSERT OR REPLACE INTO images (id, data) VALUES (?, ?)');
-      stmt.run(id, data);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error saving image:", error);
-      res.status(500).json({ error: "Failed to save image" });
-    }
-  });
-
-  // Raw-binary upload for files that would otherwise need to be base64-encoded
-  // and JSON-stringified in the browser (e.g. source PDFs in the vector
-  // pipeline). The client streams the Blob directly; we base64-encode here so
-  // the storage format and the existing /api/images/:id/raw read path remain
-  // identical to the JSON-based saveImage path.
-  app.post(
-    "/api/files/:id",
-    express.raw({ limit: "100mb", type: () => true }),
-    authenticateToken,
-    (req, res) => {
-      try {
-        const id = req.params.id;
-        const body = req.body as Buffer;
-        if (!Buffer.isBuffer(body) || body.length === 0) {
-          return res.status(400).json({ error: "Empty body" });
-        }
-        const contentType = (req.get("Content-Type") || "application/octet-stream").split(";")[0].trim();
-        const dataUrl = `data:${contentType};base64,${body.toString("base64")}`;
-        const stmt = db.prepare("INSERT OR REPLACE INTO images (id, data) VALUES (?, ?)");
-        stmt.run(id, dataUrl);
-        res.json({ success: true });
-      } catch (error) {
-        console.error("Error saving file:", error);
-        res.status(500).json({ error: "Failed to save file" });
-      }
-    }
-  );
-
   app.get("/api/templates", authenticateToken, (req, res) => {
     try {
       const stmt = db.prepare('SELECT data FROM templates');
@@ -692,54 +296,6 @@ async function startServer() {
     } catch (error) {
       console.error("Error deleting template:", error);
       res.status(500).json({ error: "Failed to delete template" });
-    }
-  });
-
-  // Bids API
-  app.get("/api/bids", authenticateToken, (req, res) => {
-    try {
-      const stmt = db.prepare('SELECT data FROM bids ORDER BY createdAt DESC');
-      const rows = stmt.all() as { data: string }[];
-      const bids = rows.map(row => JSON.parse(row.data));
-      res.json(bids);
-    } catch (error) {
-      console.error("Error fetching bids:", error);
-      res.status(500).json({ error: "Failed to fetch bids" });
-    }
-  });
-
-  app.post("/api/bids", authenticateToken, (req, res) => {
-    try {
-      const bid = req.body;
-      const stmt = db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)');
-      stmt.run(bid.id, JSON.stringify(bid), bid.createdAt || Date.now());
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error saving bid:", error);
-      res.status(500).json({ error: "Failed to save bid" });
-    }
-  });
-
-  app.put("/api/bids/:id", authenticateToken, (req, res) => {
-    try {
-      const bid = req.body;
-      const stmt = db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)');
-      stmt.run(bid.id, JSON.stringify(bid), bid.createdAt || Date.now());
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error updating bid:", error);
-      res.status(500).json({ error: "Failed to update bid" });
-    }
-  });
-
-  app.delete("/api/bids/:id", authenticateToken, (req, res) => {
-    try {
-      const stmt = db.prepare('DELETE FROM bids WHERE id = ?');
-      stmt.run(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting bid:", error);
-      res.status(500).json({ error: "Failed to delete bid" });
     }
   });
 
@@ -812,171 +368,6 @@ async function startServer() {
     }
   });
 
-  // Storage usage — admin-only overview of how much disk space the app's data
-  // occupies, broken down by table and attributed per project.
-  app.get("/api/storage/stats", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      let databaseBytes = 0;
-      try { databaseBytes = fsSync.statSync(DB_FILE).size; } catch { /* ignore */ }
-
-      const sumLen = (table: string): number => {
-        try {
-          const r = db.prepare(
-            `SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) as bytes FROM ${table}`
-          ).get() as { bytes: number };
-          return r.bytes;
-        } catch { return 0; }
-      };
-      const breakdown = {
-        images: sumLen('images'),
-        projects: sumLen('projects'),
-        templates: sumLen('templates'),
-        bids: sumLen('bids'),
-        notes: sumLen('notes'),
-        checklists: sumLen('checklists'),
-      };
-
-      const imageCount = (db.prepare('SELECT COUNT(*) as c FROM images').get() as { c: number }).c;
-
-      // id -> byte length, so each project's referenced images can be summed
-      // without pulling the (potentially huge) base64 payloads into memory.
-      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
-      const imgLen = new Map<string, number>();
-      for (const r of imgRows) imgLen.set(r.id, r.len);
-
-      const projRows = db.prepare('SELECT id, data FROM projects').all() as { id: string; data: string }[];
-      const projects = projRows.map(row => {
-        let project: any = {};
-        try { project = JSON.parse(row.data); } catch { /* ignore */ }
-        const dataBytes = Buffer.byteLength(row.data, 'utf8');
-        let imageBytes = 0;
-        for (const id of collectProjectImageIds(project)) imageBytes += imgLen.get(id) || 0;
-        return { id: row.id, name: project.name || 'Untitled', totalBytes: dataBytes + imageBytes };
-      }).sort((a, b) => b.totalBytes - a.totalBytes);
-
-      res.json({ databaseBytes, breakdown, imageCount, projectCount: projRows.length, projects });
-    } catch (error) {
-      console.error("Error computing storage stats:", error);
-      res.status(500).json({ error: "Failed to compute storage stats" });
-    }
-  });
-
-  // Orphaned files: rows in the images table that nothing references anymore
-  // (e.g. left behind by failed uploads or superseded plan-set revisions).
-  app.get("/api/storage/orphans", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const referenced = collectAllReferencedImageIds();
-      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
-      let count = 0;
-      let bytes = 0;
-      for (const r of imgRows) {
-        if (!referenced.has(r.id)) { count++; bytes += r.len; }
-      }
-      res.json({ count, bytes });
-    } catch (error) {
-      console.error("Error finding orphaned files:", error);
-      res.status(500).json({ error: "Failed to find orphaned files" });
-    }
-  });
-
-  app.post("/api/storage/orphans/cleanup", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      // Re-derive the orphan set here rather than trusting the client, so a
-      // file that became referenced since the GET can't be deleted out from
-      // under a project.
-      const referenced = collectAllReferencedImageIds();
-      const imgRows = db.prepare('SELECT id, length(CAST(data AS BLOB)) as len FROM images').all() as { id: string; len: number }[];
-      const orphans = imgRows.filter(r => !referenced.has(r.id));
-      const bytesFreed = orphans.reduce((a, r) => a + r.len, 0);
-
-      db.transaction(() => {
-        const stmt = db.prepare('DELETE FROM images WHERE id = ?');
-        for (const o of orphans) stmt.run(o.id);
-      })();
-
-      res.json({ deleted: orphans.length, bytesFreed });
-    } catch (error) {
-      console.error("Error cleaning up orphaned files:", error);
-      res.status(500).json({ error: "Failed to clean up orphaned files" });
-    }
-  });
-
-  // Cross-project search powering the command palette. Scans projects (name /
-  // contractor / address), their pages (sheet number / name / description /
-  // extracted text), takeoffs, and bids. Results are capped per category so a
-  // broad query stays responsive.
-  app.get("/api/search", authenticateToken, (req, res) => {
-    try {
-      const q = String(req.query.q || '').trim().toLowerCase();
-      if (q.length < 2) return res.json({ results: [] });
-
-      const results: any[] = [];
-      const projRows = db.prepare('SELECT data FROM projects').all() as { data: string }[];
-      const projects = projRows
-        .map(r => { try { return JSON.parse(r.data); } catch { return null; } })
-        .filter(Boolean) as any[];
-
-      let projHits = 0;
-      for (const p of projects) {
-        if (projHits >= 6) break;
-        const hay = [p.name, p.contractor, p.address].filter(Boolean).join(' ').toLowerCase();
-        if (hay.includes(q)) {
-          results.push({ type: 'project', id: `project:${p.id}`, title: p.name || 'Untitled', subtitle: p.contractor || p.address || '', projectId: p.id });
-          projHits++;
-        }
-      }
-
-      let pageHits = 0;
-      pageLoop: for (const p of projects) {
-        for (const pg of p.pages || []) {
-          if (pageHits >= 12) break pageLoop;
-          const num = (pg.pageNumber || '').toString();
-          const text = [num, pg.name, pg.description, pg.extractedText].filter(Boolean).join(' ').toLowerCase();
-          if (text.includes(q)) {
-            results.push({
-              type: 'page',
-              id: `page:${p.id}:${pg.id}`,
-              title: [num, pg.name].filter(Boolean).join(' — ') || 'Page',
-              subtitle: p.name || 'Untitled',
-              projectId: p.id,
-              pageId: pg.id,
-            });
-            pageHits++;
-          }
-        }
-      }
-
-      let takeoffHits = 0;
-      takeoffLoop: for (const p of projects) {
-        for (const t of p.takeoffs || []) {
-          if (takeoffHits >= 6) break takeoffLoop;
-          if ((t.name || '').toLowerCase().includes(q)) {
-            results.push({ type: 'takeoff', id: `takeoff:${p.id}:${t.id}`, title: t.name, subtitle: p.name || 'Untitled', projectId: p.id });
-            takeoffHits++;
-          }
-        }
-      }
-
-      const bidRows = db.prepare('SELECT data FROM bids').all() as { data: string }[];
-      let bidHits = 0;
-      for (const r of bidRows) {
-        if (bidHits >= 6) break;
-        let b: any;
-        try { b = JSON.parse(r.data); } catch { continue; }
-        const hay = [b.name, b.contractor, b.address].filter(Boolean).join(' ').toLowerCase();
-        if (hay.includes(q)) {
-          results.push({ type: 'bid', id: `bid:${b.id}`, title: b.name || b.contractor || 'Bid', subtitle: b.contractor || '', bidId: b.id });
-          bidHits++;
-        }
-      }
-
-      res.json({ results });
-    } catch (error) {
-      console.error("Error running search:", error);
-      res.status(500).json({ error: "Search failed" });
-    }
-  });
-
   // ── Sharing API ───────────────────────────────────────────────────────────────
 
   // Public: get share info (does not expose internal resourceId)
@@ -1011,43 +402,6 @@ async function startServer() {
     }
   });
 
-  // Public: serve image at a specific index for a 'pages' share
-  app.get('/api/share/:shareId/image/:index', (req, res) => {
-    try {
-      const share = db.prepare('SELECT type, resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { type: string; resourceId: string } | undefined;
-      if (!share || share.type !== 'pages') return res.status(404).send('Share not found');
-      const pages = JSON.parse(share.resourceId) as { imageId: string; name: string; pageNumber?: string }[];
-      const idx = parseInt(req.params.index, 10);
-      if (isNaN(idx) || idx < 0 || idx >= pages.length) return res.status(404).send('Page not found');
-      const img = db.prepare('SELECT data FROM images WHERE id = ?').get(pages[idx].imageId) as { data: string } | undefined;
-      if (!img || !img.data) return res.status(404).send('File not found');
-      const matches = img.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
-      if (!matches) return res.status(400).send('Invalid data');
-      res.set('Content-Type', matches[1]);
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.send(Buffer.from(matches[2], 'base64'));
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
-
-  // Public: serve the shared file directly
-  app.get('/api/share/:shareId', (req, res) => {
-    try {
-      const share = db.prepare('SELECT resourceId FROM shares WHERE id = ?').get(req.params.shareId) as { resourceId: string } | undefined;
-      if (!share) return res.status(404).send('Share not found');
-      const img = db.prepare('SELECT data FROM images WHERE id = ?').get(share.resourceId) as { data: string } | undefined;
-      if (!img || !img.data) return res.status(404).send('File not found');
-      const matches = img.data.match(/^data:([A-Za-z-+\/]+)(?:;[^;,]+)*;base64,(.+)$/);
-      if (!matches) return res.status(400).send('Invalid data');
-      res.set('Content-Type', matches[1]);
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.send(Buffer.from(matches[2], 'base64'));
-    } catch {
-      res.status(500).send('Server error');
-    }
-  });
-
   // Authenticated: create a share
   app.post('/api/shares', authenticateToken, (req, res) => {
     try {
@@ -1074,38 +428,8 @@ async function startServer() {
     }
   });
 
-  // Checklists API
-  app.get("/api/checklists", authenticateToken, (req, res) => {
-    try {
-      const rows = db.prepare('SELECT data FROM checklists ORDER BY createdAt ASC').all() as { data: string }[];
-      res.json(rows.map(r => JSON.parse(r.data)));
-    } catch (error) {
-      console.error("Error fetching checklists:", error);
-      res.status(500).json({ error: "Failed to fetch checklists" });
-    }
-  });
-
-  app.put("/api/checklists/:id", authenticateToken, (req, res) => {
-    try {
-      const checklist = req.body;
-      const stmt = db.prepare('INSERT OR REPLACE INTO checklists (id, data, createdAt) VALUES (?, ?, ?)');
-      stmt.run(checklist.id, JSON.stringify(checklist), checklist.createdAt || Date.now());
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error saving checklist:", error);
-      res.status(500).json({ error: "Failed to save checklist" });
-    }
-  });
-
-  app.delete("/api/checklists/:id", authenticateToken, (req, res) => {
-    try {
-      db.prepare('DELETE FROM checklists WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting checklist:", error);
-      res.status(500).json({ error: "Failed to delete checklist" });
-    }
-  });
+  // Checklists API removed — feature moved to /api/tasks (collaborative Tasks page).
+  // The `checklists` table is retained as a data backup (see migration 11); do not drop it.
 
   // User Preferences API (per-user, cross-browser)
   app.get("/api/user-preferences", authenticateToken, (req, res) => {
@@ -1151,6 +475,37 @@ async function startServer() {
     });
   }
 
+  // Sends a stored file as a PDF attachment via SMTP. Returns nothing; throws on
+  // misconfiguration/failure. Shared by proposal + invoice + (later) issue sends.
+  async function sendProjectEmail(opts: {
+    to: string;
+    subject: string;
+    text: string;
+    fileId: string;
+    attachmentName: string;
+    inReplyTo?: string;
+  }): Promise<void> {
+    const transport = buildTransporter();
+    if (!transport) throw new Error('SMTP not configured');
+    const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+    const smtpCfg: Record<string, string> = {};
+    smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
+    const dataUrl = getDataUrlString(db, DATA_DIR, opts.fileId);
+    if (!dataUrl) throw new Error('Attachment file not found');
+    const base64Data = dataUrl.split(',')[1];
+    const mimeType = dataUrl.split(';')[0].replace('data:', '');
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    const mailOptions: nodemailer.SendMailOptions = {
+      from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+      to: opts.to,
+      subject: opts.subject,
+      text: opts.text,
+      attachments: [{ filename: opts.attachmentName, content: fileBuffer, contentType: mimeType }],
+    };
+    if (opts.inReplyTo) { mailOptions.inReplyTo = opts.inReplyTo; mailOptions.references = opts.inReplyTo; }
+    await transport.sendMail(mailOptions);
+  }
+
   // SMTP settings (stored in settings table under smtp.* keys)
   app.get("/api/email/smtp", authenticateToken, requireAdmin, (req, res) => {
     try {
@@ -1185,351 +540,119 @@ async function startServer() {
     }
   });
 
-  // IMAP account management
-  app.get("/api/email/accounts", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const rows = db.prepare('SELECT data FROM email_accounts ORDER BY createdAt ASC').all() as { data: string }[];
-      // Mask passwords before sending to client
-      const accounts = rows.map(r => {
-        const a = JSON.parse(r.data);
-        return { ...a, password: a.password ? '••••••••' : '' };
-      });
-      res.json(accounts);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch email accounts" });
-    }
-  });
-
-  app.post("/api/email/accounts", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const account = { ...req.body, id: crypto.randomUUID(), createdAt: Date.now() };
-      db.prepare('INSERT INTO email_accounts (id, data, createdAt) VALUES (?, ?, ?)').run(account.id, JSON.stringify(account), account.createdAt);
-      res.json({ ...account, password: '••••••••' });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to save email account" });
-    }
-  });
-
-  app.put("/api/email/accounts/:id", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      const existing = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
-      if (!existing) return res.status(404).json({ error: "Account not found" });
-      const old = JSON.parse(existing.data);
-      // If password field is the masked value, keep the real one
-      const updated = { ...old, ...req.body, id: req.params.id };
-      if (req.body.password === '••••••••') updated.password = old.password;
-      db.prepare('INSERT OR REPLACE INTO email_accounts (id, data, createdAt) VALUES (?, ?, ?)').run(updated.id, JSON.stringify(updated), updated.createdAt);
-      res.json({ ...updated, password: '••••••••' });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to update email account" });
-    }
-  });
-
-  app.delete("/api/email/accounts/:id", authenticateToken, requireAdmin, (req, res) => {
-    try {
-      db.prepare('DELETE FROM email_accounts WHERE id = ?').run(req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete email account" });
-    }
-  });
-
-  app.post("/api/email/test-imap/:id", authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const row = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
-      if (!row) return res.status(404).json({ error: "Account not found" });
-      const acct = JSON.parse(row.data);
-      const client = new ImapFlow({ host: acct.host, port: acct.port, secure: acct.secure, auth: { user: acct.username, pass: acct.password }, logger: false });
-      await client.connect();
-      await client.logout();
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || "IMAP connection failed" });
-    }
-  });
-
-  // Strip Re:/Fwd:/AW: etc. to get the base subject for thread matching
-  function normalizeSubject(subject: string): string {
-    return subject
-      .replace(/^(\s*(re|fw|fwd|aw|antw|sv|vs|ref)(\[\d+\])?[:\s]+)+/gi, '')
-      .trim()
-      .toLowerCase();
-  }
-
-  // Poll a single IMAP account and create/update bid thread entries for new messages
-  async function pollImapAccount(accountId: string): Promise<number> {
-    const row = db.prepare('SELECT data FROM email_accounts WHERE id = ?').get(accountId) as { data: string } | undefined;
-    if (!row) return 0;
-    const acct = JSON.parse(row.data);
-    let created = 0;
-    const client = new ImapFlow({ host: acct.host, port: acct.port, secure: acct.secure, auth: { user: acct.username, pass: acct.password }, logger: false });
-    try {
-      await client.connect();
-      const lock = await client.getMailboxLock(acct.folder || 'INBOX');
-      try {
-        // Build dedup set from ALL messageIds across all bids (including thread emails)
-        const allBidRows = db.prepare('SELECT id, data FROM bids').all() as { id: string; data: string }[];
-        const knownIds = new Set<string>();
-        for (const row of allBidRows) {
-          try {
-            const b = JSON.parse(row.data);
-            if (b.email?.messageId) knownIds.add(b.email.messageId);
-            if (Array.isArray(b.emails)) {
-              for (const e of b.emails) { if (e.messageId) knownIds.add(e.messageId); }
-            }
-          } catch {}
-        }
-
-        // Pass 1: fetch envelopes only to identify new messages (no body download)
-        const newUids: number[] = [];
-        for await (const msg of client.fetch('1:*', { envelope: true })) {
-          const mid = (msg.envelope as any)?.messageId as string | undefined;
-          if (!mid || !knownIds.has(mid)) newUids.push(msg.uid);
-        }
-
-        // Pass 2: fetch full source only for new messages; thread by normalized subject
-        for (const uid of newUids) {
-          try {
-            const msg = await client.fetchOne(String(uid), { envelope: true, source: true }, { uid: true });
-            if (!msg) continue;
-            const parsed = await simpleParser(msg.source);
-            const from = parsed.from?.value?.[0];
-            const messageId = parsed.messageId || undefined;
-            if (messageId && knownIds.has(messageId)) continue;
-
-            const attachmentIds: string[] = [];
-            for (const att of parsed.attachments) {
-              const fileId = crypto.randomUUID();
-              const mimePrefix = `data:${att.contentType};base64,`;
-              const b64 = att.content.toString('base64');
-              db.prepare('INSERT OR IGNORE INTO images (id, data) VALUES (?, ?)').run(fileId, mimePrefix + b64);
-              attachmentIds.push(fileId);
-            }
-
-            const newEmail = {
-              messageId,
-              from: from?.address || '',
-              fromName: from?.name || '',
-              subject: parsed.subject || '(no subject)',
-              body: parsed.text || '',
-              htmlBody: typeof parsed.html === 'string' ? parsed.html : undefined,
-              receivedAt: parsed.date?.getTime() || Date.now(),
-              attachmentIds: attachmentIds.length ? attachmentIds : undefined,
-              accountId,
-            };
-
-            // Find an existing bid thread with the same normalized subject
-            const normSubject = normalizeSubject(parsed.subject || '');
-            const matchingRow = normSubject
-              ? allBidRows.find(r => {
-                  try { return normalizeSubject(JSON.parse(r.data).name || '') === normSubject; } catch { return false; }
-                })
-              : undefined;
-
-            if (matchingRow) {
-              // Append to existing thread
-              const existingBid = JSON.parse(matchingRow.data);
-              const threadEmails: typeof newEmail[] = Array.isArray(existingBid.emails)
-                ? existingBid.emails
-                : (existingBid.email ? [existingBid.email] : []);
-              threadEmails.push(newEmail);
-              threadEmails.sort((a, b) => (a.receivedAt || 0) - (b.receivedAt || 0));
-              existingBid.emails = threadEmails;
-              existingBid.email = threadEmails[threadEmails.length - 1]; // latest is primary
-              db.prepare('UPDATE bids SET data = ? WHERE id = ?').run(JSON.stringify(existingBid), matchingRow.id);
-              // Update allBidRows cache so subsequent messages in same poll find the updated data
-              matchingRow.data = JSON.stringify(existingBid);
-            } else {
-              // Create a new bid entry
-              const bid = {
-                id: crypto.randomUUID(),
-                name: parsed.subject || '(no subject)',
-                contractor: from?.name || from?.address || 'Unknown',
-                address: '',
-                decision: 'new',
-                createdAt: Date.now(),
-                email: newEmail,
-                emails: [newEmail],
-              };
-              db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
-              allBidRows.push({ id: bid.id, data: JSON.stringify(bid) });
-              created++;
-            }
-
-            await client.messageFlagsAdd({ uid }, ['\\Seen'], { uid: true });
-            if (messageId) knownIds.add(messageId);
-          } catch (msgErr) {
-            console.error(`Failed to process message UID ${uid} for account ${accountId}:`, msgErr);
-          }
-        }
-      } finally {
-        lock.release();
-      }
-      await client.logout();
-    } catch (err) {
-      console.error(`IMAP poll error for account ${accountId}:`, err);
-      try { await client.logout(); } catch {}
-    }
-    return created;
-  }
-
-  app.post("/api/email/poll", authenticateToken, async (req, res) => {
-    const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
-    let total = 0;
-    for (const a of accounts) {
-      try { total += await pollImapAccount(a.id); } catch { /* already logged inside pollImapAccount */ }
-    }
-    res.json({ success: true, imported: total });
-  });
-
-  // Manual email import (paste/upload)
-  app.post("/api/bids/import-email", authenticateToken, (req, res) => {
-    try {
-      const { from, fromName, subject, body, htmlBody } = req.body;
-      const bid = {
-        id: crypto.randomUUID(),
-        name: subject || '(no subject)',
-        contractor: fromName || from || 'Unknown',
-        address: '',
-        decision: 'new',
-        createdAt: Date.now(),
-        email: {
-          from: from || '',
-          fromName: fromName || '',
-          subject: subject || '(no subject)',
-          body: body || '',
-          htmlBody: htmlBody || undefined,
-          receivedAt: Date.now(),
-        },
-      };
-      db.prepare('INSERT INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(bid.id, JSON.stringify(bid), bid.createdAt);
-      res.json(bid);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to import email" });
-    }
-  });
-
-  // Send proposal via email (reply to original invitation)
-  app.post("/api/bids/:id/send-proposal", authenticateToken, async (req, res) => {
-    try {
-      const row = db.prepare('SELECT data FROM bids WHERE id = ?').get(req.params.id) as { data: string } | undefined;
-      if (!row) return res.status(404).json({ error: "Bid not found" });
-      const bid = JSON.parse(row.data);
-
-      const { fileId, message } = req.body as { fileId: string; message?: string };
-      const fileRow = db.prepare('SELECT data FROM images WHERE id = ?').get(fileId) as { data: string } | undefined;
-      if (!fileRow) return res.status(404).json({ error: "File not found" });
-
-      const transport = buildTransporter();
-      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
-
-      const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-      const smtpCfg: Record<string, string> = {};
-      smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
-
-      // Decode base64 file
-      const dataUrl = fileRow.data;
-      const base64Data = dataUrl.split(',')[1];
-      const mimeType = dataUrl.split(';')[0].replace('data:', '');
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-
-      const subject = bid.email?.subject ? `Re: ${bid.email.subject}` : 'Proposal';
-      const toAddress = bid.email?.from || '';
-      if (!toAddress) return res.status(400).json({ error: "No recipient address on this bid" });
-
-      const mailOptions: nodemailer.SendMailOptions = {
-        from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
-        to: toAddress,
-        subject,
-        text: message || 'Please find the attached proposal.',
-        attachments: [{ filename: 'proposal.pdf', content: fileBuffer, contentType: mimeType }],
-      };
-      // Thread the reply using In-Reply-To and References headers
-      if (bid.email?.messageId) {
-        mailOptions.inReplyTo = bid.email.messageId;
-        mailOptions.references = bid.email.messageId;
-      }
-
-      await transport.sendMail(mailOptions);
-
-      // Update bid: mark proposal sent
-      const updatedBid = { ...bid, decision: 'proposal_sent', proposalFileId: fileId, proposalSentAt: Date.now() };
-      db.prepare('INSERT OR REPLACE INTO bids (id, data, createdAt) VALUES (?, ?, ?)').run(updatedBid.id, JSON.stringify(updatedBid), updatedBid.createdAt);
-      res.json(updatedBid);
-    } catch (error: any) {
-      console.error("Error sending proposal:", error);
-      res.status(500).json({ error: error.message || "Failed to send proposal" });
-    }
-  });
-
   // Send a proposal as a reply to the email stored on a project
   app.post("/api/projects/:id/send-proposal", authenticateToken, async (req, res) => {
     try {
-      const row = db.prepare('SELECT data FROM projects WHERE id = ?').get(req.params.id) as { data: string } | undefined;
-      if (!row) return res.status(404).json({ error: "Project not found" });
-      const project = JSON.parse(row.data);
+      const project = loadProject(db, req.params.id);
+      if (!project) return res.status(404).json({ error: "Project not found" });
       if (!project.email) return res.status(400).json({ error: "Project has no associated email to reply to" });
 
       const { fileId, message } = req.body as { fileId: string; message?: string };
-      const fileRow = db.prepare('SELECT data FROM images WHERE id = ?').get(fileId) as { data: string } | undefined;
-      if (!fileRow) return res.status(404).json({ error: "File not found" });
-
-      const transport = buildTransporter();
-      if (!transport) return res.status(400).json({ error: "SMTP not configured" });
-
-      const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-      const smtpCfg: Record<string, string> = {};
-      smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
-
-      const dataUrl = fileRow.data;
-      const base64Data = dataUrl.split(',')[1];
-      const mimeType = dataUrl.split(';')[0].replace('data:', '');
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-
-      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
       const toAddress = project.email.from || '';
       if (!toAddress) return res.status(400).json({ error: "No recipient address on this project's email" });
 
-      const mailOptions: nodemailer.SendMailOptions = {
-        from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
+      const subject = project.email.subject ? `Re: ${project.email.subject}` : 'Proposal';
+
+      await sendProjectEmail({
         to: toAddress,
         subject,
         text: message || 'Please find the attached proposal.',
-        attachments: [{ filename: 'proposal.pdf', content: fileBuffer, contentType: mimeType }],
-      };
-      if (project.email.messageId) {
-        mailOptions.inReplyTo = project.email.messageId;
-        mailOptions.references = project.email.messageId;
-      }
+        fileId,
+        attachmentName: 'proposal.pdf',
+        inReplyTo: project.email.messageId || undefined,
+      });
 
-      await transport.sendMail(mailOptions);
+      logActivity(db, {
+        projectId: req.params.id, userId: (req as any).user?.id,
+        type: 'proposal_sent', message: `Proposal emailed for "${project.name ?? 'Untitled'}"`,
+      });
 
-      const updatedProject = { ...project, proposalFileId: fileId, proposalSentAt: Date.now() };
-      db.prepare('INSERT OR REPLACE INTO projects (id, data, createdAt) VALUES (?, ?, ?)').run(updatedProject.id, JSON.stringify(updatedProject), updatedProject.createdAt);
-      res.json(updatedProject);
+      // Reload after the SMTP await so a concurrent edit during the send can't
+      // make the version-checked save fail and strand a sent proposal. With no
+      // await between this load and the save, nothing can interleave.
+      const fresh = loadProject(db, req.params.id) ?? project;
+      const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
+      storeSaveProject(db, req.params.id, updatedProject);
+      res.json(loadProject(db, req.params.id));
     } catch (error: any) {
       console.error("Error sending project proposal:", error);
       res.status(500).json({ error: error.message || "Failed to send proposal" });
     }
   });
 
-  // ── IMAP background poller ──────────────────────────────────────────────────
+  // Send an invoice PDF via SMTP (admin only)
+  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const inv = getInvoice(db, req.params.id);
+      if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await sendProjectEmail({
+        to,
+        subject: `Invoice ${inv.number ?? ''}`.trim(),
+        text: message || 'Please find the attached invoice.',
+        fileId,
+        attachmentName: `${inv.number || 'invoice'}.pdf`,
+      });
+      // mark sent (best effort) + log
+      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
+      logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending invoice:', e);
+      res.status(500).json({ error: e.message || 'Failed to send invoice' });
+    }
+  });
 
-  function startImapPoller() {
-    const INTERVAL_SETTING_KEY = 'email.pollIntervalMinutes';
-    const intervalRow = db.prepare('SELECT value FROM settings WHERE key = ?').get(INTERVAL_SETTING_KEY) as { value: string } | undefined;
-    const minutes = parseInt(intervalRow?.value || '0');
-    if (!minutes || minutes < 1) return;
-    const ms = minutes * 60 * 1000;
-    console.log(`IMAP poller: checking every ${minutes} min`);
-    setInterval(async () => {
-      const accounts = db.prepare('SELECT id FROM email_accounts').all() as { id: string }[];
-      for (const a of accounts) {
-        const n = await pollImapAccount(a.id);
-        if (n > 0) console.log(`IMAP: imported ${n} new bid(s) from account ${a.id}`);
-      }
-    }, ms);
-  }
+  // Send a change order request PDF via SMTP (admin only)
+  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const co = getChangeOrder(db, req.params.id);
+      if (!co) return res.status(404).json({ error: 'Change order not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const number = co.number ?? '';
+      await sendProjectEmail({
+        to,
+        subject: `Change Order Request ${number}`.trim(),
+        text: message || 'Please find the attached change order request.',
+        fileId,
+        attachmentName: `CO-${number || 'change-order'}.pdf`,
+      });
+      // Mark sent (best effort) — but never override an already approved/rejected CO.
+      try {
+        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
+      } catch { /* best effort */ }
+      logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending change order:', e);
+      res.status(500).json({ error: e.message || 'Failed to send change order' });
+    }
+  });
+
+  // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
+  app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const iss = getIssue(db, req.params.id);
+      if (!iss) return res.status(404).json({ error: 'Issue not found' });
+      const { to, fileId, message } = req.body as { to: string; fileId: string; message?: string };
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await sendProjectEmail({
+        to,
+        subject: `Issue ISS-${String(iss.number).padStart(3, '0')}${iss.title ? ` — ${iss.title}` : ''}`,
+        text: message || 'Please find the attached issue report.',
+        fileId,
+        attachmentName: `ISS-${String(iss.number).padStart(3, '0')}.pdf`,
+      });
+      try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
+      logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${String(iss.number).padStart(3, '0')} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending issue:', e);
+      res.status(500).json({ error: e.message || 'Failed to send issue' });
+    }
+  });
 
   // WebSocket Logic
 
@@ -1733,6 +856,12 @@ async function startServer() {
     }
   });
 
+  // Unknown API routes must 404 as JSON — without this they fall through to
+  // the SPA shell and return index.html with HTTP 200.
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1757,7 +886,6 @@ async function startServer() {
   const PORT = 3000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    startImapPoller();
   });
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import {
   Stage, Layer, Line, Rect, Ellipse,
   Text as KonvaText, Image as KonvaImage, Arrow, Transformer,
@@ -17,8 +17,11 @@ import {
   ZoomIn, ZoomOut, Layers, BookOpen,
   PanelLeft, PanelLeftClose, GripVertical,
 } from 'lucide-react';
-import { saveFile } from '../utils/store';
+import {
+  getFileMeta, fetchFileBlob, saveFileVersion, getDraft, putDraft, deleteDraft,
+} from '../utils/store';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -63,7 +66,7 @@ interface RenderedPage {
 
 interface PrintoutSource {
   projectId: string;
-  printoutId: string;
+  printoutId?: string;
   fileId: string;
 }
 
@@ -337,7 +340,9 @@ const PdfPageCanvas: React.FC<{
 
 export const PdfEditor: React.FC = () => {
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [renderedPages, setRenderedPages] = useState<RenderedPage[]>([]);
   const [pdfBytes, setPdfBytes] = useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState('');
@@ -421,6 +426,45 @@ export const PdfEditor: React.FC = () => {
         if (restoredTabs.length) setTabs(restoredTabs);
         // Open new file; pass null currentTabId so we don't overwrite restored annotations
         await openPdf(incoming, null, restoredTabs, state?.source);
+        return;
+      }
+
+      // Entry by file id (?fileId=) — Documents/Printouts open files by reference.
+      const fileIdParam = searchParams.get('fileId');
+      if (fileIdParam) {
+        if (restoredTabs.length) setTabs(restoredTabs);
+        try {
+          const [meta, blob, draft] = await Promise.all([
+            getFileMeta(fileIdParam),
+            fetchFileBlob(fileIdParam),
+            getDraft(fileIdParam).catch(() => null),
+          ]);
+          const base = meta?.name || `file-${fileIdParam}`;
+          const fname = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
+          const f = new File([blob], fname, { type: 'application/pdf' });
+          const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId: fileIdParam };
+
+          let seed: Annotation[] | undefined;
+          if (draft?.kind === 'pdf') {
+            try {
+              const parsed = JSON.parse(draft.data) as { annotations?: Annotation[] };
+              if (parsed.annotations?.length) {
+                const restore = await confirm({
+                  title: 'Restore draft?',
+                  message: 'You have unsaved annotations on this file from a previous session. Restore them?',
+                  confirmLabel: 'Restore',
+                  cancelLabel: 'Discard',
+                });
+                if (restore) seed = parsed.annotations;
+                else deleteDraft(fileIdParam).catch(() => {});
+              }
+            } catch { /* unreadable draft — ignore */ }
+          }
+          await openPdf(f, null, restoredTabs, src, seed);
+        } catch (e) {
+          console.error('Failed to open file by id:', e);
+          toast('Could not open the file', { type: 'error' });
+        }
         return;
       }
 
@@ -650,6 +694,25 @@ export const PdfEditor: React.FC = () => {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [annotations, tabs, activeTabId, saveStateToIDB]);
 
+  // Mirror the active tab's annotations to a server-side draft (spec §6 —
+  // crash/refresh safe). Only file-backed tabs draft; standalone tabs keep
+  // IndexedDB-only persistence.
+  useEffect(() => {
+    const tab = tabs.find((t) => t.id === activeTabId);
+    const fileId = tab?.source?.fileId;
+    if (!fileId) return;
+    const handle = setTimeout(() => {
+      // Empty == "no draft" (consistent with the restore gate). Don't persist
+      // empty rows on mere open or post-save bake; clear any existing draft instead.
+      if (annotations.length > 0) {
+        putDraft(fileId, 'pdf', JSON.stringify({ annotations })).catch(() => {});
+      } else {
+        deleteDraft(fileId).catch(() => {});
+      }
+    }, 2000);
+    return () => clearTimeout(handle);
+  }, [annotations, activeTabId, tabs]);
+
   // Keep the live PDFDocumentProxy in sync with pdfBytes. openPdf may pre-populate
   // the ref so the first render reuses the proxy it already built; otherwise (e.g.
   // after deletePage / reorderPages / importPages mutate pdfBytes, or on tab switch),
@@ -786,7 +849,13 @@ export const PdfEditor: React.FC = () => {
 
   // ── PDF Loading ───────────────────────────────────────────────────────────────
 
-  const openPdf = async (file: File, currentTabId: string | null, currentTabs: TabSnapshot[], source?: PrintoutSource) => {
+  const openPdf = async (
+    file: File,
+    currentTabId: string | null,
+    currentTabs: TabSnapshot[],
+    source?: PrintoutSource,
+    initialAnnotations?: Annotation[],
+  ) => {
     setLoading(true);
     setLoadMsg('Loading PDF…');
 
@@ -841,10 +910,11 @@ export const PdfEditor: React.FC = () => {
     renderCanvas.width = 0; renderCanvas.height = 0;
     thumbCanvas.width = 0; thumbCanvas.height = 0;
 
+    const seededAnns = initialAnnotations ?? [];
     const newTabId = uid();
     const newTab: TabSnapshot = {
       id: newTabId, fileName: file.name, pdfBytes: buf,
-      renderedPages: pages, annotations: [], history: [[]], histIdx: 0,
+      renderedPages: pages, annotations: seededAnns, history: [seededAnns], histIdx: 0,
       source,
     };
 
@@ -863,10 +933,10 @@ export const PdfEditor: React.FC = () => {
 
     // Load new tab into flat state
     setActiveTabId(newTabId);
-    annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
+    annotationsRef.current = seededAnns; historyRef.current = [seededAnns]; histIdxRef.current = 0;
     renderedPagesRef.current = pages;
     sourceRef.current = source ?? null;
-    setAnnotations([]); setHistory([[]]); setHistIdx(0);
+    setAnnotations(seededAnns); setHistory([seededAnns]); setHistIdx(0);
     setRenderedPages(pages); setPdfBytes(buf); setFileName(file.name);
     setCurrentSource(source ?? null);
     setSelectedId(null); setCurrentAnn(null); setCurrentPage(0);
@@ -1151,15 +1221,6 @@ export const PdfEditor: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const bytesToDataUrl = (bytes: Uint8Array): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-
   // Save: if the file originated from a Printout, overwrite it on the server.
   // Otherwise, download locally using the original filename (no suffix).
   const savePdf = async () => {
@@ -1169,8 +1230,8 @@ export const PdfEditor: React.FC = () => {
       const bytes = await buildAnnotatedPdf();
       if (!bytes) return;
       if (currentSource) {
-        const dataUrl = await bytesToDataUrl(bytes);
-        await saveFile(currentSource.fileId, dataUrl);
+        await saveFileVersion(currentSource.fileId, new Blob([bytes], { type: 'application/pdf' }));
+        deleteDraft(currentSource.fileId).catch(() => {});
         // Replace the tab's pdfBytes so subsequent saves build from the annotated version,
         // and clear the annotations/history since they are now baked into the PDF.
         const newBuf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -1178,7 +1239,7 @@ export const PdfEditor: React.FC = () => {
         annotationsRef.current = []; historyRef.current = [[]]; histIdxRef.current = 0;
         setAnnotations([]); setHistory([[]]); setHistIdx(0);
         setSelectedId(null);
-        toast('Saved to Printouts', { type: 'success' });
+        toast('Saved — new version created', { type: 'success' });
       } else {
         downloadBytes(bytes, fileName || 'document.pdf');
       }

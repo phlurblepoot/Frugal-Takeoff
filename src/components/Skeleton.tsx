@@ -3,7 +3,7 @@ import React from 'react';
 // Base shimmer block. Compose these to mirror the real content's layout so
 // there's no jump when data arrives.
 export const Skeleton: React.FC<{ className?: string }> = ({ className = '' }) => (
-  <div className={`animate-pulse rounded bg-slate-200 dark:bg-slate-700 ${className}`} />
+  <div className={`animate-pulse rounded bg-edge ${className}`} />
 );
 
 // Skeleton for the desktop projects table (7 columns).

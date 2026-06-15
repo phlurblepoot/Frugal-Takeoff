@@ -83,7 +83,7 @@ export const ShareProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 </button>
               </div>
               <div className="p-6 flex flex-col items-center gap-4">
-                <div className="w-[180px] h-[180px] flex items-center justify-center rounded-xl bg-white p-2 border border-slate-200 dark:border-slate-600">
+                <div className="w-44 h-44 max-w-full aspect-square flex items-center justify-center rounded-xl bg-white p-2 border border-slate-200 dark:border-slate-600">
                   {qrDataUrl
                     ? <img src={qrDataUrl} alt="QR code linking to the shared resource" className="w-full h-full" />
                     : <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-600" />}

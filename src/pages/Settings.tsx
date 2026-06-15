@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Plus, Trash2, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Eye, EyeOff, HardDrive, Sparkles } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getEmailAccounts, createEmailAccount, updateEmailAccount, deleteEmailAccount, testImapAccount, pollEmailNow, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans } from '../utils/store';
-import { EmailAccount, SmtpSettings } from '../types';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile } from '../utils/store';
+import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
@@ -17,6 +17,24 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '2.0',
+    date: 'June 15, 2026',
+    changes: [
+      'Major release. Frugal-Takeoff is now a full project workspace, not just a takeoff tool. Every project has its own sections — Overview, Pages, Takeoffs, Documents, Billing, Issues, Punch, Tasks, Proposal, and Settings — reachable from a redesigned app shell with a project sidebar, a global command palette (press ⌘K / Ctrl-K), and a refreshed light/dark design system used consistently across the app.',
+      'Billing suite: each project now has a dedicated, tabbed Billing area. Create and send invoices with line items and a PDF; record payments against invoices or pay applications; and manage change orders. A live summary keeps the contract total, invoiced, paid, and outstanding figures at a glance.',
+      'AIA progress billing: full G702 / G703 support. Build a Schedule of Values (seed it from the estimate, sync approved change orders, or upload a two-column spreadsheet), create monthly Applications for Payment with per-line % complete, stored materials, and retainage, and export faithful AIA G702/G703 Excel documents to send with each month\'s billing.',
+      'Change Orders (new): a change order now opens an editor like an invoice — line items, a lump-sum amount, a description, schedule-impact days, and photo attachments. Generate a "Change Order Request" PDF (with an owner/contractor signature block and the photos appended as pages) and email it to the client. Change orders move through Draft → Sent → Approved/Rejected, and approved change orders flow into the contract total and the AIA Schedule of Values.',
+      'Issues: log numbered deficiency reports against a project with photos, then generate a printable PDF or email the report to the client.',
+      'Punch lists: build area-grouped punch lists with before/during/after photos and a printable punch report.',
+      'Tasks: collaborative, assignable task lists replace the old per-project checklists, with assignees and completion tracking.',
+      'Proposals: assemble and generate a project proposal PDF from your takeoffs and options, with a saved history of generated proposals.',
+      'Documents: every project has a document library with drag-to-upload, file versioning (each re-upload keeps prior versions), filtering, and download — generated invoices, proposals, and change-order requests are filed here automatically.',
+      'Dashboard & project lifecycle: a new dashboard summarizes activity, and projects move through clear lifecycle stages (estimating, active, complete, archived) with archive and cleanup tools.',
+      'Mobile & tablet: the entire app is now usable on phones and tablets — a slide-in navigation drawer, responsive layouts and tables throughout, and touch-friendly controls. On the takeoff canvas, phones get a clean read-only view while tablets support touch drawing (pinch-zoom, double-tap to finish a measurement, long-press for the action menu).',
+      'Foundation & reliability: rebuilt on a normalized database with versioned, automatic migrations and a safe backup/restore + cutover toolchain, plus a large automated test suite (unit + end-to-end) guarding the takeoff canvas, exports, and billing math. Money is handled in exact integer cents throughout, and concurrent edits are protected against conflicts.',
+    ],
+  },
   {
     version: '1.2.1',
     date: 'May 21, 2026',
@@ -534,214 +552,23 @@ const PreferencesTab: React.FC = () => {
 
 // ── Email tab ─────────────────────────────────────────────────────────────────
 
-const POLL_INTERVALS = [
-  { label: 'Disabled', value: '0' },
-  { label: 'Every 5 minutes', value: '5' },
-  { label: 'Every 15 minutes', value: '15' },
-  { label: 'Every 30 minutes', value: '30' },
-  { label: 'Every hour', value: '60' },
-];
-
 const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
 const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
 
-interface ImapAccountFormProps {
-  initial?: Partial<EmailAccount>;
-  onSave: (data: Omit<EmailAccount, 'id' | 'createdAt'>) => Promise<void>;
-  onCancel: () => void;
-}
-
-const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ initial, onSave, onCancel }) => {
-  const [form, setForm] = useState({
-    label: initial?.label || '',
-    host: initial?.host || '',
-    port: initial?.port?.toString() || '993',
-    secure: initial?.secure !== false,
-    username: initial?.username || '',
-    password: initial?.password || '',
-    folder: initial?.folder || 'INBOX',
-  });
-  const [saving, setSaving] = useState(false);
-  const [showPass, setShowPass] = useState(false);
-  const set = (k: string, v: string | boolean) => setForm(f => ({ ...f, [k]: v }));
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await onSave({ ...form, port: parseInt(form.port) || 993, secure: form.secure });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4 p-4 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700">
-      <div>
-        <label className={labelCls}>Provider</label>
-        <select
-          className={inputCls}
-          defaultValue=""
-          onChange={e => {
-            const preset = IMAP_PRESETS[e.target.value];
-            if (preset) { set('host', preset.host); set('port', preset.port.toString()); set('secure', preset.secure); }
-          }}
-        >
-          <option value="">Custom / Other</option>
-          <option value="gmail">Gmail</option>
-          <option value="outlook">Outlook / Hotmail / Microsoft 365</option>
-          <option value="yahoo">Yahoo Mail</option>
-          <option value="icloud">Apple iCloud Mail</option>
-        </select>
-        <p className="mt-1 text-xs text-slate-400">Selecting a provider fills in the server settings automatically. Refer to the Setup Guide below for credentials help.</p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className={labelCls}>Account Label</label>
-          <input className={inputCls} value={form.label} onChange={e => set('label', e.target.value)} placeholder="e.g. Work Gmail" required />
-        </div>
-        <div>
-          <label className={labelCls}>Folder / Label to watch</label>
-          <input className={inputCls} value={form.folder} onChange={e => set('folder', e.target.value)} placeholder="e.g. Bid Invitations" required />
-          <p className="mt-1 text-xs text-slate-400">Gmail: enter the exact label name. Outlook/Yahoo: enter the folder name. Create a filter to route bid emails there first.</p>
-        </div>
-        <div>
-          <label className={labelCls}>IMAP Server</label>
-          <input className={inputCls} value={form.host} onChange={e => set('host', e.target.value)} placeholder="imap.gmail.com" required />
-        </div>
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className={labelCls}>Port</label>
-            <input className={inputCls} type="number" value={form.port} onChange={e => set('port', e.target.value)} placeholder="993" required />
-          </div>
-          <div className="flex flex-col justify-end pb-0.5">
-            <label className={labelCls}>SSL</label>
-            <button type="button" onClick={() => set('secure', !form.secure)}
-              className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${form.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
-              {form.secure ? 'SSL/TLS' : 'STARTTLS'}
-            </button>
-          </div>
-        </div>
-        <div>
-          <label className={labelCls}>Username / Email</label>
-          <input className={inputCls} value={form.username} onChange={e => set('username', e.target.value)} placeholder="you@example.com" required />
-        </div>
-        <div>
-          <label className={labelCls}>Password / App Password</label>
-          <div className="relative">
-            <input className={inputCls + ' pr-12'} type={showPass ? 'text' : 'password'} value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" required={!initial} />
-            <button type="button" onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-              {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-          {initial && <p className="mt-1 text-xs text-slate-400">Leave blank to keep existing password.</p>}
-        </div>
-      </div>
-      <div className="flex gap-3 justify-end pt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">Cancel</button>
-        <button type="submit" disabled={saving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save Account'}
-        </button>
-      </div>
-    </form>
-  );
-};
-
-const IMAP_PRESETS: Record<string, { host: string; port: number; secure: boolean }> = {
-  gmail:   { host: 'imap.gmail.com',        port: 993, secure: true },
-  outlook: { host: 'outlook.office365.com', port: 993, secure: true },
-  yahoo:   { host: 'imap.mail.yahoo.com',   port: 993, secure: true },
-  icloud:  { host: 'imap.mail.me.com',      port: 993, secure: true },
-};
-
-interface ProviderStep { text: string; link?: string; linkText?: string; }
-interface ProviderInfo {
-  id: string;
-  name: string;
-  steps: ProviderStep[];
-  imap: { host: string; port: number; ssl: string };
-  smtp: { host: string; port: number; ssl: string };
-  note?: string;
-}
-
-const PROVIDER_GUIDE: ProviderInfo[] = [
-  {
-    id: 'gmail',
-    name: 'Gmail',
-    note: 'Google no longer allows regular passwords for IMAP — an App Password is required.',
-    steps: [
-      { text: 'Enable 2-Step Verification', link: 'https://myaccount.google.com/security', linkText: 'myaccount.google.com/security' },
-      { text: 'Create an App Password', link: 'https://myaccount.google.com/apppasswords', linkText: 'myaccount.google.com/apppasswords' },
-      { text: 'Select "Mail" as the app type and generate — copy the 16-character code shown' },
-      { text: 'Enter your Gmail address as the username and the App Password (not your regular password) in the account form above' },
-    ],
-    imap: { host: 'imap.gmail.com', port: 993, ssl: 'SSL/TLS' },
-    smtp: { host: 'smtp.gmail.com', port: 587, ssl: 'STARTTLS' },
-  },
-  {
-    id: 'outlook',
-    name: 'Outlook / Hotmail / Microsoft 365',
-    steps: [
-      { text: 'For personal @outlook.com or @hotmail.com accounts: use your normal password. If 2-Step Verification is on, create an App Password', link: 'https://account.live.com/proofs/AppPassword', linkText: 'account.live.com/proofs/AppPassword' },
-      { text: 'For work or school Microsoft 365 accounts: your IT administrator may need to enable IMAP access in the Microsoft 365 admin portal' },
-    ],
-    imap: { host: 'outlook.office365.com', port: 993, ssl: 'SSL/TLS' },
-    smtp: { host: 'smtp.office365.com', port: 587, ssl: 'STARTTLS' },
-  },
-  {
-    id: 'yahoo',
-    name: 'Yahoo Mail',
-    steps: [
-      { text: 'Enable IMAP access: in Yahoo Mail go to Settings → More Settings → Mailboxes → enable IMAP access' },
-      { text: 'Generate an App Password', link: 'https://login.yahoo.com/account/security', linkText: 'login.yahoo.com/account/security' },
-      { text: 'Use your full Yahoo address as the username and the generated App Password in the account form above' },
-    ],
-    imap: { host: 'imap.mail.yahoo.com', port: 993, ssl: 'SSL/TLS' },
-    smtp: { host: 'smtp.mail.yahoo.com', port: 587, ssl: 'STARTTLS' },
-  },
-  {
-    id: 'icloud',
-    name: 'Apple iCloud Mail',
-    steps: [
-      { text: 'Two-factor authentication must be enabled on your Apple ID' },
-      { text: 'Sign in and generate an app-specific password', link: 'https://appleid.apple.com', linkText: 'appleid.apple.com' },
-      { text: 'Navigate to Sign-In and Security → App-Specific Passwords → Generate an App-Specific Password' },
-      { text: 'Use your iCloud address (@icloud.com or @me.com) as the username and the generated password in the account form above' },
-    ],
-    imap: { host: 'imap.mail.me.com', port: 993, ssl: 'SSL/TLS' },
-    smtp: { host: 'smtp.mail.me.com', port: 587, ssl: 'STARTTLS' },
-  },
-];
-
 const EmailTab: React.FC = () => {
   const { toast } = useToast();
-  const confirm = useConfirm();
   const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
   const [smtpSaving, setSmtpSaving] = useState(false);
   const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [smtpTestMsg, setSmtpTestMsg] = useState('');
   const [showSmtpPass, setShowSmtpPass] = useState(false);
 
-  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
-  const [showAddAccount, setShowAddAccount] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null);
-  const [testingAccount, setTestingAccount] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, 'ok' | 'error'>>({});
-
-  const [pollInterval, setPollInterval] = useState('0');
-  const [polling, setPolling] = useState(false);
-  const [pollResult, setPollResult] = useState<string>('');
-
   const [loading, setLoading] = useState(true);
-  const [showGuide, setShowGuide] = useState(false);
-  const [guideOpenProvider, setGuideOpenProvider] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [smtpData, accts, settings] = await Promise.all([getSmtpSettings(), getEmailAccounts(), fetch('/api/settings', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(r => r.json())]);
+      const smtpData = await getSmtpSettings();
       setSmtp(smtpData);
-      setAccounts(accts);
-      setPollInterval(settings['email.pollIntervalMinutes'] || '0');
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
@@ -769,55 +596,6 @@ const EmailTab: React.FC = () => {
     }
   };
 
-  const handleAddAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
-    const acct = await createEmailAccount(data);
-    setAccounts(a => [...a, acct]);
-    setShowAddAccount(false);
-  };
-
-  const handleUpdateAccount = async (data: Omit<EmailAccount, 'id' | 'createdAt'>) => {
-    if (!editingAccount) return;
-    const updated = await updateEmailAccount({ ...editingAccount, ...data });
-    setAccounts(a => a.map(x => x.id === updated.id ? updated : x));
-    setEditingAccount(null);
-  };
-
-  const handleDeleteAccount = async (id: string) => {
-    if (!await confirm({ title: 'Remove email account', message: 'Remove this email account?', confirmLabel: 'Remove', tone: 'danger' })) return;
-    await deleteEmailAccount(id);
-    setAccounts(a => a.filter(x => x.id !== id));
-  };
-
-  const handleTestAccount = async (id: string) => {
-    setTestingAccount(id);
-    try {
-      await testImapAccount(id);
-      setTestResults(r => ({ ...r, [id]: 'ok' }));
-    } catch {
-      setTestResults(r => ({ ...r, [id]: 'error' }));
-    } finally {
-      setTestingAccount(null);
-    }
-  };
-
-  const handleSavePollInterval = async () => {
-    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ 'email.pollIntervalMinutes': pollInterval }) });
-    toast('Polling interval saved. Restart the server for changes to take effect.', { type: 'success' });
-  };
-
-  const handlePollNow = async () => {
-    setPolling(true);
-    setPollResult('');
-    try {
-      const r = await pollEmailNow();
-      setPollResult(r.imported > 0 ? `Imported ${r.imported} new bid(s).` : 'No new emails found.');
-    } catch (e: any) {
-      setPollResult(`Error: ${e.message}`);
-    } finally {
-      setPolling(false);
-    }
-  };
-
   if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
 
   return (
@@ -830,8 +608,8 @@ const EmailTab: React.FC = () => {
         </div>
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 grid grid-cols-3 gap-4">
-              <div className="col-span-2">
+            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
                 <label className={labelCls}>SMTP Server</label>
                 <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
               </div>
@@ -881,150 +659,6 @@ const EmailTab: React.FC = () => {
         </div>
       </div>
 
-      {/* IMAP accounts */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Inbound Email Monitoring (IMAP)</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Optional. Add email accounts to monitor — new emails in the watched folder automatically appear in the Bid Pipeline.</p>
-          </div>
-          <button onClick={() => { setShowAddAccount(true); setEditingAccount(null); }} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all">
-            <Plus size={16} /> Add Account
-          </button>
-        </div>
-        <div className="divide-y divide-slate-100 dark:divide-slate-700">
-          {accounts.length === 0 && !showAddAccount && (
-            <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-sm">No email accounts configured. Add one to enable automatic bid import.</div>
-          )}
-          {accounts.map(acct => (
-            <div key={acct.id}>
-              {editingAccount?.id === acct.id ? (
-                <div className="p-4">
-                  <ImapAccountForm initial={acct} onSave={handleUpdateAccount} onCancel={() => setEditingAccount(null)} />
-                </div>
-              ) : (
-                <div className="px-6 py-4 flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-900 dark:text-slate-100">{acct.label}</p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">{acct.username} · {acct.host}:{acct.port} · watching <span className="font-mono text-xs bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 rounded">{acct.folder}</span></p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {testResults[acct.id] === 'ok' && <span className="text-green-500"><CheckCircle size={16} /></span>}
-                    {testResults[acct.id] === 'error' && <span className="text-red-500"><XCircle size={16} /></span>}
-                    <button onClick={() => handleTestAccount(acct.id)} disabled={testingAccount === acct.id} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-1.5">
-                      {testingAccount === acct.id ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />} Test
-                    </button>
-                    <button onClick={() => setEditingAccount(acct)} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">Edit</button>
-                    <button onClick={() => handleDeleteAccount(acct.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-all"><Trash2 size={15} /></button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-          {showAddAccount && (
-            <div className="p-4">
-              <ImapAccountForm onSave={handleAddAccount} onCancel={() => setShowAddAccount(false)} />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Provider Setup Guide */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <button onClick={() => setShowGuide(g => !g)} className="w-full p-6 flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Email Provider Setup Guide</h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Server settings and setup instructions for Gmail, Outlook, Yahoo, and iCloud.</p>
-          </div>
-          {showGuide ? <ChevronUp size={20} className="text-slate-400 shrink-0" /> : <ChevronDown size={20} className="text-slate-400 shrink-0" />}
-        </button>
-        {showGuide && (
-          <div className="border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
-            {PROVIDER_GUIDE.map(provider => (
-              <div key={provider.id}>
-                <button
-                  onClick={() => setGuideOpenProvider(p => p === provider.id ? null : provider.id)}
-                  className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-all"
-                >
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">{provider.name}</span>
-                  {guideOpenProvider === provider.id
-                    ? <ChevronUp size={16} className="text-slate-400 shrink-0" />
-                    : <ChevronDown size={16} className="text-slate-400 shrink-0" />}
-                </button>
-                {guideOpenProvider === provider.id && (
-                  <div className="px-6 pb-6 space-y-4">
-                    <div>
-                      <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Setup Steps</p>
-                      <ol className="space-y-2">
-                        {provider.steps.map((step, i) => (
-                          <li key={i} className="flex gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <span className="shrink-0 w-5 h-5 rounded-full bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 text-xs font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
-                            <span>
-                              {step.text}
-                              {step.link && (
-                                <> — <a href={step.link} target="_blank" rel="noopener noreferrer" className="text-accent-600 dark:text-accent-400 hover:underline font-mono text-xs">{step.linkText}</a></>
-                              )}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">IMAP (Incoming Mail)</p>
-                        <div className="space-y-1.5 text-sm">
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.imap.host}</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.port}</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.imap.ssl}</span></div>
-                        </div>
-                      </div>
-                      <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">SMTP (Outgoing Mail)</p>
-                        <div className="space-y-1.5 text-sm">
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Server</span><span className="font-mono text-slate-800 dark:text-slate-200 text-xs">{provider.smtp.host}</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Port</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.port}</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-slate-500">Security</span><span className="font-mono text-slate-800 dark:text-slate-200">{provider.smtp.ssl}</span></div>
-                        </div>
-                      </div>
-                    </div>
-                    {provider.note && (
-                      <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2.5">{provider.note}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Polling interval */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Automatic Polling</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">How often the server checks configured IMAP accounts for new emails. Changes take effect after a server restart.</p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="flex items-end gap-4">
-            <div className="flex-1">
-              <label className={labelCls}>Check interval</label>
-              <select className={inputCls} value={pollInterval} onChange={e => setPollInterval(e.target.value)}>
-                {POLL_INTERVALS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <button onClick={handleSavePollInterval} className="px-4 py-2.5 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all flex items-center gap-2">
-              <Save size={16} /> Save
-            </button>
-          </div>
-          <div className="flex items-center gap-4 pt-2 border-t border-slate-100 dark:border-slate-700">
-            <button onClick={handlePollNow} disabled={polling || accounts.length === 0} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2 disabled:opacity-50">
-              <RefreshCw size={16} className={polling ? 'animate-spin' : ''} /> Poll Now
-            </button>
-            {pollResult && <span className="text-sm text-slate-600 dark:text-slate-400">{pollResult}</span>}
-            {accounts.length === 0 && <span className="text-sm text-slate-400">Add an IMAP account first.</span>}
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
@@ -1130,7 +764,6 @@ const StorageTab: React.FC = () => {
     { key: 'images', label: 'Files & Images', color: 'bg-accent-500' },
     { key: 'projects', label: 'Projects', color: 'bg-blue-500' },
     { key: 'notes', label: 'Notes', color: 'bg-amber-500' },
-    { key: 'bids', label: 'Bids', color: 'bg-emerald-500' },
     { key: 'templates', label: 'Templates', color: 'bg-purple-500' },
     { key: 'checklists', label: 'Checklists', color: 'bg-pink-500' },
   ] as const;
@@ -1252,9 +885,255 @@ const StorageTab: React.FC = () => {
   );
 };
 
+// ── AIA Export Template tab ────────────────────────────────────────────────────
+
+// Default mapping — sensible starting point the admin edits rather than a blank
+// form. Mirrors AiaTemplateMapping in aiaExcel.ts (kept structural to avoid a
+// runtime dependency on the lazy-loaded exceljs module).
+interface AiaMapping {
+  g702Sheet: string;
+  cells: Record<string, string>;
+  g703Sheet: string;
+  g703StartRow: number;
+  g703Cols: Record<string, string>;
+  moneyAsDollars: boolean;
+}
+
+const G702_CELL_FIELDS: { key: string; label: string }[] = [
+  { key: 'ownerName', label: 'Owner name' },
+  { key: 'ownerAddress', label: 'Owner address' },
+  { key: 'projectName', label: 'Project name' },
+  { key: 'contractorName', label: 'Contractor name' },
+  { key: 'architectName', label: 'Architect name' },
+  { key: 'contractFor', label: 'Contract for' },
+  { key: 'applicationNo', label: 'Application no.' },
+  { key: 'periodTo', label: 'Period to' },
+  { key: 'applicationDate', label: 'Application date' },
+  { key: 'contractDate', label: 'Contract date' },
+  { key: 'ownerProjectNumber', label: 'Owner project no.' },
+  { key: 'architectProjectNumber', label: 'Architect project no.' },
+  { key: 'retainageWorkPct', label: 'Retainage % (work)' },
+  { key: 'retainageStoredPct', label: 'Retainage % (stored)' },
+  { key: 'L1', label: 'Line 1 — Original contract sum' },
+  { key: 'L2', label: 'Line 2 — Net change orders' },
+  { key: 'L3', label: 'Line 3 — Contract sum to date' },
+  { key: 'L4', label: 'Line 4 — Total completed & stored' },
+  { key: 'L5a', label: 'Line 5a — Retainage (work)' },
+  { key: 'L5b', label: 'Line 5b — Retainage (stored)' },
+  { key: 'L5', label: 'Line 5 — Total retainage' },
+  { key: 'L6', label: 'Line 6 — Earned less retainage' },
+  { key: 'L7', label: 'Line 7 — Less previous certificates' },
+  { key: 'L8', label: 'Line 8 — Current payment due' },
+  { key: 'L9', label: 'Line 9 — Balance to finish' },
+  { key: 'coAdditions', label: 'CO additions' },
+  { key: 'coDeductions', label: 'CO deductions' },
+  { key: 'coNet', label: 'CO net change' },
+];
+
+const G703_COL_FIELDS: { key: string; label: string }[] = [
+  { key: 'itemNo', label: 'Item no.' },
+  { key: 'description', label: 'Description' },
+  { key: 'scheduledValue', label: 'Scheduled value (C)' },
+  { key: 'previous', label: 'Previous (D)' },
+  { key: 'thisPeriod', label: 'This period (E)' },
+  { key: 'stored', label: 'Stored (F)' },
+  { key: 'total', label: 'Total to date (G)' },
+  { key: 'percent', label: '% (G/C)' },
+  { key: 'balance', label: 'Balance (I)' },
+  { key: 'retainage', label: 'Retainage (J)' },
+];
+
+const DEFAULT_AIA_MAPPING: AiaMapping = {
+  g702Sheet: 'G702',
+  cells: {},
+  g703Sheet: 'G703',
+  g703StartRow: 2,
+  g703Cols: {
+    itemNo: 'A', description: 'B', scheduledValue: 'C', previous: 'D',
+    thisPeriod: 'E', stored: 'F', total: 'G', percent: 'H', balance: 'I', retainage: 'J',
+  },
+  moneyAsDollars: true,
+};
+
+const AiaTemplateTab: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [templateFileId, setTemplateFileId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [mapping, setMapping] = useState<AiaMapping>(DEFAULT_AIA_MAPPING);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getSettings();
+        if (s.aiaTemplateFileId) setTemplateFileId(s.aiaTemplateFileId);
+        if (s.aiaTemplateName) setTemplateName(s.aiaTemplateName);
+        if (s.aiaTemplateMapping) {
+          try {
+            const parsed = JSON.parse(s.aiaTemplateMapping);
+            setMapping({ ...DEFAULT_AIA_MAPPING, ...parsed,
+              cells: { ...parsed.cells }, g703Cols: { ...DEFAULT_AIA_MAPPING.g703Cols, ...parsed.g703Cols } });
+          } catch { /* keep defaults on parse error */ }
+        }
+      } catch { /* ignore */ }
+      finally { setLoading(false); }
+    })();
+  }, []);
+
+  const setCell = (key: string, val: string) =>
+    setMapping(m => ({ ...m, cells: { ...m.cells, [key]: val } }));
+  const setCol = (key: string, val: string) =>
+    setMapping(m => ({ ...m, g703Cols: { ...m.g703Cols, [key]: val } }));
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const id = `aia-template-${crypto.randomUUID()}`;
+        await saveFile(id, reader.result as string);
+        await saveSettings({ aiaTemplateFileId: id, aiaTemplateName: file.name });
+        setTemplateFileId(id);
+        setTemplateName(file.name);
+        toast('Template uploaded', { type: 'success' });
+      } catch {
+        toast('Failed to upload template', { type: 'error' });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ''; // allow re-uploading the same filename
+  };
+
+  const handleRemove = async () => {
+    const ok = await confirm({
+      title: 'Remove template',
+      message: 'Remove the configured AIA template? Exports will revert to the standard generated G702/G703.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await saveSettings({ aiaTemplateFileId: '', aiaTemplateName: '' });
+      setTemplateFileId('');
+      setTemplateName('');
+      toast('Template removed', { type: 'success' });
+    } catch {
+      toast('Failed to remove template', { type: 'error' });
+    }
+  };
+
+  const handleSaveMapping = async () => {
+    setSaving(true);
+    try {
+      await saveSettings({ aiaTemplateMapping: JSON.stringify(mapping) });
+      toast('Mapping saved', { type: 'success' });
+    } catch {
+      toast('Failed to save mapping', { type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FileSpreadsheet size={20} className="text-accent-600" /> AIA Export Template
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Upload your AIA G702/G703 .xlsx and map each value to the cell it should fill. Leave a cell blank to skip it. When no template is set, the app generates a standard G702/G703.
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleUpload} className="hidden" id="aia-template-upload" />
+            <label htmlFor="aia-template-upload"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer transition-all shadow-sm">
+              <FileSpreadsheet size={16} /> {templateFileId ? 'Replace Template' : 'Upload .xlsx Template'}
+            </label>
+            {templateFileId ? (
+              <>
+                <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1.5">
+                  <CheckCircle size={15} /> {templateName || 'Template configured'}
+                </span>
+                <button onClick={handleRemove} className="text-sm text-red-500 hover:text-red-600 font-medium flex items-center gap-1">
+                  <Trash2 size={14} /> Remove
+                </button>
+              </>
+            ) : (
+              <span className="text-sm text-slate-500 dark:text-slate-400">No template configured — using the standard generated export.</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">G702 — Sheet & Cell Mapping</h3>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="max-w-xs">
+            <label className={labelCls}>G702 sheet name</label>
+            <input className={inputCls} value={mapping.g702Sheet} onChange={e => setMapping(m => ({ ...m, g702Sheet: e.target.value }))} placeholder="G702 or 1" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {G702_CELL_FIELDS.map(f => (
+              <div key={f.key}>
+                <label className={labelCls}>{f.label}</label>
+                <input className={inputCls} value={mapping.cells[f.key] || ''} onChange={e => setCell(f.key, e.target.value)} placeholder="e.g. F20" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">G703 — Continuation Sheet Mapping</h3>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Each schedule-of-values line writes into a row, starting at the start row. Provide the column letter for each value.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+            <div>
+              <label className={labelCls}>G703 sheet name</label>
+              <input className={inputCls} value={mapping.g703Sheet} onChange={e => setMapping(m => ({ ...m, g703Sheet: e.target.value }))} placeholder="G703 or 1" />
+            </div>
+            <div>
+              <label className={labelCls}>First data row</label>
+              <input className={inputCls} type="number" min={1} value={mapping.g703StartRow}
+                onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            {G703_COL_FIELDS.map(f => (
+              <div key={f.key}>
+                <label className={labelCls}>{f.label}</label>
+                <input className={inputCls} value={mapping.g703Cols[f.key] || ''} onChange={e => setCol(f.key, e.target.value)} placeholder="e.g. C" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button onClick={handleSaveMapping} disabled={saving}
+          className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+          <Save size={16} /> {saving ? 'Saving…' : 'Save Mapping'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'changelog';
+type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1322,6 +1201,7 @@ export const Settings: React.FC = () => {
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
     { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
+    { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
     { id: 'changelog',   label: 'Changelog',         icon: <History size={18} /> },
   ];
@@ -1363,12 +1243,12 @@ export const Settings: React.FC = () => {
         <div className="flex flex-col md:flex-row gap-8">
           {/* Sidebar */}
           <aside className="w-full md:w-64 shrink-0">
-            <nav className="space-y-1">
+            <nav className="flex overflow-x-auto no-scrollbar gap-1 md:flex-col md:overflow-visible md:space-y-1 md:gap-0">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all whitespace-nowrap shrink-0 md:w-full ${
                     activeTab === tab.id
                       ? 'bg-accent-600 text-white shadow-md'
                       : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
@@ -1486,6 +1366,8 @@ export const Settings: React.FC = () => {
             {activeTab === 'email' && isAdmin && <EmailTab />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
+
+            {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 
             {activeTab === 'users' && isAdmin && (
               <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">
