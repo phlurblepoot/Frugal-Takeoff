@@ -18,6 +18,24 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.0',
+    date: 'June 15, 2026',
+    changes: [
+      'Major release. Frugal-Takeoff is now a full project workspace, not just a takeoff tool. Every project has its own sections — Overview, Pages, Takeoffs, Documents, Billing, Issues, Punch, Tasks, Proposal, and Settings — reachable from a redesigned app shell with a project sidebar, a global command palette (press ⌘K / Ctrl-K), and a refreshed light/dark design system used consistently across the app.',
+      'Billing suite: each project now has a dedicated, tabbed Billing area. Create and send invoices with line items and a PDF; record payments against invoices or pay applications; and manage change orders. A live summary keeps the contract total, invoiced, paid, and outstanding figures at a glance.',
+      'AIA progress billing: full G702 / G703 support. Build a Schedule of Values (seed it from the estimate, sync approved change orders, or upload a two-column spreadsheet), create monthly Applications for Payment with per-line % complete, stored materials, and retainage, and export faithful AIA G702/G703 Excel documents to send with each month\'s billing.',
+      'Change Orders (new): a change order now opens an editor like an invoice — line items, a lump-sum amount, a description, schedule-impact days, and photo attachments. Generate a "Change Order Request" PDF (with an owner/contractor signature block and the photos appended as pages) and email it to the client. Change orders move through Draft → Sent → Approved/Rejected, and approved change orders flow into the contract total and the AIA Schedule of Values.',
+      'Issues: log numbered deficiency reports against a project with photos, then generate a printable PDF or email the report to the client.',
+      'Punch lists: build area-grouped punch lists with before/during/after photos and a printable punch report.',
+      'Tasks: collaborative, assignable task lists replace the old per-project checklists, with assignees and completion tracking.',
+      'Proposals: assemble and generate a project proposal PDF from your takeoffs and options, with a saved history of generated proposals.',
+      'Documents: every project has a document library with drag-to-upload, file versioning (each re-upload keeps prior versions), filtering, and download — generated invoices, proposals, and change-order requests are filed here automatically.',
+      'Dashboard & project lifecycle: a new dashboard summarizes activity, and projects move through clear lifecycle stages (estimating, active, complete, archived) with archive and cleanup tools.',
+      'Mobile & tablet: the entire app is now usable on phones and tablets — a slide-in navigation drawer, responsive layouts and tables throughout, and touch-friendly controls. On the takeoff canvas, phones get a clean read-only view while tablets support touch drawing (pinch-zoom, double-tap to finish a measurement, long-press for the action menu).',
+      'Foundation & reliability: rebuilt on a normalized database with versioned, automatic migrations and a safe backup/restore + cutover toolchain, plus a large automated test suite (unit + end-to-end) guarding the takeoff canvas, exports, and billing math. Money is handled in exact integer cents throughout, and concurrent edits are protected against conflicts.',
+    ],
+  },
+  {
     version: '1.2.1',
     date: 'May 21, 2026',
     changes: [
