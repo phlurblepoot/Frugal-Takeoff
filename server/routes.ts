@@ -1071,9 +1071,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
 
   app.post('/api/email/smtp', authenticateToken, requireAdmin, (req, res) => {
     try {
-      const cfg = req.body as Record<string, string>;
+      const cfg = req.body as Record<string, unknown>;
       const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
-      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v));
+      // The client sends booleans (secure) and numbers (port); SQLite can only
+      // bind strings/numbers/null, so coerce everything to a string. null/undefined
+      // become '' so the key is still persisted.
+      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v == null ? '' : String(v)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to save SMTP settings' });

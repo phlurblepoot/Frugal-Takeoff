@@ -1000,6 +1000,19 @@ describe('email send routes', () => {
   const makeInvoice = async () =>
     (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] })).body.id;
 
+  it('smtp save: coerces boolean/number values to strings so SQLite can bind them', async () => {
+    // The client sends `secure` as a boolean and `port` as a number; SQLite can
+    // only bind strings/numbers/null, so the route must coerce before binding.
+    const res = await request(emailApp).post('/api/email/smtp').send({
+      host: 'smtp.example.com', port: 465, secure: true, username: 'u', password: 'p',
+    });
+    expect(res.status).toBe(200);
+    const saved = (await request(emailApp).get('/api/email/smtp')).body;
+    expect(saved.secure).toBe('true');
+    expect(saved.port).toBe('465');
+    expect(saved.host).toBe('smtp.example.com');
+  });
+
   it('invoice send: accepts cc/bcc/subject/body + multiple attachments; forwards them; marks sent', async () => {
     const id = await makeInvoice();
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({

@@ -268,7 +268,13 @@ export const getActivePages = async (): Promise<string[]> => {
 export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
   const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });
   await handleResponse(res);
-  return await res.json();
+  // Values are stored as strings; normalize the typed fields so the form's
+  // boolean toggle / numeric port round-trip correctly.
+  const raw = await res.json() as Record<string, string>;
+  const out: Partial<SmtpSettings> = { ...(raw as Partial<SmtpSettings>) };
+  if ('secure' in raw) out.secure = raw.secure === 'true';
+  if (raw.port) out.port = Number(raw.port); else delete (out as Partial<SmtpSettings>).port;
+  return out;
 };
 
 export const saveSmtpSettings = async (cfg: Partial<SmtpSettings>): Promise<void> => {
