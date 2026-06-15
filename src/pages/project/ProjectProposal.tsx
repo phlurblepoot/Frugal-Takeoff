@@ -259,7 +259,7 @@ export const ProjectProposal: React.FC = () => {
     if (!project || !sendFileId) return;
     setSending(true);
     try {
-      const updated = await sendProjectProposal(project.id, sendFileId, sendMessage || undefined);
+      const updated = await sendProjectProposal(project.id, { fileId: sendFileId, body: sendMessage || undefined });
       setProject(updated);
       setSendFileId('');
       setSendMessage('');
