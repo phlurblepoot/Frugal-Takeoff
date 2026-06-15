@@ -537,12 +537,28 @@ export interface ProposalOptions {
   validUntil: string; terms: string;
   includeSignature: boolean; includeTakeoffList: boolean;
   customTitle: string; highlightQuality: HighlightQuality;
+  // Pricing mode. 'takeoffs' (default when undefined) sums per-takeoff costs;
+  // 'fixed' uses a single lump-sum total and suppresses the takeoff table.
+  priceMode?: 'takeoffs' | 'fixed';
+  // Lump-sum total in DOLLARS, used only when priceMode === 'fixed'.
+  fixedPriceTotal?: number;
+  // JPEG data URLs appended as photo pages after the Terms page.
+  photoDataUrls?: string[];
 }
 
 export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; }
 
 export const formatCurrency = (n: number) =>
   '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Resolves the grand total shown on the cover (and summary). In 'fixed' mode it
+// returns the user-supplied lump sum (0 when undefined); otherwise it sums the
+// per-takeoff costs exactly as before. Pure — no side effects.
+export function resolveGrandTotal(options: ProposalOptions, selectedTakeoffs: TakeoffTotals[]): number {
+  return options.priceMode === 'fixed'
+    ? (options.fixedPriceTotal || 0)
+    : selectedTakeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
+}
 
 export async function generateProposalPdf(
   project: Project,
@@ -649,9 +665,10 @@ export async function generateProposalPdf(
   }
 
   // ── COVER PAGE: notes (context) first, then grand total ─────────────
-  const grandTotal = selectedTakeoffs.reduce(
-    (sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0
-  );
+  // In 'fixed' mode the grand total is a lump sum and the takeoff table is
+  // suppressed; in (default) 'takeoffs' mode it sums per-takeoff costs.
+  const isFixedMode = options.priceMode === 'fixed';
+  const grandTotal = resolveGrandTotal(options, selectedTakeoffs);
 
   let boxTop: number;
 
@@ -740,7 +757,8 @@ export async function generateProposalPdf(
   const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
 
   // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
-  if (includeTakeoffList) {
+  // Fixed (lump-sum) mode shows only the cover total + notes — no cost detail.
+  if (includeTakeoffList && !isFixedMode) {
   onProgress?.('Adding scope details…');
   pdf.addPage();
 
@@ -1000,6 +1018,35 @@ export async function generateProposalPdf(
     pdf.setTextColor(148, 163, 184);
     pdf.setFont(font, 'normal');
     pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+  }
+
+  // ── PHOTO PAGES ─────────────────────────────────────────────────────
+  // Appended after Terms (and before page numbering, so the new pages are
+  // included in the "Page x of y" stamp). Works in both price modes.
+  if (options.photoDataUrls?.length) {
+    onProgress?.('Adding photos…');
+    pdf.addPage();
+    let py = 50;
+    pdf.setFillColor(hR, hG, hB);
+    pdf.rect(0, 0, W, 50, 'F');
+    pdf.setFontSize(13);
+    pdf.setFont(font, 'bold');
+    pdf.setTextColor(255, 255, 255);
+    pdf.text('Photos', 40, 33);
+    pdf.setFontSize(10);
+    pdf.setFont(font, 'normal');
+    pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
+    py = 78;
+    const M = 40;
+    const cellW = (W - 2 * M - 12) / 2, cellH = 150;
+    let col = 0;
+    for (const url of options.photoDataUrls) {
+      if (py + cellH > H - M) { pdf.addPage(); py = M; col = 0; }
+      const x = M + col * (cellW + 12);
+      try { pdf.addImage(url, 'JPEG', x, py, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
+      col++;
+      if (col === 2) { col = 0; py += cellH + 12; }
+    }
   }
 
   // ── PAGE NUMBERS ────────────────────────────────────────────────────

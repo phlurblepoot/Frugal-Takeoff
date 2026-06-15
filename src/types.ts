@@ -173,6 +173,8 @@ export interface Project {
   emails?: BidEmail[];
   proposalFileId?: string;
   proposalSentAt?: number;
+  // Photo attachment ids (from the file store) appended to the generated proposal PDF.
+  proposalPhotoIds?: string[];
   // Optimistic-concurrency version — echoed back on save; the server rejects
   // stale saves with 409. Assigned by the server (1 on create).
   version?: number;
