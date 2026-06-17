@@ -456,7 +456,7 @@ function accentSwatchColor(hue: number) {
 }
 
 const PreferencesTab: React.FC = () => {
-  const { mode, accentColor, reducedMotion, toggleMode, setAccentColor, setReducedMotion } = useTheme();
+  const { mode, accentColor, customAccentHex, reducedMotion, toggleMode, setAccentColor, setCustomAccent, setReducedMotion } = useTheme();
 
   return (
     <div className="space-y-6">
@@ -552,9 +552,39 @@ const PreferencesTab: React.FC = () => {
                 </AnimatePresence>
               </button>
             ))}
+
+            {/* Custom colour — native colour picker behind a swatch */}
+            <label
+              title="Custom colour"
+              aria-label="Custom accent colour"
+              className="relative w-9 h-9 rounded-full cursor-pointer transition-transform hover:scale-110 active:scale-95 focus-within:ring-2 focus-within:ring-offset-2 dark:focus-within:ring-offset-slate-800"
+              style={{ background: customAccentHex } as React.CSSProperties}
+            >
+              <input
+                type="color"
+                value={customAccentHex}
+                aria-label="Pick a custom accent colour"
+                onChange={(e) => setCustomAccent(e.target.value)}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+              <AnimatePresence>
+                {accentColor === 'custom' && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}
+                    className="absolute inset-0 flex items-center justify-center rounded-full ring-2 ring-white ring-offset-2 pointer-events-none"
+                  >
+                    <Check size={14} className="text-white drop-shadow" strokeWidth={3} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </label>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-4 capitalize">
-            Current: <span className="font-medium text-slate-700 dark:text-slate-300">{accentColor}</span>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-4">
+            Current:{' '}
+            <span className="font-medium text-slate-700 dark:text-slate-300 capitalize">
+              {accentColor === 'custom' ? customAccentHex : accentColor}
+            </span>
           </p>
         </div>
       </div>
