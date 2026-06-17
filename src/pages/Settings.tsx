@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
@@ -17,6 +17,17 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '2.1.1',
+    date: 'June 17, 2026',
+    changes: [
+      'Custom accent colour: in addition to the preset accent colours, you can now pick any custom colour for the app accent (User Preferences → Accent Colour). The chosen colour is applied across buttons, links, and highlights.',
+      'Preferences now follow your account: your appearance settings (dark mode, accent colour including a custom colour, reduced motion) and the project-list sort are saved to your account and applied automatically when you log in on any device — no more re-setting them on each new computer.',
+      'User roles: admins can now change a user\'s role (User ⇄ Admin) directly from Settings → User Management. The last remaining admin can\'t be demoted, and you can\'t change your own role.',
+      'Change password: every user can now change their own password from Settings → User Preferences (enter your current password, then the new one).',
+      'Projects page: the project stages (Estimating, Proposal Sent, Awarded, In Progress, Punch List, Complete, Lost) are now tabs across the top instead of stacked sections, each showing its count — so the board is easier to scan and the selected stage is remembered in the URL.',
+    ],
+  },
   {
     version: '2.1',
     date: 'June 15, 2026',
@@ -456,7 +467,45 @@ function accentSwatchColor(hue: number) {
 }
 
 const PreferencesTab: React.FC = () => {
-  const { mode, accentColor, reducedMotion, toggleMode, setAccentColor, setReducedMotion } = useTheme();
+  const { mode, accentColor, customAccentHex, reducedMotion, toggleMode, setAccentColor, setCustomAccent, setReducedMotion } = useTheme();
+  const { toast } = useToast();
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      toast('New password must be at least 6 characters', { type: 'error' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast('New passwords do not match', { type: 'error' });
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to change password');
+      toast('Password changed', { type: 'success' });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      toast(err.message, { type: 'error' });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  const pwInputCls = 'w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none';
 
   return (
     <div className="space-y-6">
@@ -552,11 +601,98 @@ const PreferencesTab: React.FC = () => {
                 </AnimatePresence>
               </button>
             ))}
+
+            {/* Custom colour — native colour picker behind a swatch */}
+            <label
+              title="Custom colour"
+              aria-label="Custom accent colour"
+              className="relative w-9 h-9 rounded-full cursor-pointer transition-transform hover:scale-110 active:scale-95 focus-within:ring-2 focus-within:ring-offset-2 dark:focus-within:ring-offset-slate-800"
+              style={{ background: customAccentHex } as React.CSSProperties}
+            >
+              <input
+                type="color"
+                value={customAccentHex}
+                aria-label="Pick a custom accent colour"
+                onChange={(e) => setCustomAccent(e.target.value)}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+              <AnimatePresence>
+                {accentColor === 'custom' && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }} transition={{ duration: 0.15 }}
+                    className="absolute inset-0 flex items-center justify-center rounded-full ring-2 ring-white ring-offset-2 pointer-events-none"
+                  >
+                    <Check size={14} className="text-white drop-shadow" strokeWidth={3} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </label>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-4 capitalize">
-            Current: <span className="font-medium text-slate-700 dark:text-slate-300">{accentColor}</span>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-4">
+            Current:{' '}
+            <span className="font-medium text-slate-700 dark:text-slate-300 capitalize">
+              {accentColor === 'custom' ? customAccentHex : accentColor}
+            </span>
           </p>
         </div>
+      </div>
+
+      {/* Change Password */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Lock size={18} className="text-accent-600 dark:text-accent-400" />
+            Change Password
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Update the password you use to sign in.</p>
+        </div>
+        <form onSubmit={handleChangePassword} className="p-6 space-y-4 max-w-md">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Current password</label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={e => setCurrentPassword(e.target.value)}
+              className={pwInputCls}
+              placeholder="Enter current password"
+              autoComplete="current-password"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New password</label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              className={pwInputCls}
+              placeholder="At least 6 characters"
+              autoComplete="new-password"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Confirm new password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              className={pwInputCls}
+              placeholder="Re-enter new password"
+              autoComplete="new-password"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={savingPassword || !currentPassword || !newPassword || !confirmPassword}
+            className="flex items-center justify-center gap-2 bg-accent-600 hover:bg-accent-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+          >
+            {savingPassword ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+            Change Password
+          </button>
+        </form>
       </div>
     </div>
   );

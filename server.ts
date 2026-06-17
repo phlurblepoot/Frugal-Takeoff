@@ -203,6 +203,28 @@ async function startServer() {
     res.json({ user: req.user });
   });
 
+  app.post('/api/auth/change-password', authenticateToken, (req: any, res: any) => {
+    const { currentPassword, newPassword } = req.body;
+    try {
+      const user = db.prepare('SELECT id, password FROM users WHERE id = ?').get(req.user.id) as any;
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      const validPassword = bcrypt.compareSync(currentPassword || '', user.password);
+      if (!validPassword) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+      }
+      if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+        return res.status(400).json({ error: 'New password must be at least 6 characters' });
+      }
+      const hash = bcrypt.hashSync(newPassword, 10);
+      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, req.user.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to change password' });
+    }
+  });
+
   // User Management Routes
   app.get('/api/users', authenticateToken, requireAdmin, (req, res) => {
     try {
@@ -238,6 +260,34 @@ async function startServer() {
       } else {
         res.status(500).json({ error: 'Failed to create user' });
       }
+    }
+  });
+
+  app.patch('/api/users/:id/role', authenticateToken, requireAdmin, (req: any, res: any) => {
+    const { role } = req.body;
+    if (!['admin', 'user'].includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+    try {
+      const targetUser = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(req.params.id) as any;
+      if (!targetUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      // Prevent changing your own role (avoids self-lockout / stale-token confusion)
+      if (req.params.id === req.user.id) {
+        return res.status(400).json({ error: 'You cannot change your own role' });
+      }
+      // Prevent demoting the last admin
+      if (targetUser.role === 'admin' && role === 'user') {
+        const adminCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get() as any;
+        if (adminCount.count <= 1) {
+          return res.status(400).json({ error: 'Cannot remove the last admin' });
+        }
+      }
+      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+      res.json({ id: targetUser.id, username: targetUser.username, role });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update user role' });
     }
   });
 
