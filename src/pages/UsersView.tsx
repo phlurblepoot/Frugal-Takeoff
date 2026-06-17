@@ -10,6 +10,11 @@ interface UserData {
   role: string;
 }
 
+const currentUserId: string = (() => {
+  try { return JSON.parse(localStorage.getItem('user') || '{}').id || ''; }
+  catch { return ''; }
+})();
+
 export const UsersView: React.FC = () => {
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -65,6 +70,27 @@ export const UsersView: React.FC = () => {
       setError(err.message);
     } finally {
       setIsAdding(false);
+    }
+  };
+
+  const handleRoleChange = async (id: string, prevRole: string, nextRole: string) => {
+    if (nextRole === prevRole) return;
+    // Optimistically reflect the change; revert on failure.
+    setUsers(prev => prev.map(u => (u.id === id ? { ...u, role: nextRole } : u)));
+    try {
+      const res = await fetch(`/api/users/${id}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ role: nextRole })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update role');
+      setUsers(prev => prev.map(u => (u.id === id ? { ...u, role: data.role } : u)));
+      toast('Role updated', { type: 'success' });
+    } catch (err: any) {
+      // Revert the select to the previous value since the change didn't persist.
+      setUsers(prev => prev.map(u => (u.id === id ? { ...u, role: prevRole } : u)));
+      toast(err.message, { type: 'error' });
     }
   };
 
@@ -176,14 +202,25 @@ export const UsersView: React.FC = () => {
                     {user.username}
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
-                      user.role === 'admin'
-                        ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                        : 'bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
-                    }`}>
-                      {user.role === 'admin' && <Shield size={12} />}
-                      {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {user.role === 'admin' && (
+                        <Shield size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                      )}
+                      <select
+                        value={user.role}
+                        disabled={user.id === currentUserId}
+                        onChange={e => handleRoleChange(user.id, user.role, e.target.value)}
+                        title={user.id === currentUserId ? "You can't change your own role" : 'Change role'}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-medium outline-none focus:ring-2 focus:ring-accent-500 ${
+                          user.role === 'admin'
+                            ? 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                            : 'border-accent-200 dark:border-accent-800 bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
+                        } disabled:opacity-60 disabled:cursor-not-allowed dark:[color-scheme:dark]`}
+                      >
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </div>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <button
