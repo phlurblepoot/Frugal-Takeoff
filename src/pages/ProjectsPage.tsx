@@ -8,6 +8,7 @@ import {
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
   getActivePages, getRecentProjects, ConflictError,
+  getUserPreferences, saveUserPreferences,
 } from '../utils/store';
 import { TemplatesView } from './TemplatesView';
 import { useToast } from '../components/Toast';
@@ -197,7 +198,12 @@ export const ProjectsPage: React.FC = () => {
     const saved = localStorage.getItem('projectsSort');
     return SORT_OPTIONS.some(o => o.id === saved) ? (saved as ProjectSort) : 'updated';
   });
-  const changeSort = (s: ProjectSort) => { setSort(s); localStorage.setItem('projectsSort', s); };
+  const changeSort = (s: ProjectSort) => {
+    setSort(s);
+    localStorage.setItem('projectsSort', s);
+    // Cross-device: persist to the account, fire-and-forget.
+    saveUserPreferences({ projectsSort: s }).catch(() => {});
+  };
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
   const [deleteText, setDeleteText] = useState('');
 
@@ -211,6 +217,17 @@ export const ProjectsPage: React.FC = () => {
     }
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Server is the source of truth for the sort preference (cross-device); the
+  // localStorage init above is just the instant default. Ignore missing/invalid.
+  useEffect(() => {
+    getUserPreferences().then(prefs => {
+      const saved = prefs['projectsSort'];
+      if (saved && SORT_OPTIONS.some(o => o.id === saved)) {
+        setSort(saved as ProjectSort);
+      }
+    }).catch(() => { /* offline / not present — keep localStorage default */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const contractors = useMemo(
     () => Array.from(new Set(summaries.map(s => s.contractor).filter(Boolean))).sort() as string[],

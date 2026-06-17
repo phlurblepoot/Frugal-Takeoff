@@ -77,25 +77,37 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return localStorage.getItem('theme-motion') === 'reduced';
   });
 
-  // Sync from server on mount — server is source of truth for cross-browser
-  // Guard: only fetch if logged in (ThemeProvider renders on /login too)
-  useEffect(() => {
+  // Sync from server — server is source of truth for cross-browser settings.
+  // Guard: only fetch if logged in (ThemeProvider renders on /login too).
+  // Setters use functional/equality checks so re-running is idempotent: applying
+  // server values just sets state, which the apply-effects below pick up.
+  const syncPrefsFromServer = () => {
     if (!localStorage.getItem('token')) return;
     getUserPreferences().then(prefs => {
-      if (prefs['theme-mode'] && prefs['theme-mode'] !== mode) {
-        setMode(prefs['theme-mode'] as ThemeMode);
+      if (prefs['theme-mode']) {
+        setMode(prev => prefs['theme-mode'] !== prev ? (prefs['theme-mode'] as ThemeMode) : prev);
       }
-      if (prefs['theme-accent'] && prefs['theme-accent'] !== accentColor) {
-        setAccentColorState(prefs['theme-accent'] as AccentKey);
+      if (prefs['theme-accent']) {
+        setAccentColorState(prev => prefs['theme-accent'] !== prev ? (prefs['theme-accent'] as AccentKey) : prev);
       }
-      if (prefs['theme-accent-custom'] && prefs['theme-accent-custom'] !== customAccentHex) {
-        setCustomAccentHex(prefs['theme-accent-custom'] as string);
+      if (prefs['theme-accent-custom']) {
+        setCustomAccentHex(prev => prefs['theme-accent-custom'] !== prev ? (prefs['theme-accent-custom'] as string) : prev);
       }
       if (prefs['theme-motion']) {
         const serverReduced = prefs['theme-motion'] === 'reduced';
-        if (serverReduced !== reducedMotion) setReducedMotionState(serverReduced);
+        setReducedMotionState(prev => serverReduced !== prev ? serverReduced : prev);
       }
     }).catch(() => { /* offline / not logged in — use localStorage values */ });
+  };
+
+  // (a) Sync on mount, and (b) re-sync when login dispatches 'app:prefs-sync'
+  // so the already-mounted provider re-applies the account's prefs on a fresh
+  // device without needing a full page reload.
+  useEffect(() => {
+    syncPrefsFromServer();
+    const onSync = () => syncPrefsFromServer();
+    window.addEventListener('app:prefs-sync', onSync);
+    return () => window.removeEventListener('app:prefs-sync', onSync);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply mode on mount and changes

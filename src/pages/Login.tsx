@@ -30,6 +30,10 @@ export const Login: React.FC = () => {
 
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
+      // Tell the already-mounted ThemeProvider to re-pull this account's
+      // theme/accent/motion prefs so they apply immediately on a fresh device
+      // (it can't re-run its on-mount sync without a full reload otherwise).
+      window.dispatchEvent(new Event('app:prefs-sync'));
       navigate('/dashboard');
     } catch (err: any) {
       setError(err.message);
