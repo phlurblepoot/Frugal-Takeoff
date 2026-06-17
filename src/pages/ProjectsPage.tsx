@@ -182,6 +182,11 @@ export const ProjectsPage: React.FC = () => {
     if (t === 'projects') next.delete('tab'); else next.set('tab', t);
     setSearchParams(next, { replace: true });
   };
+  const setStage = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('stage', id);
+    setSearchParams(next, { replace: true });
+  };
 
   const [summaries, setSummaries] = useState<ProjectSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -300,6 +305,14 @@ export const ProjectsPage: React.FC = () => {
 
   const totalVisible = groups.reduce((n, g) => n + g.projects.length, 0);
 
+  // Stage tabs: one per non-empty stage. The active stage is tracked in the URL
+  // (?stage=); fall back to the first non-empty stage when absent or emptied
+  // (e.g. by a search), so the board never lands on a blank tab.
+  const stageGroups = groups.filter(g => g.projects.length > 0);
+  const stageParam = searchParams.get('stage');
+  const activeStage = stageGroups.some(g => g.id === stageParam) ? stageParam! : (stageGroups[0]?.id ?? '');
+  const activeGroup = stageGroups.find(g => g.id === activeStage);
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -383,7 +396,7 @@ export const ProjectsPage: React.FC = () => {
               action={<Button onClick={() => navigate('/new')}><Plus size={16} />New Project</Button>}
             />
           ) : (
-            <div className="space-y-7">
+            <div className="space-y-5">
               {showRecents && (
                 <section>
                   <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
@@ -392,14 +405,24 @@ export const ProjectsPage: React.FC = () => {
                   {renderCards(recents)}
                 </section>
               )}
-              {groups.filter(g => g.projects.length > 0).map(g => (
-                <section key={g.id}>
-                  <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
-                    {g.label} · {g.projects.length}
-                  </h2>
-                  {renderCards(g.projects)}
-                </section>
-              ))}
+
+              {/* Stage tabs — one per non-empty lifecycle stage */}
+              <div className="-mx-4 flex items-center gap-1 overflow-x-auto border-b border-edge px-4 no-scrollbar md:mx-0 md:px-0">
+                {stageGroups.map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => setStage(g.id)}
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                      activeStage === g.id ? 'border-accent-500 text-ink' : 'border-transparent text-ink-soft hover:text-ink'
+                    }`}
+                  >
+                    {g.label}
+                    <span className="rounded-full bg-sunken px-1.5 py-0.5 text-[11px] font-semibold text-ink-faint">{g.projects.length}</span>
+                  </button>
+                ))}
+              </div>
+
+              {activeGroup && renderCards(activeGroup.projects)}
             </div>
           )}
         </>
