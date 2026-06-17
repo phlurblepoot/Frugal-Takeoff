@@ -18,6 +18,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.1.1',
+    date: 'June 17, 2026',
+    changes: [
+      'Custom accent colour: in addition to the preset accent colours, you can now pick any custom colour for the app accent (User Preferences → Accent Colour). The chosen colour is applied across buttons, links, and highlights.',
+      'Preferences now follow your account: your appearance settings (dark mode, accent colour including a custom colour, reduced motion) and the project-list sort are saved to your account and applied automatically when you log in on any device — no more re-setting them on each new computer.',
+      'User roles: admins can now change a user\'s role (User ⇄ Admin) directly from Settings → User Management. The last remaining admin can\'t be demoted, and you can\'t change your own role.',
+      'Change password: every user can now change their own password from Settings → User Preferences (enter your current password, then the new one).',
+      'Projects page: the project stages (Estimating, Proposal Sent, Awarded, In Progress, Punch List, Complete, Lost) are now tabs across the top instead of stacked sections, each showing its count — so the board is easier to scan and the selected stage is remembered in the URL.',
+    ],
+  },
+  {
     version: '2.1',
     date: 'June 15, 2026',
     changes: [
