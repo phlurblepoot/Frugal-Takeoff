@@ -969,15 +969,17 @@ describe('email send routes', () => {
   let smtpAbsent: boolean;
   let emailApp: express.Express;
 
-  const buildEmailApp = (role: 'admin' | 'member') => {
+  const buildEmailApp = (role: 'admin' | 'member', userId = 'u1') => {
     const a = express();
     a.use(express.json({ limit: '50mb' }));
     registerEmailRoutes(a, {
       db,
       dataDir: dir,
-      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role }; next(); },
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
-      buildTransporter: () => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
+      buildTransporter: (_userId: string) => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
+      // From header now comes from the SENDING user's per-user SMTP config.
+      getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
     });
     return a;
   };
@@ -985,9 +987,6 @@ describe('email send routes', () => {
   beforeEach(async () => {
     sent = [];
     smtpAbsent = false;
-    // from-header settings (sendProjectEmail reads smtp.* for the From address)
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('smtp.fromAddress', 'noreply@example.com');
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('smtp.fromName', 'Frugal');
     emailApp = buildEmailApp('admin');
     // emailApp only has the email routes; create the project + files via the data-routes app (shared db).
     await request(app).post('/api/projects').send(PROJECT);
@@ -1000,17 +999,53 @@ describe('email send routes', () => {
   const makeInvoice = async () =>
     (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] })).body.id;
 
-  it('smtp save: coerces boolean/number values to strings so SQLite can bind them', async () => {
+  // Per-user SMTP config save/read/isolation: these exercise the REAL
+  // user_preferences-backed getUserSmtp (not the From-header stub used elsewhere),
+  // so each app gets a real reader scoped to its own userId.
+  const buildRealSmtpApp = (userId: string) => {
+    const getUserSmtp = (uid: string): Record<string, string> => {
+      const rows = db.prepare("SELECT key, value FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").all(uid) as { key: string; value: string }[];
+      const cfg: Record<string, string> = {};
+      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
+      return cfg;
+    };
+    const a = express();
+    a.use(express.json({ limit: '50mb' }));
+    registerEmailRoutes(a, {
+      db,
+      dataDir: dir,
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      buildTransporter: (uid: string) => { const c = getUserSmtp(uid); return (c.host && c.username) ? ({ verify: async () => true } as any) : null; },
+      getUserSmtp,
+    });
+    return a;
+  };
+
+  it('smtp save: coerces boolean/number values to strings; reads back per-user', async () => {
     // The client sends `secure` as a boolean and `port` as a number; SQLite can
     // only bind strings/numbers/null, so the route must coerce before binding.
-    const res = await request(emailApp).post('/api/email/smtp').send({
+    const u1App = buildRealSmtpApp('smtp-u1');
+    const res = await request(u1App).post('/api/email/smtp').send({
       host: 'smtp.example.com', port: 465, secure: true, username: 'u', password: 'p',
     });
     expect(res.status).toBe(200);
-    const saved = (await request(emailApp).get('/api/email/smtp')).body;
+    const saved = (await request(u1App).get('/api/email/smtp')).body;
     expect(saved.secure).toBe('true');
     expect(saved.port).toBe('465');
     expect(saved.host).toBe('smtp.example.com');
+  });
+
+  it('smtp save: is isolated per-user — a second user does not see the first user\'s config', async () => {
+    const u1App = buildRealSmtpApp('iso-u1');
+    const u2App = buildRealSmtpApp('iso-u2');
+    await request(u1App).post('/api/email/smtp').send({ host: 'u1.smtp', username: 'u1', password: 'p1' });
+    // u2 has saved nothing → empty config, never u1's
+    expect((await request(u2App).get('/api/email/smtp')).body).toEqual({});
+    // u2 saves its own; the two stay distinct
+    await request(u2App).post('/api/email/smtp').send({ host: 'u2.smtp', username: 'u2', password: 'p2' });
+    expect((await request(u1App).get('/api/email/smtp')).body.host).toBe('u1.smtp');
+    expect((await request(u2App).get('/api/email/smtp')).body.host).toBe('u2.smtp');
   });
 
   it('invoice send: accepts cc/bcc/subject/body + multiple attachments; forwards them; marks sent', async () => {

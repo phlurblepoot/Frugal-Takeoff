@@ -481,7 +481,9 @@ async function startServer() {
     try {
       const rows = db.prepare('SELECT key, value FROM user_preferences WHERE userId = ?').all((req as any).user.id) as { key: string; value: string }[];
       const prefs: Record<string, string> = {};
-      rows.forEach(row => { prefs[row.key] = row.value; });
+      // Exclude smtp.* keys (per-user SMTP config incl. password) — those are
+      // read/written only via the dedicated GET/POST /api/email/smtp routes.
+      rows.forEach(row => { if (!row.key.startsWith('smtp.')) prefs[row.key] = row.value; });
       res.json(prefs);
     } catch (error) {
       console.error("Error fetching user preferences:", error);
@@ -506,11 +508,18 @@ async function startServer() {
 
   // ── Email API ──────────────────────────────────────────────────────────────
 
-  // Helper: build SMTP transporter from settings (null when not configured).
-  function buildTransporter() {
-    const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
+  // Helper: read a user's per-user SMTP config (smtp.* keys in user_preferences),
+  // stripped of the `smtp.` prefix. SMTP is strictly per-user — no global fallback.
+  function getUserSmtp(userId: string): Record<string, string> {
+    const rows = db.prepare("SELECT key, value FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").all(userId) as { key: string; value: string }[];
     const cfg: Record<string, string> = {};
     rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
+    return cfg;
+  }
+
+  // Helper: build SMTP transporter from the given user's config (null when not configured).
+  function buildTransporter(userId: string) {
+    const cfg = getUserSmtp(userId);
     if (!cfg.host || !cfg.username) return null;
     return nodemailer.createTransport({
       host: cfg.host,
@@ -531,6 +540,7 @@ async function startServer() {
     authenticateToken,
     requireAdmin,
     buildTransporter,
+    getUserSmtp,
   });
 
   // WebSocket Logic
