@@ -497,6 +497,10 @@ async function startServer() {
       const stmt = db.prepare('INSERT OR REPLACE INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
       const userId = (req as any).user.id;
       Object.entries(prefs).forEach(([key, value]) => {
+        // SMTP credentials are written only via the dedicated POST /api/email/smtp
+        // route (per-user, type-coerced). Don't let the generic prefs endpoint be
+        // a second write path for them.
+        if (key.startsWith('smtp.')) return;
         stmt.run(userId, key, value as string);
       });
       res.json({ success: true });
