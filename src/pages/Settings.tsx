@@ -752,7 +752,7 @@ const EmailTab: React.FC = () => {
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 dark:border-slate-700">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Used to send proposals as email replies. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These are your personal outgoing email settings. Emails you send (proposals, invoices, issues, change orders) go out through this account. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
         </div>
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1347,7 +1347,7 @@ export const Settings: React.FC = () => {
   const allTabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
-    { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
+    { id: 'email',       label: 'Email',             icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
@@ -1511,7 +1511,7 @@ export const Settings: React.FC = () => {
               </div>
             )}
 
-            {activeTab === 'email' && isAdmin && <EmailTab />}
+            {activeTab === 'email' && <EmailTab />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 
