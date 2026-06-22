@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2 } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
+import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -1281,7 +1282,7 @@ const AiaTemplateTab: React.FC = () => {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
+type TabId = 'preferences' | 'takeoff-templates' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1346,6 +1347,7 @@ export const Settings: React.FC = () => {
   // Admin-only tabs not shown to regular users
   const allTabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
+    { id: 'takeoff-templates', label: 'Takeoff Templates', icon: <Layout size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
     { id: 'email',       label: 'Email',             icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
@@ -1412,6 +1414,8 @@ export const Settings: React.FC = () => {
           {/* Content */}
           <div className="flex-1">
             {activeTab === 'preferences' && <PreferencesTab />}
+
+            {activeTab === 'takeoff-templates' && <TemplatesView />}
 
             {activeTab === 'general' && isAdmin && (
               <div className="space-y-6">
