@@ -720,7 +720,7 @@ export const NewProject: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label htmlFor="bidDueDate" className="block text-sm font-medium text-slate-700 mb-2">
+                  <label htmlFor="bidDueDate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Bid Due Date (Optional)
                   </label>
                   <input
@@ -728,7 +728,7 @@ export const NewProject: React.FC = () => {
                     id="bidDueDate"
                     value={bidDueDate}
                     onChange={(e) => setBidDueDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                     disabled={isProcessing}
                   />
                 </div>
@@ -736,7 +736,7 @@ export const NewProject: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label htmlFor="planSetName" className="block text-sm font-medium text-slate-700 mb-2">
+                  <label htmlFor="planSetName" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Plan Set Name
                   </label>
                   <input
@@ -744,7 +744,7 @@ export const NewProject: React.FC = () => {
                     id="planSetName"
                     value={planSetName}
                     onChange={(e) => setPlanSetName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                     placeholder="e.g. Initial Set"
                     required
                     disabled={isProcessing}
@@ -752,7 +752,7 @@ export const NewProject: React.FC = () => {
                 </div>
 
                 <div>
-                  <label htmlFor="planSetDate" className="block text-sm font-medium text-slate-700 mb-2">
+                  <label htmlFor="planSetDate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                     Plan Set Date
                   </label>
                   <input
@@ -760,7 +760,7 @@ export const NewProject: React.FC = () => {
                     id="planSetDate"
                     value={planSetDate}
                     onChange={(e) => setPlanSetDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
                     required
                     disabled={isProcessing}
                   />
@@ -768,7 +768,7 @@ export const NewProject: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Blueprint PDFs
                 </label>
                 <div
