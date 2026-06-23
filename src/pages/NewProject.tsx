@@ -127,7 +127,7 @@ export const NewProject: React.FC = () => {
 
   const handleProcessFiles = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || files.length === 0) return;
+    if (!name) return;
 
     setIsProcessing(true);
     try {
@@ -162,6 +162,13 @@ export const NewProject: React.FC = () => {
       };
 
       await createProject(project);
+
+      // No plan pages were added — create the empty project (with its plan set)
+      // and go straight to it. Pages can be added later from the project.
+      if (files.length === 0) {
+        navigate(`/project/${newProjectId}`);
+        return;
+      }
 
       const extractedPages: PendingPage[] = [];
       const thumbnails: Record<string, string> = {};
@@ -647,7 +654,7 @@ export const NewProject: React.FC = () => {
         <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
           <div className="p-6 sm:p-8 border-b border-slate-100 dark:border-slate-700">
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">New Project</h1>
-            <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1">Upload a blueprint PDF to get started</p>
+            <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1">Add blueprint PDFs now, or create the project and add pages later</p>
           </div>
 
           <form onSubmit={handleProcessFiles} className="p-6 sm:p-8">
@@ -769,7 +776,7 @@ export const NewProject: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                  Blueprint PDFs
+                  Blueprint PDFs (Optional)
                 </label>
                 <div
                   className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
@@ -830,11 +837,43 @@ export const NewProject: React.FC = () => {
                   accept="application/pdf"
                   className="hidden"
                   multiple
-                  required={files.length === 0}
                   disabled={isProcessing}
                 />
               </div>
             </div>
+
+            {isProcessing && files.length > 0 && (
+              <div className="mt-6 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4">
+                <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span className="flex items-center gap-2 truncate">
+                    <Loader2 size={15} className="shrink-0 animate-spin text-accent-600" />
+                    {progress.status
+                      ? progress.status.charAt(0).toUpperCase() + progress.status.slice(1)
+                      : 'Processing…'}
+                  </span>
+                  {progress.total > 0 && (
+                    <span className="shrink-0 tabular-nums text-slate-500 dark:text-slate-400">
+                      {progress.current}/{progress.total}
+                    </span>
+                  )}
+                </div>
+                <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                  {progress.total > 0 ? (
+                    <div
+                      className="h-full rounded-full bg-accent-600 transition-[width] duration-300"
+                      style={{ width: `${Math.min(100, Math.round((progress.current / progress.total) * 100))}%` }}
+                    />
+                  ) : (
+                    <div className="progress-indeterminate absolute inset-y-0 rounded-full bg-accent-600" />
+                  )}
+                </div>
+                {progress.totalFiles > 1 && (
+                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    File {progress.currentFile} of {progress.totalFiles}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="mt-8 pt-6 border-t border-slate-100 flex flex-wrap justify-end gap-3">
               <Link
@@ -845,18 +884,16 @@ export const NewProject: React.FC = () => {
               </Link>
               <button
                 type="submit"
-                disabled={!name || files.length === 0 || isProcessing}
+                disabled={!name || isProcessing}
                 className="flex items-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 {isProcessing ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
-                    {progress.status ? `${progress.status} ` : 'Processing '}
-                    {progress.totalFiles > 1 ? `File ${progress.currentFile}/${progress.totalFiles} ` : ''}
-                    {progress.total > 0 ? `(${progress.current}/${progress.total})` : '...'}
+                    {files.length === 0 ? 'Creating…' : 'Processing…'}
                   </>
                 ) : (
-                  'Next Step'
+                  files.length === 0 ? 'Create Project' : 'Next Step'
                 )}
               </button>
             </div>
