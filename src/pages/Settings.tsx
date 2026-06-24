@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2 } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
+import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -17,6 +18,16 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '2.1.2',
+    date: 'June 24, 2026',
+    changes: [
+      'Per-user email (SMTP): outgoing email is now configured per user instead of one shared account. Set up your own sending account under Settings → Email, and the proposals, invoices, issue reports, and change-order requests you send go out from your account. (Each user needs to enter their own SMTP settings once.)',
+      'New project: plan PDFs are now optional — you can create a project with no pages and add them later. When you do upload PDFs, the upload step now shows a progress bar (and a working indicator while it reads the file) so you can tell it\'s processing and not stuck.',
+      'Takeoff templates moved: the Templates tab was removed from the projects page and is now a "Takeoff Templates" section under Settings, which fits better now that projects are more than just takeoffs.',
+      'Fixed text-field colours in dark mode on the new-project page (bid due date, plan set, and address fields were styled inconsistently).',
+    ],
+  },
   {
     version: '2.1.1',
     date: 'June 17, 2026',
@@ -752,7 +763,7 @@ const EmailTab: React.FC = () => {
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 dark:border-slate-700">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Used to send proposals as email replies. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These are your personal outgoing email settings. Emails you send (proposals, invoices, issues, change orders) go out through this account. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
         </div>
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1281,7 +1292,7 @@ const AiaTemplateTab: React.FC = () => {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
+type TabId = 'preferences' | 'takeoff-templates' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1346,8 +1357,9 @@ export const Settings: React.FC = () => {
   // Admin-only tabs not shown to regular users
   const allTabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
+    { id: 'takeoff-templates', label: 'Takeoff Templates', icon: <Layout size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
-    { id: 'email',       label: 'Email',             icon: <Mail size={18} />,    adminOnly: true },
+    { id: 'email',       label: 'Email',             icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
@@ -1412,6 +1424,8 @@ export const Settings: React.FC = () => {
           {/* Content */}
           <div className="flex-1">
             {activeTab === 'preferences' && <PreferencesTab />}
+
+            {activeTab === 'takeoff-templates' && <TemplatesView />}
 
             {activeTab === 'general' && isAdmin && (
               <div className="space-y-6">
@@ -1511,7 +1525,7 @@ export const Settings: React.FC = () => {
               </div>
             )}
 
-            {activeTab === 'email' && isAdmin && <EmailTab />}
+            {activeTab === 'email' && <EmailTab />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 

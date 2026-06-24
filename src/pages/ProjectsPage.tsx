@@ -3,20 +3,17 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus, Calendar, Building2, MapPin, Archive, ArchiveRestore,
-  Trash2, Edit2, Check, X, FileText, Ruler, FolderOpen, Layout as LayoutIcon, Clock,
+  Trash2, Edit2, Check, X, FileText, Ruler, FolderOpen, Clock,
 } from 'lucide-react';
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
   getActivePages, getRecentProjects, ConflictError,
   getUserPreferences, saveUserPreferences,
 } from '../utils/store';
-import { TemplatesView } from './TemplatesView';
 import { useToast } from '../components/Toast';
 import {
   Button, Card, EmptyState, Input, Modal, ProjectStatusPill, Select, Skeleton,
 } from '../components/ui';
-
-type Tab = 'projects' | 'templates';
 
 export interface PipelineGroup {
   id: string;
@@ -177,12 +174,6 @@ export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: Tab = searchParams.get('tab') === 'templates' ? 'templates' : 'projects';
-  const setTab = (t: Tab) => {
-    const next = new URLSearchParams(searchParams);
-    if (t === 'projects') next.delete('tab'); else next.set('tab', t);
-    setSearchParams(next, { replace: true });
-  };
   const setStage = (id: string) => {
     const next = new URLSearchParams(searchParams);
     next.set('stage', id);
@@ -337,27 +328,7 @@ export const ProjectsPage: React.FC = () => {
         <Button onClick={() => navigate('/new')}><Plus size={16} />New Project</Button>
       </div>
 
-      {/* Tabs: Projects | Templates */}
-      <div className="mb-4 flex items-center gap-1 border-b border-edge">
-        {(['projects', 'templates'] as Tab[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-              tab === t ? 'border-accent-500 text-ink' : 'border-transparent text-ink-soft hover:text-ink'
-            }`}
-          >
-            {t === 'projects' ? <FolderOpen size={15} /> : <LayoutIcon size={15} />}
-            {t === 'projects' ? 'Projects' : 'Templates'}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'templates' ? (
-        <TemplatesView />
-      ) : (
-        <>
-          {/* Controls */}
+      {/* Controls */}
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <Input
               placeholder="Search projects…"
@@ -442,8 +413,6 @@ export const ProjectsPage: React.FC = () => {
               {activeGroup && renderCards(activeGroup.projects)}
             </div>
           )}
-        </>
-      )}
 
       {/* Delete confirmation */}
       <Modal

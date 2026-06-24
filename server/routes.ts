@@ -963,9 +963,12 @@ export interface EmailRouteDeps {
   dataDir: string;
   authenticateToken: express.RequestHandler;
   requireAdmin: express.RequestHandler;
-  // Returns a ready-to-use transporter, or null when SMTP isn't configured.
-  // Injectable so tests can stub the transport and inspect mailOptions.
-  buildTransporter: () => nodemailer.Transporter | null;
+  // Returns a ready-to-use transporter for the given user, or null when that
+  // user's SMTP isn't configured. Injectable so tests can stub the transport.
+  buildTransporter: (userId: string) => nodemailer.Transporter | null;
+  // Returns the given user's SMTP config (smtp.* keys, prefix stripped). Used
+  // for the From header and the per-user config GET route.
+  getUserSmtp: (userId: string) => Record<string, string>;
 }
 
 // Sends one or more stored files as attachments via SMTP. Throws on
@@ -974,7 +977,8 @@ export interface EmailRouteDeps {
 export async function sendProjectEmail(
   db: Database.Database,
   dataDir: string,
-  buildTransporter: () => nodemailer.Transporter | null,
+  transport: nodemailer.Transporter | null,
+  smtpCfg: Record<string, string>,
   opts: {
     to: string;
     cc?: string;
@@ -985,11 +989,7 @@ export async function sendProjectEmail(
     inReplyTo?: string;
   },
 ): Promise<void> {
-  const transport = buildTransporter();
   if (!transport) throw new Error('SMTP not configured');
-  const smtpRows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-  const smtpCfg: Record<string, string> = {};
-  smtpRows.forEach(r => { smtpCfg[r.key.replace('smtp.', '')] = r.value; });
   // Build the attachment list: read each fileId's bytes. The first entry is the
   // primary document (the generated PDF) — if it can't be read, fail loudly so
   // we never send a document email with no document. Extra attachments are
@@ -1053,39 +1053,38 @@ interface SendBody {
 }
 
 export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps): void {
-  const { db, dataDir, authenticateToken, requireAdmin, buildTransporter } = deps;
-  const send = (opts: Parameters<typeof sendProjectEmail>[3]) =>
-    sendProjectEmail(db, dataDir, buildTransporter, opts);
+  const { db, dataDir, authenticateToken, requireAdmin, buildTransporter, getUserSmtp } = deps;
+  const send = (userId: string, opts: Parameters<typeof sendProjectEmail>[4]) =>
+    sendProjectEmail(db, dataDir, buildTransporter(userId), getUserSmtp(userId), opts);
 
-  // SMTP settings (stored in settings table under smtp.* keys)
-  app.get('/api/email/smtp', authenticateToken, requireAdmin, (req, res) => {
+  // SMTP settings — strictly per-user (stored in user_preferences under smtp.*
+  // keys). Any authenticated user manages their OWN SMTP; no shared/global config.
+  app.get('/api/email/smtp', authenticateToken, (req, res) => {
     try {
-      const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE 'smtp.%'").all() as { key: string; value: string }[];
-      const cfg: Record<string, string> = {};
-      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
-      res.json(cfg);
+      res.json(getUserSmtp((req as any).user.id));
     } catch (error) {
       res.status(500).json({ error: 'Failed to fetch SMTP settings' });
     }
   });
 
-  app.post('/api/email/smtp', authenticateToken, requireAdmin, (req, res) => {
+  app.post('/api/email/smtp', authenticateToken, (req, res) => {
     try {
       const cfg = req.body as Record<string, unknown>;
-      const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+      const userId = (req as any).user.id;
+      const stmt = db.prepare("INSERT OR REPLACE INTO user_preferences (userId, key, value) VALUES (?, ?, ?)");
       // The client sends booleans (secure) and numbers (port); SQLite can only
       // bind strings/numbers/null, so coerce everything to a string. null/undefined
       // become '' so the key is still persisted.
-      Object.entries(cfg).forEach(([k, v]) => stmt.run(`smtp.${k}`, v == null ? '' : String(v)));
+      Object.entries(cfg).forEach(([k, v]) => stmt.run(userId, `smtp.${k}`, v == null ? '' : String(v)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to save SMTP settings' });
     }
   });
 
-  app.post('/api/email/test-smtp', authenticateToken, requireAdmin, async (req, res) => {
+  app.post('/api/email/test-smtp', authenticateToken, async (req, res) => {
     try {
-      const transport = buildTransporter();
+      const transport = buildTransporter((req as any).user.id);
       if (!transport) return res.status(400).json({ error: 'SMTP not configured' });
       await transport.verify();
       res.json({ success: true });
@@ -1106,7 +1105,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
 
       const subject = subjectIn?.trim() || (project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name ?? 'Untitled'}`);
 
-      await send({
+      await send((req as any).user.id, {
         to: toAddress,
         cc,
         bcc,
@@ -1141,7 +1140,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       if (!inv) return res.status(404).json({ error: 'Invoice not found' });
       const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
       if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      await send({
+      await send((req as any).user.id, {
         to,
         cc,
         bcc,
@@ -1167,7 +1166,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
       if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
       const number = co.number ?? '';
-      await send({
+      await send((req as any).user.id, {
         to,
         cc,
         bcc,
@@ -1195,7 +1194,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
       if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
       const padded = String(iss.number).padStart(3, '0');
-      await send({
+      await send((req as any).user.id, {
         to,
         cc,
         bcc,
