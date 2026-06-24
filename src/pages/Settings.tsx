@@ -19,6 +19,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.1.2',
+    date: 'June 24, 2026',
+    changes: [
+      'Per-user email (SMTP): outgoing email is now configured per user instead of one shared account. Set up your own sending account under Settings → Email, and the proposals, invoices, issue reports, and change-order requests you send go out from your account. (Each user needs to enter their own SMTP settings once.)',
+      'New project: plan PDFs are now optional — you can create a project with no pages and add them later. When you do upload PDFs, the upload step now shows a progress bar (and a working indicator while it reads the file) so you can tell it\'s processing and not stuck.',
+      'Takeoff templates moved: the Templates tab was removed from the projects page and is now a "Takeoff Templates" section under Settings, which fits better now that projects are more than just takeoffs.',
+      'Fixed text-field colours in dark mode on the new-project page (bid due date, plan set, and address fields were styled inconsistently).',
+    ],
+  },
+  {
     version: '2.1.1',
     date: 'June 17, 2026',
     changes: [
