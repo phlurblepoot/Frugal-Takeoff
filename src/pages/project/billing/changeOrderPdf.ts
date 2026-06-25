@@ -1,9 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { ChangeOrder, ChangeOrderLine } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
-import { resolveAccentRgb } from './invoicePdf';
-
-export { resolveAccentRgb };
+import {
+  LetterheadContext,
+  drawLetterheadHeader,
+  drawLetterheadFooter,
+} from '../../../utils/documentLetterhead';
 
 const fmtQty = (n: number) => String(n);
 
@@ -37,43 +39,41 @@ export interface ChangeOrderPdfContext {
   projectName: string;
   contractor?: string | null;
   address?: string | null;
-  company: { name: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
-  accentRgb?: [number, number, number];
+  /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
+  letterhead: LetterheadContext;
   photoDataUrls: string[]; // pre-fetched (caller resolves each fileId → dataURL)
 }
 
 export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
-  const Hp = doc.internal.pageSize.getHeight();
   const M = 48;
-  const [ar, ag, ab] = ctx.accentRgb ?? [37, 99, 235];
+  const lc = ctx.letterhead;
+  const [ar, ag, ab] = lc.brandRgb;
   const co = ctx.changeOrder;
-  let y = M;
 
-  // (1) Header: logo + company block (left)
-  let leftY = y;
-  if (ctx.company.logoDataUrl) {
-    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip bad logo */ }
-  }
-  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
-  doc.text(ctx.company.name || 'Change Order Request', M, leftY + 4); leftY += 16;
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90, 90, 90);
-  for (const line of [ctx.company.address, [ctx.company.phone, ctx.company.email].filter(Boolean).join('  ·  ')].filter(Boolean)) {
-    doc.text(String(line), M, leftY); leftY += 12;
-  }
+  // Branded header + footer on the first page; body sits between top/bottom.
+  const top = drawLetterheadHeader(doc, lc);
+  const bottom = drawLetterheadFooter(doc, lc);
+  let y = top;
+  const newPage = () => {
+    doc.addPage();
+    drawLetterheadHeader(doc, lc);
+    drawLetterheadFooter(doc, lc);
+    y = top;
+  };
 
-  // (1) Header: CHANGE ORDER REQUEST title + meta (right)
+  // (1) Title + meta (body area, below the header)
   doc.setFont('helvetica', 'bold').setFontSize(20).setTextColor(ar, ag, ab);
-  doc.text('CHANGE ORDER REQUEST', W - M, y + 16, { align: 'right' });
+  doc.text('CHANGE ORDER REQUEST', M, y + 8);
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
-  let metaY = y + 36;
+  let metaY = y;
   doc.text(`No: CO-${co.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
   if (co.date) { doc.text(`Date: ${new Date(co.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
   const impact = scheduleImpactLabel(co.scheduleImpactDays);
   if (impact) { doc.text(impact, W - M, metaY, { align: 'right' }); metaY += 14; }
 
-  y = Math.max(leftY, metaY) + 20;
+  y = Math.max(y + 28, metaY) + 12;
 
   // (2) Bill To
   doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(120, 120, 120);
@@ -89,25 +89,34 @@ export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
     doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(120, 120, 120);
     doc.text('DESCRIPTION', M, y); y += 14;
     doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
-    const lines = doc.splitTextToSize(co.description, W - 2 * M);
-    doc.text(lines, M, y); y += lines.length * 13 + 14;
+    const lines = doc.splitTextToSize(co.description, W - 2 * M) as string[];
+    for (const line of lines) {
+      if (y + 13 > bottom) { newPage(); doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30); }
+      doc.text(line, M, y); y += 13;
+    }
+    y += 14;
   }
 
   const xQty = 320, xUnit = 396, xAmt = W - M;
 
   // (4) Line-item table (only if any lines)
   if (co.lines.length) {
-    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60, 60, 60);
-    doc.text('DESCRIPTION', M, y);
-    doc.text('QTY', xQty, y, { align: 'right' });
-    doc.text('UNIT', xUnit, y, { align: 'right' });
-    doc.text('AMOUNT', xAmt, y, { align: 'right' });
-    y += 6;
-    doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y);
-    y += 16;
+    const drawCoTableHead = () => {
+      doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60, 60, 60);
+      doc.text('DESCRIPTION', M, y);
+      doc.text('QTY', xQty, y, { align: 'right' });
+      doc.text('UNIT', xUnit, y, { align: 'right' });
+      doc.text('AMOUNT', xAmt, y, { align: 'right' });
+      y += 6;
+      doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y);
+      y += 16;
+    };
+    if (y + 40 > bottom) newPage();
+    drawCoTableHead();
 
     doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
     for (const [desc, qty, unit, amount] of coRows(co.lines)) {
+      if (y + 18 > bottom) { newPage(); drawCoTableHead(); doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30); }
       doc.text(desc, M, y, { maxWidth: 260 });
       doc.text(qty, xQty, y, { align: 'right' });
       doc.text(unit, xUnit, y, { align: 'right' });
@@ -118,7 +127,8 @@ export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
     y += 8;
   }
 
-  // (5) Lump sum + (6) Total (bottom-right)
+  // (5) Lump sum + (6) Total (bottom-right) — keep the block together.
+  if (y + 60 > bottom) newPage();
   doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(xUnit - 20, y, W - M, y);
   y += 16;
   for (const [label, value] of coTotalsBlock(co.totalCents, co.lumpSumCents)) {
@@ -131,21 +141,20 @@ export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
   y += 16;
 
   // (7) Signature / acceptance block
-  if (y + 60 > Hp - M) { doc.addPage(); y = M; }
+  if (y + 60 > bottom) newPage();
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
   doc.text('Accepted by (Owner): ______________________________    Date: ______________', M, y); y += 28;
   doc.text('Submitted by (Contractor): _________________________    Date: ______________', M, y); y += 18;
 
   // (8) Photos appended as pages (fresh page after the signature block).
   if (ctx.photoDataUrls.length) {
-    doc.addPage();
-    y = M;
+    newPage();
     doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(60, 60, 60);
     doc.text('Photos', M, y); y += 14;
     const cellW = (W - 2 * M - 12) / 2, cellH = 150;
     let col = 0;
     for (const url of ctx.photoDataUrls) {
-      if (y + cellH > Hp - M) { doc.addPage(); y = M; col = 0; }
+      if (y + cellH > bottom) { newPage(); col = 0; }
       const x = M + col * (cellW + 12);
       try { doc.addImage(url, 'JPEG', x, y, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
       col++;

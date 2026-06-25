@@ -11,7 +11,7 @@ import {
 } from '../../components/ui';
 import { PunchItemEditor } from './punch/PunchItemEditor';
 import { buildPunchPdf } from './punch/punchPdf';
-import { resolveAccentRgb } from './billing/invoicePdf';
+import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useProjectOutlet } from './ProjectLayout';
 
 const UNASSIGNED = 'Unassigned';
@@ -103,12 +103,23 @@ export const ProjectPunch: React.FC = () => {
         const blob = await (await fetch(logoDataUrl)).blob();
         logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
       }
+      if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+        logoDataUrl = await invertImageDataUrl(logoDataUrl);
+      }
       const doc = buildPunchPdf({
         items: list.map(i => ({ area: i.area, description: i.description, done: i.done })),
         projectName,
-        company: { name: settings.appName || 'Punch List', logoDataUrl },
         photoDataUrls: {}, // text-only v1; param kept so photos can be added later
-        accentRgb: resolveAccentRgb(),
+        letterhead: {
+          brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+          company: {
+            name: settings.companyName || settings.appName,
+            phone: settings.companyPhone,
+            email: settings.companyEmail,
+            address: settings.companyAddress,
+          },
+          logoDataUrl,
+        },
       });
       doc.save(`${projectName}-punch-list.pdf`);
     } catch { toast('Failed to generate report', { type: 'error' }); }

@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { Invoice } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
+import {
+  LetterheadContext,
+  drawLetterheadHeader,
+  drawLetterheadFooter,
+} from '../../../utils/documentLetterhead';
 
 const fmtQty = (n: number) => String(n);
 
@@ -40,39 +45,31 @@ export interface InvoicePdfContext {
   projectName: string;
   contractor?: string | null;
   address?: string | null;
-  company: { name: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
-  accentRgb?: [number, number, number];
+  /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
+  letterhead: LetterheadContext;
 }
 
 export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
   const M = 48;
-  const [ar, ag, ab] = ctx.accentRgb ?? [37, 99, 235];
-  let y = M;
+  const lc = ctx.letterhead;
+  const [ar, ag, ab] = lc.brandRgb; // brand accent for body rules/titles
+  // Branded header + footer on the (single) page. Body starts below `top`.
+  const top = drawLetterheadHeader(doc, lc);
+  drawLetterheadFooter(doc, lc);
+  let y = top;
 
-  // Header: logo + company block (left)
-  let leftY = y;
-  if (ctx.company.logoDataUrl) {
-    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip bad logo */ }
-  }
-  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
-  doc.text(ctx.company.name || 'Invoice', M, leftY + 4); leftY += 16;
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90, 90, 90);
-  for (const line of [ctx.company.address, [ctx.company.phone, ctx.company.email].filter(Boolean).join('  ·  ')].filter(Boolean)) {
-    doc.text(String(line), M, leftY); leftY += 12;
-  }
-
-  // Header: INVOICE title + meta (right)
+  // Title + meta (body area, just below the header)
   doc.setFont('helvetica', 'bold').setFontSize(22).setTextColor(ar, ag, ab);
-  doc.text('INVOICE', W - M, y + 16, { align: 'right' });
+  doc.text('INVOICE', M, y + 8);
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
-  let metaY = y + 36;
+  let metaY = y;
   doc.text(`No: ${ctx.invoice.number ?? ''}`, W - M, metaY, { align: 'right' }); metaY += 14;
   if (ctx.invoice.date) { doc.text(`Date: ${new Date(ctx.invoice.date).toLocaleDateString()}`, W - M, metaY, { align: 'right' }); metaY += 14; }
   if (ctx.invoice.terms) { doc.text(`Terms: ${ctx.invoice.terms}`, W - M, metaY, { align: 'right' }); metaY += 14; }
 
-  y = Math.max(leftY, metaY) + 20;
+  y = Math.max(y + 28, metaY) + 12;
 
   // Bill To
   doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(120, 120, 120);
@@ -83,20 +80,33 @@ export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   }
   y += 14;
 
+  // Bottom limit for body content (above the footer banners).
+  const bottom = drawLetterheadFooter(doc, lc);
+  const newPage = () => {
+    doc.addPage();
+    drawLetterheadHeader(doc, lc);
+    drawLetterheadFooter(doc, lc);
+    y = top;
+  };
+
   // Line table header
   const xQty = 320, xUnit = 396, xAmt = W - M;
-  doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60, 60, 60);
-  doc.text('DESCRIPTION', M, y);
-  doc.text('QTY', xQty, y, { align: 'right' });
-  doc.text('UNIT', xUnit, y, { align: 'right' });
-  doc.text('AMOUNT', xAmt, y, { align: 'right' });
-  y += 6;
-  doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y);
-  y += 16;
+  const drawTableHead = () => {
+    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60, 60, 60);
+    doc.text('DESCRIPTION', M, y);
+    doc.text('QTY', xQty, y, { align: 'right' });
+    doc.text('UNIT', xUnit, y, { align: 'right' });
+    doc.text('AMOUNT', xAmt, y, { align: 'right' });
+    y += 6;
+    doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y);
+    y += 16;
+  };
+  drawTableHead();
 
   // Rows
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30);
   for (const [desc, qty, unit, amount] of invoiceRows(ctx.invoice.lines)) {
+    if (y + 18 > bottom) { newPage(); drawTableHead(); doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(30, 30, 30); }
     doc.text(desc, M, y, { maxWidth: 260 });
     doc.text(qty, xQty, y, { align: 'right' });
     doc.text(unit, xUnit, y, { align: 'right' });
@@ -106,7 +116,8 @@ export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   doc.setDrawColor(210, 210, 210).setLineWidth(0.5).line(M, y, W - M, y);
   y += 8;
 
-  // Totals (bottom-right)
+  // Totals (bottom-right) — keep the whole totals block on one page.
+  if (y + 90 > bottom) newPage();
   doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(xUnit - 20, y, W - M, y);
   y += 16;
   const totals = invoiceTotalsBlock(ctx.invoice.totalCents, ctx.invoice.paidCents);

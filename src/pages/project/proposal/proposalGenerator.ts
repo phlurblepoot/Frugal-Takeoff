@@ -8,6 +8,11 @@ import { jsPDF } from 'jspdf';
 import { Project, MeasurementTakeoff } from '../../../types';
 import { getFile, getImage } from '../../../utils/store';
 import {
+  LetterheadContext,
+  drawLetterheadHeader,
+  drawLetterheadFooter,
+} from '../../../utils/documentLetterhead';
+import {
   calculatePolylineLength,
   calculatePolygonArea,
   calculateRealValue,
@@ -544,6 +549,10 @@ export interface ProposalOptions {
   fixedPriceTotal?: number;
   // JPEG data URLs appended as photo pages after the Terms page.
   photoDataUrls?: string[];
+  // Branded letterhead (header + footer on every page). When provided, the
+  // brand colour also drives the proposal's accents (replacing the user-picked
+  // headerColor) so client PDFs reflect the company brand, not a UI preference.
+  letterhead?: LetterheadContext;
 }
 
 export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; }
@@ -585,56 +594,46 @@ export async function generateProposalPdf(
 
   const selectedTakeoffs = takeoffTotals.filter(t => selectedTakeoffIds.has(t.id));
 
-  const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  // Letter portrait so the shared (Letter-based) letterhead fits exactly.
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = pdf.internal.pageSize.getWidth();
   const H = pdf.internal.pageSize.getHeight();
 
-  // Derive header RGB + a lighter accent tint (60% header + 40% white)
-  const hexToRgb = (hex: string): [number, number, number] => {
-    const c = hex.replace('#', '');
-    const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
-    return [parseInt(full.slice(0,2),16), parseInt(full.slice(2,4),16), parseInt(full.slice(4,6),16)];
+  // Branded letterhead. When a letterhead context is supplied the brand colour
+  // drives the proposal accents (the user-picked headerColor no longer leaks
+  // into client PDFs). Falls back to the legacy headerColor when absent.
+  const lc: LetterheadContext = options.letterhead ?? {
+    brandRgb: ((): [number, number, number] => {
+      const c = (headerColor || '#1e293b').replace('#', '');
+      const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
+      return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)];
+    })(),
+    company: {
+      name: settings.companyName || settings.appName,
+      phone: settings.companyPhone,
+      email: settings.companyEmail,
+      address: settings.companyAddress,
+    },
   };
-  const [hR, hG, hB] = hexToRgb(headerColor);
-  const accentR = Math.round(hR + (255-hR)*0.4);
-  const accentG = Math.round(hG + (255-hG)*0.4);
-  const accentB = Math.round(hB + (255-hB)*0.4);
+  const [hR, hG, hB] = lc.brandRgb;
+  // Lighter accent tint (60% brand + 40% white) for thin rules / sub-accents.
+  const accentR = Math.round(hR + (255 - hR) * 0.4);
+  const accentG = Math.round(hG + (255 - hG) * 0.4);
+  const accentB = Math.round(hB + (255 - hB) * 0.4);
   const font = fontFamily;
 
+  // Draws the branded header + footer on the current page; returns contentTop.
+  // Each page's body must start at `pageTop` and stay above `pageBottom`.
+  const drawFrame = (): number => {
+    const t = drawLetterheadHeader(pdf, lc);
+    drawLetterheadFooter(pdf, lc);
+    return t;
+  };
+  const pageBottom = drawLetterheadFooter(pdf, lc); // also draws the first footer
+  const pageTop = drawLetterheadHeader(pdf, lc);
+
   // ── COVER PAGE ──────────────────────────────────────────────────────
-  // Header band
-  pdf.setFillColor(hR, hG, hB);
-  pdf.rect(0, 0, W, 120, 'F');
-
-  // Logo
-  let logoLoaded = false;
-  if (settings.logoUrl) {
-    try {
-      const logoImg = new Image();
-      logoImg.crossOrigin = 'anonymous';
-      logoImg.src = settings.logoUrl;
-      await new Promise<void>(r => { logoImg.onload = () => r(); logoImg.onerror = () => r(); });
-      if (logoImg.complete && logoImg.naturalWidth > 0) {
-        pdf.addImage(logoImg, 40, 18, 84, 84);
-        logoLoaded = true;
-      }
-    } catch { /* skip */ }
-  }
-
-  const textX = logoLoaded ? 144 : 40;
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(15);
-  pdf.setFont(font, 'bold');
-  pdf.text(settings.companyName || settings.appName || 'Proposal', textX, 52);
-
-  const contactParts = [settings.companyPhone, settings.companyEmail, settings.companyAddress].filter(Boolean);
-  if (contactParts.length > 0) {
-    pdf.setFontSize(9);
-    pdf.setFont(font, 'normal');
-    pdf.text(contactParts.join('   ·   '), textX, 72);
-  }
-
-  // "PROPOSAL" heading — 38pt with branded accent bar
+  // "PROPOSAL" heading — 38pt with branded accent bar (in the body area)
   pdf.setTextColor(hR, hG, hB);
   pdf.setFontSize(38);
   pdf.setFont(font, 'bold');
@@ -646,6 +645,7 @@ export async function generateProposalPdf(
   pdf.setDrawColor(accentR, accentG, accentB);
   pdf.setLineWidth(0.5);
   pdf.line(40, 230, W - 40, 230);
+  void pageTop;
 
   // Project name
   const title = proposalCustomTitle || project.name;
@@ -724,9 +724,9 @@ export async function generateProposalPdf(
     pdf.text(`This proposal is valid until ${new Date(validUntil + 'T00:00:00').toLocaleDateString()}.`, W / 2, Math.min(validY, H - 90), { align: 'center' });
   }
 
-  // Signature block
+  // Signature block — kept above the letterhead footer banner.
   if (includeSignature) {
-    const sigY = H - 130;
+    const sigY = Math.min(H - 130, pageBottom - 40);
     pdf.setDrawColor(accentR, accentG, accentB);
     pdf.setLineWidth(0.5);
     // Authorized signature
@@ -748,33 +748,43 @@ export async function generateProposalPdf(
     pdf.text('ACCEPTED BY', 40, sigY - 14);
   }
 
-  // Cover page footer
+  // Cover page footer — above the letterhead footer banner.
   pdf.setFontSize(9);
   pdf.setTextColor(148, 163, 184);
   pdf.setFont(font, 'normal');
-  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
 
   const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
+
+  // Draws a section title band in the BODY area (below the letterhead header).
+  // Returns the Y where section content may begin. Each new section/continuation
+  // page must first call drawFrame() so the letterhead is on every page.
+  const drawSectionBand = (titleText: string): number => {
+    const bandY = pageTop;
+    pdf.setFillColor(hR, hG, hB);
+    pdf.rect(0, bandY, W, 30, 'F');
+    pdf.setFontSize(13);
+    pdf.setFont(font, 'bold');
+    pdf.setTextColor(255, 255, 255);
+    pdf.text(titleText, 40, bandY + 20);
+    pdf.setFontSize(10);
+    pdf.setFont(font, 'normal');
+    pdf.text(projNameTrunc, W - 40, bandY + 20, { align: 'right' });
+    return bandY + 30 + 18;
+  };
 
   // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
   // Fixed (lump-sum) mode shows only the cover total + notes — no cost detail.
   if (includeTakeoffList && !isFixedMode) {
   onProgress?.('Adding scope details…');
   pdf.addPage();
+  drawFrame();
 
-  pdf.setFillColor(hR, hG, hB);
-  pdf.rect(0, 0, W, 50, 'F');
-  pdf.setFontSize(13);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(255, 255, 255);
-  pdf.text('Takeoff Summary', 40, 33);
-  pdf.setFontSize(10);
-  pdf.setFont(font, 'normal');
-  pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
+  const sectionTop = drawSectionBand('Takeoff Summary');
 
   // Table columns
   const COL = { swatch: 40, name: 62, type: 258, qty: 330, unit: 400, cost: W - 40 };
-  const tableTop = 78;
+  const tableTop = sectionTop + 12;
   const rowH = 28;
 
   // Table header — bottom border line instead of fill
@@ -815,19 +825,11 @@ export async function generateProposalPdf(
     const unitLabel = UNIT_LABELS[t.unit || ''] || t.unit ||
       (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
 
-    // New page if near bottom
-    if (y > H - 80) {
+    // New page if near bottom (keep clear of the letterhead footer).
+    if (y > pageBottom - 24) {
       pdf.addPage();
-      pdf.setFillColor(hR, hG, hB);
-      pdf.rect(0, 0, W, 50, 'F');
-      pdf.setFontSize(13);
-      pdf.setFont(font, 'bold');
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('Takeoff Summary (cont.)', 40, 33);
-      pdf.setFontSize(10);
-      pdf.setFont(font, 'normal');
-      pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
-      y = 70;
+      drawFrame();
+      y = drawSectionBand('Takeoff Summary (cont.)') + 12;
       rowIndex = 0;
     }
 
@@ -872,18 +874,10 @@ export async function generateProposalPdf(
       if (t.isAdvancedCost && t.customCosts?.length) {
         const details = calculateTakeoffCostDetails(t, t.totalRealValue);
         for (const detail of details) {
-          if (y > H - 60) {
+          if (y > pageBottom - 18) {
             pdf.addPage();
-            pdf.setFillColor(hR, hG, hB);
-            pdf.rect(0, 0, W, 50, 'F');
-            pdf.setFontSize(13);
-            pdf.setFont(font, 'bold');
-            pdf.setTextColor(255, 255, 255);
-            pdf.text('Takeoff Summary (cont.)', 40, 33);
-            pdf.setFontSize(10);
-            pdf.setFont(font, 'normal');
-            pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
-            y = 70;
+            drawFrame();
+            y = drawSectionBand('Takeoff Summary (cont.)') + 12;
             rowIndex = 0;
           }
           pdf.setFontSize(8);
@@ -908,18 +902,10 @@ export async function generateProposalPdf(
   // Helper: draw a package group header + its takeoffs + subtotal
   const drawPackageGroup = (pkg: string, takeoffs: typeof selectedTakeoffs) => {
     // Ensure there's room for at least the header + one row
-    if (y > H - 110) {
+    if (y > pageBottom - 54) {
       pdf.addPage();
-      pdf.setFillColor(hR, hG, hB);
-      pdf.rect(0, 0, W, 50, 'F');
-      pdf.setFontSize(13);
-      pdf.setFont(font, 'bold');
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('Takeoff Summary (cont.)', 40, 33);
-      pdf.setFontSize(10);
-      pdf.setFont(font, 'normal');
-      pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
-      y = 70;
+      drawFrame();
+      y = drawSectionBand('Takeoff Summary (cont.)') + 12;
       rowIndex = 0;
     }
 
@@ -974,42 +960,31 @@ export async function generateProposalPdf(
   pdf.text('TOTAL', COL.name, y);
   pdf.text(formatCurrency(roundUpTo100(grandTotal)), COL.cost, y, { align: 'right' });
 
-  // Footer on last takeoff page
+  // Footer on last takeoff page — above the letterhead banner.
   pdf.setFontSize(9);
   pdf.setTextColor(148, 163, 184);
   pdf.setFont(font, 'normal');
-  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
   } // end includeTakeoffList
 
   // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
   if (terms.trim()) {
     onProgress?.('Adding terms…');
     pdf.addPage();
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(0, 0, W, 50, 'F');
-    pdf.setFontSize(13);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text('Terms & Conditions', 40, 33);
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'normal');
-    pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
-
-    let ty = 78;
+    drawFrame();
+    let ty = drawSectionBand('Terms & Conditions');
     pdf.setFontSize(10);
     pdf.setFont(font, 'normal');
     pdf.setTextColor(71, 85, 105);
     const termLines = pdf.splitTextToSize(terms.trim(), W - 80) as string[];
     for (const line of termLines) {
-      if (ty > H - 60) {
+      if (ty > pageBottom - 18) {
         pdf.addPage();
-        pdf.setFillColor(hR, hG, hB);
-        pdf.rect(0, 0, W, 50, 'F');
-        pdf.setFontSize(13);
-        pdf.setFont(font, 'bold');
-        pdf.setTextColor(255, 255, 255);
-        pdf.text('Terms & Conditions (cont.)', 40, 33);
-        ty = 70;
+        drawFrame();
+        ty = drawSectionBand('Terms & Conditions (cont.)');
+        pdf.setFontSize(10);
+        pdf.setFont(font, 'normal');
+        pdf.setTextColor(71, 85, 105);
       }
       pdf.text(line, 40, ty);
       ty += 16;
@@ -1017,7 +992,7 @@ export async function generateProposalPdf(
     pdf.setFontSize(9);
     pdf.setTextColor(148, 163, 184);
     pdf.setFont(font, 'normal');
-    pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, H - 36, { align: 'center' });
+    pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
   }
 
   // ── PHOTO PAGES ─────────────────────────────────────────────────────
@@ -1026,22 +1001,13 @@ export async function generateProposalPdf(
   if (options.photoDataUrls?.length) {
     onProgress?.('Adding photos…');
     pdf.addPage();
-    let py = 50;
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(0, 0, W, 50, 'F');
-    pdf.setFontSize(13);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text('Photos', 40, 33);
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'normal');
-    pdf.text(projNameTrunc, W - 40, 33, { align: 'right' });
-    py = 78;
+    drawFrame();
+    let py = drawSectionBand('Photos');
     const M = 40;
     const cellW = (W - 2 * M - 12) / 2, cellH = 150;
     let col = 0;
     for (const url of options.photoDataUrls) {
-      if (py + cellH > H - M) { pdf.addPage(); py = M; col = 0; }
+      if (py + cellH > pageBottom) { pdf.addPage(); drawFrame(); py = drawSectionBand('Photos (cont.)'); col = 0; }
       const x = M + col * (cellW + 12);
       try { pdf.addImage(url, 'JPEG', x, py, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
       col++;
@@ -1050,13 +1016,14 @@ export async function generateProposalPdf(
   }
 
   // ── PAGE NUMBERS ────────────────────────────────────────────────────
+  // Stamped just above the letterhead footer banner so they don't sit under it.
   const totalPages = (pdf as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     pdf.setPage(i);
     pdf.setFontSize(8);
     pdf.setFont(font, 'normal');
     pdf.setTextColor(148, 163, 184);
-    pdf.text(`Page ${i} of ${totalPages}`, W - 40, H - 20, { align: 'right' });
+    pdf.text(`Page ${i} of ${totalPages}`, W - 40, pageBottom + 4, { align: 'right' });
   }
 
   // ── SAVE (merge with highlights if requested) ────────────────────────

@@ -1,7 +1,11 @@
 // src/pages/project/issues/issuePdf.ts
 import { jsPDF } from 'jspdf';
 import { Issue } from '../../../utils/store';
-import { resolveAccentRgb } from '../billing/invoicePdf';
+import {
+  LetterheadContext,
+  drawLetterheadHeader,
+  drawLetterheadFooter,
+} from '../../../utils/documentLetterhead';
 
 export const issueHeading = (issue: Pick<Issue, 'number' | 'title'>): string =>
   `ISS-${String(issue.number).padStart(3, '0')} · ${issue.title || '(untitled)'}`;
@@ -10,38 +14,37 @@ export interface IssuePdfContext {
   issue: Issue;
   projectName: string;
   contractor?: string | null;
-  company: { name: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
   photoDataUrls: string[]; // pre-fetched (caller resolves each fileId → dataURL)
-  accentRgb?: [number, number, number];
+  /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
+  letterhead: LetterheadContext;
 }
 
-// Builds the issue report PDF and returns the bytes. Reuses the Layout-A header
-// treatment (logo + company left, accent title right) for visual consistency
-// with invoices; body is the issue number/title/description; photos grid follows.
+// Builds the issue report PDF and returns the bytes. Draws the shared branded
+// letterhead (header + footer on every page); body is the issue number / title /
+// description; a photos grid follows.
 export function buildIssuePdf(ctx: IssuePdfContext): Uint8Array {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
-  const Hp = doc.internal.pageSize.getHeight();
   const M = 48;
-  const [ar, ag, ab] = ctx.accentRgb ?? [37, 99, 235];
-  let y = M;
+  const lc = ctx.letterhead;
+  const [ar, ag, ab] = lc.brandRgb;
 
-  // Header: logo + company (left), ISSUE REPORT title (right)
-  let leftY = y;
-  if (ctx.company.logoDataUrl) {
-    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip */ }
-  }
-  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
-  doc.text(ctx.company.name || 'Issue Report', M, leftY + 4); leftY += 16;
-  doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90, 90, 90);
-  for (const line of [ctx.company.address, [ctx.company.phone, ctx.company.email].filter(Boolean).join('  ·  ')].filter(Boolean)) {
-    doc.text(String(line), M, leftY); leftY += 12;
-  }
+  const top = drawLetterheadHeader(doc, lc);
+  const bottom = drawLetterheadFooter(doc, lc);
+  let y = top;
+  const newPage = () => {
+    doc.addPage();
+    drawLetterheadHeader(doc, lc);
+    drawLetterheadFooter(doc, lc);
+    y = top;
+  };
+
+  // Title + date (body area, below the header)
   doc.setFont('helvetica', 'bold').setFontSize(20).setTextColor(ar, ag, ab);
-  doc.text('ISSUE REPORT', W - M, y + 16, { align: 'right' });
+  doc.text('ISSUE REPORT', M, y + 8);
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
-  doc.text(new Date(ctx.issue.createdAt).toLocaleDateString(), W - M, y + 34, { align: 'right' });
-  y = Math.max(leftY, y + 50) + 16;
+  doc.text(new Date(ctx.issue.createdAt).toLocaleDateString(), W - M, y, { align: 'right' });
+  y += 28;
 
   // Project / contractor
   doc.setFontSize(10).setTextColor(30, 30, 30);
@@ -60,18 +63,23 @@ export function buildIssuePdf(ctx: IssuePdfContext): Uint8Array {
   // Description
   if (ctx.issue.description) {
     doc.setFontSize(11).setTextColor(30, 30, 30);
-    const lines = doc.splitTextToSize(ctx.issue.description, W - 2 * M);
-    doc.text(lines, M, y); y += lines.length * 14 + 12;
+    const lines = doc.splitTextToSize(ctx.issue.description, W - 2 * M) as string[];
+    for (const line of lines) {
+      if (y + 14 > bottom) { newPage(); doc.setFont('helvetica', 'normal').setFontSize(11).setTextColor(30, 30, 30); }
+      doc.text(line, M, y); y += 14;
+    }
+    y += 12;
   }
 
   // Photos grid (2 per row)
   if (ctx.photoDataUrls.length) {
+    if (y + 28 > bottom) newPage();
     doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(60, 60, 60);
     doc.text('Photos', M, y); y += 14;
     const cellW = (W - 2 * M - 12) / 2, cellH = 150;
     let col = 0;
     for (const url of ctx.photoDataUrls) {
-      if (y + cellH > Hp - M) { doc.addPage(); y = M; col = 0; }
+      if (y + cellH > bottom) { newPage(); col = 0; }
       const x = M + col * (cellW + 12);
       try { doc.addImage(url, 'JPEG', x, y, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
       col++;

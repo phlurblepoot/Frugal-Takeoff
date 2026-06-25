@@ -23,6 +23,7 @@ import {
   HighlightQuality,
   ProposalOptions,
 } from './proposal/proposalGenerator';
+import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useShareLink } from '../../components/ShareLinkModal';
@@ -187,6 +188,18 @@ export const ProjectProposal: React.FC = () => {
           if (url) photoDataUrls.push(url);
         } catch { /* skip unreadable photo */ }
       }
+      // Resolve the company logo to a data URL (inverted when configured) for
+      // the shared branded letterhead.
+      let logoDataUrl: string | undefined = settings.logoUrl || undefined;
+      if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
+        try {
+          const blob = await (await fetch(logoDataUrl)).blob();
+          logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
+        } catch { logoDataUrl = undefined; }
+      }
+      if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+        logoDataUrl = await invertImageDataUrl(logoDataUrl);
+      }
       const options: ProposalOptions = {
         includeCostDetail,
         includeHighlights,
@@ -202,6 +215,16 @@ export const ProjectProposal: React.FC = () => {
         priceMode,
         fixedPriceTotal: Number(fixedPrice) || 0,
         photoDataUrls,
+        letterhead: {
+          brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+          company: {
+            name: settings.companyName || settings.appName,
+            phone: settings.companyPhone,
+            email: settings.companyEmail,
+            address: settings.companyAddress,
+          },
+          logoDataUrl,
+        },
       };
       const totals = computeTakeoffTotals(project, currentPageIds);
       const { pdfBytes, suggestedName } = await generateProposalPdf(
