@@ -1303,6 +1303,8 @@ export const Settings: React.FC = () => {
     companyPhone: '',
     companyEmail: '',
     companyAddress: '',
+    companyBrandColor: '#99CB38',
+    invertLogoOnDocuments: 'false',
     publicHost: '',
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -1497,6 +1499,54 @@ export const Settings: React.FC = () => {
                           />
                         </div>
                       ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Document Branding</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Controls the branded header and footer on generated documents (proposals, invoices, change orders, issues, punch lists).</p>
+                  </div>
+                  <div className="p-6 space-y-6">
+                    <div>
+                      <label htmlFor="company-brand-color" className={labelCls}>Document Brand Colour</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          id="company-brand-color"
+                          type="color"
+                          value={serverSettings.companyBrandColor || '#99CB38'}
+                          onChange={e => setServerSettings({ ...serverSettings, companyBrandColor: e.target.value })}
+                          className="w-12 h-10 rounded-lg border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer shrink-0"
+                          aria-describedby="company-brand-color-hint"
+                        />
+                        <span className="font-mono text-sm text-slate-700 dark:text-slate-300 uppercase">
+                          {serverSettings.companyBrandColor || '#99CB38'}
+                        </span>
+                      </div>
+                      <p id="company-brand-color-hint" className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
+                        Used for the header/footer accents on generated documents (proposals, invoices, etc.).
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Invert Logo on Documents</p>
+                        <p id="invert-logo-hint" className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Turn on if your logo is dark — it will be shown in white on the dark document header.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={serverSettings.invertLogoOnDocuments === 'true'}
+                        aria-label="Invert logo on documents"
+                        aria-describedby="invert-logo-hint"
+                        onClick={() => setServerSettings({ ...serverSettings, invertLogoOnDocuments: serverSettings.invertLogoOnDocuments === 'true' ? 'false' : 'true' })}
+                        className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${serverSettings.invertLogoOnDocuments === 'true' ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                      >
+                        <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                          className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${serverSettings.invertLogoOnDocuments === 'true' ? 'left-6' : 'left-0.5'}`} />
+                      </button>
                     </div>
                   </div>
                 </div>
