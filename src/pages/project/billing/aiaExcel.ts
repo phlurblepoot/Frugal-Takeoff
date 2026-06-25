@@ -20,6 +20,9 @@ import type { AiaSettings, AiaPayApp, AiaSovLine, AiaG702, AiaG703Row } from '..
 
 export interface AiaExportCtx {
   projectName: string;
+  /** The project's general contractor — shown as "G. C." on G702 (distinct from
+   *  the FROM company, which is the user's own company from settings). */
+  contractor?: string;
   company: { name?: string; address?: string; phone?: string; email?: string; logoDataUrl?: string };
   aiaSettings: AiaSettings;
   app: AiaPayApp;
@@ -170,7 +173,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
     { width: 13 }, // E this period
     { width: 16 }, // F materials stored
     { width: 16 }, // G total completed & stored
-    { width: 9 },  // H %
+    { width: 14 }, // H % — also holds the "Application #:" header label on row 3
     { width: 14 }, // I balance to finish
     { width: 12 }, // J retainage
   ];
@@ -304,7 +307,7 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
     { width: 14 }, // D
     { width: 20 }, // E
     { width: 12 }, // F
-    { width: 10 }, // G
+    { width: 16 }, // G — holds the "APPLICATION NO:" / "PERIOD FROM:" labels
     { width: 18 }, // H
   ];
 
@@ -331,9 +334,9 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
   setCell(ws, 'H5', '', { align: 'right' }); // input (blank — not tracked) — G703 I4
 
   setCell(ws, 'C6', 'G. C. :', { bold: true });
-  // GC source: the contractor performing the work = ctx.company.name (the app
-  // has no separate GC field; in the template the FROM party is also the G.C.).
-  setCell(ws, 'D6', ctx.company.name ?? '', {}); // input — referenced by G703 D3
+  // G.C. = the project's general contractor (who we're billing) — NOT the FROM
+  // company (which is our own company from settings, in B7).
+  setCell(ws, 'D6', ctx.contractor ?? '', {}); // input — referenced by G703 D3
   ws.mergeCells('D6:F6');
   setCell(ws, 'G6', 'TO:', { bold: true });
   setCell(ws, 'H6', app.periodTo ?? '', { align: 'right' }); // input — G703 I5

@@ -51,6 +51,7 @@ const aiaSettings: AiaSettings = {
 
 const ctx: AiaExportCtx = {
   projectName: 'Test Project',
+  contractor: 'GC Builders Inc',
   company: { name: 'My Co', address: '3 Co Blvd', phone: '555', email: 'a@b.com' },
   aiaSettings, app, sovLines, g702, g703,
 };
@@ -131,8 +132,10 @@ describe('buildAiaWorkbook', () => {
     const ws = wb.getWorksheet('G702')!;
 
     // Inputs.
+    expect(ws.getCell('D6').value).toBe(ctx.contractor);      // G.C. = project contractor
+    expect(ws.getCell('B3').value).toBe(ctx.aiaSettings.ownerName); // owner (when entered)
+    expect(ws.getCell('B7').value).toBe(ctx.company.name);    // FROM = our company
     expect(ws.getCell('D3').value).toBe(ctx.projectName);     // project
-    expect(ws.getCell('D6').value).toBe(ctx.company.name);    // GC (= contractor)
     expect(ws.getCell('H3').value).toBe(app.number);          // application #
     expect(ws.getCell('H6').value).toBe(app.periodTo);        // period to
     expect(ws.getCell('G22').value).toBeCloseTo(app.retainagePercent / 100, 4); // rate
