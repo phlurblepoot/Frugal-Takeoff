@@ -112,291 +112,314 @@ function applyPageSetup(ws: ExcelJS.Worksheet, landscape = false): void {
 }
 
 // ---------------------------------------------------------------------------
-// G702 — Application and Certificate for Payment
+// Dynamic G702/G703 builder — matches Nathan's `docs/AIA SOV.xlsx` template.
+//
+// Both sheets carry LIVE formulas (inputs in C/D/E/F, every G/H/I/J derived) so
+// a GC can tweak the workbook in Excel and it recomputes, exactly like the
+// template. The G703 contract section and the change-order section each scale
+// to the actual number of lines: every TOTALS/GRAND-TOTAL SUM range and every
+// G702→G703 cross-reference is computed from the list lengths, never hardcoded.
+//
+// RETAINAGE — single-rate decision: the template uses ONE retainage rate at
+// `G702!G22` (referenced by every J formula and G702 lines 5 & 7). The app's
+// data model supports a per-line / separate stored-materials retainage nuance
+// (AiaSettings.retainagePercent vs storedRetainagePercent, per-row retainage),
+// but to faithfully match this template that nuance is COLLAPSED to one rate:
+//   R = (app.retainagePercent ?? aiaSettings.retainagePercent ?? 10) / 100
+// Because the J formulas resolve `SUM(D:E)*R` (not the stored model), the
+// exported retainage figures follow the single rate, which can differ from
+// ctx.g702.L5/J-per-row when stored-material retainage differs from R.
 // ---------------------------------------------------------------------------
-function buildG702(wb: ExcelJS.Workbook, ctx: AiaExportCtx): void {
-  const ws = wb.addWorksheet('G702');
-  applyPageSetup(ws, false);
 
-  // Column widths (A..F) sized for a two-column header + label/value cert block.
-  ws.columns = [
-    { width: 22 }, // A
-    { width: 26 }, // B
-    { width: 14 }, // C
-    { width: 22 }, // D
-    { width: 16 }, // E
-    { width: 16 }, // F
-  ];
-
-  const a = ctx.aiaSettings;
-  const g = ctx.g702;
-  const app = ctx.app;
-
-  let r = 1;
-
-  // Optional logo in the top-left header band. Never throw on a bad image.
-  if (ctx.company.logoDataUrl) {
-    try {
-      const m = /^data:(image\/(png|jpeg|jpg|gif));base64,(.+)$/i.exec(ctx.company.logoDataUrl);
-      if (m) {
-        const ext = m[2].toLowerCase() === 'jpg' ? 'jpeg' : (m[2].toLowerCase() as 'png' | 'jpeg' | 'gif');
-        const imgId = wb.addImage({ base64: m[3], extension: ext });
-        ws.addImage(imgId, { tl: { col: 0, row: 0 }, ext: { width: 140, height: 50 } });
-        r = 4; // leave room for the logo
-      }
-    } catch { /* skip bad logo */ }
-  }
-
-  // Title.
-  ws.mergeCells(`A${r}:F${r}`);
-  setCell(ws, `A${r}`, 'APPLICATION AND CERTIFICATE FOR PAYMENT', { bold: true, align: 'center', size: 14 });
-  r++;
-  ws.mergeCells(`A${r}:F${r}`);
-  setCell(ws, `A${r}`, 'AIA Document G702', { align: 'center', size: 9 });
-  r += 2;
-
-  const headerRow = (label: string, value: string, label2?: string, value2?: string) => {
-    setCell(ws, `A${r}`, label, { bold: true });
-    ws.mergeCells(`B${r}:C${r}`);
-    setCell(ws, `B${r}`, value);
-    if (label2 !== undefined) {
-      setCell(ws, `D${r}`, label2, { bold: true });
-      ws.mergeCells(`E${r}:F${r}`);
-      setCell(ws, `E${r}`, value2 ?? '');
-    }
-    r++;
-  };
-
-  const contractorBlock = [a.contractFor ? `For: ${a.contractFor}` : '']
-    .filter(Boolean)
-    .join('\n');
-
-  headerRow('TO OWNER:', a.ownerName ?? '', 'FROM CONTRACTOR:', ctx.company.name ?? '');
-  headerRow('', a.ownerAddress ?? '', '', ctx.company.address ?? '');
-  headerRow('PROJECT:', ctx.projectName, '', [ctx.company.phone, ctx.company.email].filter(Boolean).join('  '));
-  headerRow('VIA ARCHITECT:', a.architectName ?? '', 'CONTRACT FOR:', a.contractFor ?? '');
-  headerRow('', a.architectAddress ?? '', '', contractorBlock || '');
-  headerRow('APPLICATION NO:', String(app.number), 'PERIOD TO:', app.periodTo ?? '');
-  headerRow('APPLICATION DATE:', app.applicationDate ?? '', 'CONTRACT DATE:', a.contractDate ?? '');
-  headerRow('OWNER PROJECT NO:', a.ownerProjectNumber ?? '', 'ARCHITECT PROJECT NO:', a.architectProjectNumber ?? '');
-  r++;
-
-  // Certificate lines 1..9.
-  setCell(ws, `A${r}`, "CONTRACTOR'S APPLICATION FOR PAYMENT", { bold: true });
-  r++;
-
-  const certRow = (label: string, cents: number, opts: { bold?: boolean; sub?: boolean } = {}) => {
-    const labelCol = opts.sub ? `B${r}` : `A${r}`;
-    if (opts.sub) ws.mergeCells(`B${r}:E${r}`);
-    else ws.mergeCells(`A${r}:E${r}`);
-    setCell(ws, labelCol, label, { bold: opts.bold, border: true });
-    setCell(ws, `F${r}`, dollars(cents), { money: true, bold: opts.bold, border: true });
-    r++;
-  };
-
-  certRow('1. ORIGINAL CONTRACT SUM', g.L1originalContractCents);
-  certRow('2. NET CHANGE BY CHANGE ORDERS', g.L2changeOrdersCents);
-  certRow('3. CONTRACT SUM TO DATE (Line 1 ± 2)', g.L3contractSumToDateCents, { bold: true });
-  certRow('4. TOTAL COMPLETED & STORED TO DATE (Column G on G703)', g.L4totalCompletedStoredCents);
-  certRow('5. RETAINAGE:', g.L5retainageCents);
-  certRow(`a. ${app.retainagePercent}% of Completed Work (Columns D + E on G703)`, g.L5aRetainageWorkCents, { sub: true });
-  certRow(`b. ${app.storedRetainagePercent}% of Stored Material (Column F on G703)`, g.L5bRetainageStoredCents, { sub: true });
-  certRow('Total Retainage (Lines 5a + 5b)', g.L5retainageCents, { sub: true });
-  certRow('6. TOTAL EARNED LESS RETAINAGE (Line 4 less Line 5 Total)', g.L6earnedLessRetainageCents);
-  certRow('7. LESS PREVIOUS CERTIFICATES FOR PAYMENT (Line 6 from prior Certificate)', g.L7lessPreviousCents);
-  // Line 8 — emphasized current payment due.
-  ws.mergeCells(`A${r}:E${r}`);
-  setCell(ws, `A${r}`, '8. CURRENT PAYMENT DUE', { bold: true, border: true, fill: 'FFFFF2CC' });
-  setCell(ws, `F${r}`, dollars(g.L8currentPaymentDueCents), { money: true, bold: true, border: true, size: 12, fill: 'FFFFF2CC' });
-  r++;
-  certRow('9. BALANCE TO FINISH, PLUS RETAINAGE (Line 3 less Line 6)', g.L9balanceToFinishCents);
-  r++;
-
-  // Change Order summary box.
-  setCell(ws, `A${r}`, 'CHANGE ORDER SUMMARY', { bold: true });
-  r++;
-  const coRow = (label: string, cents: number, bold = false) => {
-    ws.mergeCells(`A${r}:E${r}`);
-    setCell(ws, `A${r}`, label, { bold, border: true });
-    setCell(ws, `F${r}`, dollars(cents), { money: true, bold, border: true });
-    r++;
-  };
-  coRow('Total additions', g.changeOrders.additionsCents);
-  coRow('Total deductions', g.changeOrders.deductionsCents);
-  coRow('NET CHANGE BY CHANGE ORDERS', g.changeOrders.netCents, true);
-  r++;
-
-  // Contractor's certification.
-  ws.mergeCells(`A${r}:F${r + 3}`);
-  setCell(
-    ws,
-    `A${r}`,
-    "The undersigned Contractor certifies that to the best of the Contractor's knowledge, information and belief the Work covered by this Application for Payment has been completed in accordance with the Contract Documents, that all amounts have been paid by the Contractor for Work for which previous Certificates for Payment were issued and payments received from the Owner, and that current payment shown herein is now due.",
-    { wrap: true, size: 9 },
-  );
-  r += 4;
-
-  setCell(ws, `A${r}`, 'CONTRACTOR:', { bold: true });
-  r += 2;
-  setCell(ws, `A${r}`, 'By: ____________________________', {});
-  setCell(ws, `D${r}`, 'Date: ____________________', {});
-  r += 2;
-  setCell(ws, `A${r}`, 'State of: ____________________', {});
-  setCell(ws, `D${r}`, 'County of: ____________________', {});
-  r++;
-  setCell(ws, `A${r}`, 'Subscribed and sworn to before me this ______ day of ____________, ________', { size: 9 });
-  r++;
-  setCell(ws, `A${r}`, 'Notary Public: ____________________________', {});
-  setCell(ws, `D${r}`, 'My Commission expires: ____________', {});
-  r += 2;
-
-  // Architect's Certificate for Payment.
-  setCell(ws, `A${r}`, "ARCHITECT'S CERTIFICATE FOR PAYMENT", { bold: true });
-  r++;
-  ws.mergeCells(`A${r}:F${r + 3}`);
-  setCell(
-    ws,
-    `A${r}`,
-    "In accordance with the Contract Documents, based on on-site observations and the data comprising this application, the Architect certifies to the Owner that to the best of the Architect's knowledge, information and belief the Work has progressed as indicated, the quality of the Work is in accordance with the Contract Documents, and the Contractor is entitled to payment of the AMOUNT CERTIFIED.",
-    { wrap: true, size: 9 },
-  );
-  r += 4;
-  setCell(ws, `A${r}`, 'AMOUNT CERTIFIED', { bold: true });
-  setCell(ws, `C${r}`, '$ ____________________', { bold: true });
-  r++;
-  setCell(
-    ws,
-    `A${r}`,
-    '(Attach explanation if amount certified differs from the amount applied. Initial all figures on this Application and on the Continuation Sheet that are changed to conform with the amount certified.)',
-    { size: 8, wrap: true },
-  );
-  ws.mergeCells(`A${r}:F${r}`);
-  r += 2;
-  setCell(ws, `A${r}`, 'ARCHITECT:', { bold: true });
-  r += 2;
-  setCell(ws, `A${r}`, 'By: ____________________________', {});
-  setCell(ws, `D${r}`, 'Date: ____________________', {});
+// Split a multi-line / comma-joined address into up to two display lines.
+function splitAddress(address: string | undefined): [string, string] {
+  const raw = (address ?? '').trim();
+  if (!raw) return ['', ''];
+  const parts = raw.includes('\n')
+    ? raw.split(/\r?\n/)
+    : raw.split(',');
+  const line1 = (parts[0] ?? '').trim();
+  const line2 = parts.slice(1).join(', ').trim();
+  return [line1, line2];
 }
 
+// Computed dynamic row anchors for the G703 sheet, consumed by G702.
+interface G703Anchors {
+  contractStart: number; // first contract item row
+  contractTotalRow: number; // contract TOTALS row
+  coStart: number; // first change-order item row
+  coTotalRow: number; // change-order TOTALS row
+  grandRow: number; // GRAND TOTAL row
+}
+
+const COL_LETTERS = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'];
+const G703_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'] as const;
+
 // ---------------------------------------------------------------------------
-// G703 — Continuation Sheet
+// G703 — Continuation Sheet (built FIRST; G702 references its dynamic rows).
 // ---------------------------------------------------------------------------
-function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): void {
+function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
   const ws = wb.addWorksheet('G703');
   applyPageSetup(ws, true); // landscape helps the wide grid
 
-  const app = ctx.app;
-  const a = ctx.aiaSettings;
-
-  // 10 columns: A..J.
   ws.columns = [
-    { width: 10 }, // A item no
-    { width: 36 }, // B description
+    { width: 11 }, // A item no
+    { width: 37 }, // B description
     { width: 16 }, // C scheduled value
-    { width: 16 }, // D previous
-    { width: 16 }, // E this period
-    { width: 16 }, // F stored
-    { width: 18 }, // G total to date
-    { width: 8 },  // H % (G/C)
-    { width: 16 }, // I balance to finish
-    { width: 14 }, // J retainage
+    { width: 14 }, // D previous applications
+    { width: 13 }, // E this period
+    { width: 16 }, // F materials stored
+    { width: 16 }, // G total completed & stored
+    { width: 9 },  // H %
+    { width: 14 }, // I balance to finish
+    { width: 12 }, // J retainage
   ];
 
-  let r = 1;
-  ws.mergeCells(`A${r}:J${r}`);
-  setCell(ws, `A${r}`, 'CONTINUATION SHEET', { bold: true, align: 'center', size: 14 });
-  r++;
-  ws.mergeCells(`A${r}:J${r}`);
-  setCell(ws, `A${r}`, 'AIA Document G703', { align: 'center', size: 9 });
-  r++;
-  ws.mergeCells(`A${r}:E${r}`);
-  setCell(ws, `A${r}`, `PROJECT: ${ctx.projectName}`, { size: 9 });
-  setCell(ws, `F${r}`, `APPLICATION NO: ${app.number}`, { size: 9 });
-  ws.mergeCells(`F${r}:G${r}`);
-  setCell(ws, `H${r}`, `APPLICATION DATE: ${app.applicationDate ?? ''}`, { size: 9 });
-  ws.mergeCells(`H${r}:J${r}`);
-  r++;
-  ws.mergeCells(`A${r}:E${r}`);
-  setCell(ws, `A${r}`, `CONTRACT DATE: ${a.contractDate ?? ''}`, { size: 9 });
-  setCell(ws, `F${r}`, `PERIOD TO: ${app.periodTo ?? ''}`, { size: 9 });
-  ws.mergeCells(`F${r}:J${r}`);
-  r += 2;
+  const contract = ctx.g703.filter((row) => !row.isChangeOrder);
+  const cos = ctx.g703.filter((row) => row.isChangeOrder);
 
-  // Header row.
-  const headerRowNum = r;
-  const headers: [string, string][] = [
+  // ── Header rows 1-5: company block + cross-refs back to G702 ──────────────
+  const [coAddr1, coAddr2] = splitAddress(ctx.company.address);
+  ws.mergeCells('A1:B1');
+  setCell(ws, 'A1', 'CONTINUATION SHEET', { bold: true, size: 12 });
+  setCell(ws, 'D1', 'AIA DOCUMENT G703', { bold: true, align: 'center', size: 9 });
+  ws.mergeCells('D1:F1');
+
+  setCell(ws, 'A2', ctx.company.name ?? '', { bold: true });
+  setCell(ws, 'C2', 'PROJECT:', { bold: true });
+  setCell(ws, 'D2', { formula: "'G702'!D3" });
+  ws.mergeCells('D2:F2');
+
+  setCell(ws, 'A3', coAddr1, {});
+  setCell(ws, 'C3', 'GC:', { bold: true });
+  setCell(ws, 'D3', { formula: "'G702'!D6" });
+  ws.mergeCells('D3:F3');
+  setCell(ws, 'H3', 'Application #:', { bold: true });
+  setCell(ws, 'I3', { formula: "'G702'!H3" });
+
+  setCell(ws, 'A4', coAddr2, {});
+  setCell(ws, 'H4', 'Period From:', { bold: true });
+  setCell(ws, 'I4', { formula: "'G702'!H5" });
+
+  setCell(ws, 'H5', 'Period To:', { bold: true });
+  setCell(ws, 'I5', { formula: "'G702'!H6" });
+
+  // ── Row 6: decorative AIA column-letter row ───────────────────────────────
+  const letterRow = (rowNum: number): void => {
+    G703_COLS.forEach((col, i) => {
+      setCell(ws, `${col}${rowNum}`, COL_LETTERS[i], { align: 'center', size: 8, border: true });
+    });
+  };
+  letterRow(6);
+
+  // ── Rows 7-10: tall merged column header ──────────────────────────────────
+  const headerLabels: [string, string][] = [
     ['A', 'ITEM NO.'],
     ['B', 'DESCRIPTION OF WORK'],
-    ['C', 'SCHEDULED VALUE'],
-    ['D', 'WORK COMPLETED — FROM PREVIOUS APPLICATION (D+E)'],
+    ['C', 'SCHEDULED VALUES'],
+    ['D', 'PREVIOUS APPLICATIONS (D + E)'],
     ['E', 'THIS PERIOD'],
-    ['F', 'MATERIALS PRESENTLY STORED'],
+    ['F', 'MATERIALS PRESENTLY STORED (NOT IN D OR E)'],
     ['G', 'TOTAL COMPLETED AND STORED TO DATE (D+E+F)'],
     ['H', '% (G/C)'],
     ['I', 'BALANCE TO FINISH (C-G)'],
     ['J', 'RETAINAGE'],
   ];
-  ws.getRow(headerRowNum).height = 48;
-  for (const [col, label] of headers) {
-    setCell(ws, `${col}${headerRowNum}`, label, {
-      bold: true, border: true, align: 'center', wrap: true, size: 9, fill: 'FFE7E6E6',
-    });
+  const writeColumnHeader = (topRow: number): void => {
+    for (let rr = topRow; rr <= topRow + 3; rr++) ws.getRow(rr).height = 14;
+    for (const [col, label] of headerLabels) {
+      ws.mergeCells(`${col}${topRow}:${col}${topRow + 3}`);
+      setCell(ws, `${col}${topRow}`, label, {
+        bold: true, border: true, align: 'center', wrap: true, size: 8, fill: 'FFE7E6E6',
+      });
+    }
+  };
+  writeColumnHeader(7);
+
+  // ── Per-row writer: inputs C/D/E/F, formulas G/H/I/J ──────────────────────
+  const writeItemRow = (rowNum: number, row: AiaG703Row, seq: number): void => {
+    setCell(ws, `A${rowNum}`, row.itemNo ?? seq, { border: true, align: 'center' });
+    setCell(ws, `B${rowNum}`, row.description, { border: true, wrap: true });
+    setCell(ws, `C${rowNum}`, dollars(row.scheduledValueCents), { money: true, border: true });
+    setCell(ws, `D${rowNum}`, dollars(row.previousCents), { money: true, border: true });
+    setCell(ws, `E${rowNum}`, dollars(row.thisPeriodCents), { money: true, border: true });
+    setCell(ws, `F${rowNum}`, dollars(row.storedCents), { money: true, border: true });
+    setCell(ws, `G${rowNum}`, { formula: `D${rowNum}+E${rowNum}+F${rowNum}` }, { money: true, border: true });
+    setCell(ws, `H${rowNum}`, { formula: `G${rowNum}/C${rowNum}` }, { border: true, align: 'center' }).numFmt = '0.00%';
+    setCell(ws, `I${rowNum}`, { formula: `C${rowNum}-G${rowNum}` }, { money: true, border: true });
+    setCell(ws, `J${rowNum}`, { formula: `SUM(D${rowNum}:E${rowNum})*'G702'!$G$22` }, { money: true, border: true });
+  };
+
+  // ── Totals-row writer for a section (sum over [first..last]) ───────────────
+  const writeSectionTotals = (totalRow: number, first: number, last: number): void => {
+    setCell(ws, `A${totalRow}`, '', { border: true });
+    setCell(ws, `B${totalRow}`, 'TOTALS', { bold: true, border: true });
+    for (const col of ['C', 'D', 'E', 'F', 'G', 'I', 'J']) {
+      const ref = last >= first ? `SUM(${col}${first}:${col}${last})` : '0';
+      setCell(ws, `${col}${totalRow}`, { formula: ref }, { money: true, bold: true, border: true });
+    }
+    setCell(ws, `H${totalRow}`, { formula: `G${totalRow}/C${totalRow}` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
+  };
+
+  // ── Contract section ──────────────────────────────────────────────────────
+  const contractStart = 11;
+  contract.forEach((row, i) => writeItemRow(contractStart + i, row, i + 1));
+  const contractTotalRow = contractStart + contract.length;
+  writeSectionTotals(contractTotalRow, contractStart, contractTotalRow - 1);
+
+  // ── Change-order section ──────────────────────────────────────────────────
+  const coLabelRow = contractTotalRow + 2;
+  setCell(ws, `B${coLabelRow}`, 'Change Orders', { bold: true });
+  const coLetterRow = coLabelRow + 1;
+  letterRow(coLetterRow);
+  const coHeaderTop = coLetterRow + 1;
+  writeColumnHeader(coHeaderTop);
+  const coStart = coHeaderTop + 4;
+  cos.forEach((row, i) => writeItemRow(coStart + i, row, i + 1));
+  const coTotalRow = coStart + cos.length;
+  writeSectionTotals(coTotalRow, coStart, coTotalRow - 1);
+
+  // ── Grand total = contract TOTALS + CO TOTALS, per column ──────────────────
+  const grandRow = coTotalRow + 1;
+  setCell(ws, `A${grandRow}`, '', { border: true });
+  setCell(ws, `B${grandRow}`, 'GRAND TOTAL', { bold: true, border: true });
+  for (const col of ['C', 'D', 'E', 'F', 'G', 'I', 'J']) {
+    setCell(ws, `${col}${grandRow}`, { formula: `${col}${contractTotalRow}+${col}${coTotalRow}` }, { money: true, bold: true, border: true });
   }
-  r++;
+  setCell(ws, `H${grandRow}`, { formula: `G${grandRow}/C${grandRow}` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
 
-  // Data rows.
-  let sumC = 0, sumD = 0, sumE = 0, sumF = 0, sumG = 0, sumBal = 0, sumRet = 0;
-  for (const row of ctx.g703) {
-    sumC += row.scheduledValueCents;
-    sumD += row.previousCents;
-    sumE += row.thisPeriodCents;
-    sumF += row.storedCents;
-    sumG += row.totalToDateCents;
-    sumBal += row.balanceToFinishCents;
-    sumRet += row.retainageCents;
+  return { contractStart, contractTotalRow, coStart, coTotalRow, grandRow };
+}
 
-    // % (G/C): prefer computing G/C so the printed % always matches the grid;
-    // fall back to the row's stored percentComplete when scheduled value is 0.
-    const pct = row.scheduledValueCents > 0
-      ? row.totalToDateCents / row.scheduledValueCents
-      : (row.percentComplete || 0) / 100;
+// ---------------------------------------------------------------------------
+// G702 — Application and Certificate for Payment (uses G703's dynamic rows).
+// ---------------------------------------------------------------------------
+function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): void {
+  applyPageSetup(ws, false);
 
-    setCell(ws, `A${r}`, row.itemNo ?? '', { border: true, align: 'center' });
-    setCell(ws, `B${r}`, row.description, { border: true, wrap: true });
-    setCell(ws, `C${r}`, dollars(row.scheduledValueCents), { money: true, border: true });
-    setCell(ws, `D${r}`, dollars(row.previousCents), { money: true, border: true });
-    setCell(ws, `E${r}`, dollars(row.thisPeriodCents), { money: true, border: true });
-    setCell(ws, `F${r}`, dollars(row.storedCents), { money: true, border: true });
-    setCell(ws, `G${r}`, dollars(row.totalToDateCents), { money: true, border: true });
-    setCell(ws, `H${r}`, pct, { pct: true, border: true, align: 'center' });
-    setCell(ws, `I${r}`, dollars(row.balanceToFinishCents), { money: true, border: true });
-    setCell(ws, `J${r}`, dollars(row.retainageCents), { money: true, border: true });
-    r++;
+  ws.columns = [
+    { width: 12 }, // A
+    { width: 35 }, // B
+    { width: 18 }, // C
+    { width: 14 }, // D
+    { width: 20 }, // E
+    { width: 12 }, // F
+    { width: 10 }, // G
+    { width: 18 }, // H
+  ];
+
+  const a = ctx.aiaSettings;
+  const app = ctx.app;
+  const [coAddr1, coAddr2] = splitAddress(ctx.company.address);
+
+  // Single retainage rate (see file-top note): app overrides settings → 10%.
+  const R = (app.retainagePercent ?? a.retainagePercent ?? 10) / 100;
+
+  // ── Title + header inputs ─────────────────────────────────────────────────
+  ws.mergeCells('A1:H1');
+  setCell(ws, 'A1', 'APPLICATION AND CERTIFICATE FOR PAYMENT', { bold: true, align: 'center', size: 14 });
+
+  setCell(ws, 'A3', 'TO (Owner):', { bold: true });
+  setCell(ws, 'B3', a.ownerName ?? '', {});
+  setCell(ws, 'C3', 'PROJECT:', { bold: true });
+  setCell(ws, 'D3', ctx.projectName, {}); // input — referenced by G703 D2
+  ws.mergeCells('D3:F3');
+  setCell(ws, 'G3', 'APPLICATION NO:', { bold: true });
+  setCell(ws, 'H3', app.number, { align: 'right' }); // input — G703 I3
+
+  setCell(ws, 'G5', 'PERIOD FROM:', { bold: true });
+  setCell(ws, 'H5', '', { align: 'right' }); // input (blank — not tracked) — G703 I4
+
+  setCell(ws, 'C6', 'G. C. :', { bold: true });
+  // GC source: the contractor performing the work = ctx.company.name (the app
+  // has no separate GC field; in the template the FROM party is also the G.C.).
+  setCell(ws, 'D6', ctx.company.name ?? '', {}); // input — referenced by G703 D3
+  ws.mergeCells('D6:F6');
+  setCell(ws, 'G6', 'TO:', { bold: true });
+  setCell(ws, 'H6', app.periodTo ?? '', { align: 'right' }); // input — G703 I5
+
+  // FROM company block.
+  setCell(ws, 'A7', 'FROM:', { bold: true });
+  setCell(ws, 'B7', ctx.company.name ?? '', { bold: true });
+  setCell(ws, 'G7', 'TERMS:', { bold: true });
+  setCell(ws, 'B8', coAddr1, {});
+  setCell(ws, 'B9', coAddr2, {});
+
+  setCell(ws, 'A11', "CONTRACTOR'S APPLICATION FOR PAYMENT", { bold: true });
+  setCell(ws, 'E12', 'The present status of the account for this Contract is as follows:', { size: 9 });
+
+  // ── Change Order Summary block (lists CO scheduled values from G703) ───────
+  setCell(ws, 'A13', 'CHANGE ORDER SUMMARY', { bold: true });
+  setCell(ws, 'A14', 'NUMBER', { bold: true, border: true, align: 'center' });
+  setCell(ws, 'B14', 'ADDITIONS', { bold: true, border: true, align: 'center' });
+  setCell(ws, 'C14', 'DEDUCTIONS', { bold: true, border: true, align: 'center' });
+
+  const coCount = g.coTotalRow - g.coStart; // number of change-order lines
+  const coBlockFirst = 15;
+  for (let i = 0; i < coCount; i++) {
+    const rowNum = coBlockFirst + i;
+    const g703Row = g.coStart + i;
+    setCell(ws, `A${rowNum}`, i + 1, { border: true, align: 'center' });
+    // Addition references that CO's scheduled value on G703 (live cross-ref).
+    setCell(ws, `B${rowNum}`, { formula: `'G703'!C${g703Row}` }, { money: true, border: true });
+    setCell(ws, `C${rowNum}`, 0, { money: true, border: true });
   }
+  const coBlockLast = coBlockFirst + Math.max(coCount, 1) - 1;
+  const coSummaryTotalRow = coBlockLast + 1;
+  setCell(ws, `A${coSummaryTotalRow}`, 'TOTALS', { bold: true, border: true });
+  setCell(ws, `B${coSummaryTotalRow}`, { formula: `SUM(B${coBlockFirst}:B${coBlockLast})` }, { money: true, bold: true, border: true });
+  setCell(ws, `C${coSummaryTotalRow}`, { formula: `SUM(C${coBlockFirst}:C${coBlockLast})` }, { money: true, bold: true, border: true });
+  const coNetRow = coSummaryTotalRow + 1;
+  setCell(ws, `A${coNetRow}`, 'Net by Change Orders', { bold: true });
+  setCell(ws, `C${coNetRow}`, { formula: `B${coSummaryTotalRow}-C${coSummaryTotalRow}` }, { money: true, bold: true });
 
-  // Grand totals row — MUST reconcile to G702: ΣC=L3, ΣG=L4, ΣRet=L5.
-  const totalPct = sumC > 0 ? sumG / sumC : 0;
-  setCell(ws, `A${r}`, '', { border: true });
-  setCell(ws, `B${r}`, 'GRAND TOTALS', { bold: true, border: true });
-  setCell(ws, `C${r}`, dollars(sumC), { money: true, bold: true, border: true });
-  setCell(ws, `D${r}`, dollars(sumD), { money: true, bold: true, border: true });
-  setCell(ws, `E${r}`, dollars(sumE), { money: true, bold: true, border: true });
-  setCell(ws, `F${r}`, dollars(sumF), { money: true, bold: true, border: true });
-  setCell(ws, `G${r}`, dollars(sumG), { money: true, bold: true, border: true });
-  setCell(ws, `H${r}`, totalPct, { pct: true, bold: true, border: true, align: 'center' });
-  setCell(ws, `I${r}`, dollars(sumBal), { money: true, bold: true, border: true });
-  setCell(ws, `J${r}`, dollars(sumRet), { money: true, bold: true, border: true });
+  // ── 9 G702 certificate lines (label D, desc E, amount H) ──────────────────
+  // Anchored to the DYNAMIC G703 rows.
+  const ct = g.contractTotalRow;
+  const cot = g.coTotalRow;
+  const grand = g.grandRow;
+  const lineRows = [14, 16, 18, 20, 22, 24, 26, 28, 43];
+  const L1row = lineRows[0];
+  const L2row = lineRows[1];
+  const L6row = lineRows[5];
+  const L7row = lineRows[6];
+
+  const line = (idx: number, label: string, formula: string): void => {
+    const rowNum = lineRows[idx];
+    setCell(ws, `D${rowNum}`, `${idx + 1}.`, { bold: true });
+    setCell(ws, `E${rowNum}`, label, {});
+    setCell(ws, `H${rowNum}`, { formula }, { money: true, border: true });
+  };
+
+  line(0, 'ORIGINAL CONTRACT SUM:', `'G703'!C${ct}`);
+  line(1, 'Net Change by Change Orders & Extras', `C${coNetRow}`);
+  line(2, 'CONTRACT SUM TO DATE:', `H${L1row}+H${L2row}`);
+  line(3, 'TOTAL COMPLETED & STORED TO DATE:', `'G703'!G${ct}+'G703'!G${cot}`);
+  // Line 5 — retainage; G22 holds the rate beside it.
+  line(4, 'RETAINAGE FROM CURRENT BILLING', `'G703'!J${ct}+'G703'!J${cot}`);
+  setCell(ws, `G22`, R, {}).numFmt = '0%';
+  line(5, 'TOTAL EARNED LESS RETAINAGE:', `'G703'!G${grand}-'G703'!J${grand}`);
+  line(6, 'LESS PREVIOUS CERTIFICATES FOR PAYMENT:', `'G703'!D${grand}-('G703'!D${grand}*'G702'!G22)`);
+  setCell(ws, `E${L7row + 1}`, '(Line 6 from previous application)', { size: 9 });
+  line(7, 'CURRENT PAYMENT DUE:', `H${L6row}-H${L7row}`);
+  line(8, 'BALANCE TO FINISH PLUS RETAINAGE', `'G703'!I${ct}+'G703'!J${ct}+'G703'!I${cot}+'G703'!J${cot}`);
+  setCell(ws, `E${lineRows[8] + 1}`, '(Line 3 minus Line 6)', { size: 9 });
 }
 
 // Builds the full two-sheet workbook. Pure builder — no DOM / download here so
-// an alternate (template-fill) builder can sit beside it.
+// the alternate (template-fill) builder can sit beside it. G703 is built first
+// so G702 can anchor its formulas to G703's computed dynamic row numbers, then
+// the G702 sheet is moved to the front so the workbook opens on it.
 export async function buildAiaWorkbook(ctx: AiaExportCtx): Promise<ExcelJS.Workbook> {
   const { default: ExcelJSlib } = await import('exceljs');
   const wb = new ExcelJSlib.Workbook();
   wb.creator = ctx.company.name ?? 'Frugal Takeoff';
   wb.created = new Date();
-  buildG702(wb, ctx);
-  buildG703(wb, ctx);
+  // Add G702 FIRST so the workbook opens on it, but fill it AFTER G703 so its
+  // formulas can anchor to G703's computed dynamic row numbers.
+  const g702ws = wb.addWorksheet('G702');
+  const anchors = buildG703(wb, ctx);
+  buildG702(g702ws, ctx, anchors);
   return wb;
 }
 
