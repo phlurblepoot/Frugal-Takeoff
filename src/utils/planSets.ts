@@ -7,6 +7,14 @@ export const sheetKey = (page: ProjectPage): string | null => {
   return n ? n : null;
 };
 
+// Durable logical-sheet identity used to group revisions. Prefers the explicit
+// sheetId (backfilled by the migration); otherwise falls back to a stable key
+// derived from the page number, else the page's own id (an un-keyed page is its
+// own single-revision sheet). Unlike sheetKey, this NEVER returns null so every
+// page belongs to exactly one logical sheet.
+export const effectiveSheetId = (p: ProjectPage): string =>
+  p.sheetId || (p.pageNumber?.trim().toLowerCase() ? 'pn:' + p.pageNumber.trim().toLowerCase() : 'id:' + p.id);
+
 // Plan sets ordered oldest -> newest. Dates (ISO yyyy-mm-dd) sort
 // lexicographically; createdAt breaks ties or fills in for undated sets.
 export const comparePlanSets = (a: PlanSet, b: PlanSet): number => {
@@ -65,11 +73,11 @@ export const computeRevisionModel = (project: Project | null, selectedPlanSetId:
   const order = planSetIndex(project);
   const setOrder = (page: ProjectPage) => (page.planSetId ? order.get(page.planSetId) ?? -1 : -1);
 
-  // Full revision history per sheet (across all sets), oldest -> newest.
+  // Full revision history per sheet (keyed by durable sheetId), oldest -> newest.
+  // Every page belongs to exactly one logical sheet (effectiveSheetId never null).
   const revisionsBySheet = new Map<string, ProjectPage[]>();
   for (const page of project.pages) {
-    const key = sheetKey(page);
-    if (!key) continue;
+    const key = effectiveSheetId(page);
     const list = revisionsBySheet.get(key) || [];
     list.push(page);
     revisionsBySheet.set(key, list);
@@ -82,34 +90,28 @@ export const computeRevisionModel = (project: Project | null, selectedPlanSetId:
     latestPageIdBySheet.set(key, pages[pages.length - 1].id);
   }
 
-  // As-of filtering: only pages in allowed sets (plus legacy un-tagged pages).
+  // As-of filtering: a page is allowed when it has no plan set (always allowed)
+  // or its plan set is in the allowed (selected + older) window.
   const allowedIds = new Set(allowedPlanSets(project, selectedPlanSetId).map(ps => ps.id));
-  const candidates = project.pages.filter(p => !p.planSetId || allowedIds.has(p.planSetId));
+  const isAllowed = (page: ProjectPage) => !page.planSetId || allowedIds.has(page.planSetId);
 
-  // Revision dedup: for each sheet, keep only the pages from the newest allowed
-  // set. Multiple pages sharing a number *within* one set are all kept (they're
-  // distinct sheets that auto-numbering happened to collide, not revisions).
-  const newestSetForSheet = new Map<string, number>();
-  for (const page of candidates) {
-    const key = sheetKey(page);
-    if (!key) continue;
-    const o = setOrder(page);
-    if (!newestSetForSheet.has(key) || o > (newestSetForSheet.get(key) as number)) {
-      newestSetForSheet.set(key, o);
-    }
+  // Current page per sheet = the newest revision whose plan set is allowed by the
+  // as-of selection; if none of the sheet's revisions are allowed, fall back to
+  // the newest revision overall (so the sheet still surfaces). Revisions are
+  // ordered oldest -> newest above, so the last allowed entry is the newest.
+  const visiblePages: ProjectPage[] = [];
+  for (const pages of revisionsBySheet.values()) {
+    let current: ProjectPage | undefined;
+    for (const p of pages) if (isAllowed(p)) current = p;
+    if (!current) current = pages[pages.length - 1];
+    if (current) visiblePages.push(current);
   }
-  const visiblePages = candidates.filter(page => {
-    const key = sheetKey(page);
-    if (!key) return true;
-    return setOrder(page) === newestSetForSheet.get(key);
-  });
   const currentPageIds = new Set(visiblePages.map(p => p.id));
 
   const status = (pageId: string): RevisionStatus => {
     const page = project.pages.find(p => p.id === pageId);
     if (!page) return 'unique';
-    const key = sheetKey(page);
-    if (!key) return 'unique';
+    const key = effectiveSheetId(page);
     const revs = revisionsBySheet.get(key) || [];
     if (revs.length <= 1) return 'unique';
     return latestPageIdBySheet.get(key) === pageId ? 'current' : 'superseded';
