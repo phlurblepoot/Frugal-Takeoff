@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import Tesseract, { PSM } from 'tesseract.js';
+import type { ExtractConfidence } from './extractMatch';
 
 // Background timer worker to prevent throttling in background tabs
 let pulseWorker: Worker | null = null;
@@ -80,6 +81,11 @@ export interface PdfPageImage {
   detectedPageNumber?: string;
   /** Drawing title auto-detected from positional text analysis. Empty when no confident match. */
   detectedDescription?: string;
+  /** Confidence of the auto-detection for this page. 'high' when embedded
+   *  (vector) text produced a clean sheet number via positional analysis;
+   *  'low' when detection fell back to OCR or filename/label heuristics.
+   *  Task 7's review UI uses this to flag low-confidence rows. */
+  detectionConfidence?: ExtractConfidence;
   /** Populated when this page could not be rendered. dataUrl will be empty. */
   error?: string;
 }
@@ -509,6 +515,11 @@ export const loadPdfPagesGenerator = async function*(
     let extractedText = '';
     let detectedPageNumber = '';
     let detectedDescription = '';
+    // High when the embedded (vector) text yielded a clean sheet number via
+    // positional analysis below; stays low if we fall back to OCR / filename /
+    // label heuristics. Captured here (before the OCR fallback overwrites
+    // extractedText) so Task 7's review UI can flag uncertain rows.
+    let detectionConfidence: ExtractConfidence = 'low';
     try {
       const textContent = await page.getTextContent();
       extractedText = textContent.items.map((item: any) => item.str).join(' ');
@@ -519,6 +530,8 @@ export const loadPdfPagesGenerator = async function*(
         const positioned = getPositionedText(textContent, viewport);
         detectedPageNumber = detectSheetNumberFromItems(positioned, viewport.width, viewport.height);
         detectedDescription = detectDescriptionFromItems(positioned, viewport.width, viewport.height, detectedPageNumber);
+        // Embedded text produced a clean sheet number → trust this detection.
+        if (detectedPageNumber) detectionConfidence = 'high';
       } catch (e) {
         console.warn('Positional page-info detection failed', e);
       }
@@ -593,6 +606,7 @@ export const loadPdfPagesGenerator = async function*(
       extractedText,
       detectedPageNumber,
       detectedDescription,
+      detectionConfidence,
     };
   };
 

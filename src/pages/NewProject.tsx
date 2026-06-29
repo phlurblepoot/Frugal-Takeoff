@@ -23,6 +23,9 @@ interface PendingPage {
   sourcePdfPageNum?: number;
   searchTextIndexed?: boolean;
   extractedText?: string;
+  /** 'low' when auto-detection fell back to OCR/filename heuristics (Task 4).
+   *  Task 7's review UI flags these as "needs review". */
+  detectionConfidence?: 'high' | 'low';
 }
 
 export const NewProject: React.FC = () => {
@@ -253,6 +256,7 @@ export const NewProject: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
               };
 
               extractedPages.push(newPage);
@@ -467,6 +471,7 @@ export const NewProject: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
               };
 
               newPendingPages.push(newPage);

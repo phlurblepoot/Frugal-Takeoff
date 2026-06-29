@@ -781,6 +781,7 @@ export const ProjectView: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
                 revisionOf,
               };
 
@@ -1013,6 +1014,7 @@ export const ProjectView: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
                 revisionOf,
               };
 

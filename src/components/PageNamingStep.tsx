@@ -5,23 +5,27 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
+import { reconcileExtract } from '../utils/extractMatch';
 import { getImageUrl } from '../utils/store';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-// Pulls embedded text out of a rectangular region of a PDF page. Coordinates
-// are scaled into the same 2.0× viewport space the user's selection rectangle
+// Pulls embedded text items out of a rectangular region of a PDF page,
+// returning each overlapping text-layer string separately. Coordinates are
+// scaled into the same 2.0× viewport space the user's selection rectangle
 // lives in (the rectangle is stored as 0–100 percentages of the displayed
 // image, and our PdfPagePreview renders at scale=2.0). Any text item whose
-// bounding box overlaps the region is included in document order. Returns ''
-// when the region has no embedded text — caller falls back to OCR for image-
-// only content (scanned drawings, vector-art labels that aren't real text).
-async function extractTextFromVectorRegion(
+// bounding box overlaps the region is included in document order. Returns an
+// empty array when the region has no embedded text — the caller falls back to
+// OCR for image-only content (scanned drawings, vector-art labels that aren't
+// real text). These per-item strings are the `rawCandidates` fed to the hybrid
+// reconciler (OCR disambiguates which candidate to trust).
+async function extractTextItemsFromVectorRegion(
   page: any,
   region: { x: number; y: number; width: number; height: number },
-): Promise<string> {
+): Promise<string[]> {
   const viewport = page.getViewport({ scale: 2.0 });
   const regionLeft = (region.x / 100) * viewport.width;
   const regionTop = (region.y / 100) * viewport.height;
@@ -31,7 +35,7 @@ async function extractTextFromVectorRegion(
   const textContent = await page.getTextContent();
   const matched: string[] = [];
   for (const item of textContent.items as any[]) {
-    const str: string = item.str ?? '';
+    const str: string = (item.str ?? '').trim();
     if (!str) continue;
     const tx = item.transform?.[4] ?? 0;
     const ty = item.transform?.[5] ?? 0;
@@ -57,11 +61,12 @@ async function extractTextFromVectorRegion(
     if (itemBottom < regionTop || itemTop > regionBottom) continue;
     matched.push(str);
   }
-  return matched.join(' ').trim();
+  return matched;
 }
 
-// Render a vector PDF page to a JPEG data URL for OCR fallback. Used only
-// when extractTextFromVectorRegion returns nothing (image-only pages).
+// Render a vector PDF page to a JPEG data URL for OCR. The region crop is taken
+// from this full-resolution render so the OCR read is accurate (used by the
+// hybrid reconcile alongside the embedded text-layer candidates).
 async function renderPdfPageToDataUrl(page: any): Promise<string> {
   const viewport = page.getViewport({ scale: 2.0 });
   const canvas = document.createElement('canvas');
@@ -103,6 +108,10 @@ export interface NamingStepPage {
    *  an existing one (matched by page number). Only the add-pages caller
    *  populates this — the new-project upload leaves it undefined. */
   revisionOf?: string;
+  /** Confidence of the import-time auto-detection ('low' = fell back to OCR /
+   *  filename heuristics). Updated by the manual Extract tool to reflect the
+   *  hybrid reconcile result. Task 7's review UI flags 'low' rows. */
+  extractConfidence?: 'high' | 'low';
 }
 
 export interface PageNamingStepProps {
@@ -141,6 +150,9 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   const [interactionMode, setInteractionMode] = useState<'draw' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | null>(null);
   const [initialRect, setInitialRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  // Per-page extract confidence from the hybrid reconcile (raw text + OCR),
+  // keyed by page id. 'low' rows are flagged for review in Task 7's UI.
+  const [extractConfidence, setExtractConfidence] = useState<Record<string, 'high' | 'low'>>({});
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -176,18 +188,20 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   };
 
   // ── Extraction ────────────────────────────────────────────────────────────
-  // Two paths, in this preference order, per page:
-  //   1. Vector path: read embedded text from the source PDF inside the
-  //      selection region. This is what makes "A5.0" come back as "A5.0"
-  //      rather than the OCR misread "AS.0" — we're reading the same bytes
-  //      that CAD wrote, not pixels.
-  //   2. OCR fallback: only spun up when (a) the page has no source PDF
-  //      (legacy projects) or (b) the region has no embedded text at all
-  //      (scanned drawings, vector-art labels that aren't real text). For
-  //      vector pages we render the page to a JPEG on demand so the OCR
-  //      crop is full-resolution — fixes "extract all pages" producing
-  //      gibberish on non-previewed pages, which were previously being
-  //      cropped from the 400px thumbnail.
+  // Hybrid reconcile, per page: ALWAYS gather BOTH the embedded text-layer
+  // candidates (the individual overlapping strings in the region) AND an OCR
+  // read of the same region crop, then reconcile them via `reconcileExtract`:
+  //   • Raw candidates carry the exact characters CAD wrote ("A5.0" not the OCR
+  //     misread "AS.0"); OCR disambiguates which candidate the region actually
+  //     contains and supplies the value when there's no embedded text at all
+  //     (scanned drawings, vector-art labels, legacy raster pages with no
+  //     source PDF — rawCandidates = [], reconcile falls back to OCR).
+  //   • The reconcile returns a confidence: 'high' when raw + OCR agree (or a
+  //     single obvious raw candidate), 'low' when it had to lean on OCR alone.
+  //     We store the confidence per page so Task 7's review UI can flag it.
+  // For vector pages we render the page to a full-resolution JPEG on demand so
+  // the OCR crop is sharp — fixes "extract all pages" producing gibberish on
+  // non-previewed pages, which were previously cropped from the 400px thumbnail.
   const handleExtractText = async (applyToAll: boolean) => {
     if (!previewPageId || !extractionRect || !extractionType) return;
     const previewedPage = pendingPages.find(p => p.id === previewPageId);
@@ -225,15 +239,23 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       return worker;
     };
 
+    // Accumulate confidence updates so a multi-page "extract all" writes state once.
+    const confidenceUpdates: Record<string, 'high' | 'low'> = {};
+
     try {
-      const recognizePage = async (p: NamingStepPage): Promise<string> => {
-        // Vector path: try embedded text first; render+OCR is the fallback.
+      // Always gather BOTH raw text-layer candidates AND an OCR read, then
+      // reconcile. Returns the cleaned value + a confidence flag for the row.
+      const recognizePage = async (p: NamingStepPage): Promise<{ value: string; confidence: 'high' | 'low' }> => {
+        let rawCandidates: string[] = [];
+        let ocrText = '';
+
+        // Vector page: pull the per-item embedded strings as raw candidates and
+        // OCR a full-resolution render of the same region crop.
         if (p.sourcePdfFileId && p.sourcePdfPageNum) {
           try {
             const proxy = await getProxy(p.sourcePdfFileId);
             const pdfPage = await proxy.getPage(p.sourcePdfPageNum);
-            const text = await extractTextFromVectorRegion(pdfPage, region);
-            if (text) return cleanValue(text);
+            rawCandidates = await extractTextItemsFromVectorRegion(pdfPage, region);
             const cacheKey = `${p.sourcePdfFileId}#${p.sourcePdfPageNum}`;
             let rendered = renderCache.get(cacheKey);
             if (!rendered) {
@@ -242,44 +264,60 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             }
             const cropUrl = await buildOcrCrop(rendered, region);
             const w = await getWorker();
-            const { data: { text: ocrText } } = await w.recognize(cropUrl);
-            return cleanValue(ocrText || '');
+            const { data: { text } } = await w.recognize(cropUrl);
+            ocrText = text || '';
           } catch (err) {
             console.warn('Vector text extract failed; falling back to raster', err);
           }
         }
-        // Legacy raster path. Reuse the preview modal's already-loaded image
-        // for the active page when possible; otherwise the stored full-size
-        // raster URL; thumbnail only as a last resort.
-        const srcUrl =
-          p.id === previewPageId && previewImageSrc
-            ? previewImageSrc
-            : p.imageId
-            ? getImageUrl(p.imageId)
-            : pendingThumbnails[p.thumbnailId];
-        if (!srcUrl) return '';
-        const cropUrl = await buildOcrCrop(srcUrl, region);
-        const w = await getWorker();
-        const { data: { text } } = await w.recognize(cropUrl);
-        return cleanValue(text || '');
+
+        // Legacy raster path (no source PDF, or the vector path threw above and
+        // produced no OCR yet). rawCandidates stays [] so reconcile falls back
+        // to OCR — correct for scanned pages. Reuse the preview modal's
+        // already-loaded image for the active page when possible; otherwise the
+        // stored full-size raster URL; thumbnail only as a last resort.
+        if (!ocrText && rawCandidates.length === 0) {
+          const srcUrl =
+            p.id === previewPageId && previewImageSrc
+              ? previewImageSrc
+              : p.imageId
+              ? getImageUrl(p.imageId)
+              : pendingThumbnails[p.thumbnailId];
+          if (srcUrl) {
+            const cropUrl = await buildOcrCrop(srcUrl, region);
+            const w = await getWorker();
+            const { data: { text } } = await w.recognize(cropUrl);
+            ocrText = text || '';
+          }
+        }
+
+        const { value, confidence } = reconcileExtract({ rawCandidates, ocrText });
+        return { value: cleanValue(value), confidence };
       };
 
       if (applyToAll) {
         const updated = [...pendingPages];
         for (let i = 0; i < updated.length; i++) {
-          const value = await recognizePage(updated[i]);
+          const { value, confidence } = await recognizePage(updated[i]);
           const num = mode === 'pageNumber' ? value : (updated[i].pageNumber || '');
           const desc = mode === 'description' ? value : (updated[i].description || '');
           updated[i] = {
             ...updated[i],
             [mode]: value,
+            extractConfidence: confidence,
             name: num && desc ? `${num} - ${desc}` : (num || desc || updated[i].name),
           };
+          confidenceUpdates[updated[i].id] = confidence;
         }
         setPendingPages(updated);
       } else {
-        const value = await recognizePage(previewedPage);
+        const { value, confidence } = await recognizePage(previewedPage);
         updateField(previewPageId, mode, value);
+        confidenceUpdates[previewPageId] = confidence;
+      }
+
+      if (Object.keys(confidenceUpdates).length) {
+        setExtractConfidence(prev => ({ ...prev, ...confidenceUpdates }));
       }
 
       setExtractionRect(null);
