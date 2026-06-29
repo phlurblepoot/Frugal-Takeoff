@@ -607,4 +607,187 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 15,
+    name: 'plan-set-sheet-identity',
+    up({ db }) {
+      // Plan-set rework (spec docs/superpowers/specs/2026-06-28-plan-set-rework-design.md).
+      //
+      // ⚠️ DATA-TRANSFORMING + SUPERVISED. Per the migration protocol, this is
+      // flagged to run on real data only under supervision. It is NON-DESTRUCTIVE:
+      // no measurement row is ever deleted. The framework backs up the DB before
+      // applying and VACUUMs after; the whole up() runs inside one transaction.
+      //
+      // Establishes the new "logical sheet" model, per project:
+      //   (a) SUFFIX within-set duplicate page numbers ("A-101" -> "A-101 (2)")
+      //       so each page in a set has a distinct number (mirrors the client-side
+      //       suffixPageNumber in src/utils/sheetNaming.ts — kept behavior-identical).
+      //   (b) ASSIGN a durable sheetId (uuid) to every page: pages sharing a
+      //       normalized (trim+lowercase) page number across the whole project are
+      //       revisions of one sheet and share one sheetId. Blank-numbered pages
+      //       each become their own single-revision sheet. sheetId lands in the
+      //       page row's attrs JSON (round-trips via decompose/loadProject).
+      //   (c) CURRENT = LIVING: order each sheet's revisions oldest->newest by
+      //       plan-set sortOrder (pages with no plan set sort last). The newest is
+      //       the current/living revision. If the current page has ZERO measurement
+      //       rows but an older revision has some, COPY the most-recent non-empty
+      //       revision's measurements onto the current page (fresh uuids; source
+      //       rows are RETAINED as frozen history — never deleted).
+
+      const norm = (s: string | null | undefined) => (s ?? '').trim().toLowerCase();
+
+      // Next free "Base (n)" given a set of already-taken normalized numbers.
+      // Identical behavior to src/utils/sheetNaming.ts suffixPageNumber.
+      const suffixPageNumber = (base: string, takenNormalized: Set<string>): string => {
+        let n = 2;
+        while (takenNormalized.has(norm(`${base} (${n})`))) n++;
+        return `${base} (${n})`;
+      };
+
+      // Plan-set order index per project (lower = older). plan_sets.sortOrder is
+      // the persisted oldest->newest order written by decomposeProject.
+      const planSetRows = db
+        .prepare('SELECT id, projectId, sortOrder FROM plan_sets')
+        .all() as { id: string; projectId: string; sortOrder: number }[];
+      const setOrderById = new Map<string, number>();
+      for (const ps of planSetRows) setOrderById.set(ps.id, ps.sortOrder);
+
+      const updatePageNumber = db.prepare('UPDATE pages SET pageNumber = ? WHERE id = ?');
+      const updatePageAttrs = db.prepare('UPDATE pages SET attrs = ? WHERE id = ?');
+      const insMeas = db.prepare(`
+        INSERT INTO measurements (id, pageId, projectId, takeoffId, type, name, color, points, sortOrder, attrs)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const projectIds = (
+        db.prepare('SELECT id FROM projects').all() as { id: string }[]
+      ).map(r => r.id);
+
+      for (const projectId of projectIds) {
+        const pages = db
+          .prepare('SELECT id, planSetId, pageNumber, sortOrder, attrs FROM pages WHERE projectId = ? ORDER BY sortOrder')
+          .all(projectId) as {
+            id: string;
+            planSetId: string | null;
+            pageNumber: string | null;
+            sortOrder: number;
+            attrs: string | null;
+          }[];
+        if (pages.length === 0) continue;
+
+        // Working page numbers (mutated by the suffix pass below).
+        const pageNumberById = new Map<string, string | null>();
+        for (const p of pages) pageNumberById.set(p.id, p.pageNumber);
+
+        // ---- (a) Suffix within-set duplicate page numbers --------------------
+        // Per plan set (null planSet grouped together), the first occurrence of a
+        // non-blank number keeps it; later occurrences get the next free suffix.
+        const takenBySet = new Map<string, Set<string>>(); // setKey -> normalized numbers taken
+        const seenBySet = new Map<string, Set<string>>();   // setKey -> normalized numbers already seen once
+        for (const p of pages) {
+          const num = pageNumberById.get(p.id);
+          const normNum = norm(num);
+          if (!normNum) continue; // blank exempt
+          const setKey = p.planSetId ?? '';
+          let taken = takenBySet.get(setKey);
+          if (!taken) { taken = new Set(); takenBySet.set(setKey, taken); }
+          let seen = seenBySet.get(setKey);
+          if (!seen) { seen = new Set(); seenBySet.set(setKey, seen); }
+
+          if (!seen.has(normNum)) {
+            // first time this number appears in the set — keep it
+            seen.add(normNum);
+            taken.add(normNum);
+          } else {
+            // duplicate — suffix off the original (pre-normalized) base text
+            const base = (num ?? '').trim();
+            const suffixed = suffixPageNumber(base, taken);
+            taken.add(norm(suffixed));
+            pageNumberById.set(p.id, suffixed);
+            updatePageNumber.run(suffixed, p.id);
+          }
+        }
+
+        // ---- (b) Assign sheetId by normalized page number (project-wide) ------
+        // Pages sharing a normalized number are revisions of one sheet. Blank
+        // numbers never group (each blank page is its own sheet).
+        const sheetIdByNormNumber = new Map<string, string>();
+        const sheetIdByPageId = new Map<string, string>();
+        for (const p of pages) {
+          const normNum = norm(pageNumberById.get(p.id));
+          let sheetId: string;
+          if (!normNum) {
+            sheetId = crypto.randomUUID(); // blank -> own sheet
+          } else {
+            sheetId = sheetIdByNormNumber.get(normNum) ?? crypto.randomUUID();
+            sheetIdByNormNumber.set(normNum, sheetId);
+          }
+          sheetIdByPageId.set(p.id, sheetId);
+
+          // Persist sheetId into the page's attrs JSON.
+          let attrs: any = {};
+          if (p.attrs) { try { attrs = JSON.parse(p.attrs); } catch { attrs = {}; } }
+          if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs)) attrs = {};
+          attrs.sheetId = sheetId;
+          updatePageAttrs.run(JSON.stringify(attrs), p.id);
+        }
+
+        // ---- (c) current = newest revision = living set ----------------------
+        // Group pages by sheetId, order oldest->newest by plan-set order (pages
+        // with no plan set, or a set not in the order map, sort LAST/standalone).
+        const SET_LAST = Number.MAX_SAFE_INTEGER;
+        const setOrderForPage = (planSetId: string | null): number =>
+          planSetId ? (setOrderById.get(planSetId) ?? SET_LAST) : SET_LAST;
+        const pageById = new Map(pages.map(p => [p.id, p]));
+
+        const sheetGroups = new Map<string, string[]>(); // sheetId -> pageIds
+        for (const p of pages) {
+          const sid = sheetIdByPageId.get(p.id)!;
+          const g = sheetGroups.get(sid) ?? [];
+          g.push(p.id);
+          sheetGroups.set(sid, g);
+        }
+
+        for (const pageIds of sheetGroups.values()) {
+          if (pageIds.length <= 1) continue; // single revision — nothing to carry
+          // oldest -> newest; stable on original sortOrder for ties.
+          const ordered = [...pageIds].sort((a, b) => {
+            const pa = pageById.get(a)!, pb = pageById.get(b)!;
+            const oa = setOrderForPage(pa.planSetId), ob = setOrderForPage(pb.planSetId);
+            if (oa !== ob) return oa - ob;
+            return pa.sortOrder - pb.sortOrder;
+          });
+          const currentPageId = ordered[ordered.length - 1];
+
+          const measCount = (pageId: string): number =>
+            (db.prepare('SELECT COUNT(*) AS c FROM measurements WHERE pageId = ?').get(pageId) as { c: number }).c;
+
+          // Current already living? leave it.
+          if (measCount(currentPageId) > 0) continue;
+
+          // Find the most-recent OLDER revision that has measurements.
+          let sourcePageId: string | null = null;
+          for (let i = ordered.length - 2; i >= 0; i--) {
+            if (measCount(ordered[i]) > 0) { sourcePageId = ordered[i]; break; }
+          }
+          if (!sourcePageId) continue; // nothing to copy forward
+
+          // Copy source measurements onto the current page with fresh uuids.
+          // Source rows are RETAINED (frozen history) — never deleted.
+          const srcRows = db
+            .prepare('SELECT takeoffId, type, name, color, points, sortOrder, attrs FROM measurements WHERE pageId = ? ORDER BY sortOrder')
+            .all(sourcePageId) as {
+              takeoffId: string | null; type: string; name: string | null; color: string | null;
+              points: string; sortOrder: number; attrs: string | null;
+            }[];
+          for (const m of srcRows) {
+            insMeas.run(
+              crypto.randomUUID(), currentPageId, projectId,
+              m.takeoffId, m.type, m.name, m.color, m.points, m.sortOrder, m.attrs
+            );
+          }
+        }
+      }
+    },
+  },
 ];

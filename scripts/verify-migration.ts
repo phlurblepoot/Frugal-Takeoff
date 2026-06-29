@@ -2,7 +2,8 @@
  * Post-migration verification tool — the core data-loss guard for the
  * production cutover.
  *
- * After the new app boots on the old DB, migrations 1-11 transform it in place.
+ * After the new app boots on the old DB, the versioned migrations transform it
+ * in place.
  * This tool runs against the MIGRATED data dir and proves the migration did not
  * lose or corrupt data: schema fully applied, projects normalized, every file's
  * bytes intact on disk (size + sha256), structural foreign keys resolve, and

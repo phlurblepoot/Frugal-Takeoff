@@ -79,6 +79,14 @@ describe('migration 5 + loadProject round-trip', () => {
   it('reassembles the legacy JSON shape exactly (plus version/status)', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
     const loaded = loadProject(db, 'proj1');
+    // Migration 15 (plan-set sheet identity) backfills a durable sheetId onto
+    // every page; assert it was assigned, then strip it for the exact-shape
+    // comparison against the original legacy blob.
+    for (const pg of loaded.pages) {
+      expect(typeof pg.sheetId).toBe('string');
+      expect(pg.sheetId).toBeTruthy();
+      delete pg.sheetId;
+    }
     expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'proposal_sent' });
   });
 
