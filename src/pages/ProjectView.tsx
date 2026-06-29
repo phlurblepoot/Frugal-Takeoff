@@ -239,6 +239,9 @@ export const ProjectView: React.FC = () => {
   const [showManagePlanSets, setShowManagePlanSets] = useState(false);
   const [showRevisionsForPageId, setShowRevisionsForPageId] = useState<string | null>(null);
   const [comparePageId, setComparePageId] = useState<string | null>(null);
+  // Sheets grid: superseded (older, read-only) revisions are hidden by default;
+  // this toggle folds them into the grid (dimmed, with a read-only badge).
+  const [showSuperseded, setShowSuperseded] = useState(false);
 
   // Upload-failures modal state (mirrors NewProject.tsx) — keeps source File
   // objects so the user can retry missing pages from the existing flow.
@@ -1644,16 +1647,36 @@ export const ProjectView: React.FC = () => {
   // search-result badge can show "X of Y matches" (Y = visiblePages.length).
   const visiblePages = revisionModel.visiblePages;
 
+  // Superseded revisions of the visible sheets, surfaced only when the "Show
+  // superseded" toggle is on. Each is an older read-only revision of a sheet
+  // whose current page is in visiblePages. Honors the as-of selection by only
+  // including revisions at/older than the sheet's current (visible) revision.
+  const candidatePages = useMemo(() => {
+    if (!showSuperseded) return visiblePages;
+    const currentIds = new Set(visiblePages.map(p => p.id));
+    const extras: ProjectPage[] = [];
+    for (const current of visiblePages) {
+      const key = effectiveSheetId(current);
+      const revs = revisionModel.revisionsBySheet.get(key) || [];
+      const currentIdx = revs.findIndex(r => r.id === current.id);
+      // Older revisions are everything before the current one in oldest->newest order.
+      for (let i = 0; i < (currentIdx === -1 ? revs.length : currentIdx); i++) {
+        if (!currentIds.has(revs[i].id)) extras.push(revs[i]);
+      }
+    }
+    return [...visiblePages, ...extras];
+  }, [showSuperseded, visiblePages, revisionModel]);
+
   const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
     const matched = searchLower
-      ? visiblePages.filter(page =>
+      ? candidatePages.filter(page =>
           page.name.toLowerCase().includes(searchLower) ||
           (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
           (page.description && page.description.toLowerCase().includes(searchLower)) ||
           (page.extractedText && page.extractedText.toLowerCase().includes(searchLower)),
         )
-      : visiblePages;
+      : candidatePages;
 
     const sorted = [...matched];
     // Favorites always group at the top, then the chosen sort order applies
@@ -1695,7 +1718,7 @@ export const ProjectView: React.FC = () => {
       return baseCmp(a, b);
     });
     return sorted;
-  }, [visiblePages, searchTerm, pagesSortMode, favoritePageIds]);
+  }, [candidatePages, searchTerm, pagesSortMode, favoritePageIds]);
 
   if (isLoading) {
     return (
@@ -1933,6 +1956,8 @@ export const ProjectView: React.FC = () => {
             editingPageNumber={editingPageNumber}
             editingPageDescription={editingPageDescription}
             revisionModel={revisionModel}
+            showSuperseded={showSuperseded}
+            setShowSuperseded={setShowSuperseded}
             isOptimizingThumbnails={isOptimizingThumbnails}
             optimizeProgress={optimizeProgress}
             setSearchTerm={setSearchTerm}

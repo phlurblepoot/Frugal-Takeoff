@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical } from 'lucide-react';
+import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical, History } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -16,6 +16,7 @@ import { CollaborationProvider, useCollaboration } from '../context/Collaboratio
 import { useNotes } from '../context/NotesContext';
 import { CustomCostRow } from '../components/CustomCostRow';
 import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
+import { computeRevisionModel, effectiveSheetId } from '../utils/planSets';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -88,21 +89,44 @@ const CanvasViewInner: React.FC = () => {
     return () => mq.removeEventListener('change', handler);
   }, []);
   const [readOnlyBannerDismissed, setReadOnlyBannerDismissed] = useState(false);
-  // If we cross into phone width while a drawing tool is active, fall back to
-  // pan so the canvas stays in a coherent read-only state.
+
+  // Superseded-revision read-only gate (Plan Set rework Task 8). When the opened
+  // page is an OLDER revision of its sheet, it is frozen history: drawing/editing
+  // is disabled (mirrors the phone read-only gate), but pan/zoom/view and the
+  // frozen measurements still render. The current/unique revision stays fully
+  // editable. We derive this positionally via computeRevisionModel(project,'').
+  const supersededInfo = useMemo(() => {
+    if (!project || !pageId) return { isSuperseded: false, revNumber: 1, currentPageId: null as string | null };
+    const model = computeRevisionModel(project, '');
+    const isSuperseded = model.status(pageId) === 'superseded';
+    const revNumber = model.revisionNumberByPageId.get(pageId) || 1;
+    const page = project.pages.find(p => p.id === pageId);
+    const currentPageId = page ? (model.latestPageIdBySheet.get(effectiveSheetId(page)) ?? null) : null;
+    return { isSuperseded, revNumber, currentPageId };
+  }, [project, pageId]);
+  const isSupersededRevision = supersededInfo.isSuperseded;
+
+  // Unified read-only flag: phones OR a frozen older revision. Used to gate all
+  // drawing-tool selection + drawing/scale handlers below.
+  const readOnly = isPhone || isSupersededRevision;
+
+  // If we enter a read-only state (phone width or a superseded revision) while a
+  // drawing tool is active, fall back to pan so the canvas stays coherent.
   useEffect(() => {
-    if (isPhone && currentTool !== 'pan') setCurrentTool('pan');
-  }, [isPhone, currentTool]);
+    if (readOnly && currentTool !== 'pan') setCurrentTool('pan');
+  }, [readOnly, currentTool]);
   // Touch devices don't surface `title` tooltips and finish drawing via
   // double-tap rather than a keyboard, so the instruction copy adapts.
   const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
   const finishHint = isTouchDevice ? 'Double-tap to finish.' : 'Double-click or press Enter to finish.';
   const READ_ONLY_MESSAGE = 'Viewing only on small screens — open this page on a tablet or computer to draw takeoffs.';
+  const SUPERSEDED_MESSAGE = `Viewing Rev ${supersededInfo.revNumber} — read-only history. Open the current revision to edit takeoffs.`;
   // Re-surface the banner if it was dismissed, so a tap on a locked tool always
-  // explains why nothing happened.
+  // explains why nothing happened. Superseded revisions take precedence in the
+  // message (the page is frozen history regardless of screen size).
   const handlePhoneToolBlocked = () => {
     setReadOnlyBannerDismissed(false);
-    setToolDisabledMessage(READ_ONLY_MESSAGE);
+    setToolDisabledMessage(isSupersededRevision ? SUPERSEDED_MESSAGE : READ_ONLY_MESSAGE);
   };
 
   const [showScaleModal, setShowScaleModal] = useState(false);
@@ -544,6 +568,8 @@ const CanvasViewInner: React.FC = () => {
   };
 
   const handleSetScale = (pixelDistance: number) => {
+    // Frozen history / phone read-only: ignore scale-set attempts entirely.
+    if (readOnly) { setCurrentTool('pan'); return; }
     setPendingPixelDistance(pixelDistance);
     setShowScaleModal(true);
     setCurrentTool('pan');
@@ -626,6 +652,8 @@ const CanvasViewInner: React.FC = () => {
 
   const addMeasurement = (measurement: Measurement) => {
     if (!page) return;
+    // Frozen history / phone read-only: never accept new measurements.
+    if (readOnly) return;
 
     // Derive takeoff + color: prefer explicitly selected takeoff, fall back to selected measurement's takeoff
     const effectiveTakeoffId = selectedTakeoffId
@@ -1165,7 +1193,7 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('scale')}
               icon={<Settings size={18} />}
               label="Set Scale"
-              disabled={isPhone}
+              disabled={readOnly}
               onDisabledClick={handlePhoneToolBlocked}
             />
             <ToolButton
@@ -1173,9 +1201,9 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('length')}
               icon={<Ruler size={18} />}
               label="Length"
-              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+              disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
               onDisabledClick={() => {
-                if (isPhone) handlePhoneToolBlocked();
+                if (readOnly) handlePhoneToolBlocked();
                 else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1186,9 +1214,9 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('area')}
               icon={<Square size={18} />}
               label="Area"
-              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+              disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
               onDisabledClick={() => {
-                if (isPhone) handlePhoneToolBlocked();
+                if (readOnly) handlePhoneToolBlocked();
                 else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1199,9 +1227,9 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('count')}
               icon={<Hash size={18} />}
               label="Count"
-              disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+              disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
               onDisabledClick={() => {
-                if (isPhone) handlePhoneToolBlocked();
+                if (readOnly) handlePhoneToolBlocked();
                 else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1221,8 +1249,8 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('region')}
               icon={<Layers size={18} />}
               label="Region"
-              disabled={isPhone || !page.isMultiRegion}
-              onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+              disabled={readOnly || !page.isMultiRegion}
+              onDisabledClick={() => readOnly ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
             />
             <div className="h-8 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
             <button
@@ -1686,8 +1714,33 @@ const CanvasViewInner: React.FC = () => {
         </div>
 
         <div data-testid="canvas-surface" className="flex-1 relative min-h-0">
-          {/* Phone read-only notice (Phase 8). Dismissible; only on phones. */}
-          {isPhone && !readOnlyBannerDismissed && (
+          {/* Superseded-revision read-only notice (Plan Set rework). Prominent and
+              non-dismissible: this page is frozen history. "Go to current" jumps
+              to the sheet's living revision where editing is enabled. */}
+          {isSupersededRevision && (
+            <div
+              data-testid="canvas-superseded-banner"
+              className="absolute top-16 left-3 right-3 z-40 flex items-center gap-3 bg-slate-800/95 backdrop-blur border border-slate-600 text-white rounded-xl px-4 py-3 shadow-xl"
+            >
+              <History size={18} className="shrink-0 text-amber-300" />
+              <span className="text-sm leading-snug flex-1 font-medium">
+                Viewing Rev {supersededInfo.revNumber} — read-only history
+              </span>
+              {supersededInfo.currentPageId && supersededInfo.currentPageId !== pageId && (
+                <button
+                  data-testid="goto-current-revision"
+                  onClick={() => navigate(`/project/${project.id}/page/${supersededInfo.currentPageId}`)}
+                  className="shrink-0 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-semibold hover:bg-accent-700 transition-colors flex items-center gap-1.5"
+                >
+                  Go to current
+                  <ChevronRight size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          {/* Phone read-only notice (Phase 8). Dismissible; only on phones and
+              only when not already on a superseded (frozen) revision. */}
+          {isPhone && !isSupersededRevision && !readOnlyBannerDismissed && (
             <div
               data-testid="canvas-readonly-banner"
               className="absolute top-16 left-3 right-3 z-40 flex items-start gap-2 bg-amber-50/95 backdrop-blur border border-amber-200 text-amber-900 rounded-xl px-3 py-2.5 shadow-lg"
@@ -1760,7 +1813,7 @@ const CanvasViewInner: React.FC = () => {
                 icon={<Settings size={20} />}
                 label="Set Scale"
                 showLabel
-                disabled={isPhone}
+                disabled={readOnly}
                 onDisabledClick={handlePhoneToolBlocked}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
@@ -1771,9 +1824,9 @@ const CanvasViewInner: React.FC = () => {
                 icon={<Ruler size={20} />}
                 label="Length"
                 showLabel
-                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
+                disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'length')}
                 onDisabledClick={() => {
-                  if (isPhone) handlePhoneToolBlocked();
+                  if (readOnly) handlePhoneToolBlocked();
                   else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1786,9 +1839,9 @@ const CanvasViewInner: React.FC = () => {
                 icon={<Square size={20} />}
                 label="Area"
                 showLabel
-                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
+                disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'area')}
                 onDisabledClick={() => {
-                  if (isPhone) handlePhoneToolBlocked();
+                  if (readOnly) handlePhoneToolBlocked();
                   else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1801,9 +1854,9 @@ const CanvasViewInner: React.FC = () => {
                 icon={<Hash size={20} />}
                 label="Count"
                 showLabel
-                disabled={isPhone || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
+                disabled={readOnly || !page.scaleConfig || hasNoSelection || (!!activeType && activeType !== 'count')}
                 onDisabledClick={() => {
-                  if (isPhone) handlePhoneToolBlocked();
+                  if (readOnly) handlePhoneToolBlocked();
                   else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                   else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                   else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
@@ -1816,8 +1869,8 @@ const CanvasViewInner: React.FC = () => {
                 icon={<Layers size={20} />}
                 label="Region"
                 showLabel
-                disabled={isPhone || !page.isMultiRegion}
-                onDisabledClick={() => isPhone ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
+                disabled={readOnly || !page.isMultiRegion}
+                onDisabledClick={() => readOnly ? handlePhoneToolBlocked() : setToolDisabledMessage("Enable 'Multi-Region Scaling' to use this tool.")}
               />
               <div className="h-6 w-px bg-slate-200 mx-0.5 md:mx-1 flex-shrink-0" />
               <button
