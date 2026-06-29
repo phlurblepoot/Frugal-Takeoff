@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { computeRevisionModel, effectiveSheetId } from './planSets';
+import { computeRevisionModel, effectiveSheetId, carryForwardFrom } from './planSets';
 import type { Project, ProjectPage } from '../types';
 
 const page = (o: Partial<ProjectPage>): ProjectPage => ({
@@ -46,6 +46,27 @@ it('distinct sheetIds with the same pageNumber are separate sheets (not revision
   const b1 = page({ id: 'b1', sheetId: 'B', pageNumber: 'A-101', planSetId: 's1' });
   const m = computeRevisionModel(proj([a1, b1], sets), '');
   expect(new Set(m.currentPageIds)).toEqual(new Set(['a1', 'b1']));
+});
+
+it('carryForwardFrom copies measurements with NEW ids + clones scaleConfig', () => {
+  let n = 0;
+  const newId = () => `new-${++n}`;
+  const current = page({
+    id: 'cur',
+    measurements: [
+      { id: 'm1', type: 'length', points: [], takeoffId: 't' } as any,
+      { id: 'm2', type: 'area', points: [], takeoffId: 't' } as any,
+    ],
+    scaleConfig: { knownDistance: 10, pixelDistance: 100 } as any,
+  });
+  const seed = carryForwardFrom(current, newId);
+  expect(seed.measurements).toHaveLength(2);
+  expect(seed.measurements.map(m => m.id)).toEqual(['new-1', 'new-2']);
+  // ids are fresh, not the originals
+  expect(seed.measurements.some(m => m.id === 'm1' || m.id === 'm2')).toBe(false);
+  // scaleConfig is a clone (distinct object, same values)
+  expect(seed.scaleConfig).toEqual(current.scaleConfig);
+  expect(seed.scaleConfig).not.toBe(current.scaleConfig);
 });
 
 it('effectiveSheetId prefers sheetId, then page number, then id', () => {

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Project, ProjectPage } from '../../types';
 import { getImageUrl } from '../../utils/store';
-import { sheetKey } from '../../utils/planSets';
+import { effectiveSheetId } from '../../utils/planSets';
 import { RevisionModel } from '../../utils/planSets';
 
 type PagesSortMode = 'pageNumber' | 'description' | 'highlightsDesc';
@@ -72,7 +72,6 @@ interface ProjectPagesTabProps {
   handleShareSelectedPages: () => void | Promise<void>;
   handleOptimizeThumbnails: () => void | Promise<void>;
   handleOpenNamePages: () => void;
-  handleCopyMeasurementsForward: (targetPageId: string) => Promise<number>;
   // utilities
   navigate: (to: string) => void;
   toast: (message: string, options?: { type?: 'info' | 'success' | 'warning' | 'error' }) => void;
@@ -114,7 +113,6 @@ export function ProjectPagesTab({
   handleShareSelectedPages,
   handleOptimizeThumbnails,
   handleOpenNamePages,
-  handleCopyMeasurementsForward,
   navigate,
   toast,
   pageSearchInputRef,
@@ -618,11 +616,9 @@ export function ProjectPagesTab({
                     <Edit2 size={14} /> Rename
                   </button>
                   {(() => {
-                    const key = sheetKey(ctxPage);
-                    const revs = key ? (revisionModel.revisionsBySheet.get(key) || []) : [];
+                    const key = effectiveSheetId(ctxPage);
+                    const revs = revisionModel.revisionsBySheet.get(key) || [];
                     if (revs.length < 2) return null;
-                    const idx = revs.findIndex(p => p.id === ctxPage.id);
-                    const hasPrior = idx > 0 && revs[idx - 1].measurements.length > 0;
                     return (
                       <>
                         <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
@@ -632,19 +628,6 @@ export function ProjectPagesTab({
                         >
                           <History size={14} /> Revision history
                         </button>
-                        {hasPrior && (
-                          <button
-                            onClick={async () => {
-                              setPageContextMenu(null);
-                              const n = await handleCopyMeasurementsForward(ctxPage.id);
-                              if (n > 0) toast(`Copied ${n} measurement${n === 1 ? '' : 's'} from the previous revision`, { type: 'success' });
-                              else if (n === 0) toast('No measurements to copy from the previous revision', { type: 'info' });
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
-                          >
-                            <Copy size={14} /> Copy measurements from previous revision
-                          </button>
-                        )}
                       </>
                     );
                   })()}

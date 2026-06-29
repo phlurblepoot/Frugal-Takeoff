@@ -120,6 +120,24 @@ export const computeRevisionModel = (project: Project | null, selectedPlanSetId:
   return { visiblePages, currentPageIds, revisionsBySheet, revisionNumberByPageId, latestPageIdBySheet, status };
 };
 
+// Build the measurements + scale to seed a NEW revision of a sheet from its
+// current living page. Returns fresh-id copies of every measurement (the caller
+// assigns them to the new page) plus cloned scale calibration so the new
+// revision starts populated and never empty. The source (prior) page keeps its
+// own measurements — it becomes positionally superseded → read-only history.
+export function carryForwardFrom(currentPage: ProjectPage, newId: () => string) {
+  return {
+    measurements: currentPage.measurements.map(m => ({
+      ...m,
+      id: newId(),
+      segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
+    })),
+    scaleConfig: currentPage.scaleConfig ? { ...currentPage.scaleConfig } : null,
+    scaleRegions: currentPage.scaleRegions ? currentPage.scaleRegions.map(r => ({ ...r })) : currentPage.scaleRegions,
+    isMultiRegion: currentPage.isMultiRegion,
+  };
+}
+
 // Summary of what a plan set introduced relative to earlier sets: how many
 // sheet numbers are brand new vs. revisions of an existing sheet.
 export const summarizePlanSet = (project: Project | null, setId: string): { newCount: number; revisedCount: number; total: number } => {

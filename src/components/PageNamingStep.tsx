@@ -1,11 +1,12 @@
-import React, { useState, useRef } from 'react';
-import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { reconcileExtract } from '../utils/extractMatch';
+import { findDuplicatePageNumbers, suffixPageNumber } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
@@ -112,6 +113,25 @@ export interface NamingStepPage {
    *  filename heuristics). Updated by the manual Extract tool to reflect the
    *  hybrid reconcile result. Task 7's review UI flags 'low' rows. */
   extractConfidence?: 'high' | 'low';
+  /** Import-time detection confidence carried from the PDF generator. Used as
+   *  the initial "needs review" signal until the user runs the manual Extract
+   *  (which writes `extractConfidence`). */
+  detectionConfidence?: 'high' | 'low';
+  /** Revision Review match: the durable sheetId this incoming page is a revision
+   *  of (reuses that sheet's id + carries its measurements forward on commit).
+   *  Empty / undefined = a brand-new sheet (fresh sheetId, starts empty). The
+   *  add-pages caller seeds this from page-number auto-match; the user can
+   *  change it via the per-row match dropdown. Only meaningful when the review
+   *  UI is enabled (existingSheets provided). */
+  matchSheetId?: string;
+}
+
+/** One existing logical sheet the incoming pages can be matched against in the
+ *  Revision Review step. `pageNumber` is the sheet's CURRENT (living) revision's
+ *  page number, used for both the auto-match and the dropdown label. */
+export interface ExistingSheet {
+  sheetId: string;
+  pageNumber: string;
 }
 
 export interface PageNamingStepProps {
@@ -126,6 +146,16 @@ export interface PageNamingStepProps {
 
   title?: string;
   subtitle?: string;
+
+  /** When provided, enables the add-set "Revision Review" step: a per-row match
+   *  dropdown (Revision of {sheet} / New sheet), within-set duplicate blocking
+   *  with a one-click Suffix fix, and a "needs review" flag on low-confidence
+   *  rows. Omitted by the new-project upload + the rename-existing-pages flow,
+   *  which render the simpler naming grid. */
+  existingSheets?: ExistingSheet[];
+  /** Plan set the incoming pages belong to — scopes the within-set duplicate
+   *  check (the same page number across sets is a revision, not a duplicate). */
+  planSetId?: string;
 }
 
 export const PageNamingStep: React.FC<PageNamingStepProps> = ({
@@ -138,6 +168,8 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   isConfirming = false,
   title = 'Name Pages',
   subtitle = 'Review and rename the imported pages.',
+  existingSheets,
+  planSetId,
 }) => {
   const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
@@ -164,6 +196,21 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   // Updates one field on one page, auto-syncing the displayed name from
   // pageNumber + description. Identical logic was previously inlined in both
   // callers — now lives here so they can't drift.
+  // Review mode is active only when the caller supplies the existing sheets to
+  // match against (the add-set flow). The new-project upload + rename flows
+  // leave it off and render the plain naming grid.
+  const reviewMode = !!existingSheets;
+
+  // Auto-match an incoming page number against an existing sheet's CURRENT page
+  // number (case-insensitive). Returns that sheet's durable sheetId, or '' for
+  // "New sheet" when nothing matches.
+  const autoMatch = (pageNumber: string): string => {
+    const n = (pageNumber || '').trim().toLowerCase();
+    if (!n || !existingSheets) return '';
+    const hit = existingSheets.find(s => (s.pageNumber || '').trim().toLowerCase() === n);
+    return hit ? hit.sheetId : '';
+  };
+
   const updateField = (id: string, field: keyof NamingStepPage, value: string) => {
     setPendingPages(pendingPages.map(p => {
       if (p.id !== id) return p;
@@ -173,9 +220,64 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         const desc = field === 'description' ? value : (p.description || '');
         updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
       }
+      // Editing the page number re-runs the match (the duplicate check is derived
+      // live from pendingPages, so it recomputes automatically on render).
+      if (reviewMode && field === 'pageNumber') {
+        updated.matchSheetId = autoMatch(value);
+      }
       return updated;
     }));
   };
+
+  // Explicit match-dropdown change: '' = New sheet, otherwise a target sheetId.
+  const setMatch = (id: string, sheetId: string) => {
+    setPendingPages(pendingPages.map(p => (p.id === id ? { ...p, matchSheetId: sheetId } : p)));
+  };
+
+  // Apply a free " (n)" suffix to one row's page number, scoped to the page
+  // numbers already taken within this in-progress set (so the new value can't
+  // collide with another incoming row either).
+  const handleSuffixRow = (id: string) => {
+    const row = pendingPages.find(p => p.id === id);
+    if (!row) return;
+    const base = (row.pageNumber || '').trim();
+    if (!base) return;
+    const taken = new Set(
+      pendingPages
+        .filter(p => p.id !== id && p.pageNumber?.trim())
+        .map(p => p.pageNumber!.trim().toLowerCase()),
+    );
+    updateField(id, 'pageNumber', suffixPageNumber(base, taken));
+  };
+
+  // ── Review-step derived state ─────────────────────────────────────────────
+  // Within-set duplicate page numbers (blank exempt) block Commit until fixed.
+  const duplicateIds = reviewMode
+    ? new Set(findDuplicatePageNumbers(pendingPages.map(p => ({ id: p.id, planSetId, pageNumber: p.pageNumber }))))
+    : new Set<string>();
+  const hasDuplicates = duplicateIds.size > 0;
+  // A row "needs review" when its best available confidence signal is low — the
+  // live Extract result if the user ran it, else the import-time detection.
+  const rowNeedsReview = (p: NamingStepPage): boolean => {
+    const c = extractConfidence[p.id] ?? p.extractConfidence ?? p.detectionConfidence;
+    return c === 'low';
+  };
+  const needsReviewCount = reviewMode ? pendingPages.filter(rowNeedsReview).length : 0;
+
+  // One-time auto-match seed: when the review step opens, preselect "Revision of
+  // {sheet}" for any incoming page whose number matches an existing sheet's
+  // current page number. Pages whose match hasn't been resolved yet carry an
+  // undefined matchSheetId; once seeded it's an explicit '' (New sheet) or a
+  // sheetId, so the user's later edits are never overwritten.
+  useEffect(() => {
+    if (!reviewMode) return;
+    const unseeded = pendingPages.filter(p => p.matchSheetId === undefined);
+    if (unseeded.length === 0) return;
+    setPendingPages(
+      pendingPages.map(p => (p.matchSheetId === undefined ? { ...p, matchSheetId: autoMatch(p.pageNumber || '') } : p)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewMode, pendingPages]);
 
   const closePreview = () => {
     setPreviewPageId(null);
@@ -417,17 +519,29 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{title}</h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
           </div>
-          <button
-            onClick={onConfirm}
-            disabled={isConfirming}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-          >
-            {isConfirming ? (
-              <><Loader2 size={18} className="animate-spin" /> Saving...</>
-            ) : (
-              <>{confirmIcon ?? <Check size={18} />} {confirmLabel}</>
+          <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
+            <button
+              onClick={onConfirm}
+              disabled={isConfirming || hasDuplicates}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+            >
+              {isConfirming ? (
+                <><Loader2 size={18} className="animate-spin" /> Saving...</>
+              ) : (
+                <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+              )}
+            </button>
+            {reviewMode && hasDuplicates && (
+              <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
+                <AlertTriangle size={12} /> Resolve duplicate page numbers to continue
+              </p>
             )}
-          </button>
+            {reviewMode && !hasDuplicates && needsReviewCount > 0 && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <AlertTriangle size={12} /> {needsReviewCount} row{needsReviewCount === 1 ? '' : 's'} flagged — double-check before committing
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="p-4 sm:p-8">
@@ -440,10 +554,17 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               // already had on the project).
               const thumbSrc =
                 pendingThumbnails[page.thumbnailId] || pendingThumbnails[page.imageId];
+              const isDuplicate = duplicateIds.has(page.id);
+              const needsReview = reviewMode && rowNeedsReview(page);
+              const borderClass = isDuplicate
+                ? 'border-red-400 dark:border-red-500'
+                : needsReview
+                ? 'border-amber-300 dark:border-amber-500/60'
+                : 'border-slate-100 dark:border-slate-700';
               return (
               <div
                 key={page.id}
-                className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300"
+                className={`bg-white dark:bg-slate-800 rounded-2xl border-2 ${borderClass} overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300`}
               >
                 <div
                   className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
@@ -473,11 +594,17 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                     PAGE {index + 1}
                   </div>
-                  {page.revisionOf && (
+                  {reviewMode ? (
+                    needsReview && (
+                      <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">
+                        <AlertTriangle size={11} /> NEEDS REVIEW
+                      </div>
+                    )
+                  ) : page.revisionOf ? (
                     <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm">
                       REVISION
                     </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="p-5 space-y-5">
@@ -494,16 +621,63 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                         type="text"
                         value={page.pageNumber || ''}
                         onChange={(e) => updateField(page.id, 'pageNumber', e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
+                        className={`w-full pl-10 pr-4 py-3 rounded-xl border-2 bg-slate-50 focus:bg-white focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800 ${
+                          isDuplicate
+                            ? 'border-red-400 focus:border-red-500 dark:border-red-500'
+                            : 'border-slate-100 focus:border-accent-500 dark:border-slate-600'
+                        }`}
                         placeholder="e.g. A-101"
                       />
                     </div>
-                    {page.revisionOf && (
+                    {reviewMode && isDuplicate && (
+                      <div className="flex items-center justify-between gap-2 px-1">
+                        <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
+                          <AlertTriangle size={11} /> Duplicate in this set
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleSuffixRow(page.id)}
+                          className="text-[11px] font-bold text-accent-600 dark:text-accent-400 hover:underline"
+                        >
+                          Suffix
+                        </button>
+                      </div>
+                    )}
+                    {!reviewMode && page.revisionOf && (
                       <p className="text-[11px] text-amber-600 dark:text-amber-400 px-1">
                         Replaces existing page {page.revisionOf} — measurements will carry over.
                       </p>
                     )}
                   </div>
+
+                  {reviewMode && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Match</label>
+                      </div>
+                      <select
+                        value={page.matchSheetId || ''}
+                        onChange={(e) => setMatch(page.id, e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-medium text-slate-800 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:focus:bg-slate-800"
+                      >
+                        <option value="">New sheet</option>
+                        {(existingSheets || []).map(s => (
+                          <option key={s.sheetId} value={s.sheetId}>
+                            Revision of {s.pageNumber || '(untitled sheet)'}
+                          </option>
+                        ))}
+                      </select>
+                      {page.matchSheetId ? (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 px-1">
+                          Carries the current measurements + scale forward; the prior revision becomes read-only.
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500 px-1">
+                          Starts as a brand-new, empty sheet.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">
