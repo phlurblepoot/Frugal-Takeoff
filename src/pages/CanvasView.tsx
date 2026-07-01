@@ -639,21 +639,47 @@ const CanvasViewInner: React.FC = () => {
     }
   };
 
-  const pageKey = page?.pageNumber || page?.name;
-  const pageVersions = project?.pages.filter(p => (p.pageNumber || p.name) === pageKey) || [];
+  // The set of page ids whose measurements the sidebar takeoff list should show
+  // by DEFAULT: the current (latest) revision of every sheet — EXCEPT for the
+  // sheet you're actively viewing, where the visible revision is the page you
+  // opened. So browsing an older revision surfaces THAT revision's measurements
+  // for its sheet, while every other sheet still shows its latest revision.
+  // This mirrors the Takeoffs tab, which uses computeRevisionModel(...).currentPageIds.
+  const listPageIds = useMemo(() => {
+    if (!project) return new Set<string>();
+    const ids = new Set(computeRevisionModel(project, '').currentPageIds);
+    if (page) {
+      const sheetId = effectiveSheetId(page);
+      // Swap out this sheet's current revision for the one being viewed.
+      for (const p of project.pages) {
+        if (effectiveSheetId(p) === sheetId) ids.delete(p.id);
+      }
+      ids.add(page.id);
+    }
+    return ids;
+  }, [project, page]);
+
+  // The pages backing the DEFAULT sidebar list (current revision per sheet,
+  // viewed revision for the viewed sheet).
+  const listPages = useMemo(
+    () => (project ? project.pages.filter(p => listPageIds.has(p.id)) : []),
+    [project, listPageIds]
+  );
+
+  // The pages the sidebar takeoff/measurement LIST actually renders:
+  //  - "Current page only" checkbox ON  -> strictly the single viewed page.
+  //  - OFF (default)                     -> current-revision pages (listPages).
+  const sidebarPages = useMemo(
+    () => (showCurrentPageOnly ? (page ? [page] : []) : listPages),
+    [showCurrentPageOnly, page, listPages]
+  );
 
   useEffect(() => {
-    if (!project || !page) return;
-    
-    const allMeasurements: Measurement[] = [];
-    pageVersions.forEach(pv => {
-      pv.measurements.forEach(m => {
-        allMeasurements.push(m);
-      });
-    });
-    
-    setAggregatedMeasurements(allMeasurements);
-  }, [project, page]);
+    // aggregatedMeasurements is the flat measurement list the sidebar/heights
+    // modal look through; it must mirror the rendered sidebar page set so an
+    // id lookup finds exactly what is shown (the viewed page is always included).
+    setAggregatedMeasurements(sidebarPages.flatMap(p => p.measurements));
+  }, [sidebarPages]);
 
   const addMeasurement = (measurement: Measurement) => {
     if (!page) return;
@@ -1045,7 +1071,7 @@ const CanvasViewInner: React.FC = () => {
     let totalRealValue = 0;
     let measurementsCount = 0;
 
-    const pagesToProcess = showCurrentPageOnly ? pageVersions : project.pages;
+    const pagesToProcess = sidebarPages;
 
     pagesToProcess.forEach(p => {
       const takeoffMeasurements = p.measurements.filter(m => m.takeoffId === takeoff.id);
@@ -2071,9 +2097,8 @@ const CanvasViewInner: React.FC = () => {
       <MeasurementSidebar
         project={project}
         page={page}
-        pageVersions={pageVersions}
+        sidebarPages={sidebarPages}
         takeoffTotals={takeoffTotals}
-        aggregatedMeasurements={aggregatedMeasurements}
         isRightSidebarOpen={isRightSidebarOpen}
         setIsRightSidebarOpen={setIsRightSidebarOpen}
         showCurrentPageOnly={showCurrentPageOnly}
@@ -2432,7 +2457,7 @@ const CanvasViewInner: React.FC = () => {
       {/* Heights Modal */}
       {heightsModalMeasurementId && (
         <HeightsModal
-          measurement={(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === heightsModalMeasurementId)!}
+          measurement={aggregatedMeasurements.find(m => m.id === heightsModalMeasurementId)!}
           scaleConfig={page.scaleConfig}
           onClose={() => setHeightsModalMeasurementId(null)}
           onSave={(heights, isTwoSided) => {

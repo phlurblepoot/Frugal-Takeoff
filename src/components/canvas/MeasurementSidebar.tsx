@@ -10,9 +10,13 @@ type TakeoffTotal = MeasurementTakeoff & { totalRealValue: number; measurementsC
 interface MeasurementSidebarProps {
   project: Project;
   page: ProjectPage;
-  pageVersions: ProjectPage[];
+  // Pages backing the rendered takeoff/measurement list. Already resolved by the
+  // caller to reflect the intended revision(s): the current revision per sheet
+  // (viewed revision for the sheet being browsed) by default, or the single
+  // viewed page when "Current page only" is on. NEVER superseded revisions of
+  // sheets you're not viewing.
+  sidebarPages: ProjectPage[];
   takeoffTotals: TakeoffTotal[];
-  aggregatedMeasurements: Measurement[];
 
   isRightSidebarOpen: boolean;
   setIsRightSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -49,9 +53,8 @@ interface MeasurementSidebarProps {
 export function MeasurementSidebar({
   project,
   page,
-  pageVersions,
+  sidebarPages,
   takeoffTotals,
-  aggregatedMeasurements,
   isRightSidebarOpen,
   setIsRightSidebarOpen,
   showCurrentPageOnly,
@@ -212,7 +215,7 @@ export function MeasurementSidebar({
                 if (!measurementFilter) return true;
                 const fl = measurementFilter.toLowerCase();
                 if (takeoff.name.toLowerCase().includes(fl)) return true;
-                return (showCurrentPageOnly ? pageVersions : project.pages).some(p =>
+                return sidebarPages.some(p =>
                   p.measurements.some(m => m.takeoffId === takeoff.id && m.name.toLowerCase().includes(fl))
                 );
               });
@@ -252,7 +255,7 @@ export function MeasurementSidebar({
                     e.preventDefault();
                     e.currentTarget.classList.remove('ring-2', 'ring-accent-400', 'ring-inset');
                     const measurementId = e.dataTransfer.getData('text/plain');
-                    const measurement = (showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).find(m => m.id === measurementId);
+                    const measurement = sidebarPages.flatMap(p => p.measurements).find(m => m.id === measurementId);
 
                     if (measurement) {
                       if (takeoff.type === 'count' && measurement.type !== 'count') {
@@ -350,7 +353,7 @@ export function MeasurementSidebar({
                         <Plus size={14} />
                         New Measurement
                       </button>
-                      {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
+                      {sidebarPages.flatMap(p =>
                         p.measurements
                           .filter(m => m.takeoffId === takeoff.id && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase())))
                           .map(m => (
@@ -378,7 +381,7 @@ export function MeasurementSidebar({
                   )}
                   {isExpanded && takeoff.type === 'count' && (
                     <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
-                      {(showCurrentPageOnly ? pageVersions : project.pages).map(p => {
+                      {sidebarPages.map(p => {
                         const count = p.measurements.filter(m => m.takeoffId === takeoff.id).length;
                         if (count === 0) return null;
                         return (
@@ -418,7 +421,7 @@ export function MeasurementSidebar({
             })()}
 
             {/* Ungrouped Measurements */}
-            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements))
+            {sidebarPages.flatMap(p => p.measurements)
               .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
               <div
                 className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
@@ -445,7 +448,7 @@ export function MeasurementSidebar({
                   <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
                 </div>
                 <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
-                  {(showCurrentPageOnly ? pageVersions : project.pages).flatMap(p =>
+                  {sidebarPages.flatMap(p =>
                     p.measurements
                       .filter(m => !m.takeoffId)
                       .map(m => (
@@ -472,7 +475,7 @@ export function MeasurementSidebar({
               </div>
             )}
 
-            {(showCurrentPageOnly ? aggregatedMeasurements : project.pages.flatMap(p => p.measurements)).length === 0 && (
+            {sidebarPages.flatMap(p => p.measurements).length === 0 && (
               <p className="text-sm text-slate-500 italic text-center py-4">No measurements yet.</p>
             )}
           </div>
