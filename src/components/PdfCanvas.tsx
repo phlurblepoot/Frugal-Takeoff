@@ -80,6 +80,13 @@ interface PdfCanvasProps {
   onMultiSelectToggle?: (id: string, type: string) => void;
   onClearMultiSelect?: () => void;
   isMultiSelectMode?: boolean;
+  /**
+   * Frozen-history / phone read-only mode. When true, existing measurements are
+   * fully non-editable: no dragging segments or vertices, no vertex insertion,
+   * no delete/edit context menu, and the legend can't be moved. Pan / zoom /
+   * select-to-view stay fully functional. Threaded from CanvasView's `readOnly`.
+   */
+  readOnly?: boolean;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -137,6 +144,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onMultiSelectToggle,
   onClearMultiSelect,
   isMultiSelectMode = false,
+  readOnly = false,
 }) => {
   const { toast } = useToast();
   // `useImage` is the legacy raster path; new vector-source pages populate
@@ -1271,17 +1279,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       // independently draggable so multi-segment measurements move per segment
       // rather than as a single rigid shape.
       const segmentDragStart = (e: any) => {
-        if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
+        if (readOnly || (e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
           e.target.stopDrag();
           return;
         }
         e.cancelBubble = true;
       };
-      const segmentDragMove = (e: any) => { e.cancelBubble = true; };
+      const segmentDragMove = (e: any) => { if (readOnly) return; e.cancelBubble = true; };
 
       // Double-click on a segment line inserts a new vertex at the click,
       // ordered between the surrounding vertices.
       const insertVertexAtClick = (segPts: Point[]): Point[] | null => {
+        if (readOnly) return null;
         const stage = stageRef.current;
         const pos = getRelativePointerPosition(stage.getLayers()[0]);
         if (!pos || segPts.length < 2) return null;
@@ -1335,9 +1344,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           onContextMenu={(e) => {
             e.evt.preventDefault();
             e.cancelBubble = true;
+            // Read-only history: no edit/delete menu on measurements.
+            if (readOnly) return;
             setContextMenu({ x: e.evt.clientX, y: e.evt.clientY, measurementId: m.id });
           }}
           onTouchStart={(e) => {
+            // Read-only history: no long-press edit/delete menu.
+            if (readOnly) { cancelLongPress(); return; }
             // Arm long-press only for a single-finger touch (two fingers = pinch
             // zoom). Capture the touch point now; fire the context menu after the
             // hold delay if the finger hasn't moved or lifted.
@@ -1362,10 +1375,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             <Group
               x={points[0].x}
               y={points[0].y}
-              draggable={currentTool === 'pan' && !isMiddleMouseDown}
+              draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
               onDragStart={segmentDragStart}
               onDragMove={segmentDragMove}
               onDragEnd={(e) => {
+                if (readOnly) return;
                 e.cancelBubble = true;
                 onUpdateMeasurement(m.id, { points: [{ x: e.target.x(), y: e.target.y() }] });
               }}
@@ -1401,12 +1415,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             </Group>
           ) : (
             <Group
-              draggable={currentTool === 'pan' && !isMiddleMouseDown}
+              draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
               onDragStart={segmentDragStart}
               onDragMove={segmentDragMove}
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
+                if (readOnly) return;
                 // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                 if (e.target !== e.currentTarget) return;
                 e.cancelBubble = true;
@@ -1463,9 +1478,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                   fill={m.color}
                   stroke={isPrimarySelected ? '#fff' : undefined}
                   strokeWidth={isPrimarySelected ? 2 / stageScale : 0}
-                  draggable={currentTool === 'pan' && !isMiddleMouseDown}
+                  draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
                   onDragStart={(e) => {
-                    if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
+                    if (readOnly || (e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
                       e.target.stopDrag();
                       return;
                     }
@@ -1473,10 +1488,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     setDraggingPoint({ mId: m.id, idx: i, x: p.x, y: p.y });
                   }}
                   onDragMove={(e) => {
+                    if (readOnly) return;
                     e.cancelBubble = true;
                     setDraggingPoint({ mId: m.id, idx: i, x: e.target.x(), y: e.target.y() });
                   }}
                   onDragEnd={(e) => {
+                    if (readOnly) return;
                     e.cancelBubble = true;
                     const newPoints = [...m.points];
                     newPoints[i] = { x: e.target.x(), y: e.target.y() };
@@ -1532,12 +1549,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             return (
               <Group
                 key={`extra-seg-${segIdx}`}
-                draggable={currentTool === 'pan' && !isMiddleMouseDown}
+                draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
                 onDragStart={segmentDragStart}
                 onDragMove={segmentDragMove}
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
+                  if (readOnly) return;
                   // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                   if (e.target !== e.currentTarget) return;
                   e.cancelBubble = true;
@@ -1606,9 +1624,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     fill={m.color}
                     stroke={isSegmentSelected(segIdx) ? '#fff' : undefined}
                     strokeWidth={isSegmentSelected(segIdx) ? 2 / stageScale : 0}
-                    draggable={currentTool === 'pan' && !isMiddleMouseDown}
+                    draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
                     onDragStart={(e) => {
-                      if ((e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
+                      if (readOnly || (e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
                         e.target.stopDrag();
                         return;
                       }
@@ -1616,10 +1634,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: p.x, y: p.y });
                     }}
                     onDragMove={(e) => {
+                      if (readOnly) return;
                       e.cancelBubble = true;
                       setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: e.target.x(), y: e.target.y() });
                     }}
                     onDragEnd={(e) => {
+                      if (readOnly) return;
                       e.cancelBubble = true;
                       const newX = e.target.x();
                       const newY = e.target.y();
@@ -1801,8 +1821,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       <Group
         x={legendPosition.x}
         y={legendPosition.y}
-        draggable={currentTool === 'pan'}
+        draggable={!readOnly && currentTool === 'pan'}
         onDragEnd={(e) => {
+          if (readOnly) return;
           if (e.target === e.currentTarget && onUpdateLegend) {
             onUpdateLegend({ position: { x: e.target.x(), y: e.target.y() } });
           }
@@ -1902,8 +1923,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             )}
           </Group>
         ))}
-        {/* Resize handle */}
-        {currentTool === 'pan' && (
+        {/* Resize handle — mutates legend size, so hidden in read-only history. */}
+        {!readOnly && currentTool === 'pan' && (
           <Rect
             x={width - handleSize}
             y={height - handleSize}

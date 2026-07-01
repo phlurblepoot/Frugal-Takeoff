@@ -207,6 +207,8 @@ const CanvasViewInner: React.FC = () => {
   };
 
   const handlePaste = () => {
+    // Frozen history / phone read-only: pasting would create a new measurement.
+    if (readOnly) return;
     const copiedStr = localStorage.getItem('copiedMeasurement');
     if (!copiedStr || !page) return;
     try {
@@ -421,7 +423,10 @@ const CanvasViewInner: React.FC = () => {
         return;
       }
 
-      if (e.key === 'Delete' && selectedMeasurementId) {
+      // All measurement-mutating shortcuts (delete / delete-segment / resume-
+      // drawing / paste) are disabled on frozen-history & phone read-only pages.
+      // Copy, undo/redo, escape, help, and page navigation stay available.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMeasurementId && !readOnly) {
         // If a single canvas segment is selected, only delete that segment
         if (selectedSegmentIdx !== null) {
           deleteSegment(selectedMeasurementId, selectedSegmentIdx);
@@ -430,7 +435,7 @@ const CanvasViewInner: React.FC = () => {
         }
       }
 
-      if ((e.key === 'p' || e.key === 'P') && selectedMeasurementId) {
+      if ((e.key === 'p' || e.key === 'P') && selectedMeasurementId && !readOnly) {
         const measurement = aggregatedMeasurements.find(m => m.id === selectedMeasurementId);
         if (measurement && (measurement.type === 'length' || measurement.type === 'area')) {
           // Resume the specific segment that's highlighted on canvas. null/-1 = primary.
@@ -457,7 +462,7 @@ const CanvasViewInner: React.FC = () => {
         handleCopy();
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !readOnly) {
         handlePaste();
       }
 
@@ -491,7 +496,7 @@ const CanvasViewInner: React.FC = () => {
   }, [selectedMeasurementId, selectedSegmentIdx, page, project, history, redoStack, aggregatedMeasurements,
       showShortcutsHelp, showScaleModal, showDeleteConfirm, showTakeoffModal,
       heightsModalMeasurementId, editingTakeoff, toolDisabledMessage, takeoffToDelete,
-      showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal]);
+      showPageJump, prevPageId, nextPageId, pageIds, newMeasurementModal, readOnly]);
 
   // When nothing is selected, drawing tools are disabled — reset to pan so the user isn't stuck.
   useEffect(() => {
@@ -757,7 +762,9 @@ const CanvasViewInner: React.FC = () => {
 
   const updateMeasurement = (id: string, updates: Partial<Measurement>, targetPageId?: string) => {
     if (!project || !page) return;
-    
+    // Frozen history / phone read-only: existing geometry can never be mutated.
+    if (readOnly) return;
+
     let sourcePageId = targetPageId;
     let existingMeasurement: Measurement | undefined;
     
@@ -809,12 +816,15 @@ const CanvasViewInner: React.FC = () => {
   };
 
   const deleteMeasurement = (id: string, targetPageId?: string) => {
+    // Frozen history / phone read-only: no deleting existing measurements.
+    if (readOnly) return;
     setMeasurementToDelete({ id, targetPageId });
     setShowDeleteConfirm(true);
   };
 
   const confirmDeleteMeasurement = async () => {
     if (!project || !measurementToDelete || !page) return;
+    if (readOnly) { setShowDeleteConfirm(false); setMeasurementToDelete(null); return; }
     const { id, targetPageId } = measurementToDelete;
     
     let sourcePageId = targetPageId;
@@ -862,6 +872,8 @@ const CanvasViewInner: React.FC = () => {
 
   const deleteSegment = async (measurementId: string, segmentIdx: number) => {
     if (!project || !page) return;
+    // Frozen history / phone read-only: no deleting existing segments.
+    if (readOnly) return;
 
     let sourcePageId: string | undefined;
     let measurement: Measurement | undefined;
@@ -1920,6 +1932,7 @@ const CanvasViewInner: React.FC = () => {
 
           <PdfCanvas
             key={page.id}
+            readOnly={readOnly}
             imageUrl={imageUrl || ''}
             imageWidth={page.imageWidth}
             imageHeight={page.imageHeight}

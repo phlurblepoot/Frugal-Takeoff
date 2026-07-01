@@ -201,6 +201,145 @@ export async function seedProjectWithAreaTakeoffLength(
   return { projectId, pageId, imageId, name, takeoffId, takeoffName, measurementId };
 }
 
+export interface SeedTwoRevisionResult {
+  projectId: string;
+  name: string;
+  /** The OLDER page — positionally superseded → read-only history. */
+  supersededPageId: string;
+  /** The NEWER page — the current, fully-editable revision. */
+  currentPageId: string;
+  /** The measurement id living on the superseded page. */
+  supersededMeasurementId: string;
+  /** The measurement id living on the current page. */
+  currentMeasurementId: string;
+}
+
+/**
+ * Seed a project with TWO plan sets, each contributing one page that shares the
+ * same durable `sheetId`. Because they group into one logical sheet with two
+ * revisions, `computeRevisionModel` marks the page from the OLDER set
+ * ('superseded') and the page from the NEWER set ('current'). Each page carries
+ * a single 2-point length measurement so the read-only spec can attempt to drag
+ * a vertex and diff the persisted points.
+ *
+ * Driving the real "add plan set + revision review" UI is heavy and flaky in
+ * e2e, so we construct the already-revised project shape directly via the API —
+ * the same end state that flow produces. The read-only gate we're testing is
+ * derived purely from this structure (2 revisions of one sheet), so this seed
+ * exercises the exact code path a real revision would.
+ */
+export async function seedProjectWithSupersededRevision(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedTwoRevisionResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+
+  const projectId = randomUUID();
+  const oldSetId = randomUUID();
+  const newSetId = randomUUID();
+  const sheetId = randomUUID(); // shared durable identity → one logical sheet
+  const supersededPageId = randomUUID();
+  const currentPageId = randomUUID();
+  const oldImageId = randomUUID();
+  const newImageId = randomUUID();
+  const supersededMeasurementId = randomUUID();
+  const currentMeasurementId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E PlanSet ReadOnly ${short}`;
+
+  const base64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const dataUrl = `data:image/png;base64,${base64}`;
+  for (const id of [oldImageId, newImageId]) {
+    const imgRes = await request.post('/api/images', {
+      headers: auth,
+      data: { id, data: dataUrl },
+    });
+    if (!imgRes.ok()) {
+      throw new Error(`image upload failed: ${imgRes.status()} ${await imgRes.text()}`);
+    }
+  }
+
+  const scaleConfig = { pixelDistance: 100, realWorldDistance: 10, unit: 'ft' };
+  // Identical starting geometry on both pages so the spec's drag math is the
+  // same regardless of which page it targets.
+  const points = () => [
+    { x: 200, y: 200 },
+    { x: 500, y: 200 },
+  ];
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [],
+    planSets: [
+      { id: oldSetId, name: 'Rev 1', date: '2026-01-01', createdAt: Date.now() - 10_000 },
+      { id: newSetId, name: 'Rev 2', date: '2026-02-01', createdAt: Date.now() },
+    ],
+    pages: [
+      {
+        id: supersededPageId,
+        name: 'A-101 (Rev 1)',
+        pageNumber: 'A-101',
+        sheetId,
+        planSetId: oldSetId,
+        imageId: oldImageId,
+        imageWidth: 1000,
+        imageHeight: 800,
+        scaleConfig,
+        measurements: [
+          {
+            id: supersededMeasurementId,
+            type: 'length',
+            name: 'Wall Old',
+            color: '#3b82f6',
+            points: points(),
+          },
+        ],
+      },
+      {
+        id: currentPageId,
+        name: 'A-101 (Rev 2)',
+        pageNumber: 'A-101',
+        sheetId,
+        planSetId: newSetId,
+        imageId: newImageId,
+        imageWidth: 1000,
+        imageHeight: 800,
+        scaleConfig,
+        measurements: [
+          {
+            id: currentMeasurementId,
+            type: 'length',
+            name: 'Wall New',
+            color: '#3b82f6',
+            points: points(),
+          },
+        ],
+      },
+    ],
+    version: 1,
+    status: 'estimating',
+  };
+
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return {
+    projectId,
+    name,
+    supersededPageId,
+    currentPageId,
+    supersededMeasurementId,
+    currentMeasurementId,
+  };
+}
+
 export async function seedProjectWithTakeoffMeasurement(
   request: APIRequestContext,
   token: string,
