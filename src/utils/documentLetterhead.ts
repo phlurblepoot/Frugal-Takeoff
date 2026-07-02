@@ -104,62 +104,74 @@ export interface LetterheadContext {
 }
 
 // --- Letterhead geometry (Letter portrait, pt) ---------------------------------
+// Matches the source template (docs/Template.pdf):
+//   • HEADER — a tall BRAND-GREEN parallelogram on the left and a tall BLACK
+//     block on the right, meeting along a diagonal seam that slopes down-right
+//     (the green widens toward the bottom). A thin white bevel runs along the
+//     seam. The company block + logo sit white-on-black in the right block.
+//   • FOOTER — the same green-left / black-right arrangement (decorative, no
+//     text); the green sweeps larger and the seam sits further right.
+// Built with jsPDF vector ops so it scales/prints crisply, no raster background.
 const PAGE_W = 612;
 const PAGE_H = 792;
 
-// Header band heights / angle.
-const HDR_GREEN_H = 38; // short green band at top-left
-const HDR_BLACK_H = 84; // tall black band (top-right, full width minus the green wedge)
-const HDR_ANGLE = 60; // horizontal run of the diagonal transitions
-const HDR_GREEN_RIGHT = 196; // where the green band ends (top edge of its diagonal)
-const HDR_RULE_GAP = 6; // gap between black band and the green rule
-const HDR_RULE_H = 3; // green rule thickness
+const BAND_H = 84; // banner height (both shapes are full height)
+const BEVEL = 5;   // white gap along the diagonal seam
 
-// Footer band heights / angle (mirrored, decorative).
-const FTR_GREEN_H = 46;
-const FTR_BLACK_H = 30;
-const FTR_ANGLE = 60;
-const FTR_GREEN_RIGHT = 300; // green spans ~left half before the diagonal
+// Header seam (green→black): x at the top and bottom of the band.
+const HDR_SEAM_TOP = 207.6;
+const HDR_SEAM_BOT = 287.8;
+
+// Footer seam (green→black): green sweeps larger, seam sits further right.
+const FTR_SEAM_TOP = 328;
+const FTR_SEAM_BOT = 402;
+
+/** Fill a quadrilateral (p1→p2→p3→p4) via two triangles. */
+function fillQuad(
+  doc: jsPDF,
+  p1: [number, number], p2: [number, number], p3: [number, number], p4: [number, number],
+): void {
+  doc.triangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], 'F');
+  doc.triangle(p1[0], p1[1], p3[0], p3[1], p4[0], p4[1], 'F');
+}
 
 /**
  * Draw the branded header on the CURRENT page. Returns the contentTop Y where
- * body content may begin (a few pt below the green rule).
+ * body content may begin (below the banner).
  */
 export function drawLetterheadHeader(doc: jsPDF, ctx: LetterheadContext): number {
   const [gr, gg, gb] = ctx.brandRgb;
+  const top = 0;
+  const bot = BAND_H;
 
-  // --- Black band: a full-width-right rectangle plus an angled left wedge. ---
-  doc.setFillColor(0, 0, 0);
-  // Main black rectangle covering the right portion at full header height.
-  doc.rect(HDR_GREEN_RIGHT, 0, PAGE_W - HDR_GREEN_RIGHT, HDR_BLACK_H, 'F');
-  // Angled left edge of the black band (diagonal sloping down-right):
-  // wedge from the band's top-left up to the green band's lower-right.
-  doc.triangle(
-    HDR_GREEN_RIGHT, 0,
-    HDR_GREEN_RIGHT, HDR_BLACK_H,
-    HDR_GREEN_RIGHT - HDR_ANGLE, HDR_BLACK_H,
-    'F',
-  );
-
-  // --- Green band (top-left), with a parallel angled right edge. ---
+  // --- Green parallelogram (left), up to the seam. ---
   doc.setFillColor(gr, gg, gb);
-  doc.rect(0, 0, HDR_GREEN_RIGHT - HDR_ANGLE, HDR_GREEN_H, 'F');
-  // Green's angled tip slots into the black wedge.
-  doc.triangle(
-    HDR_GREEN_RIGHT - HDR_ANGLE, 0,
-    HDR_GREEN_RIGHT, 0,
-    HDR_GREEN_RIGHT - HDR_ANGLE, HDR_GREEN_H,
-    'F',
+  fillQuad(
+    doc,
+    [0, top],
+    [HDR_SEAM_TOP, top],
+    [HDR_SEAM_BOT, bot],
+    [0, bot],
   );
 
-  // --- Company contact block (white) inside the black band, right of centre. ---
+  // --- Black block (right), starting a white bevel gap past the seam. ---
+  doc.setFillColor(0, 0, 0);
+  fillQuad(
+    doc,
+    [HDR_SEAM_TOP + BEVEL, top],
+    [PAGE_W, top],
+    [PAGE_W, bot],
+    [HDR_SEAM_BOT + BEVEL, bot],
+  );
+
+  // --- Company contact block (white) inside the black band. ---
   const c = ctx.company || {};
   const textRight = PAGE_W - 120; // leave room for the logo at the far right
-  let ty = 24;
+  let ty = 26;
   if (c.name) {
     doc.setFont('helvetica', 'bold').setFontSize(11).setTextColor(255, 255, 255);
     doc.text(String(c.name), textRight, ty, { align: 'right' });
-    ty += 14;
+    ty += 15;
   }
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(235, 235, 235);
   for (const line of [c.phone, c.address, c.email].filter(Boolean)) {
@@ -167,56 +179,51 @@ export function drawLetterheadHeader(doc: jsPDF, ctx: LetterheadContext): number
     ty += 12;
   }
 
-  // --- Logo at the top-right (fit a ~64pt-tall box, ~609x456 aspect). ---
+  // --- Logo at the top-right (fit a ~58pt-tall box, ~609x456 aspect). ---
   if (ctx.logoDataUrl) {
     try {
-      const boxH = 60;
-      const boxW = boxH * (609 / 456); // ~80pt wide
-      const lx = PAGE_W - 24 - boxW;
-      const ly = (HDR_BLACK_H - boxH) / 2;
+      const boxH = 58;
+      const boxW = boxH * (609 / 456); // ~77pt wide
+      const lx = PAGE_W - 22 - boxW;
+      const ly = (BAND_H - boxH) / 2;
       doc.addImage(ctx.logoDataUrl, 'PNG', lx, ly, boxW, boxH);
     } catch {
       /* skip missing/bad logo */
     }
   }
 
-  // --- Thin brand-green rule spanning the full width below the band. ---
-  const ruleY = HDR_BLACK_H + HDR_RULE_GAP;
-  doc.setFillColor(gr, gg, gb);
-  doc.rect(0, ruleY, PAGE_W, HDR_RULE_H, 'F');
-
-  return ruleY + HDR_RULE_H + 18; // contentTop
+  return BAND_H + 24; // contentTop
 }
 
 /**
- * Draw the mirrored decorative footer banners on the CURRENT page. Returns the
- * contentBottom Y (top of the footer) so callers keep body content above it.
+ * Draw the decorative footer banner (green-left / black-right, mirroring the
+ * header's style) on the CURRENT page. Returns the contentBottom Y (top of the
+ * banner) so callers keep body content above it.
  */
 export function drawLetterheadFooter(doc: jsPDF, ctx: LetterheadContext): number {
   const [gr, gg, gb] = ctx.brandRgb;
+  const top = PAGE_H - BAND_H;
+  const bot = PAGE_H;
 
-  const greenTop = PAGE_H - FTR_GREEN_H;
-  const blackTop = PAGE_H - FTR_BLACK_H;
-
-  // --- Black band (bottom-right): rectangle + angled left wedge. ---
-  doc.setFillColor(0, 0, 0);
-  doc.rect(FTR_GREEN_RIGHT, blackTop, PAGE_W - FTR_GREEN_RIGHT, FTR_BLACK_H, 'F');
-  doc.triangle(
-    FTR_GREEN_RIGHT, blackTop,
-    FTR_GREEN_RIGHT, PAGE_H,
-    FTR_GREEN_RIGHT - FTR_ANGLE, PAGE_H,
-    'F',
-  );
-
-  // --- Green band (bottom-left), taller, with a parallel angled right edge. ---
+  // --- Green parallelogram (bottom-left), up to the seam. ---
   doc.setFillColor(gr, gg, gb);
-  doc.rect(0, greenTop, FTR_GREEN_RIGHT - FTR_ANGLE, FTR_GREEN_H, 'F');
-  doc.triangle(
-    FTR_GREEN_RIGHT - FTR_ANGLE, greenTop,
-    FTR_GREEN_RIGHT, greenTop,
-    FTR_GREEN_RIGHT - FTR_ANGLE, PAGE_H,
-    'F',
+  fillQuad(
+    doc,
+    [0, top],
+    [FTR_SEAM_TOP, top],
+    [FTR_SEAM_BOT, bot],
+    [0, bot],
   );
 
-  return greenTop - 12; // contentBottom (keep body above this)
+  // --- Black block (bottom-right), starting a white bevel gap past the seam. ---
+  doc.setFillColor(0, 0, 0);
+  fillQuad(
+    doc,
+    [FTR_SEAM_TOP + BEVEL, top],
+    [PAGE_W, top],
+    [PAGE_W, bot],
+    [FTR_SEAM_BOT + BEVEL, bot],
+  );
+
+  return top - 16; // contentBottom (keep body above the banner)
 }
