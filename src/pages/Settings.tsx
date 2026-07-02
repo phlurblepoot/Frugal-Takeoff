@@ -19,6 +19,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.2',
+    date: 'July 1, 2026',
+    changes: [
+      'Plan sets reworked: each sheet now has one living set of measurements that carries across revisions. When you add a new revision of a sheet, its current measurements (and scale) are copied onto the new revision automatically — you no longer end up with duplicate measurements, and the older revision becomes read-only history you can still open and view.',
+      'Correct totals & printouts: takeoff totals, printouts, and proposals now count only the current revision of each sheet, so measurements are never double-counted across revisions.',
+      'Read-only revision history: opening a superseded revision shows a banner and blocks drawing, dragging, editing, or deleting measurements (with a one-click "Go to current"). Revisions can be compared in an enlarged full-screen overlay with pan/zoom and opacity.',
+      'No duplicate pages in a set: naming two pages with the same page number within one plan set is now blocked, with a one-click option to auto-suffix the duplicate (e.g. "A-1 (2)").',
+      'More reliable page-name extraction: the extract tool now reads both the PDF\'s embedded text and an OCR pass of the selected area and reconciles them, so garbled or image-only title blocks are matched far more reliably.',
+      'AIA export matches your template: the default G702/G703 Excel export now mirrors the standard Big Bear AIA template, with contract line items and change-order items in separate sections that scale to fit however many rows you have.',
+      'Branded documents: generated PDFs (proposals, invoices, change-order requests, issue reports, punch lists) now carry a branded header and footer. Set your company brand colour and choose whether to invert your logo for the dark banner under Settings.',
+    ],
+  },
+  {
     version: '2.1.2',
     date: 'June 24, 2026',
     changes: [
