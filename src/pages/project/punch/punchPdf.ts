@@ -1,6 +1,10 @@
 // src/pages/project/punch/punchPdf.ts
 import { jsPDF } from 'jspdf';
-import { resolveAccentRgb } from '../billing/invoicePdf';
+import {
+  LetterheadContext,
+  drawLetterheadHeader,
+  drawLetterheadFooter,
+} from '../../../utils/documentLetterhead';
 
 export interface PunchReportItem { area: string; description: string; done: number | boolean; }
 export interface PunchAreaGroup { area: string; items: PunchReportItem[]; done: number; total: number; }
@@ -30,39 +34,41 @@ export function groupByArea(items: PunchReportItem[]): PunchAreaGroup[] {
 export interface PunchPdfContext {
   items: PunchReportItem[];
   projectName: string;
-  company?: { name?: string; logoDataUrl?: string };
   photoDataUrls?: Record<string, string>; // fileId -> dataUrl (optional; pass {} to skip photos)
-  accentRgb?: [number, number, number];
+  /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
+  letterhead: LetterheadContext;
 }
 
-// Builds the printable punch-list PDF. Reuses the Layout-A header treatment from
-// issuePdf/invoicePdf (logo + company left, accent title right) and the same
-// margins / fonts / splitTextToSize wrapping / page-break math. Every addImage
-// is wrapped in try/catch so a corrupt or oversized image can never throw.
+// Builds the printable punch-list PDF. Draws the shared branded letterhead
+// (header + footer on every page); body is the area-grouped checklist plus an
+// optional photo grid. Every addImage is wrapped in try/catch so a corrupt or
+// oversized image can never throw.
 export function buildPunchPdf(ctx: PunchPdfContext): jsPDF {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
-  const Hp = doc.internal.pageSize.getHeight();
   const M = 48;
-  const [ar, ag, ab] = ctx.accentRgb ?? resolveAccentRgb();
-  let y = M;
+  const lc = ctx.letterhead;
+  const [ar, ag, ab] = lc.brandRgb;
 
+  const top = drawLetterheadHeader(doc, lc);
+  const bottom = drawLetterheadFooter(doc, lc);
+  let y = top;
+  const newPage = () => {
+    doc.addPage();
+    drawLetterheadHeader(doc, lc);
+    drawLetterheadFooter(doc, lc);
+    y = top;
+  };
   const ensure = (need: number) => {
-    if (y + need > Hp - M) { doc.addPage(); y = M; }
+    if (y + need > bottom) newPage();
   };
 
-  // Header: logo + company (left), PUNCH LIST title (right)
-  let leftY = y;
-  if (ctx.company?.logoDataUrl) {
-    try { doc.addImage(ctx.company.logoDataUrl, 'PNG', M, leftY, 110, 44); leftY += 52; } catch { /* skip */ }
-  }
-  doc.setFont('helvetica', 'bold').setFontSize(13).setTextColor(20, 20, 20);
-  doc.text(ctx.company?.name || 'Punch List', M, leftY + 4); leftY += 16;
+  // Title + date (body area, below the header)
   doc.setFont('helvetica', 'bold').setFontSize(20).setTextColor(ar, ag, ab);
-  doc.text('PUNCH LIST', W - M, y + 16, { align: 'right' });
+  doc.text('PUNCH LIST', M, y + 8);
   doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(60, 60, 60);
-  doc.text(new Date().toLocaleDateString(), W - M, y + 34, { align: 'right' });
-  y = Math.max(leftY, y + 50) + 16;
+  doc.text(new Date().toLocaleDateString(), W - M, y, { align: 'right' });
+  y += 28;
 
   // Subheader: project name + overall progress
   const groups = groupByArea(ctx.items);
@@ -100,7 +106,7 @@ export function buildPunchPdf(ctx: PunchPdfContext): jsPDF {
     const cellW = (W - 2 * M - 12) / 2, cellH = 150;
     let col = 0;
     for (const url of photoUrls) {
-      if (y + cellH > Hp - M) { doc.addPage(); y = M; col = 0; }
+      if (y + cellH > bottom) { newPage(); col = 0; }
       const x = M + col * (cellW + 12);
       try { doc.addImage(url, 'JPEG', x, y, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
       col++;

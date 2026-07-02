@@ -10,8 +10,11 @@ import {
   HIGHLIGHT_QUALITY_PRESETS,
   getProposalPrefsKey,
   resolveGrandTotal,
+  computeTakeoffTotals,
 } from './proposalGenerator';
 import type { ProposalOptions, TakeoffTotals } from './proposalGenerator';
+import { computeRevisionModel } from '../../../utils/planSets';
+import type { Project, ProjectPage } from '../../../types';
 
 // ── hexToRgb ────────────────────────────────────────────────────────────────
 // NOTE: hexToRgb returns 0-1 RGB components for pdf-lib's rgb(), NOT 0-255.
@@ -194,5 +197,66 @@ describe('resolveGrandTotal', () => {
 
   it('takeoffs mode over empty list returns 0', () => {
     expect(resolveGrandTotal(baseOptions({ priceMode: 'takeoffs' }), [])).toBe(0);
+  });
+});
+
+// ── computeTakeoffTotals: revision (sheetId) de-duplication ───────────────────
+// Guards against the old double-counting bug: a sheet with multiple revisions
+// (older + newer page sharing one sheetId) must contribute ONLY the current
+// (newest) revision's measurements to the takeoff totals — never the sum of both.
+describe('computeTakeoffTotals only counts the current living revision', () => {
+  // Same fixture style as planSets.test.ts.
+  const mkPage = (o: Partial<ProjectPage>): ProjectPage => ({
+    id: 'p', name: '', pageNumber: '', description: '', imageId: '', thumbnailId: '',
+    imageWidth: 0, imageHeight: 0, measurements: [], scaleConfig: null, ...o,
+  } as ProjectPage);
+
+  const mkProj = (pages: ProjectPage[], planSets: any[], takeoffs: any[]): Project => ({
+    id: 'pr', name: 'x', createdAt: 0, pages, takeoffs, planSets,
+  } as Project);
+
+  it('two revisions of sheet A-101 sharing a sheetId count once (newest), not summed', () => {
+    // 1:1 scale (100px = 100 ft) so a 100px polyline → 100 ft. Reused by both pages.
+    const scaleConfig = { pixelDistance: 100, realWorldDistance: 100, unit: 'ft' } as any;
+    // A real-enough length measurement on takeoff t1: two points 100px apart.
+    const lengthMeasurement = (id: string) => ({
+      id, type: 'length', name: id, color: '#000', takeoffId: 't1',
+      points: [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+    } as any);
+
+    const sets = [
+      { id: 's1', name: 'Set 1', createdAt: 1 },
+      { id: 's2', name: 'Set 2', createdAt: 2 },
+    ];
+    // Older revision (planSet s1) carries a measurement on t1.
+    const a1 = mkPage({
+      id: 'a1', name: 'A-101 (rev 1)', sheetId: 'A', pageNumber: 'A-101',
+      planSetId: 's1', scaleConfig, measurements: [lengthMeasurement('m-old')],
+    });
+    // Newer revision (planSet s2) — SAME sheetId — also carries a measurement on t1.
+    const a2 = mkPage({
+      id: 'a2', name: 'A-101 (rev 2)', sheetId: 'A', pageNumber: 'A-101',
+      planSetId: 's2', scaleConfig, measurements: [lengthMeasurement('m-new')],
+    });
+    const takeoffs = [{ id: 't1', name: 'Wall', color: '#000', type: 'length', unit: 'ft' }];
+    const project = mkProj([a1, a2], sets, takeoffs);
+
+    // The consumer derives current pages exactly as the proposal section does.
+    const currentPageIds = computeRevisionModel(project, '').currentPageIds;
+    expect([...currentPageIds]).toEqual(['a2']); // sanity: only the newest revision is current
+
+    const totals = computeTakeoffTotals(project, currentPageIds);
+    const t1 = totals.find(t => t.id === 't1')!;
+
+    // ROBUST CHECK: pageBreakdown references ONLY the current page id — never both.
+    expect(t1.pageBreakdown.map(b => b.pageId)).toEqual(['a2']);
+    expect(t1.pageBreakdown.map(b => b.pageId)).not.toContain('a1');
+
+    // CORROBORATING CHECK: total equals a SINGLE revision's value (100 ft), not 200.
+    const singleRevisionValue = t1.pageBreakdown[0].realValue;
+    expect(t1.totalRealValue).toBeCloseTo(singleRevisionValue);
+    expect(t1.totalRealValue).toBeCloseTo(100);
+    // Explicitly not the double-counted sum of both revisions.
+    expect(t1.totalRealValue).not.toBeCloseTo(200);
   });
 });

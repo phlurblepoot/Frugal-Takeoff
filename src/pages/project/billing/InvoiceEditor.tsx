@@ -6,7 +6,8 @@ import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
-import { buildInvoicePdf, resolveAccentRgb } from './invoicePdf';
+import { buildInvoicePdf } from './invoicePdf';
+import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
   Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100);
@@ -78,19 +79,24 @@ export const InvoiceEditor: React.FC<{
         } catch { /* skip logo on fetch error */ }
       }
     }
+    if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+      logoDataUrl = await invertImageDataUrl(logoDataUrl);
+    }
     return buildInvoicePdf({
       invoice,
       projectName,
       contractor,
       address,
-      company: {
-        name: settings.appName || 'Invoice',
-        address: settings.companyAddress,
-        phone: settings.companyPhone,
-        email: settings.companyEmail,
+      letterhead: {
+        brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+        company: {
+          name: settings.companyName || settings.appName,
+          phone: settings.companyPhone,
+          email: settings.companyEmail,
+          address: settings.companyAddress,
+        },
         logoDataUrl,
       },
-      accentRgb: resolveAccentRgb(),
     });
   };
 

@@ -114,6 +114,11 @@ export interface ProjectPage {
   searchTextIndexed?: boolean;
   measurements: Measurement[];
   scaleConfig: ScaleConfig | null;
+  // Durable logical-sheet id (optional for legacy/in-flight pages — the
+  // migration backfills it). All revisions of one sheet share a sheetId. The
+  // newest revision (by plan-set order) is current/living; older are read-only
+  // history.
+  sheetId?: string;
   planSetId?: string; // Optional for backwards compatibility
   isMultiRegion?: boolean;
   scaleRegions?: ScaleRegion[];

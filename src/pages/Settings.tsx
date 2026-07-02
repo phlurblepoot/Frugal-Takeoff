@@ -19,6 +19,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.2',
+    date: 'July 1, 2026',
+    changes: [
+      'Plan sets reworked: each sheet now has one living set of measurements that carries across revisions. When you add a new revision of a sheet, its current measurements (and scale) are copied onto the new revision automatically — you no longer end up with duplicate measurements, and the older revision becomes read-only history you can still open and view.',
+      'Correct totals & printouts: takeoff totals, printouts, and proposals now count only the current revision of each sheet, so measurements are never double-counted across revisions.',
+      'Read-only revision history: opening a superseded revision shows a banner and blocks drawing, dragging, editing, or deleting measurements (with a one-click "Go to current"). Revisions can be compared in an enlarged full-screen overlay with pan/zoom and opacity.',
+      'No duplicate pages in a set: naming two pages with the same page number within one plan set is now blocked, with a one-click option to auto-suffix the duplicate (e.g. "A-1 (2)").',
+      'More reliable page-name extraction: the extract tool now reads both the PDF\'s embedded text and an OCR pass of the selected area and reconciles them, so garbled or image-only title blocks are matched far more reliably.',
+      'AIA export matches your template: the default G702/G703 Excel export now mirrors the standard Big Bear AIA template, with contract line items and change-order items in separate sections that scale to fit however many rows you have.',
+      'Branded documents: generated PDFs (proposals, invoices, change-order requests, issue reports, punch lists) now carry a branded header and footer. Set your company brand colour and choose whether to invert your logo for the dark banner under Settings.',
+    ],
+  },
+  {
     version: '2.1.2',
     date: 'June 24, 2026',
     changes: [
@@ -1303,6 +1316,8 @@ export const Settings: React.FC = () => {
     companyPhone: '',
     companyEmail: '',
     companyAddress: '',
+    companyBrandColor: '#99CB38',
+    invertLogoOnDocuments: 'false',
     publicHost: '',
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -1497,6 +1512,54 @@ export const Settings: React.FC = () => {
                           />
                         </div>
                       ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Document Branding</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Controls the branded header and footer on generated documents (proposals, invoices, change orders, issues, punch lists).</p>
+                  </div>
+                  <div className="p-6 space-y-6">
+                    <div>
+                      <label htmlFor="company-brand-color" className={labelCls}>Document Brand Colour</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          id="company-brand-color"
+                          type="color"
+                          value={serverSettings.companyBrandColor || '#99CB38'}
+                          onChange={e => setServerSettings({ ...serverSettings, companyBrandColor: e.target.value })}
+                          className="w-12 h-10 rounded-lg border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer shrink-0"
+                          aria-describedby="company-brand-color-hint"
+                        />
+                        <span className="font-mono text-sm text-slate-700 dark:text-slate-300 uppercase">
+                          {serverSettings.companyBrandColor || '#99CB38'}
+                        </span>
+                      </div>
+                      <p id="company-brand-color-hint" className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
+                        Used for the header/footer accents on generated documents (proposals, invoices, etc.).
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Invert Logo on Documents</p>
+                        <p id="invert-logo-hint" className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Turn on if your logo is dark — it will be shown in white on the dark document header.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={serverSettings.invertLogoOnDocuments === 'true'}
+                        aria-label="Invert logo on documents"
+                        aria-describedby="invert-logo-hint"
+                        onClick={() => setServerSettings({ ...serverSettings, invertLogoOnDocuments: serverSettings.invertLogoOnDocuments === 'true' ? 'false' : 'true' })}
+                        className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${serverSettings.invertLogoOnDocuments === 'true' ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                      >
+                        <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                          className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${serverSettings.invertLogoOnDocuments === 'true' ? 'left-6' : 'left-0.5'}`} />
+                      </button>
                     </div>
                   </div>
                 </div>

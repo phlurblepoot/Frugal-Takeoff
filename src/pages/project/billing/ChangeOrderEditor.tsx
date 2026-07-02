@@ -11,7 +11,8 @@ import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
-import { buildChangeOrderPdf, resolveAccentRgb } from './changeOrderPdf';
+import { buildChangeOrderPdf } from './changeOrderPdf';
+import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 import { lineCents, draftTotalCents } from './InvoiceEditor';
 
 export const ChangeOrderEditor: React.FC<{
@@ -108,6 +109,9 @@ export const ChangeOrderEditor: React.FC<{
         } catch { /* skip logo on fetch error */ }
       }
     }
+    if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+      logoDataUrl = await invertImageDataUrl(logoDataUrl);
+    }
     // fetch each photo as a dataURL (authenticated content endpoint)
     const photoDataUrls: string[] = [];
     for (const p of co.photos) {
@@ -121,14 +125,16 @@ export const ChangeOrderEditor: React.FC<{
       projectName,
       contractor,
       address,
-      company: {
-        name: settings.appName || 'Change Order Request',
-        address: settings.companyAddress,
-        phone: settings.companyPhone,
-        email: settings.companyEmail,
+      letterhead: {
+        brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+        company: {
+          name: settings.companyName || settings.appName,
+          phone: settings.companyPhone,
+          email: settings.companyEmail,
+          address: settings.companyAddress,
+        },
         logoDataUrl,
       },
-      accentRgb: resolveAccentRgb(),
       photoDataUrls,
     });
   };

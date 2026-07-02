@@ -1,27 +1,32 @@
-import React, { useState, useRef } from 'react';
-import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
+import { reconcileExtract } from '../utils/extractMatch';
+import { findDuplicatePageNumbers, suffixPageNumber } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-// Pulls embedded text out of a rectangular region of a PDF page. Coordinates
-// are scaled into the same 2.0× viewport space the user's selection rectangle
+// Pulls embedded text items out of a rectangular region of a PDF page,
+// returning each overlapping text-layer string separately. Coordinates are
+// scaled into the same 2.0× viewport space the user's selection rectangle
 // lives in (the rectangle is stored as 0–100 percentages of the displayed
 // image, and our PdfPagePreview renders at scale=2.0). Any text item whose
-// bounding box overlaps the region is included in document order. Returns ''
-// when the region has no embedded text — caller falls back to OCR for image-
-// only content (scanned drawings, vector-art labels that aren't real text).
-async function extractTextFromVectorRegion(
+// bounding box overlaps the region is included in document order. Returns an
+// empty array when the region has no embedded text — the caller falls back to
+// OCR for image-only content (scanned drawings, vector-art labels that aren't
+// real text). These per-item strings are the `rawCandidates` fed to the hybrid
+// reconciler (OCR disambiguates which candidate to trust).
+async function extractTextItemsFromVectorRegion(
   page: any,
   region: { x: number; y: number; width: number; height: number },
-): Promise<string> {
+): Promise<string[]> {
   const viewport = page.getViewport({ scale: 2.0 });
   const regionLeft = (region.x / 100) * viewport.width;
   const regionTop = (region.y / 100) * viewport.height;
@@ -31,7 +36,7 @@ async function extractTextFromVectorRegion(
   const textContent = await page.getTextContent();
   const matched: string[] = [];
   for (const item of textContent.items as any[]) {
-    const str: string = item.str ?? '';
+    const str: string = (item.str ?? '').trim();
     if (!str) continue;
     const tx = item.transform?.[4] ?? 0;
     const ty = item.transform?.[5] ?? 0;
@@ -57,11 +62,12 @@ async function extractTextFromVectorRegion(
     if (itemBottom < regionTop || itemTop > regionBottom) continue;
     matched.push(str);
   }
-  return matched.join(' ').trim();
+  return matched;
 }
 
-// Render a vector PDF page to a JPEG data URL for OCR fallback. Used only
-// when extractTextFromVectorRegion returns nothing (image-only pages).
+// Render a vector PDF page to a JPEG data URL for OCR. The region crop is taken
+// from this full-resolution render so the OCR read is accurate (used by the
+// hybrid reconcile alongside the embedded text-layer candidates).
 async function renderPdfPageToDataUrl(page: any): Promise<string> {
   const viewport = page.getViewport({ scale: 2.0 });
   const canvas = document.createElement('canvas');
@@ -103,6 +109,29 @@ export interface NamingStepPage {
    *  an existing one (matched by page number). Only the add-pages caller
    *  populates this — the new-project upload leaves it undefined. */
   revisionOf?: string;
+  /** Confidence of the import-time auto-detection ('low' = fell back to OCR /
+   *  filename heuristics). Updated by the manual Extract tool to reflect the
+   *  hybrid reconcile result. Task 7's review UI flags 'low' rows. */
+  extractConfidence?: 'high' | 'low';
+  /** Import-time detection confidence carried from the PDF generator. Used as
+   *  the initial "needs review" signal until the user runs the manual Extract
+   *  (which writes `extractConfidence`). */
+  detectionConfidence?: 'high' | 'low';
+  /** Revision Review match: the durable sheetId this incoming page is a revision
+   *  of (reuses that sheet's id + carries its measurements forward on commit).
+   *  Empty / undefined = a brand-new sheet (fresh sheetId, starts empty). The
+   *  add-pages caller seeds this from page-number auto-match; the user can
+   *  change it via the per-row match dropdown. Only meaningful when the review
+   *  UI is enabled (existingSheets provided). */
+  matchSheetId?: string;
+}
+
+/** One existing logical sheet the incoming pages can be matched against in the
+ *  Revision Review step. `pageNumber` is the sheet's CURRENT (living) revision's
+ *  page number, used for both the auto-match and the dropdown label. */
+export interface ExistingSheet {
+  sheetId: string;
+  pageNumber: string;
 }
 
 export interface PageNamingStepProps {
@@ -117,6 +146,16 @@ export interface PageNamingStepProps {
 
   title?: string;
   subtitle?: string;
+
+  /** When provided, enables the add-set "Revision Review" step: a per-row match
+   *  dropdown (Revision of {sheet} / New sheet), within-set duplicate blocking
+   *  with a one-click Suffix fix, and a "needs review" flag on low-confidence
+   *  rows. Omitted by the new-project upload + the rename-existing-pages flow,
+   *  which render the simpler naming grid. */
+  existingSheets?: ExistingSheet[];
+  /** Plan set the incoming pages belong to — scopes the within-set duplicate
+   *  check (the same page number across sets is a revision, not a duplicate). */
+  planSetId?: string;
 }
 
 export const PageNamingStep: React.FC<PageNamingStepProps> = ({
@@ -129,6 +168,8 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   isConfirming = false,
   title = 'Name Pages',
   subtitle = 'Review and rename the imported pages.',
+  existingSheets,
+  planSetId,
 }) => {
   const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
@@ -141,6 +182,9 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   const [interactionMode, setInteractionMode] = useState<'draw' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | null>(null);
   const [initialRect, setInitialRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
+  // Per-page extract confidence from the hybrid reconcile (raw text + OCR),
+  // keyed by page id. 'low' rows are flagged for review in Task 7's UI.
+  const [extractConfidence, setExtractConfidence] = useState<Record<string, 'high' | 'low'>>({});
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -152,6 +196,21 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   // Updates one field on one page, auto-syncing the displayed name from
   // pageNumber + description. Identical logic was previously inlined in both
   // callers — now lives here so they can't drift.
+  // Review mode is active only when the caller supplies the existing sheets to
+  // match against (the add-set flow). The new-project upload + rename flows
+  // leave it off and render the plain naming grid.
+  const reviewMode = !!existingSheets;
+
+  // Auto-match an incoming page number against an existing sheet's CURRENT page
+  // number (case-insensitive). Returns that sheet's durable sheetId, or '' for
+  // "New sheet" when nothing matches.
+  const autoMatch = (pageNumber: string): string => {
+    const n = (pageNumber || '').trim().toLowerCase();
+    if (!n || !existingSheets) return '';
+    const hit = existingSheets.find(s => (s.pageNumber || '').trim().toLowerCase() === n);
+    return hit ? hit.sheetId : '';
+  };
+
   const updateField = (id: string, field: keyof NamingStepPage, value: string) => {
     setPendingPages(pendingPages.map(p => {
       if (p.id !== id) return p;
@@ -161,9 +220,64 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         const desc = field === 'description' ? value : (p.description || '');
         updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
       }
+      // Editing the page number re-runs the match (the duplicate check is derived
+      // live from pendingPages, so it recomputes automatically on render).
+      if (reviewMode && field === 'pageNumber') {
+        updated.matchSheetId = autoMatch(value);
+      }
       return updated;
     }));
   };
+
+  // Explicit match-dropdown change: '' = New sheet, otherwise a target sheetId.
+  const setMatch = (id: string, sheetId: string) => {
+    setPendingPages(pendingPages.map(p => (p.id === id ? { ...p, matchSheetId: sheetId } : p)));
+  };
+
+  // Apply a free " (n)" suffix to one row's page number, scoped to the page
+  // numbers already taken within this in-progress set (so the new value can't
+  // collide with another incoming row either).
+  const handleSuffixRow = (id: string) => {
+    const row = pendingPages.find(p => p.id === id);
+    if (!row) return;
+    const base = (row.pageNumber || '').trim();
+    if (!base) return;
+    const taken = new Set(
+      pendingPages
+        .filter(p => p.id !== id && p.pageNumber?.trim())
+        .map(p => p.pageNumber!.trim().toLowerCase()),
+    );
+    updateField(id, 'pageNumber', suffixPageNumber(base, taken));
+  };
+
+  // ── Review-step derived state ─────────────────────────────────────────────
+  // Within-set duplicate page numbers (blank exempt) block Commit until fixed.
+  const duplicateIds = reviewMode
+    ? new Set(findDuplicatePageNumbers(pendingPages.map(p => ({ id: p.id, planSetId, pageNumber: p.pageNumber }))))
+    : new Set<string>();
+  const hasDuplicates = duplicateIds.size > 0;
+  // A row "needs review" when its best available confidence signal is low — the
+  // live Extract result if the user ran it, else the import-time detection.
+  const rowNeedsReview = (p: NamingStepPage): boolean => {
+    const c = extractConfidence[p.id] ?? p.extractConfidence ?? p.detectionConfidence;
+    return c === 'low';
+  };
+  const needsReviewCount = reviewMode ? pendingPages.filter(rowNeedsReview).length : 0;
+
+  // One-time auto-match seed: when the review step opens, preselect "Revision of
+  // {sheet}" for any incoming page whose number matches an existing sheet's
+  // current page number. Pages whose match hasn't been resolved yet carry an
+  // undefined matchSheetId; once seeded it's an explicit '' (New sheet) or a
+  // sheetId, so the user's later edits are never overwritten.
+  useEffect(() => {
+    if (!reviewMode) return;
+    const unseeded = pendingPages.filter(p => p.matchSheetId === undefined);
+    if (unseeded.length === 0) return;
+    setPendingPages(
+      pendingPages.map(p => (p.matchSheetId === undefined ? { ...p, matchSheetId: autoMatch(p.pageNumber || '') } : p)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewMode, pendingPages]);
 
   const closePreview = () => {
     setPreviewPageId(null);
@@ -176,18 +290,20 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   };
 
   // ── Extraction ────────────────────────────────────────────────────────────
-  // Two paths, in this preference order, per page:
-  //   1. Vector path: read embedded text from the source PDF inside the
-  //      selection region. This is what makes "A5.0" come back as "A5.0"
-  //      rather than the OCR misread "AS.0" — we're reading the same bytes
-  //      that CAD wrote, not pixels.
-  //   2. OCR fallback: only spun up when (a) the page has no source PDF
-  //      (legacy projects) or (b) the region has no embedded text at all
-  //      (scanned drawings, vector-art labels that aren't real text). For
-  //      vector pages we render the page to a JPEG on demand so the OCR
-  //      crop is full-resolution — fixes "extract all pages" producing
-  //      gibberish on non-previewed pages, which were previously being
-  //      cropped from the 400px thumbnail.
+  // Hybrid reconcile, per page: ALWAYS gather BOTH the embedded text-layer
+  // candidates (the individual overlapping strings in the region) AND an OCR
+  // read of the same region crop, then reconcile them via `reconcileExtract`:
+  //   • Raw candidates carry the exact characters CAD wrote ("A5.0" not the OCR
+  //     misread "AS.0"); OCR disambiguates which candidate the region actually
+  //     contains and supplies the value when there's no embedded text at all
+  //     (scanned drawings, vector-art labels, legacy raster pages with no
+  //     source PDF — rawCandidates = [], reconcile falls back to OCR).
+  //   • The reconcile returns a confidence: 'high' when raw + OCR agree (or a
+  //     single obvious raw candidate), 'low' when it had to lean on OCR alone.
+  //     We store the confidence per page so Task 7's review UI can flag it.
+  // For vector pages we render the page to a full-resolution JPEG on demand so
+  // the OCR crop is sharp — fixes "extract all pages" producing gibberish on
+  // non-previewed pages, which were previously cropped from the 400px thumbnail.
   const handleExtractText = async (applyToAll: boolean) => {
     if (!previewPageId || !extractionRect || !extractionType) return;
     const previewedPage = pendingPages.find(p => p.id === previewPageId);
@@ -225,15 +341,23 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       return worker;
     };
 
+    // Accumulate confidence updates so a multi-page "extract all" writes state once.
+    const confidenceUpdates: Record<string, 'high' | 'low'> = {};
+
     try {
-      const recognizePage = async (p: NamingStepPage): Promise<string> => {
-        // Vector path: try embedded text first; render+OCR is the fallback.
+      // Always gather BOTH raw text-layer candidates AND an OCR read, then
+      // reconcile. Returns the cleaned value + a confidence flag for the row.
+      const recognizePage = async (p: NamingStepPage): Promise<{ value: string; confidence: 'high' | 'low' }> => {
+        let rawCandidates: string[] = [];
+        let ocrText = '';
+
+        // Vector page: pull the per-item embedded strings as raw candidates and
+        // OCR a full-resolution render of the same region crop.
         if (p.sourcePdfFileId && p.sourcePdfPageNum) {
           try {
             const proxy = await getProxy(p.sourcePdfFileId);
             const pdfPage = await proxy.getPage(p.sourcePdfPageNum);
-            const text = await extractTextFromVectorRegion(pdfPage, region);
-            if (text) return cleanValue(text);
+            rawCandidates = await extractTextItemsFromVectorRegion(pdfPage, region);
             const cacheKey = `${p.sourcePdfFileId}#${p.sourcePdfPageNum}`;
             let rendered = renderCache.get(cacheKey);
             if (!rendered) {
@@ -242,44 +366,60 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             }
             const cropUrl = await buildOcrCrop(rendered, region);
             const w = await getWorker();
-            const { data: { text: ocrText } } = await w.recognize(cropUrl);
-            return cleanValue(ocrText || '');
+            const { data: { text } } = await w.recognize(cropUrl);
+            ocrText = text || '';
           } catch (err) {
             console.warn('Vector text extract failed; falling back to raster', err);
           }
         }
-        // Legacy raster path. Reuse the preview modal's already-loaded image
-        // for the active page when possible; otherwise the stored full-size
-        // raster URL; thumbnail only as a last resort.
-        const srcUrl =
-          p.id === previewPageId && previewImageSrc
-            ? previewImageSrc
-            : p.imageId
-            ? getImageUrl(p.imageId)
-            : pendingThumbnails[p.thumbnailId];
-        if (!srcUrl) return '';
-        const cropUrl = await buildOcrCrop(srcUrl, region);
-        const w = await getWorker();
-        const { data: { text } } = await w.recognize(cropUrl);
-        return cleanValue(text || '');
+
+        // Legacy raster path (no source PDF, or the vector path threw above and
+        // produced no OCR yet). rawCandidates stays [] so reconcile falls back
+        // to OCR — correct for scanned pages. Reuse the preview modal's
+        // already-loaded image for the active page when possible; otherwise the
+        // stored full-size raster URL; thumbnail only as a last resort.
+        if (!ocrText && rawCandidates.length === 0) {
+          const srcUrl =
+            p.id === previewPageId && previewImageSrc
+              ? previewImageSrc
+              : p.imageId
+              ? getImageUrl(p.imageId)
+              : pendingThumbnails[p.thumbnailId];
+          if (srcUrl) {
+            const cropUrl = await buildOcrCrop(srcUrl, region);
+            const w = await getWorker();
+            const { data: { text } } = await w.recognize(cropUrl);
+            ocrText = text || '';
+          }
+        }
+
+        const { value, confidence } = reconcileExtract({ rawCandidates, ocrText });
+        return { value: cleanValue(value), confidence };
       };
 
       if (applyToAll) {
         const updated = [...pendingPages];
         for (let i = 0; i < updated.length; i++) {
-          const value = await recognizePage(updated[i]);
+          const { value, confidence } = await recognizePage(updated[i]);
           const num = mode === 'pageNumber' ? value : (updated[i].pageNumber || '');
           const desc = mode === 'description' ? value : (updated[i].description || '');
           updated[i] = {
             ...updated[i],
             [mode]: value,
+            extractConfidence: confidence,
             name: num && desc ? `${num} - ${desc}` : (num || desc || updated[i].name),
           };
+          confidenceUpdates[updated[i].id] = confidence;
         }
         setPendingPages(updated);
       } else {
-        const value = await recognizePage(previewedPage);
+        const { value, confidence } = await recognizePage(previewedPage);
         updateField(previewPageId, mode, value);
+        confidenceUpdates[previewPageId] = confidence;
+      }
+
+      if (Object.keys(confidenceUpdates).length) {
+        setExtractConfidence(prev => ({ ...prev, ...confidenceUpdates }));
       }
 
       setExtractionRect(null);
@@ -379,17 +519,29 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{title}</h1>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
           </div>
-          <button
-            onClick={onConfirm}
-            disabled={isConfirming}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-          >
-            {isConfirming ? (
-              <><Loader2 size={18} className="animate-spin" /> Saving...</>
-            ) : (
-              <>{confirmIcon ?? <Check size={18} />} {confirmLabel}</>
+          <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
+            <button
+              onClick={onConfirm}
+              disabled={isConfirming || hasDuplicates}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+            >
+              {isConfirming ? (
+                <><Loader2 size={18} className="animate-spin" /> Saving...</>
+              ) : (
+                <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+              )}
+            </button>
+            {reviewMode && hasDuplicates && (
+              <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
+                <AlertTriangle size={12} /> Resolve duplicate page numbers to continue
+              </p>
             )}
-          </button>
+            {reviewMode && !hasDuplicates && needsReviewCount > 0 && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <AlertTriangle size={12} /> {needsReviewCount} row{needsReviewCount === 1 ? '' : 's'} flagged — double-check before committing
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="p-4 sm:p-8">
@@ -402,10 +554,17 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               // already had on the project).
               const thumbSrc =
                 pendingThumbnails[page.thumbnailId] || pendingThumbnails[page.imageId];
+              const isDuplicate = duplicateIds.has(page.id);
+              const needsReview = reviewMode && rowNeedsReview(page);
+              const borderClass = isDuplicate
+                ? 'border-red-400 dark:border-red-500'
+                : needsReview
+                ? 'border-amber-300 dark:border-amber-500/60'
+                : 'border-slate-100 dark:border-slate-700';
               return (
               <div
                 key={page.id}
-                className="bg-white dark:bg-slate-800 rounded-2xl border-2 border-slate-100 dark:border-slate-700 overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300"
+                className={`bg-white dark:bg-slate-800 rounded-2xl border-2 ${borderClass} overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300`}
               >
                 <div
                   className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
@@ -435,11 +594,17 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                     PAGE {index + 1}
                   </div>
-                  {page.revisionOf && (
+                  {reviewMode ? (
+                    needsReview && (
+                      <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">
+                        <AlertTriangle size={11} /> NEEDS REVIEW
+                      </div>
+                    )
+                  ) : page.revisionOf ? (
                     <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm">
                       REVISION
                     </div>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="p-5 space-y-5">
@@ -456,16 +621,63 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                         type="text"
                         value={page.pageNumber || ''}
                         onChange={(e) => updateField(page.id, 'pageNumber', e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
+                        className={`w-full pl-10 pr-4 py-3 rounded-xl border-2 bg-slate-50 focus:bg-white focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800 ${
+                          isDuplicate
+                            ? 'border-red-400 focus:border-red-500 dark:border-red-500'
+                            : 'border-slate-100 focus:border-accent-500 dark:border-slate-600'
+                        }`}
                         placeholder="e.g. A-101"
                       />
                     </div>
-                    {page.revisionOf && (
+                    {reviewMode && isDuplicate && (
+                      <div className="flex items-center justify-between gap-2 px-1">
+                        <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
+                          <AlertTriangle size={11} /> Duplicate in this set
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleSuffixRow(page.id)}
+                          className="text-[11px] font-bold text-accent-600 dark:text-accent-400 hover:underline"
+                        >
+                          Suffix
+                        </button>
+                      </div>
+                    )}
+                    {!reviewMode && page.revisionOf && (
                       <p className="text-[11px] text-amber-600 dark:text-amber-400 px-1">
                         Replaces existing page {page.revisionOf} — measurements will carry over.
                       </p>
                     )}
                   </div>
+
+                  {reviewMode && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between px-1">
+                        <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Match</label>
+                      </div>
+                      <select
+                        value={page.matchSheetId || ''}
+                        onChange={(e) => setMatch(page.id, e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-medium text-slate-800 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:focus:bg-slate-800"
+                      >
+                        <option value="">New sheet</option>
+                        {(existingSheets || []).map(s => (
+                          <option key={s.sheetId} value={s.sheetId}>
+                            Revision of {s.pageNumber || '(untitled sheet)'}
+                          </option>
+                        ))}
+                      </select>
+                      {page.matchSheetId ? (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 px-1">
+                          Carries the current measurements + scale forward; the prior revision becomes read-only.
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500 px-1">
+                          Starts as a brand-new, empty sheet.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">

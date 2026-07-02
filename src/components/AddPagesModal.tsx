@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, FileImage, Trash2, Plus, Upload, Loader2 } from 'lucide-react';
 import { Project } from '../types';
-import { PageNamingStep, NamingStepPage } from './PageNamingStep';
+import { PageNamingStep, NamingStepPage, ExistingSheet } from './PageNamingStep';
 
 export interface AddPagesProgress {
   status: string;
@@ -36,6 +36,13 @@ export interface AddPagesModalProps {
   setPendingPages: (pages: NamingStepPage[]) => void;
   pendingThumbnails: Record<string, string>;
 
+  /** Existing logical sheets the incoming pages can be matched against — drives
+   *  the Revision Review step. Only supplied for the add-set flow (not the
+   *  rename-existing-pages flow). */
+  reviewSheets?: ExistingSheet[];
+  /** Plan set the incoming pages belong to (scopes the duplicate check). */
+  reviewPlanSetId?: string;
+
   isAddingPages: boolean;
   addProgress: AddPagesProgress;
 
@@ -65,6 +72,8 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
   pendingPages,
   setPendingPages,
   pendingThumbnails,
+  reviewSheets,
+  reviewPlanSetId,
   isAddingPages,
   addProgress,
   fileInputRef,
@@ -263,8 +272,12 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
             onConfirm={onConfirmAddPages}
             isConfirming={isAddingPages}
             confirmLabel={isNamingExistingPages ? 'Save Changes' : 'Add Pages'}
-            title="Name Pages"
-            subtitle="Review and rename the imported pages."
+            title={isNamingExistingPages ? 'Name Pages' : 'Revision Review'}
+            subtitle={isNamingExistingPages
+              ? 'Review and rename the imported pages.'
+              : 'Confirm each incoming page: name it, match it to an existing sheet (or mark New), and resolve duplicates before committing.'}
+            existingSheets={isNamingExistingPages ? undefined : reviewSheets}
+            planSetId={isNamingExistingPages ? undefined : reviewPlanSetId}
           />
         )}
       </div>

@@ -51,60 +51,102 @@ const aiaSettings: AiaSettings = {
 
 const ctx: AiaExportCtx = {
   projectName: 'Test Project',
+  contractor: 'GC Builders Inc',
   company: { name: 'My Co', address: '3 Co Blvd', phone: '555', email: 'a@b.com' },
   aiaSettings, app, sovLines, g702, g703,
 };
 
+// The stub ctx has 2 contract lines + 1 change-order line. Contract items start
+// at row 11, so the dynamic anchors are:
+const N = 2; // contract lines
+const M = 1; // change-order lines
+const CONTRACT_START = 11;
+const CONTRACT_TOTAL_ROW = CONTRACT_START + N;          // 13
+const CO_LABEL_ROW = CONTRACT_TOTAL_ROW + 2;            // 15
+const CO_HEADER_TOP = CO_LABEL_ROW + 2;                 // 17
+const CO_START = CO_HEADER_TOP + 4;                     // 21
+const CO_TOTAL_ROW = CO_START + M;                      // 22
+const GRAND_ROW = CO_TOTAL_ROW + 1;                     // 23
+
+// exceljs stores a formula cell as { formula, result? }; extract the formula.
+const formulaOf = (cell: unknown): string | undefined =>
+  cell && typeof cell === 'object' && 'formula' in (cell as Record<string, unknown>)
+    ? String((cell as { formula: string }).formula)
+    : undefined;
+
 describe('buildAiaWorkbook', () => {
-  it('creates a workbook with G702 and G703 sheets', async () => {
+  it('creates a workbook with sheets G702 then G703 (G702 first)', async () => {
     const wb = await buildAiaWorkbook(ctx);
     expect(wb.getWorksheet('G702')).toBeDefined();
     expect(wb.getWorksheet('G703')).toBeDefined();
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['G702', 'G703']);
   });
 
-  it('G703 has one row per g703 line plus a grand-totals row, reconciling to G702', async () => {
+  it('G703 contract TOTALS row sits at 11 + N (dynamic) with SUM formulas', async () => {
     const wb = await buildAiaWorkbook(ctx);
     const ws = wb.getWorksheet('G703')!;
 
-    // Find the GRAND TOTALS row by scanning column B.
-    let totalsRow = -1;
-    let dataRows = 0;
-    ws.eachRow((row, n) => {
-      const b = row.getCell('B').value;
-      if (b === 'GRAND TOTALS') totalsRow = n;
-    });
-    expect(totalsRow).toBeGreaterThan(0);
-
-    // Data rows = the three header-grid rows above the totals row whose item/desc
-    // match our inputs. Count rows where column C is a number and it's not the
-    // totals row.
-    for (let n = 1; n < totalsRow; n++) {
-      const c = ws.getCell(`C${n}`).value;
-      const b = ws.getCell(`B${n}`).value;
-      if (typeof c === 'number' && b !== 'GRAND TOTALS' &&
-          (b === 'Mobilization' || b === 'Framing' || b === 'Extra door')) {
-        dataRows++;
-      }
-    }
-    expect(dataRows).toBe(3);
-
-    // Grand totals reconcile to G702: ΣC=L3, ΣG=L4, ΣRet=L5 (dollars).
-    expect(ws.getCell(`C${totalsRow}`).value).toBeCloseTo(g702.L3contractSumToDateCents / 100, 2);
-    expect(ws.getCell(`G${totalsRow}`).value).toBeCloseTo(g702.L4totalCompletedStoredCents / 100, 2);
-    expect(ws.getCell(`J${totalsRow}`).value).toBeCloseTo(g702.L5retainageCents / 100, 2);
+    expect(ws.getCell(`B${CONTRACT_TOTAL_ROW}`).value).toBe('TOTALS');
+    expect(formulaOf(ws.getCell(`C${CONTRACT_TOTAL_ROW}`).value))
+      .toBe(`SUM(C${CONTRACT_START}:C${CONTRACT_TOTAL_ROW - 1})`);
+    expect(formulaOf(ws.getCell(`G${CONTRACT_TOTAL_ROW}`).value))
+      .toBe(`SUM(G${CONTRACT_START}:G${CONTRACT_TOTAL_ROW - 1})`);
   });
 
-  it('G702 current payment due cell equals L8 in dollars', async () => {
+  it('G703 change-order TOTALS + GRAND TOTAL rows sit at the expected dynamic positions', async () => {
+    const wb = await buildAiaWorkbook(ctx);
+    const ws = wb.getWorksheet('G703')!;
+
+    expect(ws.getCell(`B${CO_LABEL_ROW}`).value).toBe('Change Orders');
+    expect(ws.getCell(`B${CO_TOTAL_ROW}`).value).toBe('TOTALS');
+    expect(formulaOf(ws.getCell(`C${CO_TOTAL_ROW}`).value))
+      .toBe(`SUM(C${CO_START}:C${CO_TOTAL_ROW - 1})`);
+
+    expect(ws.getCell(`B${GRAND_ROW}`).value).toBe('GRAND TOTAL');
+    expect(formulaOf(ws.getCell(`C${GRAND_ROW}`).value))
+      .toBe(`C${CONTRACT_TOTAL_ROW}+C${CO_TOTAL_ROW}`);
+  });
+
+  it('G703 item rows hold cents/100 inputs and live G/H/I/J formulas', async () => {
+    const wb = await buildAiaWorkbook(ctx);
+    const ws = wb.getWorksheet('G703')!;
+
+    // First contract line = g703[0] (Mobilization).
+    expect(ws.getCell(`B${CONTRACT_START}`).value).toBe('Mobilization');
+    expect(ws.getCell(`C${CONTRACT_START}`).value).toBe(g703[0].scheduledValueCents / 100);
+    expect(ws.getCell(`D${CONTRACT_START}`).value).toBe(g703[0].previousCents / 100);
+    expect(ws.getCell(`E${CONTRACT_START}`).value).toBe(g703[0].thisPeriodCents / 100);
+    expect(ws.getCell(`F${CONTRACT_START}`).value).toBe(g703[0].storedCents / 100);
+    expect(formulaOf(ws.getCell(`G${CONTRACT_START}`).value))
+      .toBe(`D${CONTRACT_START}+E${CONTRACT_START}+F${CONTRACT_START}`);
+    expect(formulaOf(ws.getCell(`J${CONTRACT_START}`).value))
+      .toBe(`SUM(D${CONTRACT_START}:E${CONTRACT_START})*'G702'!$G$22`);
+
+    // The CO line input sits at CO_START.
+    expect(ws.getCell(`B${CO_START}`).value).toBe('Extra door');
+    expect(ws.getCell(`C${CO_START}`).value).toBe(g703[2].scheduledValueCents / 100);
+  });
+
+  it('G702 carries the inputs and anchors its 9 lines to the dynamic G703 rows', async () => {
     const wb = await buildAiaWorkbook(ctx);
     const ws = wb.getWorksheet('G702')!;
 
-    // Find the "8. CURRENT PAYMENT DUE" row, read its money cell (column F).
-    let found = -1;
-    ws.eachRow((row, n) => {
-      const a = row.getCell('A').value;
-      if (typeof a === 'string' && a.startsWith('8. CURRENT PAYMENT DUE')) found = n;
-    });
-    expect(found).toBeGreaterThan(0);
-    expect(ws.getCell(`F${found}`).value).toBeCloseTo(g702.L8currentPaymentDueCents / 100, 2);
+    // Inputs.
+    expect(ws.getCell('D6').value).toBe(ctx.contractor);      // G.C. = project contractor
+    expect(ws.getCell('B3').value).toBe(ctx.aiaSettings.ownerName); // owner (when entered)
+    expect(ws.getCell('B7').value).toBe(ctx.company.name);    // FROM = our company
+    expect(ws.getCell('D3').value).toBe(ctx.projectName);     // project
+    expect(ws.getCell('H3').value).toBe(app.number);          // application #
+    expect(ws.getCell('H6').value).toBe(app.periodTo);        // period to
+    expect(ws.getCell('G22').value).toBeCloseTo(app.retainagePercent / 100, 4); // rate
+
+    // Line 1 (ORIGINAL CONTRACT SUM) references the dynamic contract TOTALS C cell.
+    expect(formulaOf(ws.getCell('H14').value)).toBe(`'G703'!C${CONTRACT_TOTAL_ROW}`);
+    // Line 4 references contract + CO TOTALS G cells.
+    expect(formulaOf(ws.getCell('H20').value))
+      .toBe(`'G703'!G${CONTRACT_TOTAL_ROW}+'G703'!G${CO_TOTAL_ROW}`);
+    // Line 5 (retainage) references contract + CO TOTALS J cells.
+    expect(formulaOf(ws.getCell('H22').value))
+      .toBe(`'G703'!J${CONTRACT_TOTAL_ROW}+'G703'!J${CO_TOTAL_ROW}`);
   });
 });

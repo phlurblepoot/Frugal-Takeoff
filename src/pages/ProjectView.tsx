@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, Copy, SlidersHorizontal } from 'lucide-react';
+import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
 import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
-import { computeRevisionModel, orderedPlanSets, summarizePlanSet, sheetKey } from '../utils/planSets';
+import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -239,6 +239,9 @@ export const ProjectView: React.FC = () => {
   const [showManagePlanSets, setShowManagePlanSets] = useState(false);
   const [showRevisionsForPageId, setShowRevisionsForPageId] = useState<string | null>(null);
   const [comparePageId, setComparePageId] = useState<string | null>(null);
+  // Sheets grid: superseded (older, read-only) revisions are hidden by default;
+  // this toggle folds them into the grid (dimmed, with a read-only badge).
+  const [showSuperseded, setShowSuperseded] = useState(false);
 
   // Upload-failures modal state (mirrors NewProject.tsx) — keeps source File
   // objects so the user can retry missing pages from the existing flow.
@@ -308,41 +311,6 @@ export const ProjectView: React.FC = () => {
     } catch {
       setProject(previous);
       toast('Failed to delete plan set', { type: 'error' });
-    }
-  };
-
-  // Copy the previous revision's measurements + scale onto a sheet's current
-  // revision so takeoffs don't have to be redrawn after a reissue.
-  const handleCopyMeasurementsForward = async (targetPageId: string): Promise<number> => {
-    if (!project) return 0;
-    const target = project.pages.find(p => p.id === targetPageId);
-    const key = target ? sheetKey(target) : null;
-    if (!target || !key) return 0;
-    const revs = revisionModel.revisionsBySheet.get(key) || [];
-    const idx = revs.findIndex(p => p.id === targetPageId);
-    const source = idx > 0 ? revs[idx - 1] : undefined;
-    if (!source || source.measurements.length === 0) return 0;
-    const copied = source.measurements.map(m => ({
-      ...m,
-      id: uuidv4(),
-      planSetId: target.planSetId,
-      segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
-    }));
-    const previous = project;
-    const updated = {
-      ...project,
-      pages: project.pages.map(p => p.id === targetPageId
-        ? { ...p, measurements: [...p.measurements, ...copied], scaleConfig: p.scaleConfig || source.scaleConfig, scaleRegions: p.scaleRegions || source.scaleRegions, isMultiRegion: p.isMultiRegion ?? source.isMultiRegion }
-        : p),
-    };
-    setProject(updated);
-    try {
-      await saveProject(updated);
-      return copied.length;
-    } catch {
-      setProject(previous);
-      toast('Failed to copy measurements', { type: 'error' });
-      return 0;
     }
   };
 
@@ -781,6 +749,7 @@ export const ProjectView: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
                 revisionOf,
               };
 
@@ -1013,6 +982,7 @@ export const ProjectView: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
+                detectionConfidence: pageData.detectionConfidence,
                 revisionOf,
               };
 
@@ -1455,36 +1425,90 @@ export const ProjectView: React.FC = () => {
     if (!project) return;
     setIsAddingPages(true);
     try {
-      // The pages are already added to the project, we just need to update their names
-      const updatedProject = { 
+      const wasNewSet = !isNamingExistingPages;
+      const pendingIds = new Set(pendingPages.map(p => p.id));
+
+      // For the add-set flow, resolve each incoming page's sheet identity from
+      // the Revision Review step's MATCH control before assigning measurements.
+      // The matched sheet's CURRENT living page is computed from the project as
+      // it stood BEFORE this batch (exclude the just-added pending pages) so we
+      // copy forward the real prior revision, not the empty incoming page.
+      const priorPages = project.pages.filter(p => !pendingIds.has(p.id));
+      const priorModel = wasNewSet
+        ? computeRevisionModel({ ...project, pages: priorPages }, '')
+        : null;
+
+      // When a matched sheet's current page is LEGACY (no real stored sheetId),
+      // mint one and stamp it on BOTH the prior page and the new revision so
+      // they share a durable identity going forward. Keyed by the effective
+      // sheet id used in the match dropdown.
+      const backfillSheetId = new Map<string, string>(); // matchSheetId -> real sheetId
+      const stampOnSourcePageId = new Map<string, string>(); // sourcePageId -> real sheetId
+      if (wasNewSet) {
+        for (const p of pendingPages) {
+          if (!p.matchSheetId) continue;
+          const currentPageId = priorModel!.latestPageIdBySheet.get(p.matchSheetId);
+          const source = currentPageId ? priorPages.find(pp => pp.id === currentPageId) : undefined;
+          if (!source) continue;
+          const realId = source.sheetId || uuidv4();
+          backfillSheetId.set(p.matchSheetId, realId);
+          if (!source.sheetId) stampOnSourcePageId.set(source.id, realId);
+        }
+      }
+
+      const updatedProject = {
         ...project,
-        pages: [...project.pages]
-      };
-      
-      pendingPages.forEach(p => {
-        const pageIndex = updatedProject.pages.findIndex(pp => pp.id === p.id);
-        if (pageIndex !== -1) {
-          updatedProject.pages[pageIndex] = {
-            ...updatedProject.pages[pageIndex],
+        pages: project.pages.map(pp => {
+          const p = pendingPages.find(pn => pn.id === pp.id);
+          if (!p) {
+            // Backfill a real sheetId onto a matched legacy prior page so it and
+            // its new revision share identity.
+            const stamp = stampOnSourcePageId.get(pp.id);
+            return stamp ? { ...pp, sheetId: stamp } : pp;
+          }
+
+          const named = {
+            ...pp,
             name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
             pageNumber: p.pageNumber,
             description: p.description,
           };
-        }
-      });
+
+          // Rename-existing flow: names only, no identity/measurement changes.
+          if (!wasNewSet) return named;
+
+          // Add-set flow: assign sheetId + (for revisions) carry measurements
+          // forward from the matched sheet's current living page.
+          const matchSheetId = p.matchSheetId;
+          if (matchSheetId) {
+            const currentPageId = priorModel!.latestPageIdBySheet.get(matchSheetId);
+            const source = currentPageId ? priorPages.find(pp2 => pp2.id === currentPageId) : undefined;
+            const realSheetId = backfillSheetId.get(matchSheetId) || matchSheetId;
+            if (source) {
+              const seeded = carryForwardFrom(source, uuidv4);
+              return {
+                ...named,
+                sheetId: realSheetId,
+                measurements: seeded.measurements,
+                scaleConfig: seeded.scaleConfig,
+                scaleRegions: seeded.scaleRegions,
+                isMultiRegion: seeded.isMultiRegion,
+              };
+            }
+            // Matched sheet vanished (shouldn't happen) — treat as a new sheet.
+            return { ...named, sheetId: uuidv4() };
+          }
+          // New sheet: a fresh durable id, starts empty.
+          return { ...named, sheetId: uuidv4() };
+        }),
+      };
 
       await saveProject(updatedProject);
       setProject(updatedProject);
 
-      const wasNewSet = !isNamingExistingPages;
-      const addedPageIds = pendingPages.map(p => p.id);
-
       if (wasNewSet) {
-        // Find the planSetId from the first pending page
         const planSetId = updatedProject.pages.find(p => p.id === pendingPages[0]?.id)?.planSetId;
-        if (planSetId) {
-          setSelectedPlanSetId(planSetId);
-        }
+        if (planSetId) setSelectedPlanSetId(planSetId);
       }
 
       setShowAddPagesModal(false);
@@ -1497,78 +1521,10 @@ export const ProjectView: React.FC = () => {
       setUseExistingPlanSet(false);
       setTargetPlanSetId('');
       setIsAddingPages(false);
-
-      // If any newly added sheet is a reissue of a sheet that already had
-      // measurements, offer to carry those measurements (and scale) forward so
-      // the takeoffs don't have to be redrawn.
-      if (wasNewSet) {
-        await maybeOfferCarryForward(updatedProject, addedPageIds);
-      }
     } catch (error) {
       console.error('Error adding pages:', error);
       toast('Failed to add pages.', { type: 'error' });
       setIsAddingPages(false);
-    }
-  };
-
-  // Detects reissued sheets among the just-added pages and, with the user's
-  // confirmation, copies the previous revision's measurements + scale onto
-  // them in a single batched update.
-  const maybeOfferCarryForward = async (proj: Project, addedPageIds: string[]) => {
-    const model = computeRevisionModel(proj, '');
-    const added = new Set(addedPageIds);
-    const candidates: { targetId: string; source: ProjectPage }[] = [];
-    for (const pageId of addedPageIds) {
-      const target = proj.pages.find(p => p.id === pageId);
-      const key = target ? sheetKey(target) : null;
-      if (!target || !key || target.measurements.length > 0) continue;
-      const revs = model.revisionsBySheet.get(key) || [];
-      const idx = revs.findIndex(p => p.id === pageId);
-      // Walk back to the most recent earlier revision that actually has work on it.
-      let source: ProjectPage | undefined;
-      for (let j = idx - 1; j >= 0; j--) {
-        if (!added.has(revs[j].id) && revs[j].measurements.length > 0) { source = revs[j]; break; }
-      }
-      if (source) candidates.push({ targetId: pageId, source });
-    }
-    if (candidates.length === 0) return;
-
-    const totalM = candidates.reduce((a, c) => a + c.source.measurements.length, 0);
-    const ok = await confirm({
-      title: 'Carry over measurements?',
-      message: `${candidates.length} reissued sheet${candidates.length === 1 ? '' : 's'} had measurements on the previous revision. Copy ${totalM} measurement${totalM === 1 ? '' : 's'} (and scale calibration) onto the new revision${candidates.length === 1 ? '' : 's'}? You can adjust them afterward.`,
-      confirmLabel: 'Copy measurements',
-    });
-    if (!ok) return;
-
-    const carried = {
-      ...proj,
-      pages: proj.pages.map(p => {
-        const c = candidates.find(x => x.targetId === p.id);
-        if (!c) return p;
-        const copied = c.source.measurements.map(m => ({
-          ...m,
-          id: uuidv4(),
-          planSetId: p.planSetId,
-          segments: m.segments ? m.segments.map(s => ({ ...s })) : m.segments,
-        }));
-        return {
-          ...p,
-          measurements: [...p.measurements, ...copied],
-          scaleConfig: p.scaleConfig || c.source.scaleConfig,
-          scaleRegions: p.scaleRegions || c.source.scaleRegions,
-          isMultiRegion: p.isMultiRegion ?? c.source.isMultiRegion,
-        };
-      }),
-    };
-    const previous = proj;
-    setProject(carried);
-    try {
-      await saveProject(carried);
-      toast(`Copied ${totalM} measurement${totalM === 1 ? '' : 's'} onto ${candidates.length} sheet${candidates.length === 1 ? '' : 's'}`, { type: 'success' });
-    } catch {
-      setProject(previous);
-      toast('Failed to copy measurements forward', { type: 'error' });
     }
   };
 
@@ -1580,6 +1536,29 @@ export const ProjectView: React.FC = () => {
     () => computeRevisionModel(project, selectedPlanSetId),
     [project, selectedPlanSetId],
   );
+
+  // Existing logical sheets the add-set Revision Review step matches against:
+  // each sheet's durable id + its CURRENT (living) revision's page number,
+  // computed from the project EXCLUDING the pages currently being added (so a
+  // page can't be offered as a revision of itself). Also surfaces the incoming
+  // batch's plan set id for the within-set duplicate check.
+  const reviewContext = useMemo(() => {
+    if (!project || isNamingExistingPages || pendingPages.length === 0) {
+      return { sheets: [] as { sheetId: string; pageNumber: string }[], planSetId: undefined as string | undefined };
+    }
+    const pendingIds = new Set(pendingPages.map(p => p.id));
+    const priorPages = project.pages.filter(p => !pendingIds.has(p.id));
+    const model = computeRevisionModel({ ...project, pages: priorPages }, '');
+    const sheets: { sheetId: string; pageNumber: string }[] = [];
+    for (const [sheetId, currentPageId] of model.latestPageIdBySheet) {
+      const page = priorPages.find(p => p.id === currentPageId);
+      sheets.push({ sheetId: effectiveSheetId(page!), pageNumber: page?.pageNumber || '' });
+    }
+    // Sort by page number for a stable, scannable dropdown.
+    sheets.sort((a, b) => a.pageNumber.localeCompare(b.pageNumber));
+    const firstPending = project.pages.find(p => pendingIds.has(p.id));
+    return { sheets, planSetId: firstPending?.planSetId };
+  }, [project, isNamingExistingPages, pendingPages]);
 
   // Calculate totals for takeoffs. Only the current revision of each sheet (for
   // the selected plan set) counts, so measurements stranded on superseded
@@ -1668,16 +1647,36 @@ export const ProjectView: React.FC = () => {
   // search-result badge can show "X of Y matches" (Y = visiblePages.length).
   const visiblePages = revisionModel.visiblePages;
 
+  // Superseded revisions of the visible sheets, surfaced only when the "Show
+  // superseded" toggle is on. Each is an older read-only revision of a sheet
+  // whose current page is in visiblePages. Honors the as-of selection by only
+  // including revisions at/older than the sheet's current (visible) revision.
+  const candidatePages = useMemo(() => {
+    if (!showSuperseded) return visiblePages;
+    const currentIds = new Set(visiblePages.map(p => p.id));
+    const extras: ProjectPage[] = [];
+    for (const current of visiblePages) {
+      const key = effectiveSheetId(current);
+      const revs = revisionModel.revisionsBySheet.get(key) || [];
+      const currentIdx = revs.findIndex(r => r.id === current.id);
+      // Older revisions are everything before the current one in oldest->newest order.
+      for (let i = 0; i < (currentIdx === -1 ? revs.length : currentIdx); i++) {
+        if (!currentIds.has(revs[i].id)) extras.push(revs[i]);
+      }
+    }
+    return [...visiblePages, ...extras];
+  }, [showSuperseded, visiblePages, revisionModel]);
+
   const filteredPages = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
     const matched = searchLower
-      ? visiblePages.filter(page =>
+      ? candidatePages.filter(page =>
           page.name.toLowerCase().includes(searchLower) ||
           (page.pageNumber && page.pageNumber.toLowerCase().includes(searchLower)) ||
           (page.description && page.description.toLowerCase().includes(searchLower)) ||
           (page.extractedText && page.extractedText.toLowerCase().includes(searchLower)),
         )
-      : visiblePages;
+      : candidatePages;
 
     const sorted = [...matched];
     // Favorites always group at the top, then the chosen sort order applies
@@ -1719,7 +1718,7 @@ export const ProjectView: React.FC = () => {
       return baseCmp(a, b);
     });
     return sorted;
-  }, [visiblePages, searchTerm, pagesSortMode, favoritePageIds]);
+  }, [candidatePages, searchTerm, pagesSortMode, favoritePageIds]);
 
   if (isLoading) {
     return (
@@ -1957,6 +1956,8 @@ export const ProjectView: React.FC = () => {
             editingPageNumber={editingPageNumber}
             editingPageDescription={editingPageDescription}
             revisionModel={revisionModel}
+            showSuperseded={showSuperseded}
+            setShowSuperseded={setShowSuperseded}
             isOptimizingThumbnails={isOptimizingThumbnails}
             optimizeProgress={optimizeProgress}
             setSearchTerm={setSearchTerm}
@@ -1977,7 +1978,6 @@ export const ProjectView: React.FC = () => {
             handleShareSelectedPages={handleShareSelectedPages}
             handleOptimizeThumbnails={handleOptimizeThumbnails}
             handleOpenNamePages={handleOpenNamePages}
-            handleCopyMeasurementsForward={handleCopyMeasurementsForward}
             navigate={navigate}
             toast={toast}
             pageSearchInputRef={pageSearchInputRef}
@@ -2121,6 +2121,8 @@ export const ProjectView: React.FC = () => {
         pendingPages={pendingPages}
         setPendingPages={setPendingPages}
         pendingThumbnails={pendingThumbnails}
+        reviewSheets={reviewContext.sheets}
+        reviewPlanSetId={reviewContext.planSetId}
         isAddingPages={isAddingPages}
         addProgress={addProgress}
         fileInputRef={fileInputRef}

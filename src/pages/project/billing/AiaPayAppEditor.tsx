@@ -184,6 +184,7 @@ export const AiaPayAppEditor: React.FC<{
 
       await exportAiaXlsx({
         projectName: project?.name ?? 'Project',
+        contractor: project?.contractor ?? undefined,
         company: {
           name: settings.companyName || settings.appName,
           address: settings.companyAddress,

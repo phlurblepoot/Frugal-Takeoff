@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Project, ProjectPage } from '../../types';
 import { getImageUrl } from '../../utils/store';
-import { sheetKey } from '../../utils/planSets';
+import { effectiveSheetId } from '../../utils/planSets';
 import { RevisionModel } from '../../utils/planSets';
 
 type PagesSortMode = 'pageNumber' | 'description' | 'highlightsDesc';
@@ -50,6 +50,8 @@ interface ProjectPagesTabProps {
   editingPageNumber: string;
   editingPageDescription: string;
   revisionModel: RevisionModel;
+  showSuperseded: boolean;
+  setShowSuperseded: (show: boolean) => void;
   isOptimizingThumbnails: boolean;
   optimizeProgress: { current: number; total: number };
   // setters
@@ -72,7 +74,6 @@ interface ProjectPagesTabProps {
   handleShareSelectedPages: () => void | Promise<void>;
   handleOptimizeThumbnails: () => void | Promise<void>;
   handleOpenNamePages: () => void;
-  handleCopyMeasurementsForward: (targetPageId: string) => Promise<number>;
   // utilities
   navigate: (to: string) => void;
   toast: (message: string, options?: { type?: 'info' | 'success' | 'warning' | 'error' }) => void;
@@ -94,6 +95,8 @@ export function ProjectPagesTab({
   editingPageNumber,
   editingPageDescription,
   revisionModel,
+  showSuperseded,
+  setShowSuperseded,
   isOptimizingThumbnails,
   optimizeProgress,
   setSearchTerm,
@@ -114,11 +117,19 @@ export function ProjectPagesTab({
   handleShareSelectedPages,
   handleOptimizeThumbnails,
   handleOpenNamePages,
-  handleCopyMeasurementsForward,
   navigate,
   toast,
   pageSearchInputRef,
 }: ProjectPagesTabProps) {
+  // How many sheets carry older (read-only) revisions — drives the "Show
+  // superseded" toggle visibility and its count badge.
+  const supersededCount = React.useMemo(() => {
+    let n = 0;
+    for (const revs of revisionModel.revisionsBySheet.values()) {
+      if (revs.length > 1) n += revs.length - 1;
+    }
+    return n;
+  }, [revisionModel]);
   return (
           <div className="space-y-6">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
@@ -197,6 +208,23 @@ export function ProjectPagesTab({
                     <List size={16} />
                   </button>
                 </div>
+                {supersededCount > 0 && (
+                  <button
+                    data-testid="toggle-superseded"
+                    type="button"
+                    onClick={() => setShowSuperseded(!showSuperseded)}
+                    aria-pressed={showSuperseded}
+                    title={showSuperseded ? 'Hide older revisions' : 'Show older (read-only) revisions'}
+                    className={`flex-1 lg:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 shadow-sm border ${
+                      showSuperseded
+                        ? 'bg-accent-600 text-white border-accent-600 hover:bg-accent-700'
+                        : 'bg-white dark:bg-slate-800/50 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <History size={16} />
+                    {showSuperseded ? 'Hide superseded' : `Show superseded (${supersededCount})`}
+                  </button>
+                )}
                 {selectedPageIds.size > 0 && (
                   <>
                     <button
@@ -270,6 +298,9 @@ export function ProjectPagesTab({
                   const isPageSelected = selectedPageIds.has(page.id);
                   const isEditing = editingPageId === page.id;
                   const isFavorite = favoritePageIds.has(page.id);
+                  const revStatus = revisionModel.status(page.id);
+                  const revNumber = revisionModel.revisionNumberByPageId.get(page.id) || 1;
+                  const isSuperseded = revStatus === 'superseded';
                   const matchIdx = searchTerm && page.extractedText
                     ? page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase())
                     : -1;
@@ -284,7 +315,10 @@ export function ProjectPagesTab({
                         e.preventDefault();
                         setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
                       }}
+                      data-superseded={isSuperseded ? 'true' : undefined}
                       className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
+                        isSuperseded ? 'opacity-60 hover:opacity-100' : ''
+                      } ${
                         isPageSelected
                           ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
                           : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
@@ -317,15 +351,23 @@ export function ProjectPagesTab({
                         >
                           {isPageSelected && <Check size={12} className="text-white" />}
                         </button>
-                        {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                        {isSuperseded ? (
+                          <button
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                            title="Read-only history — open revisions"
+                            className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-slate-700/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-slate-800"
+                          >
+                            Rev {revNumber} · Read-only
+                          </button>
+                        ) : revStatus === 'current' ? (
                           <button
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
                             title="View revision history"
-                            className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                            className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded-md bg-emerald-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-emerald-700 flex items-center gap-1"
                           >
-                            Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                            Current · Rev {revNumber}
                           </button>
-                        )}
+                        ) : null}
                       </div>
                       <div className="flex-1 min-w-0 p-3 flex flex-col justify-center gap-1">
                         {isEditing ? (
@@ -425,6 +467,9 @@ export function ProjectPagesTab({
                 {filteredPages.map((page) => {
                   const isPageSelected = selectedPageIds.has(page.id);
                   const isFavorite = favoritePageIds.has(page.id);
+                  const revStatus = revisionModel.status(page.id);
+                  const revNumber = revisionModel.revisionNumberByPageId.get(page.id) || 1;
+                  const isSuperseded = revStatus === 'superseded';
                   return (
                   <Link
                     key={page.id}
@@ -435,7 +480,10 @@ export function ProjectPagesTab({
                       e.preventDefault();
                       setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
                     }}
+                    data-superseded={isSuperseded ? 'true' : undefined}
                     className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
+                      isSuperseded ? 'opacity-60 hover:opacity-100' : ''
+                    } ${
                       isPageSelected
                         ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
                         : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
@@ -483,15 +531,23 @@ export function ProjectPagesTab({
                           className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
                         />
                       </button>
-                      {(revisionModel.revisionNumberByPageId.get(page.id) || 1) > 1 && (
+                      {isSuperseded ? (
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
+                          title="Read-only history — open revisions"
+                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-slate-700/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-slate-800"
+                        >
+                          Rev {revNumber} · Read-only
+                        </button>
+                      ) : revStatus === 'current' ? (
                         <button
                           onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowRevisionsForPageId(page.id); }}
                           title="View revision history"
-                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-accent-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-accent-700"
+                          className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-emerald-600/90 text-white text-[10px] font-bold tracking-wide shadow-sm hover:bg-emerald-700"
                         >
-                          Rev {revisionModel.revisionNumberByPageId.get(page.id)}
+                          Current · Rev {revNumber}
                         </button>
-                      )}
+                      ) : null}
                     </div>
                     <div className="p-4 flex-1 flex flex-col justify-between">
                       <div>
@@ -618,11 +674,9 @@ export function ProjectPagesTab({
                     <Edit2 size={14} /> Rename
                   </button>
                   {(() => {
-                    const key = sheetKey(ctxPage);
-                    const revs = key ? (revisionModel.revisionsBySheet.get(key) || []) : [];
+                    const key = effectiveSheetId(ctxPage);
+                    const revs = revisionModel.revisionsBySheet.get(key) || [];
                     if (revs.length < 2) return null;
-                    const idx = revs.findIndex(p => p.id === ctxPage.id);
-                    const hasPrior = idx > 0 && revs[idx - 1].measurements.length > 0;
                     return (
                       <>
                         <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
@@ -632,19 +686,6 @@ export function ProjectPagesTab({
                         >
                           <History size={14} /> Revision history
                         </button>
-                        {hasPrior && (
-                          <button
-                            onClick={async () => {
-                              setPageContextMenu(null);
-                              const n = await handleCopyMeasurementsForward(ctxPage.id);
-                              if (n > 0) toast(`Copied ${n} measurement${n === 1 ? '' : 's'} from the previous revision`, { type: 'success' });
-                              else if (n === 0) toast('No measurements to copy from the previous revision', { type: 'info' });
-                            }}
-                            className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
-                          >
-                            <Copy size={14} /> Copy measurements from previous revision
-                          </button>
-                        )}
                       </>
                     );
                   })()}

@@ -7,7 +7,7 @@ import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
 import { IssueStatusPill, ISSUE_STATUS_META } from '../../../components/ui/IssueStatusPill';
 import { buildIssuePdf } from './issuePdf';
-import { resolveAccentRgb } from '../billing/invoicePdf';
+import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const IssueEditor: React.FC<{
   issue: Issue;
@@ -52,6 +52,9 @@ export const IssueEditor: React.FC<{
       const blob = await (await fetch(logoDataUrl)).blob();
       logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
     }
+    if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+      logoDataUrl = await invertImageDataUrl(logoDataUrl);
+    }
     // fetch each photo as a dataURL (authenticated content endpoint)
     const photoDataUrls: string[] = [];
     for (const p of issue.photos) {
@@ -64,9 +67,17 @@ export const IssueEditor: React.FC<{
       issue,
       projectName: projectName,
       contractor: contractor,
-      company: { name: settings.appName || 'Issue Report', address: settings.companyAddress, phone: settings.companyPhone, email: settings.companyEmail, logoDataUrl },
       photoDataUrls,
-      accentRgb: resolveAccentRgb(),
+      letterhead: {
+        brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+        company: {
+          name: settings.companyName || settings.appName,
+          phone: settings.companyPhone,
+          email: settings.companyEmail,
+          address: settings.companyAddress,
+        },
+        logoDataUrl,
+      },
     });
   };
 

@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { motion } from 'motion/react';
 import { History, X, GitCompare, ExternalLink, Ruler } from 'lucide-react';
 import { Project, ProjectPage } from '../types';
-import { computeRevisionModel, sheetKey } from '../utils/planSets';
+import { computeRevisionModel, effectiveSheetId } from '../utils/planSets';
 
 interface Props {
   project: Project;
@@ -23,7 +23,7 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
   const { revs, latestId, sheetNo } = useMemo(() => {
     const model = computeRevisionModel(project, '');
     const page = project.pages.find(p => p.id === pageId);
-    const key = page ? sheetKey(page) : null;
+    const key = page ? effectiveSheetId(page) : null;
     const list = key ? (model.revisionsBySheet.get(key) || []) : [];
     return {
       revs: [...list].reverse(),
@@ -70,8 +70,13 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
                     <Ruler size={12} /> {p.measurements.length} measurement{p.measurements.length === 1 ? '' : 's'}
                   </div>
                 </div>
-                <button onClick={() => onOpenPage(p.id)} title="Open this revision" aria-label="Open this revision" className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700">
-                  <ExternalLink size={16} />
+                <button
+                  onClick={() => onOpenPage(p.id)}
+                  title={isCurrent ? 'Open this revision' : 'View this revision (read-only)'}
+                  aria-label={isCurrent ? 'Open this revision' : 'View this revision (read-only)'}
+                  className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                >
+                  <ExternalLink size={15} /> {isCurrent ? 'Open' : 'View'}
                 </button>
               </div>
             );
