@@ -7,6 +7,7 @@ import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, rou
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
+import { getAiStatus, readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled } from '../utils/aiSheets';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -848,6 +849,51 @@ export const ProjectView: React.FC = () => {
         setIsAddingPages(false);
         setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
         return;
+      }
+
+      // AI naming + revision matching pass: read each incoming sheet, then ask
+      // the model which existing sheet (if any) it revises. Prefer the full
+      // raster (imageId) else the stored thumbnail. Falls back silently so the
+      // add-set flow is never blocked; below-threshold matches leave the page's
+      // matchSheetId for PageNamingStep's page-number auto-seed to fill.
+      try {
+        if (aiAutoNameEnabled() && extractedPages.length && (await getAiStatus()).available) {
+          const reads = await runWithConcurrency(
+            extractedPages.map((pg, i) => async () => {
+              setAddProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
+              return readSheet({
+                imageId: pg.imageId || undefined,
+                imageBase64: pg.imageId ? undefined : thumbnails[pg.thumbnailId],
+                embeddedText: pg.extractedText,
+              });
+            }),
+            3,
+          );
+          reads.forEach((read, i) => { if (read) extractedPages[i] = applyReadToPage(extractedPages[i], read); });
+
+          // Existing sheets to match against (exclude the pages being added).
+          const pendingIds = new Set(extractedPages.map(p => p.id));
+          const priorPages = updatedProject.pages.filter(p => !pendingIds.has(p.id));
+          const model = computeRevisionModel({ ...updatedProject, pages: priorPages }, '');
+          const existingRefs: { sheetId: string; number: string; title: string }[] = [];
+          for (const [, currentPageId] of model.latestPageIdBySheet) {
+            const pg = priorPages.find(p => p.id === currentPageId);
+            if (pg) existingRefs.push({ sheetId: effectiveSheetId(pg), number: pg.pageNumber || '', title: pg.description || pg.name || '' });
+          }
+          if (existingRefs.length) {
+            const matches = await runWithConcurrency(
+              extractedPages.map((_pg, i) => async () => {
+                const read = reads[i];
+                if (!read || (!read.sheetNumber && !read.sheetTitle)) return null;
+                return matchSheet({ page: read, existingSheets: existingRefs });
+              }),
+              3,
+            );
+            matches.forEach((m, i) => { if (m) extractedPages[i] = applyMatchToPage(extractedPages[i], m); });
+          }
+        }
+      } catch (aiErr) {
+        console.warn('AI naming/matching pass failed; using heuristics', aiErr);
       }
 
       setPendingPages(extractedPages);
