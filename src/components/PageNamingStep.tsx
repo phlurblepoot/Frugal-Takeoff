@@ -124,6 +124,9 @@ export interface NamingStepPage {
    *  change it via the per-row match dropdown. Only meaningful when the review
    *  UI is enabled (existingSheets provided). */
   matchSheetId?: string;
+  /** Confidence 0..1 from the local AI read, when the page was AI-named. Drives
+   *  the "AI" badge + tooltip in the review grid; absent for OCR/heuristic names. */
+  aiConfidence?: number;
 }
 
 /** One existing logical sheet the incoming pages can be matched against in the
@@ -594,6 +597,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                     PAGE {index + 1}
                   </div>
+                  {page.aiConfidence !== undefined && (
+                    <div
+                      className="absolute bottom-3 left-3 bg-accent-600/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm"
+                      title={`Named by AI (${Math.round(page.aiConfidence * 100)}% confidence)`}
+                    >
+                      AI {Math.round(page.aiConfidence * 100)}%
+                    </div>
+                  )}
                   {reviewMode ? (
                     needsReview && (
                       <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">

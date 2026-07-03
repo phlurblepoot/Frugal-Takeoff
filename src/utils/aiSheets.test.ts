@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runWithConcurrency, applyReadToPage, applyMatchToPage } from './aiSheets';
+import { runWithConcurrency, applyReadToPage, applyMatchToPage, type AiPage } from './aiSheets';
 
 describe('runWithConcurrency', () => {
   it('runs all items, never exceeding the limit, preserving order', async () => {
@@ -16,7 +16,7 @@ describe('runWithConcurrency', () => {
 });
 
 describe('applyReadToPage', () => {
-  const base = { id: 'p1', name: 'Page 1', pageNumber: '', description: '', detectionConfidence: 'low' as const };
+  const base: AiPage = { id: 'p1', name: 'Page 1', pageNumber: '', description: '', detectionConfidence: 'low' };
   it('fills number/description/name from a confident read', () => {
     const out = applyReadToPage(base, { sheetNumber: 'A-201', sheetTitle: 'Second Floor Plan', confidence: 0.9 });
     expect(out.pageNumber).toBe('A-201');
@@ -36,7 +36,7 @@ describe('applyReadToPage', () => {
 });
 
 describe('applyMatchToPage', () => {
-  const base = { id: 'p1', name: 'A-201', pageNumber: 'A-201', description: '', detectionConfidence: 'high' as const };
+  const base: AiPage = { id: 'p1', name: 'A-201', pageNumber: 'A-201', description: '', detectionConfidence: 'high' };
   it('sets matchSheetId from a confident match', () => {
     expect(applyMatchToPage(base, { matchSheetId: 's2', confidence: 0.9 }).matchSheetId).toBe('s2');
   });
