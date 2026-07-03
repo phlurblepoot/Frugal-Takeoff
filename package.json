@@ -53,9 +53,6 @@
     "vite": "^6.2.0",
     "xlsx": "^0.18.5"
   },
-  "optionalDependencies": {
-    "node-llama-cpp": "^3.0.0"
-  },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@testing-library/jest-dom": "^6.9.1",

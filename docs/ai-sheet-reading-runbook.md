@@ -1,61 +1,96 @@
 # AI Sheet Reading — Ops Runbook
 
 ## What it is
-A local vision model (default Qwen2.5-VL-3B GGUF) runs on the server GPU to read
-plan-sheet numbers/titles and match revisions when adding a plan set. Fully
-local; no external calls, no API key. If the model isn't available, the app
-silently falls back to the existing text/OCR extraction + manual naming.
+A local vision model (default **Qwen2.5-VL-3B**) reads plan-sheet numbers/titles
+and matches revisions when adding a plan set. Fully local; no external calls at
+inference time, no API key. Inference runs through a bundled **llama.cpp
+`llama-server`** subprocess on the GPU; the app calls it over localhost. If the
+server/GPU isn't available, the app silently falls back to the existing text/OCR
+extraction + manual naming.
+
+## Architecture
+- The **CUDA image** (`Dockerfile.cuda`) bundles the `llama-server` binary.
+- On first use, the Node app spawns `llama-server` pointing at the model, which
+  **auto-downloads the model + its vision projector (mmproj) from Hugging Face**
+  (`-hf`) into the mounted `/models` volume, then serves an OpenAI-compatible
+  `/v1/chat/completions` endpoint the app calls.
+- The **default CPU image** (`Dockerfile`) does **not** include `llama-server`,
+  so the feature stays disabled there.
 
 ## Requirements
-- NVIDIA GPU (tested target: RTX 5070) with the NVIDIA Container Toolkit
-  configured on the host.
-- Container image built with CUDA support (`--build-arg WITH_CUDA=1`) — see the
-  Dockerfile notes. For a GPU build, base the image on an NVIDIA CUDA 12.x image
-  with Node 22 (or add the CUDA 12.x runtime to the existing base) so
-  `node-llama-cpp` can use its CUDA backend.
-- A host directory mounted at `/models` holding the model weights.
+- NVIDIA GPU (target: RTX 5070) with the NVIDIA Container Toolkit on the host.
+- Image built from `Dockerfile.cuda`.
+- A host directory mounted at `/models` (persists the downloaded weights).
+- Outbound internet on first run (to download the model). After that it's offline.
 
-## First-time setup
-1. Create a models directory on the host and mount it to `/models`.
-2. Download the model + vision projector GGUF files into it (filenames must
-   match `AI_MODEL_FILE` / `AI_MMPROJ_FILE`, defaults shown):
-   - `qwen2.5-vl-3b-instruct-q4_k_m.gguf`
-   - `qwen2.5-vl-3b-instruct-mmproj-f16.gguf`
-   If Qwen2.5-VL misbehaves in the installed `node-llama-cpp` / llama.cpp
-   version, use MiniCPM-V 2.6 GGUF + its mmproj and set `AI_MODEL_FILE` /
-   `AI_MMPROJ_FILE` accordingly.
-3. Run the container with GPU access (e.g. `--gpus all`).
+## Unraid setup
+1. **Install the "Nvidia Driver" plugin** (ich777) from Community Applications;
+   reboot. The RTX 5070 (Blackwell) needs a recent driver branch (570+) — pick
+   the latest/production driver in the plugin if the card isn't detected.
+   Confirm with `nvidia-smi` on the host; note the UUID from `nvidia-smi -L`.
+2. **Build/pull the CUDA image** (`docker build -f Dockerfile.cuda -t frugal-takeoff:cuda .`).
+3. In the container template (Advanced view):
+   - **Extra Parameters:** `--runtime=nvidia`
+   - **Variable** `NVIDIA_VISIBLE_DEVICES` = `GPU-<uuid>` (or `all`)
+   - **Variable** `NVIDIA_DRIVER_CAPABILITIES` = `all`
+   - **Path** `/models` → e.g. `/mnt/user/appdata/frugal-takeoff/models` (read/write)
 
 ## Config (environment variables)
-- `AI_ENABLED` — default on; set `false`/`0` to disable the feature entirely.
-- `AI_MODELS_DIR` — default `/models`.
-- `AI_MODEL_FILE` / `AI_MMPROJ_FILE` — model + vision projector filenames in
-  `AI_MODELS_DIR`.
-- `AI_MODEL_PATH` / `AI_MMPROJ_PATH` — absolute overrides (bypass the dir+file join).
-- `AI_GPU_LAYERS` — default `-1` (all layers on GPU).
-- `AI_TIMEOUT_MS` — per-inference timeout, default `30000`.
+- `AI_ENABLED` — default on; set `false`/`0` to disable entirely.
+- `AI_MODEL_HF` — Hugging Face model to auto-download, `repo:quant`
+  (default `ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M`). llama-server pulls the
+  matching mmproj automatically for multimodal repos.
+- `AI_MODEL_PATH` + `AI_MMPROJ_PATH` — use explicit local GGUF files instead of
+  `-hf` (skips auto-download). Both must be set together.
+- `AI_MODELS_DIR` / `LLAMA_CACHE` — download/cache dir (default `/models`).
+- `AI_LLAMA_SERVER_BIN` — path to the binary (default `/usr/local/bin/llama-server`
+  in the CUDA image).
+- `AI_HOST` / `AI_PORT` — llama-server bind address (default `127.0.0.1:8080`).
+- `AI_GPU_LAYERS` — `-ngl`, default `999` (offload all).
+- `AI_TIMEOUT_MS` — per-inference timeout (default 30000).
+- `AI_STARTUP_TIMEOUT_MS` — max wait for the server to become healthy on first
+  run, which includes the model download (default 900000 = 15 min).
+
+To use a different model, e.g. the tiny fallback SmolVLM-500M:
+`AI_MODEL_HF=ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0`, or the larger
+`ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M`.
+
+## Manual model download (optional)
+If you prefer to pre-seed the weights instead of first-run auto-download:
+```bash
+pip install -U "huggingface_hub[cli]"
+cd /mnt/user/appdata/frugal-takeoff/models
+huggingface-cli download ggml-org/Qwen2.5-VL-3B-Instruct-GGUF \
+  Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf \
+  mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf --local-dir .
+```
+Then point at them explicitly:
+`AI_MODEL_PATH=/models/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf`
+`AI_MMPROJ_PATH=/models/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf`
 
 ## Verify
-Authenticated request to `GET /api/ai/status`:
+Authenticated `GET /api/ai/status`:
 ```
-{"available": true, "model": "qwen2.5-vl-3b-instruct", "device": "cuda"}
+{"available": true, "model": "...:Q4_K_M", "device": "cuda"}
 ```
-Then read a real page (use an actual page `imageId`):
+On the very first run after a fresh deploy, `available` stays `false` while the
+model downloads/loads (several minutes) — imports during that window use OCR.
+Once the download finishes, `available` flips to `true` and reads work. Then:
 ```
 curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"imageId":"<imageId>"}' http://localhost:3331/api/ai/read-sheet
+  -d '{"imageId":"<a real page imageId>"}' http://localhost:3331/api/ai/read-sheet
 # → {"sheetNumber":"A-201","sheetTitle":"...","confidence":0.x}
 ```
 
 ## Troubleshooting
-- `available:false`, `device:"none"`, model `"model files not found"` → the GGUF
-  files aren't at the configured paths in `/models`.
-- `available:false` but files present → the container can't load the model:
-  confirm CUDA libs are in the image, the container sees the GPU
-  (`nvidia-smi` inside the container), and `node-llama-cpp` installed. Check
-  server logs for the load error.
-- `device:"cpu"` → the model loaded but without GPU offload; check CUDA/driver
-  and `AI_GPU_LAYERS`.
+- `available:false`, model `"llama-server not found"` → you're running the CPU
+  image; build/run `Dockerfile.cuda`.
+- `available:false` for a long time on first run → still downloading the model;
+  check container logs and outbound network. Increase `AI_STARTUP_TIMEOUT_MS` for
+  slow links.
+- `available:false` after download → the container can't see the GPU. Confirm
+  `docker exec -it <container> nvidia-smi` lists the card and `--runtime=nvidia`
+  + `NVIDIA_*` vars are set.
 
 ## Fallback behaviour
 When unavailable, imports and the add-set review step use the existing OCR +

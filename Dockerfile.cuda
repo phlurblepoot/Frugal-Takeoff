@@ -1,0 +1,52 @@
+# GPU build: Frugal-Takeoff + a bundled CUDA llama.cpp server for local AI
+# sheet reading. Build on a host with the NVIDIA Container Toolkit and run with
+# `--gpus all`. See docs/ai-sheet-reading-runbook.md.
+#
+#   docker build -f Dockerfile.cuda -t frugal-takeoff:cuda .
+#   docker run --gpus all -v /path/to/models:/models -p 3000:3000 frugal-takeoff:cuda
+
+# 1) The prebuilt CUDA llama.cpp server image provides the `llama-server` binary
+#    and its shared libraries, already built against CUDA.
+FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama
+
+# 2) Final image: CUDA runtime + Node 22 + our app + the copied llama-server.
+FROM nvidia/cuda:12.5.1-runtime-ubuntu22.04
+
+# Node 22 + build tools for native modules (better-sqlite3).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates gnupg python3 build-essential \
+ && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# Bring in the CUDA-built llama-server binary + its libs from the llama.cpp image.
+# (The server-cuda image installs these under /app.)
+COPY --from=llama /app/llama-server /usr/local/bin/llama-server
+COPY --from=llama /app/*.so* /usr/local/lib/
+RUN ldconfig
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV STORAGE_PATH=/app/data
+ENV PORT=3000
+
+# AI configuration — llama-server binary + model download cache (mounted volume).
+ENV AI_LLAMA_SERVER_BIN=/usr/local/bin/llama-server
+ENV AI_MODELS_DIR=/models
+ENV LLAMA_CACHE=/models
+VOLUME ["/models"]
+
+EXPOSE 3000
+RUN mkdir -p /app/data /models
+
+# The base image sets llama-server as its entrypoint — reset it so our Node
+# server runs (it spawns llama-server itself).
+ENTRYPOINT []
+CMD ["npx", "tsx", "server.ts"]
