@@ -48,10 +48,19 @@ export function createLlamaRunner(cfg: RunnerConfig): AiRunner {
         const ctx = await model.createContext();
         return {
           async complete(prompt: string, image?: Buffer): Promise<string> {
-            const session = new mod.LlamaChatSession({ contextSequence: ctx.getSequence() });
+            const sequence = ctx.getSequence();
+            const session = new mod.LlamaChatSession({ contextSequence: sequence });
             const opts: any = { maxTokens: 256, temperature: 0 };
             if (image) opts.images = [image]; // adjust per confirmed API
-            return session.prompt(prompt, opts);
+            try {
+              return await session.prompt(prompt, opts);
+            } finally {
+              // Best-effort cleanup so long import batches don't exhaust the
+              // context's sequence pool / leak KV-cache. Method names are
+              // version-specific; guard with optional chaining.
+              try { session?.dispose?.(); } catch { /* ignore */ }
+              try { sequence?.dispose?.(); } catch { /* ignore */ }
+            }
           },
         };
       })().catch((err: unknown) => { loadFailed = true; throw err; });
