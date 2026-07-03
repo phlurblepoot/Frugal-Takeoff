@@ -6,6 +6,7 @@ import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
+import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 
@@ -499,6 +500,10 @@ const PreferencesTab: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [autoName, setAutoName] = useState<boolean>(aiAutoNameEnabled());
+  useEffect(() => { getAiStatus(true).then(setAiStatus); }, []);
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword.length < 6) {
@@ -659,6 +664,40 @@ const PreferencesTab: React.FC = () => {
               {accentColor === 'custom' ? customAccentHex : accentColor}
             </span>
           </p>
+        </div>
+      </div>
+
+      {/* AI Sheet Reading */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Sparkles size={18} /> AI Sheet Reading
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            {aiStatus?.available
+              ? `Local model ready: ${aiStatus.model} (${aiStatus.device}). Imported plan sheets are read and named automatically.`
+              : 'No local model detected. Page naming falls back to text/OCR extraction. See the ops runbook to enable it.'}
+          </p>
+        </div>
+        <div className="p-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white">Auto-name imported pages with AI</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                When a local model is available, read each sheet's number and title on import.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoName}
+              disabled={!aiStatus?.available}
+              onClick={() => { const next = !autoName; setAutoName(next); setAiAutoNameEnabled(next); }}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed ${autoName && aiStatus?.available ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+            >
+              <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-all ${autoName && aiStatus?.available ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
         </div>
       </div>
 
