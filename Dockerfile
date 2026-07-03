@@ -22,6 +22,22 @@ COPY . .
 # Build the frontend
 RUN npm run build
 
+# --- Optional local AI (sheet reading) -------------------------------------
+# node-llama-cpp is an OPTIONAL dependency; `npm ci` installs its CPU binaries
+# by default and the app runs fine with the feature disabled. For GPU inference
+# (the AI sheet-reading feature), build a CUDA-capable image:
+#   * base this stage on an NVIDIA CUDA image with Node 22 (or install the CUDA
+#     12.x runtime on top of this image — match the GPU, e.g. RTX 5070/Blackwell),
+#   * build with `--build-arg WITH_CUDA=1`, and
+#   * run the container with `--gpus all`.
+# node-llama-cpp resolves its CUDA backend when the GPU + CUDA libs are present.
+# Model weights are NOT baked in — mount them at /models.
+# See docs/ai-sheet-reading-runbook.md.
+ARG WITH_CUDA=0
+ENV WITH_CUDA=${WITH_CUDA}
+ENV AI_MODELS_DIR=/models
+VOLUME ["/models"]
+
 # Set environment variables
 ENV NODE_ENV=production
 ENV STORAGE_PATH=/app/data
