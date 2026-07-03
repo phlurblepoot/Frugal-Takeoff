@@ -17,6 +17,8 @@ import { openDb } from './server/db';
 import { runMigrations } from './server/migrations';
 import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
+import { registerAiRoutes } from './server/aiRoutes';
+import { getAiRunner } from './server/ai';
 
 dotenv.config();
 
@@ -545,6 +547,12 @@ async function startServer() {
     requireAdmin,
     buildTransporter,
     getUserSmtp,
+  });
+
+  registerAiRoutes(app, {
+    dataDir: DATA_DIR,
+    authenticateToken,
+    runner: getAiRunner(),
   });
 
   // WebSocket Logic
