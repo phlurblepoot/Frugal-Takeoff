@@ -16,8 +16,16 @@ const fakeRunner = (over: Partial<AiRunner> = {}): AiRunner => ({
 const loadImage = (id: string) => (id === 'img1' ? Buffer.from('jpeg') : null);
 
 describe('handleStatus', () => {
-  it('reports availability + info', async () => {
-    expect(await handleStatus(fakeRunner())).toEqual({ status: 200, body: { available: true, model: 'fake', device: 'cuda' } });
+  it('reports availability + info + ready state', async () => {
+    expect(await handleStatus(fakeRunner())).toEqual({ status: 200, body: { available: true, model: 'fake', device: 'cuda', state: 'ready' } });
+  });
+  it('reports "loading" when configured but not yet healthy', async () => {
+    const r = await handleStatus(fakeRunner({ available: () => Promise.resolve(false) }));
+    expect(r.body).toMatchObject({ available: false, state: 'loading' });
+  });
+  it('reports "off" when the runner is disabled (device none)', async () => {
+    const r = await handleStatus(fakeRunner({ available: () => Promise.resolve(false), info: () => ({ model: 'disabled', device: 'none' }) }));
+    expect(r.body).toMatchObject({ state: 'off' });
   });
 });
 

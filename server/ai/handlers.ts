@@ -8,7 +8,11 @@ export type ImageLoader = (id: string) => Buffer | null;
 export async function handleStatus(runner: AiRunner): Promise<HandlerResult> {
   const available = await runner.available().catch(() => false);
   const info = runner.info();
-  return { status: 200, body: { available, model: info.model, device: info.device } };
+  // 'off'     = disabled / no GPU image (device none)
+  // 'ready'   = model loaded and serving
+  // 'loading' = configured but not healthy yet (spawning / downloading weights)
+  const state = info.device === 'none' ? 'off' : available ? 'ready' : 'loading';
+  return { status: 200, body: { available, model: info.model, device: info.device, state } };
 }
 
 function decodeBase64Image(input: string): Buffer | null {

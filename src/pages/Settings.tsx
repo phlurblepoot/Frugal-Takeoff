@@ -502,7 +502,20 @@ const PreferencesTab: React.FC = () => {
 
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [autoName, setAutoName] = useState<boolean>(aiAutoNameEnabled());
-  useEffect(() => { getAiStatus(true).then(setAiStatus); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      const s = await getAiStatus(true);
+      if (cancelled) return;
+      setAiStatus(s);
+      // While the model is downloading/loading, keep polling so the page flips
+      // to "ready" on its own without a manual refresh.
+      if (s.state === 'loading') timer = setTimeout(tick, 5000);
+    };
+    tick();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -674,8 +687,10 @@ const PreferencesTab: React.FC = () => {
             <Sparkles size={18} /> AI Sheet Reading
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            {aiStatus?.available
+            {aiStatus?.state === 'ready'
               ? `Local model ready: ${aiStatus.model} (${aiStatus.device}). Imported plan sheets are read and named automatically.`
+              : aiStatus?.state === 'loading'
+              ? 'Model is starting up — on first run it downloads the weights (this can take several minutes). Watch the container log for download progress. Page naming uses text/OCR until it\'s ready; this will update automatically.'
               : 'No local model detected. Page naming falls back to text/OCR extraction. See the ops runbook to enable it.'}
           </p>
         </div>

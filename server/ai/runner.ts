@@ -53,9 +53,11 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
     if (proc || spawnFailed) return;
     if (!existsSync(cfg.serverBin)) { spawnFailed = true; return; }
     try {
+      // Inherit stdio so llama-server's model-download progress bar + load logs
+      // stream straight to the container log (docker logs / Unraid log viewer).
       proc = spawn(cfg.serverBin, buildServerArgs(cfg), {
         env: { ...process.env, LLAMA_CACHE: cfg.cacheDir },
-        stdio: 'ignore',
+        stdio: 'inherit',
       });
       proc.on('exit', () => { proc = null; });
       proc.on('error', () => { spawnFailed = true; proc = null; });

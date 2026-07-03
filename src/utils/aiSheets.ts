@@ -2,7 +2,7 @@ import { getAuthHeaders } from './store';
 
 export interface SheetRead { sheetNumber: string; sheetTitle: string; discipline?: string; confidence: number; }
 export interface SheetMatch { matchSheetId: string | null; confidence: number; reason?: string; }
-export interface AiStatus { available: boolean; model: string; device: string; }
+export interface AiStatus { available: boolean; model: string; device: string; state?: 'off' | 'loading' | 'ready'; }
 export interface ExistingSheetRef { sheetId: string; number: string; title: string; }
 
 /** Minimal shape of a review page the apply helpers touch. */
