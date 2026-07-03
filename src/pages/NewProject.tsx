@@ -8,6 +8,7 @@ import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
+import { getAiStatus, readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 
 interface PendingPage {
@@ -348,6 +349,29 @@ export const NewProject: React.FC = () => {
         // Nothing to name — stay on the upload step. Modal (if any) still shows.
         setIsProcessing(false);
         return;
+      }
+
+      // AI naming pass: when the local model is available and auto-naming is on,
+      // replace the heuristic names with the model's read. Prefer the full-page
+      // raster (imageId) when present, else the stored thumbnail. Falls back
+      // silently on any error so import is never blocked.
+      try {
+        if (aiAutoNameEnabled() && extractedPages.length && (await getAiStatus()).available) {
+          const reads = await runWithConcurrency(
+            extractedPages.map((pg, i) => async () => {
+              setProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
+              return readSheet({
+                imageId: pg.imageId || undefined,
+                imageBase64: pg.imageId ? undefined : thumbnails[pg.thumbnailId],
+                embeddedText: pg.extractedText,
+              });
+            }),
+            3,
+          );
+          reads.forEach((read, i) => { if (read) extractedPages[i] = applyReadToPage(extractedPages[i], read); });
+        }
+      } catch (aiErr) {
+        console.warn('AI naming pass failed; using heuristic names', aiErr);
       }
 
       setPendingPages(extractedPages);
