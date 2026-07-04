@@ -1,15 +1,18 @@
 name: Docker CUDA Image CI
 
-# The GPU image (Dockerfile.cuda) is large and slow to build, so it is NOT built
-# on every push like the CPU image. Build it on demand:
-#   * from the Actions tab -> "Docker CUDA Image CI" -> Run workflow, OR
-#   * by pushing a git tag matching `cuda-*` (e.g. `git tag cuda-1 && git push origin cuda-1`).
-# It publishes ghcr.io/<repo>:cuda (plus a :cuda-<sha> for traceability).
+# Builds the GPU image (Dockerfile.cuda) and publishes ghcr.io/<repo>:cuda
+# (plus a :cuda-<sha> for traceability). It tracks the `testing` branch: every
+# push to testing rebuilds :cuda, mirroring how the CPU :testing tag works, so
+# the GPU image stays in sync with your live box. You can also build on demand:
+#   * Actions tab -> "Docker CUDA Image CI" -> Run workflow (any branch), OR
+#   * push a git tag matching `cuda-*` (e.g. `git tag cuda-1 && git push origin cuda-1`).
+# GPU builds are large/slow; GHA layer caching keeps incremental builds faster.
 # Point your Unraid container's Repository at the :cuda tag and re-pull to update.
 
 on:
   workflow_dispatch:
   push:
+    branches: [ "testing" ]
     tags: [ 'cuda-*' ]
 
 env:
