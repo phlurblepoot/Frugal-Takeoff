@@ -38,6 +38,6 @@ export interface AiInfo {
 export interface AiRunner {
   available(): Promise<boolean>;
   info(): AiInfo;
-  readSheet(input: { image: Buffer; embeddedText?: string }): Promise<SheetRead>;
+  readSheet(input: { image: Buffer; embeddedText?: string; prompt?: string }): Promise<SheetRead>;
   matchSheet(input: { page: SheetRead; existing: ExistingSheetRef[] }): Promise<SheetMatch>;
 }

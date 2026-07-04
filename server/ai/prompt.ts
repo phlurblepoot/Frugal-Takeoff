@@ -27,13 +27,17 @@ export function buildReadPrompt(embeddedText?: string): string {
     ? `\n\nFor reference, here is text extracted from the drawing's PDF layer (may be noisy or incomplete). Prefer it when it agrees with what you see:\n"""${embeddedText.trim().slice(0, 2000)}"""`
     : '';
   return (
-    `You are reading a single sheet from a set of construction/architectural drawings. ` +
-    `Identify the sheet's number and its title from anywhere on the page (often but not always in a title block along an edge). ` +
-    `The sheet number is the drawing identifier such as "A-201", "S1.1", "M-2.0", or "E001". ` +
-    `The title is the sheet's name such as "SECOND FLOOR PLAN" or "ROOF DETAILS". ` +
+    `You are reading a single sheet from a set of construction/architectural drawings. Extract:\n` +
+    `- sheetNumber: the drawing identifier printed on the sheet (e.g. "A-201", "S1.1", "RC-A-106", "E001"), ` +
+    `usually in the title block along the right or bottom edge. Ignore unrelated numbers (project/record numbers, room tags, detail callouts).\n` +
+    `- sheetTitle: a concise title for what THIS sheet depicts. If the title block prints an explicit sheet title, use it verbatim. ` +
+    `If it does NOT, look at the drawings and infer a short conventional title from the content — e.g. "Exterior Elevations", ` +
+    `"Second Floor Plan", "Building Sections", "Wall Details", "Roof Plan", "Door Schedule". ` +
+    `Do NOT use the heading of a legend, keynotes, general notes, or a notes table as the title.\n` +
+    `- discipline: one of Architectural, Structural, Mechanical, Electrical, Plumbing, Civil, or similar.\n` +
     `Respond with ONLY a JSON object, no prose, exactly of the form ` +
     `{"sheetNumber": string, "sheetTitle": string, "discipline": string, "confidence": number between 0 and 1}. ` +
-    `Use empty strings when unsure and a low confidence.` +
+    `Use empty strings and a low confidence only when the sheet is genuinely unreadable.` +
     hint
   );
 }

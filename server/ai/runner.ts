@@ -107,13 +107,13 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
       return health(1000);
     },
     info(): AiInfo { return { model: cfg.modelLabel, device }; },
-    async readSheet({ image, embeddedText }: { image: Buffer; embeddedText?: string }): Promise<SheetRead> {
+    async readSheet({ image, embeddedText, prompt }: { image: Buffer; embeddedText?: string; prompt?: string }): Promise<SheetRead> {
       await waitReady();
       const dataUrl = `data:image/jpeg;base64,${image.toString('base64')}`;
       const messages = [{
         role: 'user',
         content: [
-          { type: 'text', text: buildReadPrompt(embeddedText) },
+          { type: 'text', text: prompt || buildReadPrompt(embeddedText) },
           { type: 'image_url', image_url: { url: dataUrl } },
         ],
       }];

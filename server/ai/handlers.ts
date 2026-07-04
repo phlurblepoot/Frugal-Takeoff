@@ -24,7 +24,7 @@ function decodeBase64Image(input: string): Buffer | null {
 export async function handleReadSheet(
   runner: AiRunner,
   loadImage: ImageLoader,
-  body: { imageId?: string; imageBase64?: string; embeddedText?: string },
+  body: { imageId?: string; imageBase64?: string; embeddedText?: string; prompt?: string },
 ): Promise<HandlerResult> {
   if (!(await runner.available().catch(() => false))) return { status: 503, body: { error: 'ai unavailable' } };
 
@@ -40,7 +40,7 @@ export async function handleReadSheet(
   }
 
   try {
-    const read = await runner.readSheet({ image, embeddedText: body.embeddedText });
+    const read = await runner.readSheet({ image, embeddedText: body.embeddedText, prompt: body.prompt });
     return { status: 200, body: read };
   } catch (e: any) {
     return { status: 502, body: { error: String(e?.message ?? e) } };
