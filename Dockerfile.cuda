@@ -14,6 +14,12 @@ FROM ghcr.io/ggml-org/llama.cpp:server-cuda
 # Some base images run as a non-root user; ensure apt works.
 USER root
 
+# The bundled llama-server keeps its shared libs in /app and relied on the base
+# image's own entrypoint/env to find them. We reset the entrypoint and spawn the
+# binary from our Node process, so register /app with the linker cache to make
+# the libs (e.g. libllama-server-impl.so) resolvable regardless of how it starts.
+RUN echo "/app" > /etc/ld.so.conf.d/llama.conf && ldconfig
+
 # Node 22 + build tools for native modules (better-sqlite3 -> node-gyp).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg python3 build-essential \
