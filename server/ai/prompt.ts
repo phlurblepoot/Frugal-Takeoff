@@ -27,13 +27,19 @@ export function buildReadPrompt(embeddedText?: string): string {
     ? `\n\nFor reference, here is text extracted from the drawing's PDF layer (may be noisy or incomplete). Prefer it when it agrees with what you see:\n"""${embeddedText.trim().slice(0, 2000)}"""`
     : '';
   return (
-    `You are reading a single sheet from a set of construction/architectural drawings. Extract:\n` +
-    `- sheetNumber: the drawing identifier printed on the sheet (e.g. "A-201", "S1.1", "RC-A-106", "E001"), ` +
-    `usually in the title block along the right or bottom edge. Ignore unrelated numbers (project/record numbers, room tags, detail callouts).\n` +
-    `- sheetTitle: a concise title for what THIS sheet depicts. If the title block prints an explicit sheet title, use it verbatim. ` +
-    `If it does NOT, look at the drawings and infer a short conventional title from the content — e.g. "Exterior Elevations", ` +
-    `"Second Floor Plan", "Building Sections", "Wall Details", "Roof Plan", "Door Schedule". ` +
-    `Do NOT use the heading of a legend, keynotes, general notes, or a notes table as the title.\n` +
+    `You are reading ONE sheet from a set of construction/architectural drawings. Extract:\n` +
+    `- sheetNumber: the sheet's identifier from the title block (the strip along the right or bottom edge that holds the sheet number), ` +
+    `e.g. "A-201", "S1.1", "RC-A-106", "A-300". Read each character and digit carefully. ` +
+    `Ignore project/record numbers, revision numbers, room tags, and round detail-callout bubbles.\n` +
+    `- sheetTitle, in this priority:\n` +
+    `  (1) If a sheet title is printed IN THE TITLE BLOCK (right next to / above the sheet number), copy it VERBATIM, keeping any ` +
+    `level/area/phase qualifier — e.g. "Level 06 Floor Plan", "Second Floor Plan".\n` +
+    `  (2) Otherwise give ONE general category title for the WHOLE sheet. In this case it must name a category, not a single drawing; ` +
+    `it must NOT contain a compass direction (North/South/East/West) or parentheses. The individual drawings may each carry their own ` +
+    `label (e.g. "Front Elevation (South)", "Section A", "Detail 3") — do NOT copy one of those. Name the collective type instead: ` +
+    `several building elevations -> "Exterior Elevations"; several sections -> "Building Sections"; a roof plan -> "Roof Plan"; ` +
+    `enlarged details -> "Wall Details".\n` +
+    `  Never use the heading of a legend, keynotes, or a notes table as the title.\n` +
     `- discipline: one of Architectural, Structural, Mechanical, Electrical, Plumbing, Civil, or similar.\n` +
     `Respond with ONLY a JSON object, no prose, exactly of the form ` +
     `{"sheetNumber": string, "sheetTitle": string, "discipline": string, "confidence": number between 0 and 1}. ` +
