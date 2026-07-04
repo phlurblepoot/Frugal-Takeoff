@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -159,6 +159,10 @@ export interface PageNamingStepProps {
   /** Plan set the incoming pages belong to — scopes the within-set duplicate
    *  check (the same page number across sets is a revision, not a duplicate). */
   planSetId?: string;
+  /** When provided, shows an "AI Scan" button that re-runs local AI reading on
+   *  every page (used to invoke it manually, e.g. if the model wasn't ready at
+   *  upload time). The parent owns the images/status and mutates pendingPages. */
+  onAiScan?: () => Promise<void>;
 }
 
 export const PageNamingStep: React.FC<PageNamingStepProps> = ({
@@ -173,9 +177,11 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   subtitle = 'Review and rename the imported pages.',
   existingSheets,
   planSetId,
+  onAiScan,
 }) => {
   const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
+  const [aiScanning, setAiScanning] = useState(false);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
@@ -523,17 +529,30 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
           </div>
           <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
-            <button
-              onClick={onConfirm}
-              disabled={isConfirming || hasDuplicates}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-            >
-              {isConfirming ? (
-                <><Loader2 size={18} className="animate-spin" /> Saving...</>
-              ) : (
-                <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+            <div className="w-full sm:w-auto flex items-center gap-2">
+              {onAiScan && (
+                <button
+                  type="button"
+                  onClick={async () => { setAiScanning(true); try { await onAiScan(); } finally { setAiScanning(false); } }}
+                  disabled={aiScanning || isConfirming}
+                  title="Read every page's number and description with the local AI"
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 hover:bg-accent-100 dark:hover:bg-accent-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {aiScanning ? <><Loader2 size={18} className="animate-spin" /> Scanning…</> : <><Sparkles size={18} /> AI Scan</>}
+                </button>
               )}
-            </button>
+              <button
+                onClick={onConfirm}
+                disabled={isConfirming || hasDuplicates || aiScanning}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+              >
+                {isConfirming ? (
+                  <><Loader2 size={18} className="animate-spin" /> Saving...</>
+                ) : (
+                  <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+                )}
+              </button>
+            </div>
             {reviewMode && hasDuplicates && (
               <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
                 <AlertTriangle size={12} /> Resolve duplicate page numbers to continue

@@ -50,6 +50,7 @@ export interface AddPagesModalProps {
 
   onAddPages: (e: React.FormEvent) => void | Promise<void>;
   onConfirmAddPages: () => void | Promise<void>;
+  onAiScan?: () => Promise<void>;
 }
 
 export const AddPagesModal: React.FC<AddPagesModalProps> = ({
@@ -79,6 +80,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
   fileInputRef,
   onAddPages,
   onConfirmAddPages,
+  onAiScan,
 }) => {
   if (!open) return null;
 
@@ -279,6 +281,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                 : 'Confirm each incoming page: name it, match it to an existing sheet (or mark New), and resolve duplicates before committing.'}
               existingSheets={isNamingExistingPages ? undefined : reviewSheets}
               planSetId={isNamingExistingPages ? undefined : reviewPlanSetId}
+              onAiScan={onAiScan}
             />
           </div>
         )}

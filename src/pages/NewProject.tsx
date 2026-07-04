@@ -49,6 +49,30 @@ export const NewProject: React.FC = () => {
   const [planSetId, setPlanSetId] = useState<string | null>(null);
   const [pendingPages, setPendingPages] = useState<PendingPage[]>([]);
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({});
+  // Transient medium-res per-page images for AI reading (kept so the manual
+  // "AI Scan" button can re-run reads without re-rendering the PDF).
+  const [aiImages, setAiImages] = useState<Record<string, string>>({});
+
+  // Manual "AI Scan" — re-run the local AI read on every page and apply names.
+  const handleAiScan = async () => {
+    const status = await getAiStatus(true);
+    if (!status.available) {
+      toast(status.state === 'loading' ? 'AI model is still loading — try again in a moment.' : 'AI model is not available.', { type: 'error' });
+      return;
+    }
+    const pages = pendingPages;
+    const reads = await runWithConcurrency(
+      pages.map(pg => async () => readSheet({
+        imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+        imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pageThumbnails[pg.thumbnailId]),
+        embeddedText: pg.extractedText,
+      })),
+      3,
+    );
+    setPendingPages(pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg)));
+    const hits = reads.filter(Boolean).length;
+    toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
+  };
   const [allContractors, setAllContractors] = useState<string[]>([]);
   const [filteredContractors, setFilteredContractors] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -179,7 +203,11 @@ export const NewProject: React.FC = () => {
       // Transient per-page medium-res images for AI reading (not stored). Only
       // rendered when the local model is available + auto-naming is on.
       const aiImages: Record<string, string> = {};
-      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus(true)).available;
+      // Render the AI image whenever auto-naming is on (independent of whether
+      // the model is up right now) so the manual "AI Scan" button always has a
+      // good image to send later. The auto pass additionally requires readiness.
+      const aiWanted = aiAutoNameEnabled();
+      const aiEnabled = aiWanted && (await getAiStatus(true)).available;
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
@@ -219,7 +247,7 @@ export const NewProject: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiEnabled });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiWanted });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -382,6 +410,7 @@ export const NewProject: React.FC = () => {
 
       setPendingPages(extractedPages);
       setPageThumbnails(thumbnails);
+      setAiImages(aiImages);
       setStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
@@ -672,6 +701,7 @@ export const NewProject: React.FC = () => {
             isConfirming={isProcessing}
             title="Name Pages"
             subtitle="Review and rename the imported pages before creating the project."
+            onAiScan={handleAiScan}
           />
         </div>
       </div>

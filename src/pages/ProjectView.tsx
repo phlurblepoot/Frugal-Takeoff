@@ -232,6 +232,9 @@ export const ProjectView: React.FC = () => {
   const [isNamingExistingPages, setIsNamingExistingPages] = useState(false);
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
+  // Medium-res per-page images for AI reading, kept so the manual "AI Scan"
+  // button can re-run reads without re-rendering the PDF.
+  const [aiImages, setAiImages] = useState<Record<string, string>>({});
   const [newPlanSetName, setNewPlanSetName] = useState('');
   const [newPlanSetDate, setNewPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
@@ -664,7 +667,10 @@ export const ProjectView: React.FC = () => {
       const thumbnails: Record<string, string> = {};
       // Transient per-page medium-res images for AI reading (not stored).
       const aiImages: Record<string, string> = {};
-      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus(true)).available;
+      // Render the AI image whenever auto-naming is on so the manual "AI Scan"
+      // button always has a good image; the auto pass also requires readiness.
+      const aiWanted = aiAutoNameEnabled();
+      const aiEnabled = aiWanted && (await getAiStatus(true)).available;
 
       // Build map of existing page numbers for revision detection
       const existingPageNums = new Map<string, string>(); // normalised → display
@@ -707,7 +713,7 @@ export const ProjectView: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setAddProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiEnabled });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiWanted });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -903,6 +909,7 @@ export const ProjectView: React.FC = () => {
 
       setPendingPages(extractedPages);
       setPendingThumbnails(thumbnails);
+      setAiImages(aiImages);
       setAddPagesStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
@@ -1470,6 +1477,50 @@ export const ProjectView: React.FC = () => {
     setAddPagesStep('name_pages');
     setIsNamingExistingPages(true);
     setShowAddPagesModal(true);
+  };
+
+  // Manual "AI Scan" — re-run the local AI read (+ revision match) on every
+  // pending page and apply the results.
+  const handleAiScan = async () => {
+    const status = await getAiStatus(true);
+    if (!status.available) {
+      toast(status.state === 'loading' ? 'AI model is still loading — try again in a moment.' : 'AI model is not available.', { type: 'error' });
+      return;
+    }
+    const pages = pendingPages;
+    const reads = await runWithConcurrency(
+      pages.map(pg => async () => readSheet({
+        imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+        imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pendingThumbnails[pg.thumbnailId]),
+        embeddedText: pg.extractedText,
+      })),
+      3,
+    );
+    let named = pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg));
+    if (!isNamingExistingPages && project) {
+      const pendingIds = new Set(pages.map(p => p.id));
+      const priorPages = project.pages.filter(p => !pendingIds.has(p.id));
+      const model = computeRevisionModel({ ...project, pages: priorPages }, '');
+      const existingRefs: { sheetId: string; number: string; title: string }[] = [];
+      for (const [, currentPageId] of model.latestPageIdBySheet) {
+        const pg = priorPages.find(p => p.id === currentPageId);
+        if (pg) existingRefs.push({ sheetId: effectiveSheetId(pg), number: pg.pageNumber || '', title: pg.description || pg.name || '' });
+      }
+      if (existingRefs.length) {
+        const matches = await runWithConcurrency(
+          named.map((_pg, i) => async () => {
+            const read = reads[i];
+            if (!read || (!read.sheetNumber && !read.sheetTitle)) return null;
+            return matchSheet({ page: read, existingSheets: existingRefs });
+          }),
+          3,
+        );
+        named = named.map((pg, i) => (matches[i] ? applyMatchToPage(pg, matches[i]!) : pg));
+      }
+    }
+    setPendingPages(named);
+    const hits = reads.filter(Boolean).length;
+    toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
   };
 
   const handleConfirmAddPages = async () => {
@@ -2179,6 +2230,7 @@ export const ProjectView: React.FC = () => {
         fileInputRef={fileInputRef}
         onAddPages={handleAddPages}
         onConfirmAddPages={handleConfirmAddPages}
+        onAiScan={handleAiScan}
       />
 
 
