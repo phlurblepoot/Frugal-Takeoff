@@ -176,6 +176,10 @@ export const NewProject: React.FC = () => {
 
       const extractedPages: PendingPage[] = [];
       const thumbnails: Record<string, string> = {};
+      // Transient per-page medium-res images for AI reading (not stored). Only
+      // rendered when the local model is available + auto-naming is on.
+      const aiImages: Record<string, string> = {};
+      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus()).available;
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
@@ -215,7 +219,7 @@ export const NewProject: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiEnabled });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -261,6 +265,7 @@ export const NewProject: React.FC = () => {
               };
 
               extractedPages.push(newPage);
+              if (pageData.aiImageDataUrl) aiImages[newPage.id] = pageData.aiImageDataUrl;
 
               project.pages.push({
                 id: newPage.id,
@@ -352,17 +357,18 @@ export const NewProject: React.FC = () => {
       }
 
       // AI naming pass: when the local model is available and auto-naming is on,
-      // replace the heuristic names with the model's read. Prefer the full-page
-      // raster (imageId) when present, else the stored thumbnail. Falls back
-      // silently on any error so import is never blocked.
+      // replace the heuristic names with the model's read. Prefer the medium-res
+      // AI image (the 400px thumbnail is too small to read a title block), else
+      // the full-page raster / thumbnail. Falls back silently on any error so
+      // import is never blocked.
       try {
-        if (aiAutoNameEnabled() && extractedPages.length && (await getAiStatus()).available) {
+        if (aiEnabled && extractedPages.length) {
           const reads = await runWithConcurrency(
             extractedPages.map((pg, i) => async () => {
               setProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
               return readSheet({
-                imageId: pg.imageId || undefined,
-                imageBase64: pg.imageId ? undefined : thumbnails[pg.thumbnailId],
+                imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+                imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : thumbnails[pg.thumbnailId]),
                 embeddedText: pg.extractedText,
               });
             }),

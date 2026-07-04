@@ -662,6 +662,9 @@ export const ProjectView: React.FC = () => {
 
       const extractedPages: any[] = [];
       const thumbnails: Record<string, string> = {};
+      // Transient per-page medium-res images for AI reading (not stored).
+      const aiImages: Record<string, string> = {};
+      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus()).available;
 
       // Build map of existing page numbers for revision detection
       const existingPageNums = new Map<string, string>(); // normalised → display
@@ -704,7 +707,7 @@ export const ProjectView: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setAddProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiEnabled });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -755,6 +758,7 @@ export const ProjectView: React.FC = () => {
               };
 
               extractedPages.push(newPage);
+              if (pageData.aiImageDataUrl) aiImages[newPage.id] = pageData.aiImageDataUrl;
 
               const newProjectPage = {
                 id: newPage.id,
@@ -852,18 +856,19 @@ export const ProjectView: React.FC = () => {
       }
 
       // AI naming + revision matching pass: read each incoming sheet, then ask
-      // the model which existing sheet (if any) it revises. Prefer the full
-      // raster (imageId) else the stored thumbnail. Falls back silently so the
-      // add-set flow is never blocked; below-threshold matches leave the page's
-      // matchSheetId for PageNamingStep's page-number auto-seed to fill.
+      // the model which existing sheet (if any) it revises. Prefer the medium-res
+      // AI image (the 400px thumbnail can't resolve a title block), else the full
+      // raster / thumbnail. Falls back silently so the add-set flow is never
+      // blocked; below-threshold matches leave the page's matchSheetId for
+      // PageNamingStep's page-number auto-seed to fill.
       try {
-        if (aiAutoNameEnabled() && extractedPages.length && (await getAiStatus()).available) {
+        if (aiEnabled && extractedPages.length) {
           const reads = await runWithConcurrency(
             extractedPages.map((pg, i) => async () => {
               setAddProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
               return readSheet({
-                imageId: pg.imageId || undefined,
-                imageBase64: pg.imageId ? undefined : thumbnails[pg.thumbnailId],
+                imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+                imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : thumbnails[pg.thumbnailId]),
                 embeddedText: pg.extractedText,
               });
             }),

@@ -86,6 +86,11 @@ export interface PdfPageImage {
    *  'low' when detection fell back to OCR or filename/label heuristics.
    *  Task 7's review UI uses this to flag low-confidence rows. */
   detectionConfidence?: ExtractConfidence;
+  /** Medium-resolution JPEG (~1600px long side) for local AI sheet reading.
+   *  Only produced when the caller opts in via includeAiImage; transient (not
+   *  stored) — the 400px thumbnail is too low-res for the model to read a title
+   *  block, so this is sent to /api/ai/read-sheet instead. */
+  aiImageDataUrl?: string;
   /** Populated when this page could not be rendered. dataUrl will be empty. */
   error?: string;
 }
@@ -454,6 +459,9 @@ export function detectPageInfo(
 export interface LoadPdfPagesOptions {
   /** When true, also rasterize each page to a JPEG dataUrl (legacy path). Defaults to false. */
   includeFullPageRaster?: boolean;
+  /** When true, also produce a ~1600px `aiImageDataUrl` per page for local AI
+   *  sheet reading. Defaults to false (skips the extra render when AI is off). */
+  includeAiImage?: boolean;
 }
 
 export const loadPdfPagesGenerator = async function*(
@@ -463,6 +471,7 @@ export const loadPdfPagesGenerator = async function*(
   options: LoadPdfPagesOptions = {}
 ): AsyncGenerator<PdfPageImage, void, unknown> {
   const includeFullPageRaster = options.includeFullPageRaster ?? false;
+  const includeAiImage = options.includeAiImage ?? false;
   const fileUrl = URL.createObjectURL(file);
   const getPdfDoc = () => pdfjsLib.getDocument({
     url: fileUrl,
@@ -594,11 +603,35 @@ export const loadPdfPagesGenerator = async function*(
     const dataUrl = includeFullPageRaster ? canvas.toDataURL('image/jpeg', 0.6) : '';
     const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
 
+    // Medium-res image for local AI reading (the 400px thumbnail can't resolve a
+    // title block). Rendered directly at AI scale for vector pages, or downscaled
+    // from the already-rendered full canvas when we have one.
+    let aiImageDataUrl = '';
+    if (includeAiImage) {
+      const aiScale = Math.min(1, 1600 / Math.max(viewport.width, viewport.height));
+      const aiCanvas = document.createElement('canvas');
+      aiCanvas.width = Math.round(viewport.width * aiScale);
+      aiCanvas.height = Math.round(viewport.height * aiScale);
+      const aiCtx = aiCanvas.getContext('2d');
+      if (aiCtx) {
+        aiCtx.fillStyle = 'white';
+        aiCtx.fillRect(0, 0, aiCanvas.width, aiCanvas.height);
+        if (needsFullRender) {
+          aiCtx.drawImage(canvas, 0, 0, aiCanvas.width, aiCanvas.height);
+        } else {
+          const aiVp = page.getViewport({ scale: scale * aiScale });
+          await page.render({ canvasContext: aiCtx, viewport: aiVp, intent: 'print' } as any).promise;
+        }
+        aiImageDataUrl = aiCanvas.toDataURL('image/jpeg', 0.72);
+      }
+    }
+
     page.cleanup();
 
     return {
       dataUrl,
       thumbnailDataUrl,
+      aiImageDataUrl,
       width: viewport.width,
       height: viewport.height,
       pageNum: i,
