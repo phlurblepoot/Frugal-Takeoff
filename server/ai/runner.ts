@@ -91,7 +91,9 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, temperature: 0, max_tokens: 256 }),
+      // response_format forces the model to emit a single JSON object (llama.cpp
+      // constrains generation with a grammar), so small VLMs can't return prose.
+      body: JSON.stringify({ messages, temperature: 0, max_tokens: 256, response_format: { type: 'json_object' } }),
       signal: AbortSignal.timeout(cfg.timeoutMs),
     });
     if (!res.ok) throw new Error(`llama-server responded ${res.status}`);
@@ -116,12 +118,14 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
         ],
       }];
       const raw = await queue.enqueue(() => chat(messages));
+      console.log('[ai] read-sheet raw:', (raw || '').slice(0, 400));
       return parseReadResponse(raw);
     },
     async matchSheet({ page, existing }: { page: SheetRead; existing: ExistingSheetRef[] }): Promise<SheetMatch> {
       await waitReady();
       const messages = [{ role: 'user', content: buildMatchPrompt(page, existing) }];
       const raw = await queue.enqueue(() => chat(messages));
+      console.log('[ai] match-sheet raw:', (raw || '').slice(0, 400));
       return parseMatchResponse(raw, existing.map(e => e.sheetId));
     },
   };
