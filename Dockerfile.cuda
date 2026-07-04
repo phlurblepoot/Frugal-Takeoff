@@ -4,28 +4,25 @@
 #
 #   docker build -f Dockerfile.cuda -t frugal-takeoff:cuda .
 #   docker run --gpus all -v /path/to/models:/models -p 3000:3000 frugal-takeoff:cuda
+#
+# We base directly on the prebuilt CUDA llama.cpp server image so the
+# `llama-server` binary, its shared libraries, and the CUDA runtime are all from
+# the same distro (avoids GLIBC/GLIBCXX mismatches from copying binaries across
+# base images). We just add Node 22 + our app on top.
+FROM ghcr.io/ggml-org/llama.cpp:server-cuda
 
-# 1) The prebuilt CUDA llama.cpp server image provides the `llama-server` binary
-#    and its shared libraries, already built against CUDA.
-FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama
+# Some base images run as a non-root user; ensure apt works.
+USER root
 
-# 2) Final image: CUDA runtime + Node 22 + our app + the copied llama-server.
-FROM nvidia/cuda:12.5.1-runtime-ubuntu22.04
-
-# Node 22 + build tools for native modules (better-sqlite3).
+# Node 22 + build tools for native modules (better-sqlite3 -> node-gyp).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg python3 build-essential \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
-# Bring in the CUDA-built llama-server binary + its libs from the llama.cpp image.
-# (The server-cuda image installs these under /app.)
-COPY --from=llama /app/llama-server /usr/local/bin/llama-server
-COPY --from=llama /app/*.so* /usr/local/lib/
-RUN ldconfig
-
-WORKDIR /app
+# Keep our app separate from the base image's /app (which holds llama-server).
+WORKDIR /srv/app
 
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -33,12 +30,13 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 RUN npm run build
 
+# NODE_ENV is set AFTER install/build so devDependencies (tsx, vite) are present.
 ENV NODE_ENV=production
 ENV STORAGE_PATH=/app/data
 ENV PORT=3000
 
-# AI configuration — llama-server binary + model download cache (mounted volume).
-ENV AI_LLAMA_SERVER_BIN=/usr/local/bin/llama-server
+# AI configuration — the bundled llama-server + model download cache (volume).
+ENV AI_LLAMA_SERVER_BIN=/app/llama-server
 ENV AI_MODELS_DIR=/models
 ENV LLAMA_CACHE=/models
 VOLUME ["/models"]

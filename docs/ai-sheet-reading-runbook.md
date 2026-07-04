@@ -43,8 +43,8 @@ extraction + manual naming.
 - `AI_MODEL_PATH` + `AI_MMPROJ_PATH` — use explicit local GGUF files instead of
   `-hf` (skips auto-download). Both must be set together.
 - `AI_MODELS_DIR` / `LLAMA_CACHE` — download/cache dir (default `/models`).
-- `AI_LLAMA_SERVER_BIN` — path to the binary (default `/usr/local/bin/llama-server`
-  in the CUDA image).
+- `AI_LLAMA_SERVER_BIN` — path to the binary (the CUDA image sets it to
+  `/app/llama-server`, from the bundled llama.cpp server-cuda base).
 - `AI_HOST` / `AI_PORT` — llama-server bind address (default `127.0.0.1:8080`).
 - `AI_GPU_LAYERS` — `-ngl`, default `999` (offload all).
 - `AI_TIMEOUT_MS` — per-inference timeout (default 30000).
