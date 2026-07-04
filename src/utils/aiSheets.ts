@@ -18,14 +18,21 @@ export interface AiPage {
 
 let statusCache: AiStatus | null = null;
 
+let statusCacheAt = 0;
+const STATUS_TTL_MS = 15000;
+
 export async function getAiStatus(force = false): Promise<AiStatus> {
-  if (statusCache && !force) return statusCache;
+  // Short-lived cache: a stale "unavailable" (e.g. cached while the model was
+  // still loading) must not stick forever, or imports would skip the AI even
+  // after it becomes ready. Re-fetch when forced or once the TTL elapses.
+  if (statusCache && !force && (Date.now() - statusCacheAt) < STATUS_TTL_MS) return statusCache;
   try {
     const res = await fetch('/api/ai/status', { headers: getAuthHeaders() });
     statusCache = res.ok ? await res.json() : { available: false, model: 'n/a', device: 'none' };
   } catch {
     statusCache = { available: false, model: 'n/a', device: 'none' };
   }
+  statusCacheAt = Date.now();
   return statusCache!;
 }
 

@@ -664,7 +664,7 @@ export const ProjectView: React.FC = () => {
       const thumbnails: Record<string, string> = {};
       // Transient per-page medium-res images for AI reading (not stored).
       const aiImages: Record<string, string> = {};
-      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus()).available;
+      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus(true)).available;
 
       // Build map of existing page numbers for revision detection
       const existingPageNums = new Map<string, string>(); // normalised → display

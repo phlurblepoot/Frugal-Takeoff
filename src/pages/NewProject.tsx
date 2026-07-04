@@ -179,7 +179,7 @@ export const NewProject: React.FC = () => {
       // Transient per-page medium-res images for AI reading (not stored). Only
       // rendered when the local model is available + auto-naming is on.
       const aiImages: Record<string, string> = {};
-      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus()).available;
+      const aiEnabled = aiAutoNameEnabled() && (await getAiStatus(true)).available;
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
