@@ -1,7 +1,7 @@
 # AI Sheet Reading — Ops Runbook
 
 ## What it is
-A local vision model (default **Qwen2.5-VL-3B**) reads plan-sheet numbers/titles
+A local vision model (default **Qwen2.5-VL-7B**) reads plan-sheet numbers/titles
 and matches revisions when adding a plan set. Fully local; no external calls at
 inference time, no API key. Inference runs through a bundled **llama.cpp
 `llama-server`** subprocess on the GPU; the app calls it over localhost. If the
@@ -38,7 +38,9 @@ extraction + manual naming.
 ## Config (environment variables)
 - `AI_ENABLED` — default on; set `false`/`0` to disable entirely.
 - `AI_MODEL_HF` — Hugging Face model to auto-download, `repo:quant`
-  (default `ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M`). llama-server pulls the
+  (default `ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M`; the 3B is lighter but
+  can't synthesize a sheet-level description for sheets that only carry
+  per-drawing labels — the 7B can). llama-server pulls the
   matching mmproj automatically for multimodal repos.
 - `AI_MODEL_PATH` + `AI_MMPROJ_PATH` — use explicit local GGUF files instead of
   `-hf` (skips auto-download). Both must be set together.

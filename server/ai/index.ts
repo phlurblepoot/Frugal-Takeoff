@@ -27,7 +27,7 @@ export function getAiRunner(env: NodeJS.ProcessEnv = process.env): AiRunner {
   const modelsDir = env.AI_MODELS_DIR || '/models';
   const modelArgs = env.AI_MODEL_PATH && env.AI_MMPROJ_PATH
     ? ['--model', env.AI_MODEL_PATH, '--mmproj', env.AI_MMPROJ_PATH]
-    : ['-hf', env.AI_MODEL_HF || 'ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M'];
+    : ['-hf', env.AI_MODEL_HF || 'ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M'];
 
   singleton = createLlamaServerRunner({
     serverBin,
@@ -38,7 +38,7 @@ export function getAiRunner(env: NodeJS.ProcessEnv = process.env): AiRunner {
     cacheDir: modelsDir,
     timeoutMs: Number(env.AI_TIMEOUT_MS ?? 30000),
     startupTimeoutMs: Number(env.AI_STARTUP_TIMEOUT_MS ?? 900000),
-    modelLabel: env.AI_MODEL_HF || 'qwen2.5-vl-3b-instruct',
+    modelLabel: env.AI_MODEL_HF || 'qwen2.5-vl-7b-instruct',
   });
   return singleton;
 }
