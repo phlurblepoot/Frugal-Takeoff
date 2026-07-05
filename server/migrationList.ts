@@ -813,7 +813,8 @@ export const migrations: Migration[] = [
       db.prepare(`INSERT OR IGNORE INTO customers (id,name,createdAt,updatedAt) VALUES (?,?,?,?)`)
         .run('customer-unassigned', 'Unassigned', now, now);
 
-      const rows = db.prepare(`SELECT id, contractor FROM projects`).all() as any[];
+      // Only touch not-yet-linked projects so a re-run is a no-op (idempotent).
+      const rows = db.prepare(`SELECT id, contractor FROM projects WHERE customerId IS NULL OR customerId = ''`).all() as any[];
       const byNorm = new Map<string, string>();
       let seq = 0;
       const link = db.prepare(`UPDATE projects SET customerId = ? WHERE id = ?`);
