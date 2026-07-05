@@ -1243,3 +1243,52 @@ describe('email send routes', () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+describe('customers routes', () => {
+  it('POST creates a customer, GET list returns it, GET by id works', async () => {
+    const post = await request(app).post('/api/customers').send({
+      name: 'Acme Corp', phone: '555-1234',
+      emails: { general: 'info@acme.com' },
+    });
+    expect(post.status).toBe(200);
+    expect(post.body.name).toBe('Acme Corp');
+    const id = post.body.id;
+
+    const list = await request(app).get('/api/customers');
+    expect(list.status).toBe(200);
+    // migrations seed an "Unassigned" customer; we added one more
+    const names = list.body.map((c: any) => c.name);
+    expect(names).toContain('Acme Corp');
+
+    const get = await request(app).get(`/api/customers/${id}`);
+    expect(get.status).toBe(200);
+    expect(get.body.emails.general).toBe('info@acme.com');
+  });
+
+  it('PUT updates a customer', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Old Name' });
+    const id = post.body.id;
+    const put = await request(app).put(`/api/customers/${id}`).send({ name: 'New Name', emails: {} });
+    expect(put.status).toBe(200);
+    expect(put.body.name).toBe('New Name');
+  });
+
+  it('DELETE removes a customer with no projects', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'To Delete' });
+    const id = post.body.id;
+    const del = await request(app).delete(`/api/customers/${id}`);
+    expect(del.status).toBe(200);
+    expect((await request(app).get(`/api/customers/${id}`)).status).toBe(404);
+  });
+
+  it('DELETE customer with projects returns 409', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Has Projects' });
+    const cid = post.body.id;
+    // createProject stores customerId when it is in the payload
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc1', customerId: cid,
+    });
+    const del = await request(app).delete(`/api/customers/${cid}`);
+    expect(del.status).toBe(409);
+  });
+});

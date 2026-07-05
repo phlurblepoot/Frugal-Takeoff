@@ -44,6 +44,7 @@ import {
   ConflictError as AiaConflictError,
   NotFoundError as AiaNotFoundError,
 } from './aiaStore';
+import { listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer } from './customerStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -949,6 +950,30 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) {
       res.status(500).json({ error: 'Failed to delete draft' });
     }
+  });
+
+  // ── Customers ────────────────────────────────────────────────────────────────
+
+  app.get('/api/customers', authenticateToken, (_req, res) => res.json(listCustomers(db)));
+  app.get('/api/customers/:id', authenticateToken, (req, res) => {
+    const c = getCustomer(db, req.params.id);
+    return c ? res.json(c) : res.status(404).json({ error: 'not found' });
+  });
+  app.get('/api/customers/:id/projects', authenticateToken, (req, res) =>
+    res.json(listProjectsForCustomer(db, req.params.id)));
+  app.post('/api/customers', authenticateToken, (req, res) => {
+    const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    res.json(saveCustomer(db, { ...req.body, id }));
+  });
+  app.put('/api/customers/:id', authenticateToken, (req, res) =>
+    res.json(saveCustomer(db, { ...req.body, id: req.params.id })));
+  app.delete('/api/customers/:id', authenticateToken, (req, res) => {
+    try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
+    catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }
+  });
+  app.post('/api/customers/merge', authenticateToken, (req, res) => {
+    try { mergeCustomers(db, req.body.targetId, req.body.sourceIds || []); res.json({ success: true }); }
+    catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
   });
 }
 
