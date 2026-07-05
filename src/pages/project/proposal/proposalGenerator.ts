@@ -553,6 +553,8 @@ export interface ProposalOptions {
   // brand colour also drives the proposal's accents (replacing the user-picked
   // headerColor) so client PDFs reflect the company brand, not a UI preference.
   letterhead?: LetterheadContext;
+  // When provided and non-empty, overrides the company email shown in the document header.
+  headerEmail?: string;
 }
 
 export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; }
@@ -602,7 +604,7 @@ export async function generateProposalPdf(
   // Branded letterhead. When a letterhead context is supplied the brand colour
   // drives the proposal accents (the user-picked headerColor no longer leaks
   // into client PDFs). Falls back to the legacy headerColor when absent.
-  const lc: LetterheadContext = options.letterhead ?? {
+  const baseLc: LetterheadContext = options.letterhead ?? {
     brandRgb: ((): [number, number, number] => {
       const c = (headerColor || '#1e293b').replace('#', '');
       const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
@@ -615,6 +617,9 @@ export async function generateProposalPdf(
       address: settings.companyAddress,
     },
   };
+  const lc: LetterheadContext = options.headerEmail
+    ? { ...baseLc, company: { ...baseLc.company, email: options.headerEmail } }
+    : baseLc;
   const [hR, hG, hB] = lc.brandRgb;
   // Lighter accent tint (60% brand + 40% white) for thin rules / sub-accents.
   const accentR = Math.round(hR + (255 - hR) * 0.4);

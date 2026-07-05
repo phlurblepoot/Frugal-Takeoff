@@ -1151,6 +1151,19 @@ export const saveAiaSettings = async (projectId: string, settings: AiaSettings):
   await handleResponse(res);
 };
 
+// ── Per-user always-CC helper ─────────────────────────────────────────────────
+// Reads the `emailAlwaysCc` pref (a plain string, comma/semicolon-separated).
+// Async because getUserPreferences() fetches from the server; there is no
+// synchronous pref cache in this module.
+export const getAlwaysCc = async (): Promise<string> => {
+  try {
+    const prefs = await getUserPreferences();
+    return prefs['emailAlwaysCc'] ?? '';
+  } catch {
+    return '';
+  }
+};
+
 // ── Customers ────────────────────────────────────────────────────────────────
 
 export const getCustomers = async () => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();

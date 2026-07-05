@@ -37,6 +37,8 @@ export interface PunchPdfContext {
   photoDataUrls?: Record<string, string>; // fileId -> dataUrl (optional; pass {} to skip photos)
   /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
   letterhead: LetterheadContext;
+  /** When provided and non-empty, overrides the company email shown in the document header. */
+  headerEmail?: string;
 }
 
 // Builds the printable punch-list PDF. Draws the shared branded letterhead
@@ -47,7 +49,9 @@ export function buildPunchPdf(ctx: PunchPdfContext): jsPDF {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
   const M = 48;
-  const lc = ctx.letterhead;
+  const lc: LetterheadContext = ctx.headerEmail
+    ? { ...ctx.letterhead, company: { ...ctx.letterhead.company, email: ctx.headerEmail } }
+    : ctx.letterhead;
   const [ar, ag, ab] = lc.brandRgb;
 
   const top = drawLetterheadHeader(doc, lc);
