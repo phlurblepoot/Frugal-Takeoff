@@ -7,7 +7,7 @@
 // whole thing sits behind the AiRunner interface, so nothing else changes.
 import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import type { AiRunner, AiInfo, SheetRead, SheetMatch, ExistingSheetRef } from './types';
+import type { AiRunner, AiInfo, AiState, SheetRead, SheetMatch, ExistingSheetRef } from './types';
 import { createSingleFlightQueue } from './queue';
 import { buildReadPrompt, parseReadResponse, buildMatchPrompt, parseMatchResponse } from './prompt';
 
@@ -48,6 +48,22 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
   const device: AiInfo['device'] = 'cuda';
   let proc: ChildProcess | null = null;
   let spawnFailed = false;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearIdle(): void {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  }
+
+  function armIdle(ms?: number): void {
+    clearIdle();
+    if (ms && ms > 0 && proc) {
+      idleTimer = setTimeout(() => {
+        try { proc?.kill(); } catch {}
+        proc = null;
+        idleTimer = null;
+      }, ms);
+    }
+  }
 
   function ensureStarted(): void {
     if (proc || spawnFailed) return;
@@ -101,13 +117,25 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
   }
 
   return {
-    async available(): Promise<boolean> {
-      ensureStarted();
-      if (spawnFailed) return false;
-      return health(1000);
+    configured(): boolean {
+      return existsSync(cfg.serverBin) && !spawnFailed;
     },
+
+    async state(): Promise<AiState> {
+      if (!existsSync(cfg.serverBin) || spawnFailed) return 'off';
+      if (!proc) return 'idle';
+      return (await health(1000)) ? 'ready' : 'loading';
+    },
+
+    warmup(idleTimeoutMs?: number): void {
+      ensureStarted();
+      armIdle(idleTimeoutMs);
+    },
+
     info(): AiInfo { return { model: cfg.modelLabel, device }; },
-    async readSheet({ image, embeddedText, prompt }: { image: Buffer; embeddedText?: string; prompt?: string }): Promise<SheetRead> {
+
+    async readSheet({ image, embeddedText, prompt, idleTimeoutMs }: { image: Buffer; embeddedText?: string; prompt?: string; idleTimeoutMs?: number }): Promise<SheetRead> {
+      clearIdle();
       await waitReady();
       const dataUrl = `data:image/jpeg;base64,${image.toString('base64')}`;
       const messages = [{
@@ -117,16 +145,26 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
           { type: 'image_url', image_url: { url: dataUrl } },
         ],
       }];
-      const raw = await queue.enqueue(() => chat(messages));
-      console.log('[ai] read-sheet raw:', (raw || '').slice(0, 400));
-      return parseReadResponse(raw);
+      try {
+        const raw = await queue.enqueue(() => chat(messages));
+        console.log('[ai] read-sheet raw:', (raw || '').slice(0, 400));
+        return parseReadResponse(raw);
+      } finally {
+        armIdle(idleTimeoutMs);
+      }
     },
-    async matchSheet({ page, existing }: { page: SheetRead; existing: ExistingSheetRef[] }): Promise<SheetMatch> {
+
+    async matchSheet({ page, existing, idleTimeoutMs }: { page: SheetRead; existing: ExistingSheetRef[]; idleTimeoutMs?: number }): Promise<SheetMatch> {
+      clearIdle();
       await waitReady();
       const messages = [{ role: 'user', content: buildMatchPrompt(page, existing) }];
-      const raw = await queue.enqueue(() => chat(messages));
-      console.log('[ai] match-sheet raw:', (raw || '').slice(0, 400));
-      return parseMatchResponse(raw, existing.map(e => e.sheetId));
+      try {
+        const raw = await queue.enqueue(() => chat(messages));
+        console.log('[ai] match-sheet raw:', (raw || '').slice(0, 400));
+        return parseMatchResponse(raw, existing.map(e => e.sheetId));
+      } finally {
+        armIdle(idleTimeoutMs);
+      }
     },
   };
 }

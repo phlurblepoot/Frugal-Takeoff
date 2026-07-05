@@ -4,7 +4,9 @@ import type { AiRunner } from './types';
 export function createDisabledRunner(reason = 'disabled'): AiRunner {
   const unavailable = () => Promise.reject(new Error('ai runner unavailable'));
   return {
-    available: () => Promise.resolve(false),
+    configured: () => false,
+    state: () => Promise.resolve('off' as const),
+    warmup: () => {},
     info: () => ({ model: reason, device: 'none' }),
     readSheet: unavailable,
     matchSheet: unavailable,

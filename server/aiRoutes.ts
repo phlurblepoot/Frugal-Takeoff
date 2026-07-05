@@ -1,6 +1,6 @@
 import type express from 'express';
 import { readFileContent } from './fileStore';
-import { handleStatus, handleReadSheet, handleMatchSheet } from './ai/handlers';
+import { handleStatus, handleReadSheet, handleMatchSheet, handleWarmup } from './ai/handlers';
 import type { AiRunner } from './ai/types';
 
 export interface AiRouteDeps {
@@ -15,6 +15,11 @@ export function registerAiRoutes(app: express.Express, deps: AiRouteDeps): void 
 
   app.get('/api/ai/status', authenticateToken, async (_req, res) => {
     const r = await handleStatus(runner);
+    res.status(r.status).json(r.body);
+  });
+
+  app.post('/api/ai/warmup', authenticateToken, async (req, res) => {
+    const r = await handleWarmup(runner, req.body || {});
     res.status(r.status).json(r.body);
   });
 

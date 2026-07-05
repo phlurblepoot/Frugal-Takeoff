@@ -6,13 +6,9 @@ export interface HandlerResult { status: number; body: unknown; }
 export type ImageLoader = (id: string) => Buffer | null;
 
 export async function handleStatus(runner: AiRunner): Promise<HandlerResult> {
-  const available = await runner.available().catch(() => false);
+  const state = await runner.state();
   const info = runner.info();
-  // 'off'     = disabled / no GPU image (device none)
-  // 'ready'   = model loaded and serving
-  // 'loading' = configured but not healthy yet (spawning / downloading weights)
-  const state = info.device === 'none' ? 'off' : available ? 'ready' : 'loading';
-  return { status: 200, body: { available, model: info.model, device: info.device, state } };
+  return { status: 200, body: { available: runner.configured(), state, model: info.model, device: info.device } };
 }
 
 function decodeBase64Image(input: string): Buffer | null {
@@ -24,9 +20,9 @@ function decodeBase64Image(input: string): Buffer | null {
 export async function handleReadSheet(
   runner: AiRunner,
   loadImage: ImageLoader,
-  body: { imageId?: string; imageBase64?: string; embeddedText?: string; prompt?: string },
+  body: { imageId?: string; imageBase64?: string; embeddedText?: string; prompt?: string; idleTimeoutMs?: number },
 ): Promise<HandlerResult> {
-  if (!(await runner.available().catch(() => false))) return { status: 503, body: { error: 'ai unavailable' } };
+  if (!runner.configured()) return { status: 503, body: { error: 'ai unavailable' } };
 
   let image: Buffer | null = null;
   if (body.imageId) {
@@ -40,7 +36,7 @@ export async function handleReadSheet(
   }
 
   try {
-    const read = await runner.readSheet({ image, embeddedText: body.embeddedText, prompt: body.prompt });
+    const read = await runner.readSheet({ image, embeddedText: body.embeddedText, prompt: body.prompt, idleTimeoutMs: body.idleTimeoutMs });
     return { status: 200, body: read };
   } catch (e: any) {
     return { status: 502, body: { error: String(e?.message ?? e) } };
@@ -49,15 +45,24 @@ export async function handleReadSheet(
 
 export async function handleMatchSheet(
   runner: AiRunner,
-  body: { page?: SheetRead; existingSheets?: ExistingSheetRef[] },
+  body: { page?: SheetRead; existingSheets?: ExistingSheetRef[]; idleTimeoutMs?: number },
 ): Promise<HandlerResult> {
-  if (!(await runner.available().catch(() => false))) return { status: 503, body: { error: 'ai unavailable' } };
+  if (!runner.configured()) return { status: 503, body: { error: 'ai unavailable' } };
   if (!body.page) return { status: 400, body: { error: 'page required' } };
   const existing = Array.isArray(body.existingSheets) ? body.existingSheets : [];
   try {
-    const match = await runner.matchSheet({ page: body.page, existing });
+    const match = await runner.matchSheet({ page: body.page, existing, idleTimeoutMs: body.idleTimeoutMs });
     return { status: 200, body: match };
   } catch (e: any) {
     return { status: 502, body: { error: String(e?.message ?? e) } };
   }
+}
+
+export async function handleWarmup(
+  runner: AiRunner,
+  body: { idleTimeoutMs?: number },
+): Promise<HandlerResult> {
+  if (!runner.configured()) return { status: 503, body: { error: 'ai unavailable' } };
+  runner.warmup(body.idleTimeoutMs);
+  return { status: 200, body: { ok: true, state: await runner.state() } };
 }

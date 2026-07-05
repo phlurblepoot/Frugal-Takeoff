@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { handleStatus, handleReadSheet, handleMatchSheet } from './handlers';
+import { handleStatus, handleReadSheet, handleMatchSheet, handleWarmup } from './handlers';
 import type { AiRunner, SheetRead, SheetMatch } from './types';
 
 const okRead: SheetRead = { sheetNumber: 'A-201', sheetTitle: 'Second Floor Plan', confidence: 0.9 };
 const okMatch: SheetMatch = { matchSheetId: 's2', confidence: 0.8 };
 
 const fakeRunner = (over: Partial<AiRunner> = {}): AiRunner => ({
-  available: () => Promise.resolve(true),
+  configured: () => true,
+  state: () => Promise.resolve('ready'),
+  warmup: () => {},
   info: () => ({ model: 'fake', device: 'cuda' }),
   readSheet: () => Promise.resolve(okRead),
   matchSheet: () => Promise.resolve(okMatch),
@@ -17,21 +19,21 @@ const loadImage = (id: string) => (id === 'img1' ? Buffer.from('jpeg') : null);
 
 describe('handleStatus', () => {
   it('reports availability + info + ready state', async () => {
-    expect(await handleStatus(fakeRunner())).toEqual({ status: 200, body: { available: true, model: 'fake', device: 'cuda', state: 'ready' } });
+    expect(await handleStatus(fakeRunner())).toEqual({ status: 200, body: { available: true, state: 'ready', model: 'fake', device: 'cuda' } });
   });
-  it('reports "loading" when configured but not yet healthy', async () => {
-    const r = await handleStatus(fakeRunner({ available: () => Promise.resolve(false) }));
-    expect(r.body).toMatchObject({ available: false, state: 'loading' });
+  it('reports idle state when configured but not yet loaded', async () => {
+    const r = await handleStatus(fakeRunner({ state: () => Promise.resolve('idle') }));
+    expect(r.body).toMatchObject({ available: true, state: 'idle' });
   });
-  it('reports "off" when the runner is disabled (device none)', async () => {
-    const r = await handleStatus(fakeRunner({ available: () => Promise.resolve(false), info: () => ({ model: 'disabled', device: 'none' }) }));
-    expect(r.body).toMatchObject({ state: 'off' });
+  it('reports "off" when the runner is disabled (configured false)', async () => {
+    const r = await handleStatus(fakeRunner({ configured: () => false, state: () => Promise.resolve('off') }));
+    expect(r.body).toMatchObject({ available: false, state: 'off' });
   });
 });
 
 describe('handleReadSheet', () => {
-  it('503 when runner unavailable', async () => {
-    const r = await handleReadSheet(fakeRunner({ available: () => Promise.resolve(false) }), loadImage, { imageId: 'img1' });
+  it('503 when runner not configured', async () => {
+    const r = await handleReadSheet(fakeRunner({ configured: () => false }), loadImage, { imageId: 'img1' });
     expect(r.status).toBe(503);
   });
   it('reads from a stored imageId', async () => {
@@ -58,8 +60,8 @@ describe('handleReadSheet', () => {
 });
 
 describe('handleMatchSheet', () => {
-  it('503 when unavailable', async () => {
-    const r = await handleMatchSheet(fakeRunner({ available: () => Promise.resolve(false) }), { page: okRead, existingSheets: [] });
+  it('503 when not configured', async () => {
+    const r = await handleMatchSheet(fakeRunner({ configured: () => false }), { page: okRead, existingSheets: [] });
     expect(r.status).toBe(503);
   });
   it('400 when page missing', async () => {
@@ -69,5 +71,20 @@ describe('handleMatchSheet', () => {
   it('returns the match', async () => {
     const r = await handleMatchSheet(fakeRunner(), { page: okRead, existingSheets: [{ sheetId: 's2', number: 'A-201', title: 'x' }] });
     expect(r).toEqual({ status: 200, body: okMatch });
+  });
+});
+
+describe('handleWarmup', () => {
+  it('calls warmup and returns ok + state', async () => {
+    let warmedUp = false;
+    const runner = fakeRunner({ warmup: () => { warmedUp = true; } });
+    const r = await handleWarmup(runner, { idleTimeoutMs: 60000 });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true, state: 'ready' });
+    expect(warmedUp).toBe(true);
+  });
+  it('503 when not configured', async () => {
+    const r = await handleWarmup(fakeRunner({ configured: () => false }), {});
+    expect(r.status).toBe(503);
   });
 });

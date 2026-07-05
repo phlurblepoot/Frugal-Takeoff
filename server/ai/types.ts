@@ -34,10 +34,18 @@ export interface AiInfo {
   device: 'cuda' | 'cpu' | 'none';
 }
 
+/** Runner lifecycle state. */
+export type AiState = 'off' | 'idle' | 'loading' | 'ready';
+
 /** The inference boundary. Faked in tests; real impl in runner.ts. */
 export interface AiRunner {
-  available(): Promise<boolean>;
+  /** Feature usable (enabled + binary present); NEVER spawns. */
+  configured(): boolean;
+  /** Current lifecycle state; NEVER spawns. */
+  state(): Promise<AiState>;
+  /** Spawn the model if idle (non-blocking); (re)arm the idle-unload timer. */
+  warmup(idleTimeoutMs?: number): void;
   info(): AiInfo;
-  readSheet(input: { image: Buffer; embeddedText?: string; prompt?: string }): Promise<SheetRead>;
-  matchSheet(input: { page: SheetRead; existing: ExistingSheetRef[] }): Promise<SheetMatch>;
+  readSheet(input: { image: Buffer; embeddedText?: string; prompt?: string; idleTimeoutMs?: number }): Promise<SheetRead>;
+  matchSheet(input: { page: SheetRead; existing: ExistingSheetRef[]; idleTimeoutMs?: number }): Promise<SheetMatch>;
 }
