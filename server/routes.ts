@@ -1211,6 +1211,27 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     }
   });
 
+  // Send a punch-list report PDF via SMTP (any authenticated user)
+  app.post('/api/projects/:id/send-punch', authenticateToken, async (req, res) => {
+    try {
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await send((req as any).user.id, {
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || 'Punch List Report',
+        text: body ?? message ?? 'Please find the attached punch list report.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: 'punch-list.pdf' }, attachmentFileIds),
+      });
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'punch_sent', message: `Punch list report emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending punch report:', e);
+      res.status(500).json({ error: e.message || 'Failed to send punch report' });
+    }
+  });
+
   // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
   app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
     try {

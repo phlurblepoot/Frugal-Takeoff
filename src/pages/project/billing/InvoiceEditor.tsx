@@ -1,7 +1,9 @@
 // src/pages/project/billing/InvoiceEditor.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getSettings, sendInvoice, uploadProjectFile } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile } from '../../../utils/store';
+import { Customer } from '../../../types';
+import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
@@ -31,6 +33,44 @@ export const InvoiceEditor: React.FC<{
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
 
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', companyEmail: '', headerEmailOptions: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, project] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (project?.customerId) {
+          customer = await getCustomer(project.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('invoice', project?.contactEmails, customer?.emails);
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved, defaultCc: alwaysCc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
   const balance = total - paid;
@@ -59,7 +99,7 @@ export const InvoiceEditor: React.FC<{
     }
   };
 
-  const buildBytes = async (): Promise<Uint8Array> => {
+  const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;
@@ -97,6 +137,7 @@ export const InvoiceEditor: React.FC<{
         },
         logoDataUrl,
       },
+      headerEmail: headerEmail || undefined,
     });
   };
 
@@ -173,10 +214,16 @@ export const InvoiceEditor: React.FC<{
         projectId={projectId}
         title="Send invoice"
         primaryAttachmentName={`${invoice.number || 'invoice'}.pdf`}
+        defaultTo={emailDefaults.defaultTo || undefined}
+        defaultCc={emailDefaults.defaultCc || undefined}
         defaultSubject={`Invoice ${invoice.number} — ${projectName}`}
         defaultBody={`Hello,\n\nPlease find attached Invoice ${invoice.number} for ${projectName}.\n\nThank you.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
         onSend={async (m) => {
-          const bytes = await buildBytes();
+          // Always regenerate with the chosen header email so the PDF contact matches.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          const bytes = await buildBytes(effectiveHeaderEmail);
           const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
           // The PDF is uploaded as a project document before sending; if the send
           // fails the file remains in Documents (project-attributed), and a retry

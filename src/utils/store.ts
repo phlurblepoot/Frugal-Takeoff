@@ -909,6 +909,9 @@ export const removeIssuePhoto = async (issueId: string, fileId: string): Promise
 export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
 };
+export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
+  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
+};
 
 // ── Phase 4c: punch list ──────────────────────────────────────────────────────
 
