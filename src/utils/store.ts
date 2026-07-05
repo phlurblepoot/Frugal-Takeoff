@@ -1151,6 +1151,27 @@ export const saveAiaSettings = async (projectId: string, settings: AiaSettings):
   await handleResponse(res);
 };
 
+// ── Customers ────────────────────────────────────────────────────────────────
+
+export const getCustomers = async () => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
+export const getCustomer = async (id: string) => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
+export const getCustomerProjects = async (id: string) => (await fetch(`/api/customers/${id}/projects`, { headers: getAuthHeaders() })).json();
+export const saveCustomer = async (c: any) => {
+  const res = await fetch(c.id ? '/api/customers/' + c.id : '/api/customers', {
+    method: c.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(c),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'save failed');
+  return res.json();
+};
+export const deleteCustomer = async (id: string) => {
+  const res = await fetch('/api/customers/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'delete failed');
+};
+export const mergeCustomers = async (targetId: string, sourceIds: string[]) => {
+  const res = await fetch('/api/customers/merge', { method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ targetId, sourceIds }) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'merge failed');
+};
+
 // Derive a Schedule of Values seed from the project's estimate (takeoffs grouped
 // by price package). Cost is in DOLLARS from calculateTakeoffTotalCost; converted
 // to integer cents here. Groups with zero total cost are skipped.
