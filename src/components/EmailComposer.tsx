@@ -25,6 +25,8 @@ export interface EmailComposerProps {
   defaultTo?: string;
   /** Pre-seed the Cc field when the composer opens (e.g. the user's always-CC list). */
   defaultCc?: string;
+  /** Pre-seed the Bcc field when the composer opens; also auto-shows the Cc/Bcc row. */
+  defaultBcc?: string;
   defaultSubject: string;
   defaultBody: string;
   /** When provided and non-empty, renders a "Document shows email:" select. */
@@ -51,6 +53,7 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   primaryAttachmentName,
   defaultTo,
   defaultCc,
+  defaultBcc,
   defaultSubject,
   defaultBody,
   headerEmailOptions,
@@ -75,11 +78,12 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   useEffect(() => {
     if (!open) return;
     setTo(defaultTo ?? '');
-    // Seed CC from defaultCc; auto-show the Cc/Bcc fields if a default is present.
+    // Seed CC/BCC from defaults; auto-show the Cc/Bcc fields if either is present.
     const seedCc = defaultCc?.trim() ?? '';
+    const seedBcc = defaultBcc?.trim() ?? '';
     setCc(seedCc);
-    setShowCcBcc(!!seedCc);
-    setBcc('');
+    setBcc(seedBcc);
+    setShowCcBcc(!!(seedCc || seedBcc));
     setSubject(defaultSubject);
     setBody(defaultBody);
     setHeaderEmail(defaultHeaderEmail ?? '');

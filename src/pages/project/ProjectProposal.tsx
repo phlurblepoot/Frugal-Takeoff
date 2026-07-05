@@ -79,9 +79,10 @@ export const ProjectProposal: React.FC = () => {
   const [emailDefaults, setEmailDefaults] = useState<{
     defaultTo: string;
     defaultCc: string;
+    defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', companyEmail: '', headerEmailOptions: [] });
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   // Load email defaults (once per project mount).
   useEffect(() => {
@@ -101,6 +102,7 @@ export const ProjectProposal: React.FC = () => {
           customer = await getCustomer(proj.customerId).catch(() => undefined);
         }
         const resolved = resolveRecipient('proposal', proj?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
         const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
         const opts = [
@@ -108,7 +110,7 @@ export const ProjectProposal: React.FC = () => {
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved, defaultCc: alwaysCc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
         }
       } catch { /* non-fatal */ }
     })();
@@ -662,6 +664,7 @@ export const ProjectProposal: React.FC = () => {
         primaryAttachmentName={pdfPrintouts.find(pr => pr.fileId === sendFileId)?.name || 'Proposal.pdf'}
         defaultTo={emailDefaults.defaultTo || project.email?.from || ''}
         defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`}
         defaultBody={`Please find our proposal attached. Don't hesitate to reach out with any questions.`}
         headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}

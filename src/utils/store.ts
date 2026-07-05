@@ -429,6 +429,7 @@ export interface ProjectSummary {
   name: string;
   status: string;
   contractor: string | null;
+  customerId: string | null;
   address: string | null;
   bidDueDate: number | null;
   version: number;

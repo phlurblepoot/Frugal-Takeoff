@@ -36,9 +36,10 @@ export const ProjectPunch: React.FC = () => {
   const [emailDefaults, setEmailDefaults] = useState<{
     defaultTo: string;
     defaultCc: string;
+    defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', companyEmail: '', headerEmailOptions: [] });
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
     if (!projectId) return;
@@ -57,6 +58,7 @@ export const ProjectPunch: React.FC = () => {
           customer = await getCustomer(project.customerId).catch(() => undefined);
         }
         const resolved = resolveRecipient('punch', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
         const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
         const opts = [
@@ -64,7 +66,7 @@ export const ProjectPunch: React.FC = () => {
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved, defaultCc: alwaysCc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
         }
       } catch { /* non-fatal */ }
     })();
@@ -275,6 +277,7 @@ export const ProjectPunch: React.FC = () => {
         primaryAttachmentName={`${summary?.name || 'project'}-punch-list.pdf`}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={`Punch List Report — ${summary?.name || 'Project'}`}
         defaultBody={`Hello,\n\nPlease find attached the punch list report for ${summary?.name || 'the project'}.\n\nThank you.`}
         headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}

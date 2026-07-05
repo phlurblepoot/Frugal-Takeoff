@@ -8,7 +8,7 @@ import {
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
   getActivePages, getRecentProjects, ConflictError,
-  getUserPreferences, saveUserPreferences,
+  getUserPreferences, saveUserPreferences, getCustomers,
 } from '../utils/store';
 import { useToast } from '../components/Toast';
 import {
@@ -93,11 +93,12 @@ const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 
 const ProjectCard: React.FC<{
   p: ProjectSummary;
+  customerName?: string;
   onOpen: () => void;
   onRename: (name: string) => void;
   onArchiveToggle: () => void;
   onDelete: () => void;
-}> = ({ p, onOpen, onRename, onArchiveToggle, onDelete }) => {
+}> = ({ p, customerName, onOpen, onRename, onArchiveToggle, onDelete }) => {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(p.name);
   // The bid due date only matters while a project is still being estimated.
@@ -139,8 +140,8 @@ const ProjectCard: React.FC<{
       </div>
 
       <div className="mt-2 space-y-1 text-xs text-ink-soft">
-        {p.contractor && (
-          <p className="flex items-center gap-1.5 truncate"><Building2 size={12} className="shrink-0 text-ink-faint" />{p.contractor}</p>
+        {(customerName || p.contractor) && (
+          <p className="flex items-center gap-1.5 truncate"><Building2 size={12} className="shrink-0 text-ink-faint" />{customerName || p.contractor}</p>
         )}
         {p.address && (
           <p className="flex items-center gap-1.5 truncate"><MapPin size={12} className="shrink-0 text-ink-faint" />{p.address}</p>
@@ -184,7 +185,8 @@ export const ProjectsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [view, setView] = useState<'active' | 'archived'>('active');
   const [search, setSearch] = useState('');
-  const [contractor, setContractor] = useState('all');
+  const [customerFilter, setCustomerFilter] = useState('all');
+  const [customerMap, setCustomerMap] = useState<Map<string, string>>(new Map());
   const [sort, setSort] = useState<ProjectSort>(() => {
     const saved = localStorage.getItem('projectsSort');
     return SORT_OPTIONS.some(o => o.id === saved) ? (saved as ProjectSort) : 'updated';
@@ -200,7 +202,12 @@ export const ProjectsPage: React.FC = () => {
 
   const load = async () => {
     try {
-      setSummaries(await getProjectsSummary());
+      const [sums, custs] = await Promise.all([
+        getProjectsSummary(),
+        getCustomers().catch(() => [] as { id: string; name: string }[]),
+      ]);
+      setSummaries(sums);
+      setCustomerMap(new Map(custs.map((c: { id: string; name: string }) => [c.id, c.name])));
     } catch {
       toast('Failed to load projects', { type: 'error' });
     } finally {
@@ -220,19 +227,23 @@ export const ProjectsPage: React.FC = () => {
     }).catch(() => { /* offline / not present — keep localStorage default */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const contractors = useMemo(
-    () => Array.from(new Set(summaries.map(s => s.contractor).filter(Boolean))).sort() as string[],
-    [summaries]
-  );
+  // Customers that have at least one project in the loaded summaries (for filter dropdown).
+  const filterableCustomers = useMemo(() => {
+    const seen = new Set(summaries.map(s => s.customerId).filter(Boolean) as string[]);
+    return Array.from(seen)
+      .map(id => ({ id, name: customerMap.get(id) ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [summaries, customerMap]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return summaries.filter(s => {
-      if (contractor !== 'all' && s.contractor !== contractor) return false;
+      if (customerFilter !== 'all' && s.customerId !== customerFilter) return false;
       if (!q) return true;
-      return [s.name, s.contractor, s.address].some(v => v && v.toLowerCase().includes(q));
+      const customerName = s.customerId ? (customerMap.get(s.customerId) ?? s.contractor ?? '') : (s.contractor ?? '');
+      return [s.name, customerName, s.address].some(v => v && v.toLowerCase().includes(q));
     });
-  }, [summaries, search, contractor]);
+  }, [summaries, search, customerFilter, customerMap]);
 
   const groups = useMemo(() => groupSummaries(filtered, sort), [filtered, sort]);
   const archivedProjects = useMemo(
@@ -250,7 +261,7 @@ export const ProjectsPage: React.FC = () => {
       .filter((s): s is ProjectSummary => !!s && !s.archived)
       .slice(0, 6);
   }, [summaries]);
-  const showRecents = view === 'active' && !search.trim() && contractor === 'all' && recents.length > 0;
+  const showRecents = view === 'active' && !search.trim() && customerFilter === 'all' && recents.length > 0;
 
   // Applies a granular patch and reconciles the local row. A 409 means our
   // summary is stale — refetch rather than reloading the page.
@@ -302,6 +313,7 @@ export const ProjectsPage: React.FC = () => {
         <ProjectCard
           key={p.id}
           p={p}
+          customerName={p.customerId ? customerMap.get(p.customerId) : undefined}
           onOpen={() => navigate(`/project/${p.id}`)}
           onRename={name => applyPatch(p, { name })}
           onArchiveToggle={() => applyPatch(p, { archived: !p.archived })}
@@ -336,9 +348,9 @@ export const ProjectsPage: React.FC = () => {
               onChange={e => setSearch(e.target.value)}
               className="h-9 max-w-xs"
             />
-            <Select value={contractor} onChange={e => setContractor(e.target.value)} className="h-9 w-auto">
-              <option value="all">All contractors</option>
-              {contractors.map(c => <option key={c} value={c}>{c}</option>)}
+            <Select value={customerFilter} onChange={e => setCustomerFilter(e.target.value)} className="h-9 w-auto">
+              <option value="all">All customers</option>
+              {filterableCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
             <Select
               value={sort}

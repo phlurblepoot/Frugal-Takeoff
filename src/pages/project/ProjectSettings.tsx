@@ -225,12 +225,6 @@ export const ProjectSettings: React.FC = () => {
                 ))}
               </Select>
             </Field>
-            <Field label="Contractor" htmlFor="ps-contractor">
-              <Input id="ps-contractor" value={contractor} disabled={busy}
-                onChange={e => setContractor(e.target.value)}
-                onBlur={saveContractor}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-            </Field>
             <Field label="Address" htmlFor="ps-address">
               <AddressAutocomplete value={address} onChange={saveAddress} disabled={busy} />
             </Field>

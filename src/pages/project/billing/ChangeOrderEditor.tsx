@@ -45,9 +45,10 @@ export const ChangeOrderEditor: React.FC<{
   const [emailDefaults, setEmailDefaults] = useState<{
     defaultTo: string;
     defaultCc: string;
+    defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', companyEmail: '', headerEmailOptions: [] });
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +66,7 @@ export const ChangeOrderEditor: React.FC<{
           customer = await getCustomer(project.customerId).catch(() => undefined);
         }
         const resolved = resolveRecipient('changeOrder', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
         const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
         const opts = [
@@ -72,7 +74,7 @@ export const ChangeOrderEditor: React.FC<{
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved, defaultCc: alwaysCc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
         }
       } catch { /* non-fatal */ }
     })();
@@ -295,6 +297,7 @@ export const ChangeOrderEditor: React.FC<{
         primaryAttachmentName={`CO-${co.number || 'change-order'}.pdf`}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={`Change Order Request CO-${co.number} — ${projectName}`}
         defaultBody={`Hello,\n\nPlease find attached Change Order Request CO-${co.number} for ${projectName}${co.description ? ', covering: ' + co.description : ''}.\n\nPlease review and approve at your convenience.\n\nThank you.`}
         headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}

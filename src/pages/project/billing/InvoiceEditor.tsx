@@ -37,9 +37,10 @@ export const InvoiceEditor: React.FC<{
   const [emailDefaults, setEmailDefaults] = useState<{
     defaultTo: string;
     defaultCc: string;
+    defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', companyEmail: '', headerEmailOptions: [] });
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +58,7 @@ export const InvoiceEditor: React.FC<{
           customer = await getCustomer(project.customerId).catch(() => undefined);
         }
         const resolved = resolveRecipient('invoice', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
         const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
         const opts = [
@@ -64,7 +66,7 @@ export const InvoiceEditor: React.FC<{
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved, defaultCc: alwaysCc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
         }
       } catch { /* non-fatal */ }
     })();
@@ -216,6 +218,7 @@ export const InvoiceEditor: React.FC<{
         primaryAttachmentName={`${invoice.number || 'invoice'}.pdf`}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={`Invoice ${invoice.number} — ${projectName}`}
         defaultBody={`Hello,\n\nPlease find attached Invoice ${invoice.number} for ${projectName}.\n\nThank you.`}
         headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}

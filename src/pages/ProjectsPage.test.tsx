@@ -4,7 +4,7 @@ import { groupSummaries, sortProjects } from './ProjectsPage';
 import type { ProjectSummary } from '../utils/store';
 
 const mk = (over: Partial<ProjectSummary>): ProjectSummary => ({
-  id: 'x', name: 'P', status: 'estimating', contractor: null, address: null,
+  id: 'x', name: 'P', status: 'estimating', contractor: null, customerId: null, address: null,
   bidDueDate: null, version: 1, createdAt: 1, updatedAt: null, archived: false,
   pageCount: 0, takeoffCount: 0, pageIds: [], openIssueCount: 0, punchDone: 0, punchTotal: 0, contractValueCents: 0, invoiceCount: 0, ...over,
 });

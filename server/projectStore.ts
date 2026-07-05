@@ -248,8 +248,10 @@ export function saveProject(db: Database.Database, id: string, payload: any): { 
 // pageIds are included so the client can keep its "page is being edited"
 // deletion guard without loading full aggregates.
 export function listProjectSummaries(db: Database.Database, id?: string, includeBilling = true): any[] {
+  // Include customerId when the column exists (added in migration 16).
+  const hasCustCol = (db.prepare('PRAGMA table_info(projects)').all() as any[]).some((c: any) => c.name === 'customerId');
   const rows = db.prepare(`
-    SELECT id, name, status, contractor, address, bidDueDate, version, createdAt, updatedAt,
+    SELECT id, name, status, contractor, ${hasCustCol ? 'customerId,' : ''} address, bidDueDate, version, createdAt, updatedAt,
            COALESCE(json_extract(meta, '$.archived'), 0) AS archived
     FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
   `).all(...(id ? [id] : [])) as any[];
@@ -276,6 +278,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       name: r.name ?? 'Untitled',
       status: r.status ?? 'estimating',
       contractor: r.contractor ?? null,
+      customerId: r.customerId ?? null,
       address: r.address ?? null,
       bidDueDate: r.bidDueDate ?? null,
       version: r.version ?? 1,
