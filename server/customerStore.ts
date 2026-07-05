@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { Customer } from '../src/types';
+import type { Customer, CustomerRoleEmails } from '../src/types';
 
 export function createCustomerTables(db: Database.Database): void {
   db.exec(`
@@ -14,6 +14,7 @@ export function createCustomerTables(db: Database.Database): void {
       accountingEmail TEXT,
       estimatingEmail TEXT,
       pmEmail TEXT,
+      emails TEXT,
       createdAt INTEGER,
       updatedAt INTEGER,
       attrs TEXT
@@ -21,11 +22,19 @@ export function createCustomerTables(db: Database.Database): void {
   `);
 }
 
+function buildEmailsFromLegacy(r: any): CustomerRoleEmails {
+  const emails: CustomerRoleEmails = {};
+  if (r.generalEmail) emails.general = { to: r.generalEmail };
+  if (r.accountingEmail) emails.accounting = { to: r.accountingEmail };
+  if (r.estimatingEmail) emails.estimating = { to: r.estimatingEmail };
+  if (r.pmEmail) emails.pm = { to: r.pmEmail };
+  return emails;
+}
+
 const rowToCustomer = (r: any): Customer => ({
   id: r.id, name: r.name, phone: r.phone ?? undefined, address: r.address ?? undefined,
   contactName: r.contactName ?? undefined, notes: r.notes ?? undefined,
-  emails: { general: r.generalEmail ?? undefined, accounting: r.accountingEmail ?? undefined,
-            estimating: r.estimatingEmail ?? undefined, pm: r.pmEmail ?? undefined },
+  emails: r.emails ? (JSON.parse(r.emails) as CustomerRoleEmails) : buildEmailsFromLegacy(r),
   createdAt: r.createdAt ?? undefined, updatedAt: r.updatedAt ?? undefined,
   ...(r.attrs ? JSON.parse(r.attrs) : {}),
 });
@@ -43,19 +52,19 @@ export function listProjectsForCustomer(db: Database.Database, id: string): any[
 
 export function saveCustomer(db: Database.Database, c: Customer): Customer {
   const now = Date.now();
-  const e = c.emails || {};
+  const emailsJson = JSON.stringify(c.emails || {});
   const exists = db.prepare('SELECT id FROM customers WHERE id = ?').get(c.id);
   if (exists) {
     db.prepare(`UPDATE customers SET name=?, phone=?, address=?, contactName=?, notes=?,
-      generalEmail=?, accountingEmail=?, estimatingEmail=?, pmEmail=?, updatedAt=? WHERE id=?`)
+      emails=?, updatedAt=? WHERE id=?`)
       .run(c.name, c.phone ?? null, c.address ?? null, c.contactName ?? null, c.notes ?? null,
-           e.general ?? null, e.accounting ?? null, e.estimating ?? null, e.pm ?? null, now, c.id);
+           emailsJson, now, c.id);
   } else {
     db.prepare(`INSERT INTO customers (id,name,phone,address,contactName,notes,
-      generalEmail,accountingEmail,estimatingEmail,pmEmail,createdAt,updatedAt)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      emails,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(c.id, c.name, c.phone ?? null, c.address ?? null, c.contactName ?? null, c.notes ?? null,
-           e.general ?? null, e.accounting ?? null, e.estimating ?? null, e.pm ?? null, now, now);
+           emailsJson, now, now);
   }
   return getCustomer(db, c.id)!;
 }

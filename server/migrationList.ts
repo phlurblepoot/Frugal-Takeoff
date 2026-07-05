@@ -832,4 +832,38 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 17,
+    name: 'customer-emails-json',
+    // ADDITIVE, NON-DESTRUCTIVE, IDEMPOTENT. Upgrades customer role emails from
+    // 4 flat string columns (generalEmail etc.) to a single JSON column `emails`
+    // whose shape is CustomerRoleEmails (each role holds {to?, cc?, bcc?}).
+    // The old columns are left untouched so rollback is safe.
+    up({ db }) {
+      // Add the column idempotently.
+      const cols = (db.prepare(`PRAGMA table_info(customers)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('emails')) {
+        db.exec(`ALTER TABLE customers ADD COLUMN emails TEXT;`);
+      }
+
+      // Backfill: only touch rows where emails is still NULL (re-run safe).
+      const rows = db.prepare(
+        `SELECT id, generalEmail, accountingEmail, estimatingEmail, pmEmail
+         FROM customers WHERE emails IS NULL`
+      ).all() as { id: string; generalEmail: string | null; accountingEmail: string | null; estimatingEmail: string | null; pmEmail: string | null }[];
+
+      const upd = db.prepare(`UPDATE customers SET emails = ? WHERE id = ?`);
+      for (const r of rows) {
+        const obj: Record<string, { to: string }> = {};
+        if (r.generalEmail) obj.general = { to: r.generalEmail };
+        if (r.accountingEmail) obj.accounting = { to: r.accountingEmail };
+        if (r.estimatingEmail) obj.estimating = { to: r.estimatingEmail };
+        if (r.pmEmail) obj.pm = { to: r.pmEmail };
+        // Only write non-empty objects; rows with all-null columns stay NULL.
+        if (Object.keys(obj).length > 0) {
+          upd.run(JSON.stringify(obj), r.id);
+        }
+      }
+    },
+  },
 ];

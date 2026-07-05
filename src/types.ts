@@ -147,11 +147,17 @@ export interface BidEmail {
   accountId?: string;       // Inbound-account id retained for legacy data compatibility (IMAP removed).
 }
 
+export interface RoleEmailSet {
+  /** Comma-separated address list. */
+  to?: string;
+  cc?: string;
+  bcc?: string;
+}
 export interface CustomerRoleEmails {
-  general?: string;
-  accounting?: string;
-  estimating?: string;
-  pm?: string;
+  general?: RoleEmailSet;
+  accounting?: RoleEmailSet;
+  estimating?: RoleEmailSet;
+  pm?: RoleEmailSet;
 }
 export interface Customer {
   id: string;
