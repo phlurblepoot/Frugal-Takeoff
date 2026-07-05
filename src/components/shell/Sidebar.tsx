@@ -5,7 +5,7 @@ import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
   ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
-  ClipboardCheck, FileText, SlidersHorizontal,
+  ClipboardCheck, FileText, SlidersHorizontal, Users,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
@@ -23,6 +23,7 @@ interface NavEntry {
 const WORKSPACE_NAV: NavEntry[] = [
   { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard, path: '/dashboard', match: p => p === '/' || p.startsWith('/dashboard') },
   { id: 'projects', label: 'Projects', Icon: FolderKanban, path: '/projects', match: p => p.startsWith('/projects') || p === '/new' || p.startsWith('/project') },
+  { id: 'customers', label: 'Customers', Icon: Users, path: '/customers', match: p => p.startsWith('/customers') },
   { id: 'tasks', label: 'Tasks', Icon: ListTodo, path: '/tasks', match: p => p.startsWith('/tasks') },
   { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
 ];

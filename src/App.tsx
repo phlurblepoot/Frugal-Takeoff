@@ -22,6 +22,8 @@ import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
 import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
+import { CustomersPage } from './pages/CustomersPage';
+import { CustomerDetail } from './pages/CustomerDetail';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
@@ -143,6 +145,14 @@ export default function App() {
         {
           path: 'spreadsheet-editor',
           element: <Navigate to="/tools/sheets" replace />,
+        },
+        {
+          path: 'customers',
+          element: <CustomersPage />,
+        },
+        {
+          path: 'customers/:id',
+          element: <CustomerDetail />,
         },
         {
           path: 'tasks',
