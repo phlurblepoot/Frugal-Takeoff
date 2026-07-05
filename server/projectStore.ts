@@ -43,6 +43,7 @@ export function loadProject(db: Database.Database, id: string): any | null {
   put(project, 'contractor', row.contractor);
   put(project, 'address', row.address);
   put(project, 'bidDueDate', row.bidDueDate);
+  put(project, 'customerId', row.customerId);
   Object.assign(project, meta);
 
   const planSetRows = db.prepare('SELECT * FROM plan_sets WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
@@ -143,7 +144,7 @@ export function deriveStatus(meta: any, existing?: string): string {
 // transaction. Never touches the files table (spec §3.3 rule 4).
 export function decomposeProject(db: Database.Database, payload: any, version: number): void {
   const {
-    id, name, createdAt, contractor, address, bidDueDate,
+    id, name, createdAt, contractor, customerId, address, bidDueDate,
     planSets, pages, takeoffs, version: _v, status: _s, ...meta
   } = payload;
 
@@ -162,6 +163,13 @@ export function decomposeProject(db: Database.Database, payload: any, version: n
     JSON.stringify(meta),
     id
   );
+
+  // customerId is a dedicated column added in migration 16. Skip the write
+  // when the column doesn't exist yet (e.g. when migration 5 calls us).
+  const cols = (db.prepare('PRAGMA table_info(projects)').all() as any[]).map((c: any) => c.name);
+  if (cols.includes('customerId')) {
+    db.prepare('UPDATE projects SET customerId = ? WHERE id = ?').run(customerId ?? null, id);
+  }
 
   for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
     db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
