@@ -962,11 +962,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/customers/:id/projects', authenticateToken, (req, res) =>
     res.json(listProjectsForCustomer(db, req.params.id)));
   app.post('/api/customers', authenticateToken, (req, res) => {
+    if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
     res.json(saveCustomer(db, { ...req.body, id }));
   });
-  app.put('/api/customers/:id', authenticateToken, (req, res) =>
-    res.json(saveCustomer(db, { ...req.body, id: req.params.id })));
+  app.put('/api/customers/:id', authenticateToken, (req, res) => {
+    if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
+    res.json(saveCustomer(db, { ...req.body, id: req.params.id }));
+  });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {
     try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
     catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }

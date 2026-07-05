@@ -23,7 +23,7 @@ export interface EmailComposerProps {
   /** The generated document — shown as a fixed, non-removable chip. */
   primaryAttachmentName: string;
   defaultTo?: string;
-  /** Pre-seed the Cc field when the composer opens. De-duped against any existing Cc. */
+  /** Pre-seed the Cc field when the composer opens (e.g. the user's always-CC list). */
   defaultCc?: string;
   defaultSubject: string;
   defaultBody: string;
