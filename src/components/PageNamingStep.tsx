@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle, Sparkles } from 'lucide-react';
+import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -239,6 +239,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       }
       return updated;
     }));
+  };
+
+  // Re-run the page-number auto-match for EVERY page against its CURRENT page
+  // number. Useful after correcting numbers (e.g. via AI Scan): the initial
+  // auto-match ran on the original, often-wrong numbers, so matches go stale.
+  const rematchAll = () => {
+    setPendingPages(pendingPages.map(p => ({ ...p, matchSheetId: autoMatch(p.pageNumber || '') })));
+    toast('Re-matched pages to sheets by their current page number.', { type: 'success' });
   };
 
   // Explicit match-dropdown change: '' = New sheet, otherwise a target sheetId.
@@ -533,6 +541,17 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
           </div>
           <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
             <div className="w-full sm:w-auto flex items-center gap-2">
+              {reviewMode && (
+                <button
+                  type="button"
+                  onClick={rematchAll}
+                  disabled={aiScanning || isConfirming}
+                  title="Re-check each page's revision match against its current page number"
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <RefreshCw size={18} /> Re-match by page #
+                </button>
+              )}
               {onAiScan && (
                 <div className="flex flex-col items-end gap-1">
                   <button
