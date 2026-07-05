@@ -790,4 +790,45 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 16,
+    name: 'customers-from-contractor',
+    // SUPERVISED, data-transforming, NON-DESTRUCTIVE. Creates the customers table
+    // + projects.customerId, then makes one Customer per distinct (trimmed,
+    // lower-cased) contractor string and links its projects. Projects with a
+    // blank/null contractor go to a single well-known "Unassigned" customer so
+    // they remain reachable. `contractor` is left untouched.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(projects)`).all() as any[]).map(c => c.name);
+      if (!cols.includes('customerId')) db.exec(`ALTER TABLE projects ADD COLUMN customerId TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customers (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, address TEXT,
+          contactName TEXT, notes TEXT, generalEmail TEXT, accountingEmail TEXT,
+          estimatingEmail TEXT, pmEmail TEXT, createdAt INTEGER, updatedAt INTEGER, attrs TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_customerId ON projects (customerId);
+      `);
+      const now = Date.now();
+      db.prepare(`INSERT OR IGNORE INTO customers (id,name,createdAt,updatedAt) VALUES (?,?,?,?)`)
+        .run('customer-unassigned', 'Unassigned', now, now);
+
+      const rows = db.prepare(`SELECT id, contractor FROM projects`).all() as any[];
+      const byNorm = new Map<string, string>();
+      let seq = 0;
+      const link = db.prepare(`UPDATE projects SET customerId = ? WHERE id = ?`);
+      for (const r of rows) {
+        const raw = (r.contractor ?? '').trim();
+        if (!raw) { link.run('customer-unassigned', r.id); continue; }
+        const norm = raw.toLowerCase();
+        let cid = byNorm.get(norm);
+        if (!cid) {
+          cid = `customer-mig-${now}-${seq++}`;
+          db.prepare(`INSERT INTO customers (id,name,createdAt,updatedAt) VALUES (?,?,?,?)`).run(cid, raw, now, now);
+          byNorm.set(norm, cid);
+        }
+        link.run(cid, r.id);
+      }
+    },
+  },
 ];
