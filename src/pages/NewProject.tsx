@@ -8,7 +8,7 @@ import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
-import { getAiStatus, readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled } from '../utils/aiSheets';
+import { readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 
 interface PendingPage {
@@ -54,25 +54,37 @@ export const NewProject: React.FC = () => {
   // "AI Scan" button can re-run reads without re-rendering the PDF).
   const [aiImages, setAiImages] = useState<Record<string, string>>({});
 
-  // Manual "AI Scan" — re-run the local AI read on every page and apply names.
-  const handleAiScan = async () => {
-    const status = await getAiStatus(true);
-    if (!status.available) {
-      toast(status.state === 'loading' ? 'AI model is still loading — try again in a moment.' : 'AI model is not available.', { type: 'error' });
+  // Manual "AI Scan" — load the model on demand, then read every page.
+  const handleAiScan = async (report: (p: AiScanProgress) => void) => {
+    report({ phase: 'loading' });
+    const idleMs = await getAiIdleTimeoutMs();
+    await warmupAi(idleMs);
+    const ready = await waitForAiReady(() => report({ phase: 'loading' }));
+    if (!ready) {
+      toast('AI model unavailable.', { type: 'error' });
       return;
     }
     const pages = pendingPages;
+    let count = 0;
+    report({ phase: 'scanning', done: 0, total: pages.length });
     const reads = await runWithConcurrency(
-      pages.map(pg => async () => readSheet({
-        imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
-        imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pageThumbnails[pg.thumbnailId]),
-        embeddedText: pg.extractedText,
-      })),
+      pages.map(pg => async () => {
+        const result = await readSheet({
+          imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+          imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pageThumbnails[pg.thumbnailId]),
+          embeddedText: pg.extractedText,
+          idleTimeoutMs: idleMs,
+        });
+        count++;
+        report({ phase: 'scanning', done: count, total: pages.length });
+        return result;
+      }),
       3,
     );
     setPendingPages(pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg)));
     const hits = reads.filter(Boolean).length;
     toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
+    report({ phase: 'done' });
   };
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -194,7 +206,6 @@ export const NewProject: React.FC = () => {
       // the model is up right now) so the manual "AI Scan" button always has a
       // good image to send later. The auto pass additionally requires readiness.
       const aiWanted = aiAutoNameEnabled();
-      const aiEnabled = aiWanted && (await getAiStatus(true)).available;
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
@@ -369,30 +380,6 @@ export const NewProject: React.FC = () => {
         // Nothing to name — stay on the upload step. Modal (if any) still shows.
         setIsProcessing(false);
         return;
-      }
-
-      // AI naming pass: when the local model is available and auto-naming is on,
-      // replace the heuristic names with the model's read. Prefer the medium-res
-      // AI image (the 400px thumbnail is too small to read a title block), else
-      // the full-page raster / thumbnail. Falls back silently on any error so
-      // import is never blocked.
-      try {
-        if (aiEnabled && extractedPages.length) {
-          const reads = await runWithConcurrency(
-            extractedPages.map((pg, i) => async () => {
-              setProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
-              return readSheet({
-                imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
-                imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : thumbnails[pg.thumbnailId]),
-                embeddedText: pg.extractedText,
-              });
-            }),
-            3,
-          );
-          reads.forEach((read, i) => { if (read) extractedPages[i] = applyReadToPage(extractedPages[i], read); });
-        }
-      } catch (aiErr) {
-        console.warn('AI naming pass failed; using heuristic names', aiErr);
       }
 
       setPendingPages(extractedPages);

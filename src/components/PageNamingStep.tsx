@@ -8,6 +8,7 @@ import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } fr
 import { reconcileExtract } from '../utils/extractMatch';
 import { findDuplicatePageNumbers, suffixPageNumber } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
+import { AiScanProgress } from '../utils/aiSheets';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
 
@@ -161,8 +162,9 @@ export interface PageNamingStepProps {
   planSetId?: string;
   /** When provided, shows an "AI Scan" button that re-runs local AI reading on
    *  every page (used to invoke it manually, e.g. if the model wasn't ready at
-   *  upload time). The parent owns the images/status and mutates pendingPages. */
-  onAiScan?: () => Promise<void>;
+   *  upload time). The parent owns the images/status and mutates pendingPages.
+   *  The reporter callback receives loading/scanning/done progress updates. */
+  onAiScan?: (report: (p: AiScanProgress) => void) => Promise<void>;
 }
 
 export const PageNamingStep: React.FC<PageNamingStepProps> = ({
@@ -182,6 +184,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
   const [aiScanning, setAiScanning] = useState(false);
+  const [aiScanProgress, setAiScanProgress] = useState<AiScanProgress | null>(null);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
@@ -531,15 +534,43 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
           <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
             <div className="w-full sm:w-auto flex items-center gap-2">
               {onAiScan && (
-                <button
-                  type="button"
-                  onClick={async () => { setAiScanning(true); try { await onAiScan(); } finally { setAiScanning(false); } }}
-                  disabled={aiScanning || isConfirming}
-                  title="Read every page's number and description with the local AI"
-                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 hover:bg-accent-100 dark:hover:bg-accent-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {aiScanning ? <><Loader2 size={18} className="animate-spin" /> Scanning…</> : <><Sparkles size={18} /> AI Scan</>}
-                </button>
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setAiScanning(true);
+                      setAiScanProgress(null);
+                      try { await onAiScan(setAiScanProgress); }
+                      finally { setAiScanning(false); setAiScanProgress(null); }
+                    }}
+                    disabled={aiScanning || isConfirming}
+                    title="Read every page's number and description with the local AI"
+                    className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 hover:bg-accent-100 dark:hover:bg-accent-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {aiScanning ? <><Loader2 size={18} className="animate-spin" /> Scanning…</> : <><Sparkles size={18} /> AI Scan</>}
+                  </button>
+                  {aiScanning && aiScanProgress && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 min-w-0">
+                      {aiScanProgress.phase === 'loading' ? (
+                        <>
+                          <Loader2 size={12} className="animate-spin shrink-0" />
+                          <span>Loading model…</span>
+                          <span className="text-slate-400 dark:text-slate-500">(first run ~30s)</span>
+                        </>
+                      ) : aiScanProgress.phase === 'scanning' && aiScanProgress.total !== undefined ? (
+                        <>
+                          <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-accent-500 rounded-full transition-all"
+                              style={{ width: `${Math.round(((aiScanProgress.done ?? 0) / aiScanProgress.total) * 100)}%` }}
+                            />
+                          </div>
+                          <span>{aiScanProgress.done ?? 0}/{aiScanProgress.total}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               )}
               <button
                 onClick={onConfirm}

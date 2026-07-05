@@ -1,9 +1,12 @@
-import { getAuthHeaders } from './store';
+import { getAuthHeaders, getSettings } from './store';
 
 export interface SheetRead { sheetNumber: string; sheetTitle: string; discipline?: string; confidence: number; }
 export interface SheetMatch { matchSheetId: string | null; confidence: number; reason?: string; }
-export interface AiStatus { available: boolean; model: string; device: string; state?: 'off' | 'loading' | 'ready'; }
+export interface AiStatus { available: boolean; model: string; device: string; state?: 'off' | 'idle' | 'loading' | 'ready'; }
 export interface ExistingSheetRef { sheetId: string; number: string; title: string; }
+
+export type AiScanPhase = 'loading' | 'scanning' | 'done';
+export interface AiScanProgress { phase: AiScanPhase; done?: number; total?: number; }
 
 /** Minimal shape of a review page the apply helpers touch. */
 export interface AiPage {
@@ -36,7 +39,39 @@ export async function getAiStatus(force = false): Promise<AiStatus> {
   return statusCache!;
 }
 
-export async function readSheet(input: { imageId?: string; imageBase64?: string; embeddedText?: string }): Promise<SheetRead | null> {
+export async function warmupAi(idleTimeoutMs?: number): Promise<void> {
+  try {
+    await fetch('/api/ai/warmup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ idleTimeoutMs }),
+    });
+  } catch { /* ignore */ }
+}
+
+export async function getAiIdleTimeoutMs(): Promise<number> {
+  try {
+    const settings = await getSettings();
+    const minutes = parseFloat(settings['aiIdleTimeoutMinutes'] ?? '');
+    if (!isNaN(minutes)) return minutes * 60000;
+  } catch { /* ignore */ }
+  return 300000; // default 5 minutes
+}
+
+/** Poll until state === 'ready' (true) or 'off' / timeout (false). */
+export async function waitForAiReady(onTick?: () => void, timeoutMs = 900000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await getAiStatus(true);
+    if (status.state === 'ready') return true;
+    if (status.state === 'off') return false;
+    if (onTick) onTick();
+    await new Promise<void>(r => setTimeout(r, 1500));
+  }
+  return false;
+}
+
+export async function readSheet(input: { imageId?: string; imageBase64?: string; embeddedText?: string; idleTimeoutMs?: number }): Promise<SheetRead | null> {
   try {
     const res = await fetch('/api/ai/read-sheet', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(input),
@@ -45,7 +80,7 @@ export async function readSheet(input: { imageId?: string; imageBase64?: string;
   } catch { return null; }
 }
 
-export async function matchSheet(input: { page: SheetRead; existingSheets: ExistingSheetRef[] }): Promise<SheetMatch | null> {
+export async function matchSheet(input: { page: SheetRead; existingSheets: ExistingSheetRef[]; idleTimeoutMs?: number }): Promise<SheetMatch | null> {
   try {
     const res = await fetch('/api/ai/match-sheet', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(input),

@@ -2,6 +2,7 @@ import React from 'react';
 import { X, FileImage, Trash2, Plus, Upload, Loader2 } from 'lucide-react';
 import { Project } from '../types';
 import { PageNamingStep, NamingStepPage, ExistingSheet } from './PageNamingStep';
+import { AiScanProgress } from '../utils/aiSheets';
 
 export interface AddPagesProgress {
   status: string;
@@ -50,7 +51,7 @@ export interface AddPagesModalProps {
 
   onAddPages: (e: React.FormEvent) => void | Promise<void>;
   onConfirmAddPages: () => void | Promise<void>;
-  onAiScan?: () => Promise<void>;
+  onAiScan?: (report: (p: AiScanProgress) => void) => Promise<void>;
 }
 
 export const AddPagesModal: React.FC<AddPagesModalProps> = ({

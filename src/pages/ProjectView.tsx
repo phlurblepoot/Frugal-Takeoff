@@ -7,7 +7,7 @@ import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, rou
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
-import { getAiStatus, readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled } from '../utils/aiSheets';
+import { readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -670,7 +670,6 @@ export const ProjectView: React.FC = () => {
       // Render the AI image whenever auto-naming is on so the manual "AI Scan"
       // button always has a good image; the auto pass also requires readiness.
       const aiWanted = aiAutoNameEnabled();
-      const aiEnabled = aiWanted && (await getAiStatus(true)).available;
 
       // Build map of existing page numbers for revision detection
       const existingPageNums = new Map<string, string>(); // normalised → display
@@ -859,52 +858,6 @@ export const ProjectView: React.FC = () => {
         setIsAddingPages(false);
         setAddProgress({ status: '', current: 0, total: 0, currentFile: 0, totalFiles: 0 });
         return;
-      }
-
-      // AI naming + revision matching pass: read each incoming sheet, then ask
-      // the model which existing sheet (if any) it revises. Prefer the medium-res
-      // AI image (the 400px thumbnail can't resolve a title block), else the full
-      // raster / thumbnail. Falls back silently so the add-set flow is never
-      // blocked; below-threshold matches leave the page's matchSheetId for
-      // PageNamingStep's page-number auto-seed to fill.
-      try {
-        if (aiEnabled && extractedPages.length) {
-          const reads = await runWithConcurrency(
-            extractedPages.map((pg, i) => async () => {
-              setAddProgress(prev => ({ ...prev, status: 'reading', current: i + 1, total: extractedPages.length }));
-              return readSheet({
-                imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
-                imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : thumbnails[pg.thumbnailId]),
-                embeddedText: pg.extractedText,
-              });
-            }),
-            3,
-          );
-          reads.forEach((read, i) => { if (read) extractedPages[i] = applyReadToPage(extractedPages[i], read); });
-
-          // Existing sheets to match against (exclude the pages being added).
-          const pendingIds = new Set(extractedPages.map(p => p.id));
-          const priorPages = updatedProject.pages.filter(p => !pendingIds.has(p.id));
-          const model = computeRevisionModel({ ...updatedProject, pages: priorPages }, '');
-          const existingRefs: { sheetId: string; number: string; title: string }[] = [];
-          for (const [, currentPageId] of model.latestPageIdBySheet) {
-            const pg = priorPages.find(p => p.id === currentPageId);
-            if (pg) existingRefs.push({ sheetId: effectiveSheetId(pg), number: pg.pageNumber || '', title: pg.description || pg.name || '' });
-          }
-          if (existingRefs.length) {
-            const matches = await runWithConcurrency(
-              extractedPages.map((_pg, i) => async () => {
-                const read = reads[i];
-                if (!read || (!read.sheetNumber && !read.sheetTitle)) return null;
-                return matchSheet({ page: read, existingSheets: existingRefs });
-              }),
-              3,
-            );
-            matches.forEach((m, i) => { if (m) extractedPages[i] = applyMatchToPage(extractedPages[i], m); });
-          }
-        }
-      } catch (aiErr) {
-        console.warn('AI naming/matching pass failed; using heuristics', aiErr);
       }
 
       setPendingPages(extractedPages);
@@ -1479,21 +1432,31 @@ export const ProjectView: React.FC = () => {
     setShowAddPagesModal(true);
   };
 
-  // Manual "AI Scan" — re-run the local AI read (+ revision match) on every
-  // pending page and apply the results.
-  const handleAiScan = async () => {
-    const status = await getAiStatus(true);
-    if (!status.available) {
-      toast(status.state === 'loading' ? 'AI model is still loading — try again in a moment.' : 'AI model is not available.', { type: 'error' });
+  // Manual "AI Scan" — load the model on demand, read every page, then match.
+  const handleAiScan = async (report: (p: AiScanProgress) => void) => {
+    report({ phase: 'loading' });
+    const idleMs = await getAiIdleTimeoutMs();
+    await warmupAi(idleMs);
+    const ready = await waitForAiReady(() => report({ phase: 'loading' }));
+    if (!ready) {
+      toast('AI model unavailable.', { type: 'error' });
       return;
     }
     const pages = pendingPages;
+    let count = 0;
+    report({ phase: 'scanning', done: 0, total: pages.length });
     const reads = await runWithConcurrency(
-      pages.map(pg => async () => readSheet({
-        imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
-        imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pendingThumbnails[pg.thumbnailId]),
-        embeddedText: pg.extractedText,
-      })),
+      pages.map(pg => async () => {
+        const result = await readSheet({
+          imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+          imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pendingThumbnails[pg.thumbnailId]),
+          embeddedText: pg.extractedText,
+          idleTimeoutMs: idleMs,
+        });
+        count++;
+        report({ phase: 'scanning', done: count, total: pages.length });
+        return result;
+      }),
       3,
     );
     let named = pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg));
@@ -1511,7 +1474,7 @@ export const ProjectView: React.FC = () => {
           named.map((_pg, i) => async () => {
             const read = reads[i];
             if (!read || (!read.sheetNumber && !read.sheetTitle)) return null;
-            return matchSheet({ page: read, existingSheets: existingRefs });
+            return matchSheet({ page: read, existingSheets: existingRefs, idleTimeoutMs: idleMs });
           }),
           3,
         );
@@ -1521,6 +1484,7 @@ export const ProjectView: React.FC = () => {
     setPendingPages(named);
     const hits = reads.filter(Boolean).length;
     toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
+    report({ phase: 'done' });
   };
 
   const handleConfirmAddPages = async () => {

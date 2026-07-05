@@ -502,6 +502,8 @@ const PreferencesTab: React.FC = () => {
 
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [autoName, setAutoName] = useState<boolean>(aiAutoNameEnabled());
+  const [aiIdleMinutes, setAiIdleMinutes] = useState<string>('5');
+  const [aiSettings, setAiSettings] = useState<Record<string, string> | null>(null);
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -514,8 +516,27 @@ const PreferencesTab: React.FC = () => {
       if (s.state === 'loading') timer = setTimeout(tick, 5000);
     };
     tick();
+    // Load the idle-timeout setting
+    getSettings().then(s => {
+      if (cancelled) return;
+      setAiSettings(s);
+      if (s['aiIdleTimeoutMinutes'] !== undefined) setAiIdleMinutes(s['aiIdleTimeoutMinutes']);
+    }).catch(() => {});
     return () => { cancelled = true; clearTimeout(timer); };
   }, []);
+
+  const handleAiIdleBlur = async () => {
+    const val = aiIdleMinutes.trim();
+    const num = parseFloat(val);
+    const safe = isNaN(num) || num < 0 ? '5' : String(num);
+    setAiIdleMinutes(safe);
+    try {
+      await saveSettings({ ...(aiSettings ?? {}), aiIdleTimeoutMinutes: safe });
+      setAiSettings(prev => ({ ...(prev ?? {}), aiIdleTimeoutMinutes: safe }));
+    } catch (err: any) {
+      toast(err?.message?.includes('admin') || err?.message?.includes('403') ? 'Only admins can change this.' : (err?.message ?? 'Failed to save.'), { type: 'error' });
+    }
+  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -688,18 +709,20 @@ const PreferencesTab: React.FC = () => {
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             {aiStatus?.state === 'ready'
-              ? `Local model ready: ${aiStatus.model} (${aiStatus.device}). Imported plan sheets are read and named automatically.`
+              ? `Local model ready: ${aiStatus.model} (${aiStatus.device}).`
               : aiStatus?.state === 'loading'
-              ? 'Model is starting up — on first run it downloads the weights (this can take several minutes). Watch the container log for download progress. Page naming uses text/OCR until it\'s ready; this will update automatically.'
+              ? 'Model is starting up — on first run it downloads the weights (this can take several minutes). Watch the container log for download progress. This will update automatically.'
+              : aiStatus?.state === 'idle'
+              ? `Local model idle: ${aiStatus.model} (${aiStatus.device}).`
               : 'No local model detected. Page naming falls back to text/OCR extraction. See the ops runbook to enable it.'}
           </p>
         </div>
-        <div className="p-6">
+        <div className="p-6 space-y-6">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-slate-900 dark:text-white">Auto-name imported pages with AI</p>
+              <p className="text-sm font-medium text-slate-900 dark:text-white">Enable AI sheet reading</p>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                When a local model is available, read each sheet's number and title on import.
+                Renders page images for AI and shows the AI Scan button on the naming screen. Nothing runs until you click AI Scan.
               </p>
             </div>
             <button
@@ -712,6 +735,24 @@ const PreferencesTab: React.FC = () => {
             >
               <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-all ${autoName && aiStatus?.available ? 'left-6' : 'left-0.5'}`} />
             </button>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <p className="text-sm font-medium text-slate-900 dark:text-white">Unload model after (minutes idle)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Frees GPU memory when idle. 0 = keep loaded.
+              </p>
+            </div>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={aiIdleMinutes}
+              onChange={e => setAiIdleMinutes(e.target.value)}
+              onBlur={handleAiIdleBlur}
+              disabled={!aiStatus?.available}
+              className="w-24 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm focus:ring-2 focus:ring-accent-500 outline-none disabled:opacity-50"
+            />
           </div>
         </div>
       </div>
