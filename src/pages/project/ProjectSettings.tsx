@@ -13,6 +13,7 @@ import { Project, Customer, CustomerRoleEmails } from '../../types';
 import { getProject, saveProject, deleteProject, patchProject, ConflictError, getCustomers } from '../../utils/store';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { ProjectStageControl } from '../../components/ProjectStageControl';
+import { RoleEmailsEditor } from '../../components/RoleEmailsEditor';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
@@ -260,36 +261,11 @@ export const ProjectSettings: React.FC = () => {
           <p className="text-xs text-ink-faint mb-4">
             These email addresses are used for this project only and override any emails set on the linked customer.
           </p>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="General" htmlFor="ps-email-general">
-              <Input id="ps-email-general" type="email" value={contactEmails.general ?? ''} disabled={busy}
-                placeholder="general@example.com"
-                onChange={e => setContactEmails(prev => ({ ...prev, general: e.target.value || undefined }))}
-                onBlur={() => saveContactEmails(contactEmails)}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-            </Field>
-            <Field label="Accounting" htmlFor="ps-email-accounting">
-              <Input id="ps-email-accounting" type="email" value={contactEmails.accounting ?? ''} disabled={busy}
-                placeholder="accounting@example.com"
-                onChange={e => setContactEmails(prev => ({ ...prev, accounting: e.target.value || undefined }))}
-                onBlur={() => saveContactEmails(contactEmails)}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-            </Field>
-            <Field label="Estimating" htmlFor="ps-email-estimating">
-              <Input id="ps-email-estimating" type="email" value={contactEmails.estimating ?? ''} disabled={busy}
-                placeholder="estimating@example.com"
-                onChange={e => setContactEmails(prev => ({ ...prev, estimating: e.target.value || undefined }))}
-                onBlur={() => saveContactEmails(contactEmails)}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-            </Field>
-            <Field label="Project Management" htmlFor="ps-email-pm">
-              <Input id="ps-email-pm" type="email" value={contactEmails.pm ?? ''} disabled={busy}
-                placeholder="pm@example.com"
-                onChange={e => setContactEmails(prev => ({ ...prev, pm: e.target.value || undefined }))}
-                onBlur={() => saveContactEmails(contactEmails)}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-            </Field>
-          </div>
+          <RoleEmailsEditor
+            value={contactEmails}
+            onChange={next => { setContactEmails(next); saveContactEmails(next); }}
+            disabled={busy}
+          />
         </CardBody>
       </Card>
 

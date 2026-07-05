@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search, Users, Phone, User } from 'lucide-react';
-import { Customer } from '../types';
+import { Customer, CustomerRoleEmails } from '../types';
 import {
   getCustomers,
   saveCustomer,
@@ -11,6 +11,7 @@ import { useToast } from '../components/Toast';
 import {
   Button, Card, EmptyState, Field, Input, Modal, Textarea,
 } from '../components/ui';
+import { RoleEmailsEditor } from '../components/RoleEmailsEditor';
 
 // ── Customer form (shared between create modal and detail page) ───────────────
 
@@ -20,10 +21,7 @@ export interface CustomerFormState {
   address: string;
   contactName: string;
   notes: string;
-  emailGeneral: string;
-  emailAccounting: string;
-  emailEstimating: string;
-  emailPm: string;
+  emails: CustomerRoleEmails;
 }
 
 const EMPTY_FORM: CustomerFormState = {
@@ -32,10 +30,7 @@ const EMPTY_FORM: CustomerFormState = {
   address: '',
   contactName: '',
   notes: '',
-  emailGeneral: '',
-  emailAccounting: '',
-  emailEstimating: '',
-  emailPm: '',
+  emails: {},
 };
 
 export const CustomerForm: React.FC<{
@@ -43,8 +38,9 @@ export const CustomerForm: React.FC<{
   onChange: (v: CustomerFormState) => void;
   nameError?: string;
 }> = ({ value, onChange, nameError }) => {
-  const set = (key: keyof CustomerFormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    onChange({ ...value, [key]: e.target.value });
+  const set = (key: keyof Omit<CustomerFormState, 'emails'>) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      onChange({ ...value, [key]: e.target.value });
 
   return (
     <div className="space-y-4">
@@ -69,20 +65,10 @@ export const CustomerForm: React.FC<{
         <Input id="cust-address" value={value.address} onChange={set('address')} placeholder="Street, City, State ZIP" />
       </Field>
       <p className="text-xs font-semibold uppercase tracking-wider text-ink-faint pt-1">Role Emails</p>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="General" htmlFor="cust-email-general">
-          <Input id="cust-email-general" value={value.emailGeneral} onChange={set('emailGeneral')} placeholder="general@example.com" type="email" />
-        </Field>
-        <Field label="Accounting" htmlFor="cust-email-accounting">
-          <Input id="cust-email-accounting" value={value.emailAccounting} onChange={set('emailAccounting')} placeholder="billing@example.com" type="email" />
-        </Field>
-        <Field label="Estimating" htmlFor="cust-email-estimating">
-          <Input id="cust-email-estimating" value={value.emailEstimating} onChange={set('emailEstimating')} placeholder="estimating@example.com" type="email" />
-        </Field>
-        <Field label="Project Management" htmlFor="cust-email-pm">
-          <Input id="cust-email-pm" value={value.emailPm} onChange={set('emailPm')} placeholder="pm@example.com" type="email" />
-        </Field>
-      </div>
+      <RoleEmailsEditor
+        value={value.emails}
+        onChange={next => onChange({ ...value, emails: next })}
+      />
       <Field label="Notes" htmlFor="cust-notes">
         <Textarea id="cust-notes" value={value.notes} onChange={set('notes')} placeholder="Internal notes about this customer…" rows={3} />
       </Field>
@@ -97,12 +83,7 @@ export function formToCustomer(f: CustomerFormState): Omit<Customer, 'id' | 'cre
     address: f.address.trim() || undefined,
     contactName: f.contactName.trim() || undefined,
     notes: f.notes.trim() || undefined,
-    emails: {
-      general: f.emailGeneral.trim() || undefined,
-      accounting: f.emailAccounting.trim() || undefined,
-      estimating: f.emailEstimating.trim() || undefined,
-      pm: f.emailPm.trim() || undefined,
-    },
+    emails: f.emails,
   };
 }
 
@@ -113,10 +94,7 @@ export function customerToForm(c: Customer): CustomerFormState {
     address: c.address ?? '',
     contactName: c.contactName ?? '',
     notes: c.notes ?? '',
-    emailGeneral: c.emails?.general ?? '',
-    emailAccounting: c.emails?.accounting ?? '',
-    emailEstimating: c.emails?.estimating ?? '',
-    emailPm: c.emails?.pm ?? '',
+    emails: c.emails ?? {},
   };
 }
 
