@@ -3,8 +3,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ListChecks, Plus, ImageIcon } from 'lucide-react';
 import {
-  Task, TaskListItem, AssignableUser,
+  Task, TaskListItem, AssignableUser, ProjectSummary,
   getTasks, getTask, createTask, setTaskStatus, getAssignableUsers,
+  getProjectsSummary, getCustomers,
 } from '../utils/store';
 import { useToast } from '../components/Toast';
 import { Button, Card, CardBody, EmptyState, Field, Input, Select, Skeleton } from '../components/ui';
@@ -33,26 +34,40 @@ export const TasksPage: React.FC = () => {
   const { toast } = useToast();
   const [tasks, setTasks] = useState<TaskListItem[] | null>(null);
   const [users, setUsers] = useState<AssignableUser[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
   const [editing, setEditing] = useState<Task | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [newCategory, setNewCategory] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newAssignee, setNewAssignee] = useState('');
   const [newDue, setNewDue] = useState('');
+  const [newProjectId, setNewProjectId] = useState<string>('');
+  const [newCustomerId, setNewCustomerId] = useState<string>('');
 
   const currentUser = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
   }, []);
 
-  const reload = () => { getTasks().then(setTasks).catch(() => setTasks([])); };
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const reload = () => {
+    const projectId = searchParams.get('projectId') || undefined;
+    const customerId = searchParams.get('customerId') || undefined;
+    getTasks({ projectId, customerId }).then(setTasks).catch(() => setTasks([]));
+  };
 
   useEffect(() => {
     reload();
     getAssignableUsers().then(setUsers).catch(() => setUsers([]));
+    getProjectsSummary().then(ps => setProjects(ps.filter(p => !p.archived))).catch(() => setProjects([]));
+    getCustomers().then((cs: any[]) => setCustomers(cs.map(c => ({ id: c.id, name: c.name })))).catch(() => setCustomers([]));
   }, []);
 
+  // Re-fetch when the project/customer scope in the URL changes.
+  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [searchParams.get('projectId'), searchParams.get('customerId')]);
+
   // Focus the create-form input when arriving via the command palette's "New task" action.
-  const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
     if (searchParams.get('new') === '1') {
       const el = document.getElementById('new-task-title') as HTMLInputElement | null;
@@ -63,6 +78,27 @@ export const TasksPage: React.FC = () => {
   }, [searchParams]);
 
   const list = tasks ?? [];
+
+  const scopeProjectId = searchParams.get('projectId') || '';
+  const scopeCustomerId = searchParams.get('customerId') || '';
+  const scopeProjectName = projects.find(p => p.id === scopeProjectId)?.name;
+  const scopeCustomerName = customers.find(c => c.id === scopeCustomerId)?.name;
+
+  const setScope = (key: 'projectId' | 'customerId', value: string) => {
+    setSearchParams(prev => {
+      const p = new URLSearchParams(prev);
+      // project and customer scope are mutually exclusive in the filter bar
+      p.delete('projectId'); p.delete('customerId');
+      if (value) p.set(key, value);
+      return p;
+    }, { replace: true });
+  };
+
+  useEffect(() => {
+    setNewProjectId(scopeProjectId);
+    setNewCustomerId(scopeProjectId ? '' : scopeCustomerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeProjectId, scopeCustomerId]);
 
   // Distinct, non-empty category names for the create-form datalist.
   const categoryOptions = useMemo(() => {
@@ -119,6 +155,8 @@ export const TasksPage: React.FC = () => {
         title: newTitle.trim(),
         assigneeUserId: newAssignee || null,
         dueDate: newDue || null,
+        projectId: newProjectId || null,
+        customerId: newProjectId ? null : (newCustomerId || null), // project derives its own customer server-side
       });
       setNewCategory('');
       setNewTitle('');
@@ -153,6 +191,31 @@ export const TasksPage: React.FC = () => {
         ))}
       </div>
 
+      {(scopeProjectName || scopeCustomerName) && (
+        <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-accent-50 px-3 py-2 text-sm dark:bg-accent-950/30">
+          <span className="text-ink-soft">
+            Showing tasks for <span className="font-semibold text-ink">{scopeProjectName ?? scopeCustomerName}</span>
+          </span>
+          <button type="button" onClick={() => setScope('projectId', '')}
+            className="shrink-0 text-xs font-medium text-accent-600 hover:underline">Clear</button>
+        </div>
+      )}
+
+      <div className="mb-5 flex flex-wrap items-end gap-2">
+        <Field label="Project" htmlFor="filter-project">
+          <Select id="filter-project" value={scopeProjectId} onChange={e => setScope('projectId', e.target.value)} className="w-48">
+            <option value="">All projects</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Customer" htmlFor="filter-customer">
+          <Select id="filter-customer" value={scopeCustomerId} onChange={e => setScope('customerId', e.target.value)} className="w-48">
+            <option value="">All customers</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+        </Field>
+      </div>
+
       {/* Create form */}
       <Card className="mb-5">
         <CardBody>
@@ -181,6 +244,21 @@ export const TasksPage: React.FC = () => {
             <Field label="Due" htmlFor="new-task-due">
               <Input id="new-task-due" type="date" value={newDue}
                 onChange={e => setNewDue(e.target.value)} className="w-40" />
+            </Field>
+            <Field label="Project" htmlFor="new-task-project">
+              <Select id="new-task-project" value={newProjectId}
+                onChange={e => { setNewProjectId(e.target.value); if (e.target.value) setNewCustomerId(''); }} className="w-44">
+                <option value="">— none —</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Customer" htmlFor="new-task-customer">
+              <Select id="new-task-customer" value={newProjectId ? (projects.find(p => p.id === newProjectId)?.customerId ?? '') : newCustomerId}
+                disabled={!!newProjectId}
+                onChange={e => setNewCustomerId(e.target.value)} className="w-44">
+                <option value="">— none —</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
             </Field>
             <Button onClick={addTask} disabled={!newTitle.trim()}><Plus size={15} />Add</Button>
           </div>
@@ -216,6 +294,11 @@ export const TasksPage: React.FC = () => {
                           <span className={`shrink-0 text-xs ${t.assigneeUsername ? 'text-ink-soft' : 'text-ink-faint'}`}>
                             {t.assigneeUsername || 'Unassigned'}
                           </span>
+                          {(t.projectName || t.customerName) && (
+                            <span className="shrink-0 truncate text-xs text-accent-600 dark:text-accent-400" title={t.projectName ?? t.customerName ?? ''}>
+                              {t.projectName ?? t.customerName}
+                            </span>
+                          )}
                           <TaskStatusPill status={t.status} />
                           {t.dueDate && (
                             <span className={`shrink-0 text-xs tabular-nums ${overdue ? 'font-semibold text-red-600 dark:text-red-400' : 'text-ink-faint'}`}>
@@ -243,6 +326,8 @@ export const TasksPage: React.FC = () => {
           key={`${editing.id}:${editing.version}`}
           task={editing}
           users={users}
+          projects={projects}
+          customers={customers}
           onClose={() => setEditing(null)}
           onSaved={async () => { try { setEditing(await getTask(editing.id)); } catch { setEditing(null); } reload(); }}
         />
