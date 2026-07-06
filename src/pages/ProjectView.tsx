@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
+import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
@@ -21,7 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
-import { StickyNote } from 'lucide-react';
+import { StickyNote, ListChecks } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
 import { useCollaboration } from '../context/CollaborationContext';
 import { useToast } from '../components/Toast';
@@ -37,6 +37,7 @@ import {
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
+import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { TakeoffEditModal } from './project/TakeoffEditModal';
 import { TakeoffDeleteModals } from './project/TakeoffDeleteModals';
 
@@ -67,6 +68,7 @@ export const ProjectView: React.FC = () => {
     setSearchParams(searchParams, { replace: true });
   };
   const [project, setProject] = useState<Project | null>(null);
+  const [projectTasks, setProjectTasks] = useState<TaskListItem[] | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
@@ -337,6 +339,11 @@ export const ProjectView: React.FC = () => {
     fetchActivePages();
     const interval = setInterval(fetchActivePages, 5000);
     return () => clearInterval(interval);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    getTasks({ projectId }).then(setProjectTasks).catch(() => setProjectTasks([]));
   }, [projectId]);
 
   useEffect(() => {
@@ -1878,6 +1885,13 @@ export const ProjectView: React.FC = () => {
                 <StickyNote size={14} />
                 Notes Board
               </button>
+              <button
+                onClick={() => navigate(`/tasks?projectId=${projectId}`)}
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
+              >
+                <ListChecks size={14} />
+                Tasks
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500 dark:text-slate-400">
@@ -1961,6 +1975,19 @@ export const ProjectView: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="mt-4 md:mt-6 max-w-md">
+          <UpcomingTasksCard
+            items={upcomingTaskItems(projectTasks ?? [])}
+            loading={projectTasks === null}
+            title="Upcoming tasks"
+            to={`/tasks?projectId=${projectId}`}
+            emptyDescription="Tasks linked to this project with due dates show up here."
+            headerActions={
+              <Link to={`/tasks?projectId=${projectId}`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>
+            }
+          />
         </div>
 
         {/* Tabs */}
