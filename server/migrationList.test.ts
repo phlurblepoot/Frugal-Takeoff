@@ -342,3 +342,13 @@ describe('migration 13: payments-polymorphic', () => {
     db.close();
   });
 });
+
+describe('migration 18: task relations', () => {
+  it('adds projectId and customerId columns to tasks', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 18));
+    const cols = (db.prepare('PRAGMA table_info(tasks)').all() as any[]).map(c => c.name);
+    expect(cols).toContain('projectId');
+    expect(cols).toContain('customerId');
+  });
+});

@@ -866,4 +866,19 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 18,
+    name: 'task-relations',
+    // ADDITIVE. A task may relate to a project and/or customer as its SUBJECT
+    // (not its doer). Setting a project derives+locks its customer; that
+    // invariant is enforced in taskStore, not here. Existing tasks stay NULL.
+    up({ db }) {
+      db.exec(`
+        ALTER TABLE tasks ADD COLUMN projectId TEXT;
+        ALTER TABLE tasks ADD COLUMN customerId TEXT;
+        CREATE INDEX idx_tasks_projectId ON tasks (projectId);
+        CREATE INDEX idx_tasks_customerId ON tasks (customerId);
+      `);
+    },
+  },
 ];
