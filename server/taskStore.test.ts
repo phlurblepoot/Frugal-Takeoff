@@ -199,3 +199,25 @@ describe('task relations', () => {
     expect(getTask(db, id)!.customerId).toBe('c1');
   });
 });
+
+describe('listTasks filters', () => {
+  beforeEach(() => {
+    createTask(db, { title: 'onP1', projectId: 'p1' });   // customer c1
+    createTask(db, { title: 'onC2', customerId: 'c2' });
+    createTask(db, { title: 'mineU2', assigneeUserId: 'u2' });
+  });
+
+  it('filters by projectId', () => {
+    expect(listTasks(db, { projectId: 'p1' }).map(t => t.title)).toEqual(['onP1']);
+  });
+  it('filters by customerId (includes project-derived customers)', () => {
+    expect(listTasks(db, { customerId: 'c1' }).map(t => t.title)).toEqual(['onP1']);
+    expect(listTasks(db, { customerId: 'c2' }).map(t => t.title)).toEqual(['onC2']);
+  });
+  it('filters by assigneeUserId', () => {
+    expect(listTasks(db, { assigneeUserId: 'u2' }).map(t => t.title)).toEqual(['mineU2']);
+  });
+  it('no filter returns all', () => {
+    expect(listTasks(db).length).toBe(3);
+  });
+});

@@ -67,14 +67,21 @@ export function getTask(db: Database.Database, id: string): any | null {
   return { ...row, photos };
 }
 
-export function listTasks(db: Database.Database): any[] {
+export function listTasks(db: Database.Database, filter: { projectId?: string; customerId?: string; assigneeUserId?: string } = {}): any[] {
+  const where: string[] = [];
+  const params: any[] = [];
+  if (filter.projectId) { where.push('t.projectId = ?'); params.push(filter.projectId); }
+  if (filter.customerId) { where.push('t.customerId = ?'); params.push(filter.customerId); }
+  if (filter.assigneeUserId) { where.push('t.assigneeUserId = ?'); params.push(filter.assigneeUserId); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const rows = db.prepare(`
     SELECT t.*, u.username AS assigneeUsername, p.name AS projectName, c.name AS customerName
     FROM tasks t
     LEFT JOIN users u ON u.id = t.assigneeUserId
     LEFT JOIN projects p ON p.id = t.projectId
     LEFT JOIN customers c ON c.id = t.customerId
-    ORDER BY t.category ASC, t.sortOrder ASC, t.createdAt ASC, t.rowid ASC`).all() as any[];
+    ${whereSql}
+    ORDER BY t.category ASC, t.sortOrder ASC, t.createdAt ASC, t.rowid ASC`).all(...params) as any[];
   return rows.map(r => ({ ...r, photoCount: photoCount(db, r.id) }));
 }
 
