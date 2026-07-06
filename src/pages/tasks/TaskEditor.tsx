@@ -2,7 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
 import {
-  Task, AssignableUser, saveTask, setTaskStatus, addTaskPhoto, removeTaskPhoto,
+  Task, AssignableUser, ProjectSummary, saveTask, setTaskStatus, addTaskPhoto, removeTaskPhoto,
   saveFile, getImageUrl,
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
@@ -11,6 +11,8 @@ import { Button, Field, Input, Modal, Select, Textarea } from '../../components/
 interface Props {
   task: Task;
   users: AssignableUser[];
+  projects: ProjectSummary[];
+  customers: { id: string; name: string }[];
   onClose: () => void;
   onSaved: () => void;
 }
@@ -38,13 +40,26 @@ const readDataUrl = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-export const TaskEditor: React.FC<Props> = ({ task, users, onClose, onSaved }) => {
+export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, onClose, onSaved }) => {
   const { toast } = useToast();
   const [category, setCategory] = useState(task.category ?? '');
   const [title, setTitle] = useState(task.title ?? '');
   const [notes, setNotes] = useState(task.notes ?? '');
   const [assigneeUserId, setAssigneeUserId] = useState<string | null>(task.assigneeUserId ?? null);
   const [dueDate, setDueDate] = useState(task.dueDate ?? '');
+  const [projectId, setProjectId] = useState<string | null>(task.projectId ?? null);
+  const [customerId, setCustomerId] = useState<string | null>(task.customerId ?? null);
+
+  // Selecting a project locks the customer to that project's customer.
+  const onProjectChange = (next: string) => {
+    if (next) {
+      const p = projects.find(pr => pr.id === next);
+      setProjectId(next);
+      setCustomerId(p?.customerId ?? null);
+    } else {
+      setProjectId(null); // customer stays as-is; user may set it directly
+    }
+  };
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -54,12 +69,14 @@ export const TaskEditor: React.FC<Props> = ({ task, users, onClose, onSaved }) =
     title !== (task.title ?? '') ||
     notes !== (task.notes ?? '') ||
     assigneeUserId !== (task.assigneeUserId ?? null) ||
-    dueDate !== (task.dueDate ?? '');
+    dueDate !== (task.dueDate ?? '') ||
+    projectId !== (task.projectId ?? null) ||
+    customerId !== (task.customerId ?? null);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveTask(task.id, { ...task, category, title, notes, assigneeUserId, dueDate: dueDate || null });
+      await saveTask(task.id, { ...task, category, title, notes, assigneeUserId, dueDate: dueDate || null, projectId, customerId });
       toast('Task saved', { type: 'success' });
       onSaved();
     } catch (e) {
@@ -121,6 +138,24 @@ export const TaskEditor: React.FC<Props> = ({ task, users, onClose, onSaved }) =
             <option value="">Unassigned</option>
             {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
           </Select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Project" htmlFor="task-project">
+          <Select id="task-project" value={projectId ?? ''} onChange={e => onProjectChange(e.target.value)}>
+            <option value="">— none —</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Customer" htmlFor="task-customer">
+          <Select id="task-customer" value={customerId ?? ''} disabled={!!projectId}
+            onChange={e => setCustomerId(e.target.value || null)}>
+            <option value="">— none —</option>
+            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </Select>
+          {projectId && <p className="mt-1 text-xs text-ink-faint">Set by the selected project.</p>}
         </Field>
       </div>
       <div className="mt-3">
