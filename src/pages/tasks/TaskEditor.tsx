@@ -57,7 +57,8 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
       setProjectId(next);
       setCustomerId(p?.customerId ?? null);
     } else {
-      setProjectId(null); // customer stays as-is; user may set it directly
+      setProjectId(null);
+      setCustomerId(null); // clearing the project clears its derived customer; user can set one directly
     }
   };
   const [saving, setSaving] = useState(false);

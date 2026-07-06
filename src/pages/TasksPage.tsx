@@ -65,7 +65,11 @@ export const TasksPage: React.FC = () => {
   }, []);
 
   // Re-fetch when the project/customer scope in the URL changes.
-  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [searchParams.get('projectId'), searchParams.get('customerId')]);
+  useEffect(() => {
+    const projectId = searchParams.get('projectId') || undefined;
+    const customerId = searchParams.get('customerId') || undefined;
+    getTasks({ projectId, customerId }).then(setTasks).catch(() => setTasks([]));
+  }, [searchParams.get('projectId'), searchParams.get('customerId')]);
 
   // Focus the create-form input when arriving via the command palette's "New task" action.
   useEffect(() => {
@@ -247,7 +251,7 @@ export const TasksPage: React.FC = () => {
             </Field>
             <Field label="Project" htmlFor="new-task-project">
               <Select id="new-task-project" value={newProjectId}
-                onChange={e => { setNewProjectId(e.target.value); if (e.target.value) setNewCustomerId(''); }} className="w-44">
+                onChange={e => { setNewProjectId(e.target.value); setNewCustomerId(''); }} className="w-44">
                 <option value="">— none —</option>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </Select>
