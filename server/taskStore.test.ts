@@ -198,6 +198,14 @@ describe('task relations', () => {
     saveTask(db, id, { title: 'T', customerId: 'c1', version: v });
     expect(getTask(db, id)!.customerId).toBe('c1');
   });
+
+  it('setTaskStatus does not change project/customer relations', () => {
+    const { id } = createTask(db, { title: 'T', projectId: 'p1' });
+    setTaskStatus(db, id, 'in_progress');
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBe('p1');
+    expect(t.customerId).toBe('c1');
+  });
 });
 
 describe('listTasks filters', () => {

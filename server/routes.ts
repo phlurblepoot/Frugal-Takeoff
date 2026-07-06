@@ -500,7 +500,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.get('/api/tasks', authenticateToken, (req, res) => {
     try {
-      const { projectId, customerId, assigneeUserId } = req.query as Record<string, string | undefined>;
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : undefined;
+      const assigneeUserId = typeof req.query.assigneeUserId === 'string' ? req.query.assigneeUserId : undefined;
       res.json(listTasks(db, {
         ...(projectId ? { projectId } : {}),
         ...(customerId ? { customerId } : {}),
