@@ -1,7 +1,7 @@
 // src/pages/CustomerDetail.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Trash2, GitMerge, FolderKanban, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Trash2, GitMerge, FolderKanban, Save, Loader2, ListChecks } from 'lucide-react';
 import { Customer } from '../types';
 import {
   getCustomer,
@@ -279,6 +279,10 @@ export const CustomerDetail: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <Button variant="secondary" size="sm" onClick={() => navigate(`/tasks?customerId=${customer.id}`)}>
+              <ListChecks size={15} />
+              Tasks
+            </Button>
             {!isUnassigned && (
               <>
                 <Button
