@@ -499,7 +499,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   };
 
   app.get('/api/tasks', authenticateToken, (req, res) => {
-    try { res.json(listTasks(db)); } catch (e) { taskErr(e, res); }
+    try {
+      const { projectId, customerId, assigneeUserId } = req.query as Record<string, string | undefined>;
+      res.json(listTasks(db, {
+        ...(projectId ? { projectId } : {}),
+        ...(customerId ? { customerId } : {}),
+        ...(assigneeUserId ? { assigneeUserId } : {}),
+      }));
+    } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks', authenticateToken, (req, res) => {
     try { res.json(createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null })); } catch (e) { taskErr(e, res); }
