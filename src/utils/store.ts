@@ -973,6 +973,8 @@ export interface Task {
   id: string; category: string; title: string; notes: string;
   assigneeUserId: string | null; assigneeUsername: string | null;
   status: string; dueDate: string | null; sortOrder: number;
+  projectId: string | null; customerId: string | null;
+  projectName: string | null; customerName: string | null;
   version: number; createdAt: number; createdBy: string | null;
   photos: TaskPhoto[];
 }
@@ -980,6 +982,8 @@ export interface TaskListItem {
   id: string; category: string; title: string; notes: string;
   assigneeUserId: string | null; assigneeUsername: string | null;
   status: string; dueDate: string | null; sortOrder: number;
+  projectId: string | null; customerId: string | null;
+  projectName: string | null; customerName: string | null;
   version: number; createdAt: number; createdBy: string | null;
   photoCount: number;
 }
@@ -995,15 +999,20 @@ export const getAssignableUsers = async (): Promise<AssignableUser[]> => {
   const res = await fetchWithRetry('/api/users/list', { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const getTasks = async (): Promise<TaskListItem[]> => {
-  const res = await fetchWithRetry('/api/tasks', { headers: { ...getAuthHeaders() } });
+export const getTasks = async (params?: { projectId?: string; customerId?: string; assigneeUserId?: string }): Promise<TaskListItem[]> => {
+  const qs = new URLSearchParams();
+  if (params?.projectId) qs.set('projectId', params.projectId);
+  if (params?.customerId) qs.set('customerId', params.customerId);
+  if (params?.assigneeUserId) qs.set('assigneeUserId', params.assigneeUserId);
+  const url = qs.toString() ? `/api/tasks?${qs.toString()}` : '/api/tasks';
+  const res = await fetchWithRetry(url, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
 export const getTask = async (id: string): Promise<Task> => {
   const res = await fetchWithRetry(`/api/tasks/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createTask = async (input: { category?: string; title: string; assigneeUserId?: string | null; dueDate?: string | null; notes?: string }): Promise<{ id: string }> => {
+export const createTask = async (input: { category?: string; title: string; assigneeUserId?: string | null; dueDate?: string | null; notes?: string; projectId?: string | null; customerId?: string | null }): Promise<{ id: string }> => {
   const res = await taskJson('POST', '/api/tasks', input);
   await handleResponse(res); return res.json();
 };
@@ -1014,6 +1023,8 @@ export const saveTask = async (id: string, task: Task): Promise<{ version: numbe
     notes: task.notes,
     assigneeUserId: task.assigneeUserId,
     dueDate: task.dueDate,
+    projectId: task.projectId,
+    customerId: task.customerId,
     version: task.version,
   });
   if (res.status === 409) throw new ConflictError(id);
