@@ -937,6 +937,36 @@ describe('users-list + task routes (auth-only, not admin-gated)', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('POST /api/tasks with a projectId derives+returns the project customer + names', async () => {
+    db.prepare("INSERT INTO customers (id, name, createdAt) VALUES ('c1','Acme',0)").run();
+    db.prepare("INSERT INTO projects (id, name, customerId, version, createdAt) VALUES ('pr1','Plaza','c1',1,0)").run();
+    // A mismatched client customerId must be ignored — the project dictates the customer.
+    const ok = await request(userApp).post('/api/tasks').send({ title: 'On project', projectId: 'pr1', customerId: 'bogus' });
+    expect(ok.status).toBe(200);
+    const get = await request(userApp).get(`/api/tasks/${ok.body.id}`);
+    expect(get.body.projectId).toBe('pr1');
+    expect(get.body.customerId).toBe('c1');
+    expect(get.body.projectName).toBe('Plaza');
+    expect(get.body.customerName).toBe('Acme');
+    // Unknown project id is rejected at the route.
+    const bad = await request(userApp).post('/api/tasks').send({ title: 'Bad', projectId: 'nope' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('GET /api/tasks?projectId= and ?customerId= filter the list', async () => {
+    db.prepare("INSERT INTO customers (id, name, createdAt) VALUES ('c1','Acme',0),('c2','Globex',0)").run();
+    db.prepare("INSERT INTO projects (id, name, customerId, version, createdAt) VALUES ('pr1','Plaza','c1',1,0)").run();
+    await request(userApp).post('/api/tasks').send({ title: 'onPr1', projectId: 'pr1' });
+    await request(userApp).post('/api/tasks').send({ title: 'onC2', customerId: 'c2' });
+    await request(userApp).post('/api/tasks').send({ title: 'unlinked' });
+    const byProject = await request(userApp).get('/api/tasks?projectId=pr1');
+    expect(byProject.body.map((t: any) => t.title)).toEqual(['onPr1']);
+    const byCustomer = await request(userApp).get('/api/tasks?customerId=c1');
+    expect(byCustomer.body.map((t: any) => t.title)).toEqual(['onPr1']); // derived from pr1
+    const byCustomer2 = await request(userApp).get('/api/tasks?customerId=c2');
+    expect(byCustomer2.body.map((t: any) => t.title)).toEqual(['onC2']);
+  });
+
   it('PUT /api/tasks/:id with stale version 99 → 409 version_conflict', async () => {
     const id = (await request(userApp).post('/api/tasks').send({ category: 'Shop', title: 'Door' })).body.id;
     const res = await request(userApp).put(`/api/tasks/${id}`).send({ title: 'Door', version: 99 });
@@ -1241,5 +1271,54 @@ describe('email send routes', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('No recipient address');
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('customers routes', () => {
+  it('POST creates a customer, GET list returns it, GET by id works', async () => {
+    const post = await request(app).post('/api/customers').send({
+      name: 'Acme Corp', phone: '555-1234',
+      emails: { general: 'info@acme.com' },
+    });
+    expect(post.status).toBe(200);
+    expect(post.body.name).toBe('Acme Corp');
+    const id = post.body.id;
+
+    const list = await request(app).get('/api/customers');
+    expect(list.status).toBe(200);
+    // migrations seed an "Unassigned" customer; we added one more
+    const names = list.body.map((c: any) => c.name);
+    expect(names).toContain('Acme Corp');
+
+    const get = await request(app).get(`/api/customers/${id}`);
+    expect(get.status).toBe(200);
+    expect(get.body.emails.general).toBe('info@acme.com');
+  });
+
+  it('PUT updates a customer', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Old Name' });
+    const id = post.body.id;
+    const put = await request(app).put(`/api/customers/${id}`).send({ name: 'New Name', emails: {} });
+    expect(put.status).toBe(200);
+    expect(put.body.name).toBe('New Name');
+  });
+
+  it('DELETE removes a customer with no projects', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'To Delete' });
+    const id = post.body.id;
+    const del = await request(app).delete(`/api/customers/${id}`);
+    expect(del.status).toBe(200);
+    expect((await request(app).get(`/api/customers/${id}`)).status).toBe(404);
+  });
+
+  it('DELETE customer with projects returns 409', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Has Projects' });
+    const cid = post.body.id;
+    // createProject stores customerId when it is in the payload
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc1', customerId: cid,
+    });
+    const del = await request(app).delete(`/api/customers/${cid}`);
+    expect(del.status).toBe(409);
   });
 });

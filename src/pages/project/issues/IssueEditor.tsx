@@ -1,7 +1,9 @@
 // src/pages/project/issues/IssueEditor.tsx
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
-import { Issue, saveIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, uploadProjectFile, getImageUrl, getSettings, fetchFileBlob, sendIssue } from '../../../utils/store';
+import { Issue, saveIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
+import { Customer } from '../../../types';
+import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
@@ -24,6 +26,46 @@ export const IssueEditor: React.FC<{
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    defaultBcc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, project] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (project?.customerId) {
+          customer = await getCustomer(project.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('issue', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handlePhotos = async (list: FileList | null) => {
     if (!list || !list.length) return;
     setUploading(true);
@@ -45,7 +87,7 @@ export const IssueEditor: React.FC<{
     try { await removeIssuePhoto(issue.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
   };
 
-  const buildIssueBytes = async (): Promise<Uint8Array> => {
+  const buildIssueBytes = async (headerEmail?: string): Promise<Uint8Array> => {
     const settings = await getSettings();
     let logoDataUrl: string | undefined = settings.logoUrl || undefined;
     if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
@@ -78,6 +120,7 @@ export const IssueEditor: React.FC<{
         },
         logoDataUrl,
       },
+      headerEmail: headerEmail || undefined,
     });
   };
 
@@ -175,10 +218,17 @@ export const IssueEditor: React.FC<{
         projectId={projectId}
         title="Send issue report"
         primaryAttachmentName={`ISS-${padded}.pdf`}
+        defaultTo={emailDefaults.defaultTo || undefined}
+        defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={`Issue Report ISS-${padded} — ${projectName}`}
         defaultBody={`Hello,\n\nPlease find attached Issue Report ISS-${padded}${issue.title ? ' — ' + issue.title : ''} for ${projectName}.\n\nThank you.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
         onSend={async (m) => {
-          const bytes = await buildIssueBytes();
+          // Always regenerate with the chosen header email so the PDF contact matches.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          const bytes = await buildIssueBytes(effectiveHeaderEmail);
           const file = new File([bytes], `ISS-${padded}.pdf`, { type: 'application/pdf' });
           // Uploaded as a project document before sending; a failed send leaves it in
           // Documents (project-attributed), and a retry uploads another — fine for v1.

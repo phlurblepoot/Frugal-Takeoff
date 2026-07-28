@@ -2,12 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { Project, ProjectPage } from '../types';
-import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getAllProjects } from '../utils/store';
+import { Project, ProjectPage, Customer } from '../types';
+import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getCustomers, saveCustomer } from '../utils/store';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
+import { readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 
 interface PendingPage {
@@ -35,6 +36,7 @@ export const NewProject: React.FC = () => {
   const [step, setStep] = useState<'details' | 'name_pages'>('details');
   const [name, setName] = useState(location.state?.initialName || '');
   const [contractor, setContractor] = useState(location.state?.initialContractor || '');
+  const [customerId, setCustomerId] = useState<string | undefined>(undefined);
   const [address, setAddress] = useState(location.state?.initialAddress || '');
   const [bidDueDate, setBidDueDate] = useState('');
   const [planSetName, setPlanSetName] = useState('Initial Set');
@@ -48,10 +50,46 @@ export const NewProject: React.FC = () => {
   const [planSetId, setPlanSetId] = useState<string | null>(null);
   const [pendingPages, setPendingPages] = useState<PendingPage[]>([]);
   const [pageThumbnails, setPageThumbnails] = useState<Record<string, string>>({});
-  const [allContractors, setAllContractors] = useState<string[]>([]);
-  const [filteredContractors, setFilteredContractors] = useState<string[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const suggestionRef = useRef<HTMLDivElement>(null);
+  // Transient medium-res per-page images for AI reading (kept so the manual
+  // "AI Scan" button can re-run reads without re-rendering the PDF).
+  const [aiImages, setAiImages] = useState<Record<string, string>>({});
+
+  // Manual "AI Scan" — load the model on demand, then read every page.
+  const handleAiScan = async (report: (p: AiScanProgress) => void) => {
+    report({ phase: 'loading' });
+    const idleMs = await getAiIdleTimeoutMs();
+    await warmupAi(idleMs);
+    const ready = await waitForAiReady(() => report({ phase: 'loading' }));
+    if (!ready) {
+      toast('AI model unavailable.', { type: 'error' });
+      return;
+    }
+    const pages = pendingPages;
+    let count = 0;
+    report({ phase: 'scanning', done: 0, total: pages.length });
+    const reads = await runWithConcurrency(
+      pages.map(pg => async () => {
+        const result = await readSheet({
+          imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+          imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pageThumbnails[pg.thumbnailId]),
+          embeddedText: pg.extractedText,
+          idleTimeoutMs: idleMs,
+        });
+        count++;
+        report({ phase: 'scanning', done: count, total: pages.length });
+        return result;
+      }),
+      3,
+    );
+    setPendingPages(pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg)));
+    const hits = reads.filter(Boolean).length;
+    toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
+    report({ phase: 'done' });
+  };
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [addingCustomer, setAddingCustomer] = useState(false);
 
   // Upload-failures modal: opened when one or more pages didn't import. Holds
   // the source File objects so the user can retry the missing pages in place.
@@ -63,43 +101,28 @@ export const NewProject: React.FC = () => {
   const [retryProgress, setRetryProgress] = useState({ status: '', current: 0, total: 0, fileName: '' });
 
   useEffect(() => {
-    const fetchContractors = async () => {
-      try {
-        const projects = await getAllProjects();
-        const contractors = new Set<string>();
-        projects.forEach(p => {
-          if (p.contractor) contractors.add(p.contractor);
-        });
-        setAllContractors(Array.from(contractors).sort());
-      } catch (error) {
-        console.error('Failed to fetch contractors:', error);
-      }
-    };
-    fetchContractors();
+    getCustomers()
+      .then(setCustomers)
+      .catch(err => console.error('Failed to fetch customers:', err));
   }, []);
 
-  useEffect(() => {
-    const trimmedContractor = String(contractor || '').trim();
-    if (trimmedContractor) {
-      const filtered = allContractors.filter(c => 
-        c.toLowerCase().includes(trimmedContractor.toLowerCase()) && 
-        c.toLowerCase() !== trimmedContractor.toLowerCase()
-      );
-      setFilteredContractors(filtered);
-    } else {
-      setFilteredContractors([]);
+  const handleAddNewCustomer = async () => {
+    const trimmed = newCustomerName.trim();
+    if (!trimmed) return;
+    setAddingCustomer(true);
+    try {
+      const created: Customer = await saveCustomer({ name: trimmed, emails: {} });
+      setCustomers(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setCustomerId(created.id);
+      setContractor(created.name);
+      setNewCustomerName('');
+      setShowNewCustomer(false);
+    } catch (err) {
+      toast('Failed to create customer. Please try again.', { type: 'error' });
+    } finally {
+      setAddingCustomer(false);
     }
-  }, [contractor, allContractors]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node)) {
-        setShowSuggestions(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -150,6 +173,7 @@ export const NewProject: React.FC = () => {
         name,
         createdAt: Date.now(),
         contractor: contractor || undefined,
+        customerId: customerId || undefined,
         address: address || undefined,
         bidDueDate: parsedBidDueDate,
         planSets: [
@@ -175,6 +199,13 @@ export const NewProject: React.FC = () => {
 
       const extractedPages: PendingPage[] = [];
       const thumbnails: Record<string, string> = {};
+      // Transient per-page medium-res images for AI reading (not stored). Only
+      // rendered when the local model is available + auto-naming is on.
+      const aiImages: Record<string, string> = {};
+      // Render the AI image whenever auto-naming is on (independent of whether
+      // the model is up right now) so the manual "AI Scan" button always has a
+      // good image to send later. The auto pass additionally requires readiness.
+      const aiWanted = aiAutoNameEnabled();
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
@@ -214,7 +245,7 @@ export const NewProject: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiWanted });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -260,6 +291,7 @@ export const NewProject: React.FC = () => {
               };
 
               extractedPages.push(newPage);
+              if (pageData.aiImageDataUrl) aiImages[newPage.id] = pageData.aiImageDataUrl;
 
               project.pages.push({
                 id: newPage.id,
@@ -352,6 +384,7 @@ export const NewProject: React.FC = () => {
 
       setPendingPages(extractedPages);
       setPageThumbnails(thumbnails);
+      setAiImages(aiImages);
       setStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
@@ -642,6 +675,7 @@ export const NewProject: React.FC = () => {
             isConfirming={isProcessing}
             title="Name Pages"
             subtitle="Review and rename the imported pages before creating the project."
+            onAiScan={handleAiScan}
           />
         </div>
       </div>
@@ -681,42 +715,55 @@ export const NewProject: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="relative">
-                  <label htmlFor="contractor" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                    Contractor (Optional)
+                <div>
+                  <label htmlFor="customerId" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Customer (Optional)
                   </label>
-                  <input
-                    type="text"
-                    id="contractor"
-                    value={contractor}
-                    onChange={(e) => {
-                      setContractor(e.target.value);
-                      setShowSuggestions(true);
+                  <select
+                    id="customerId"
+                    value={customerId ?? ''}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val === '__new__') {
+                        setShowNewCustomer(true);
+                        setCustomerId(undefined);
+                        setContractor('');
+                      } else {
+                        setShowNewCustomer(false);
+                        setCustomerId(val || undefined);
+                        const found = customers.find(c => c.id === val);
+                        setContractor(found ? found.name : '');
+                      }
                     }}
-                    onFocus={() => setShowSuggestions(true)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
-                    placeholder="e.g. ABC Construction"
                     disabled={isProcessing}
-                    autoComplete="off"
-                  />
-                  {showSuggestions && filteredContractors.length > 0 && (
-                    <div
-                      ref={suggestionRef}
-                      className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-auto"
-                    >
-                      {filteredContractors.map((c, index) => (
-                        <button
-                          key={index}
-                          type="button"
-                          className="w-full text-left px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-900 dark:text-slate-100 transition-colors first:rounded-t-xl last:rounded-b-xl"
-                          onClick={() => {
-                            setContractor(c);
-                            setShowSuggestions(false);
-                          }}
-                        >
-                          {c}
-                        </button>
-                      ))}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 bg-white"
+                  >
+                    <option value="">— None —</option>
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                    <option value="__new__">＋ New customer…</option>
+                  </select>
+                  {showNewCustomer && (
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        type="text"
+                        value={newCustomerName}
+                        onChange={e => setNewCustomerName(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddNewCustomer(); } }}
+                        placeholder="Customer name"
+                        disabled={addingCustomer || isProcessing}
+                        className="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 text-sm"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddNewCustomer}
+                        disabled={!newCustomerName.trim() || addingCustomer || isProcessing}
+                        className="px-3 py-2 rounded-lg text-sm font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {addingCustomer ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                      </button>
                     </div>
                   )}
                 </div>

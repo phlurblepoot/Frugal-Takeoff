@@ -147,6 +147,30 @@ export interface BidEmail {
   accountId?: string;       // Inbound-account id retained for legacy data compatibility (IMAP removed).
 }
 
+export interface RoleEmailSet {
+  /** Comma-separated address list. */
+  to?: string;
+  cc?: string;
+  bcc?: string;
+}
+export interface CustomerRoleEmails {
+  general?: RoleEmailSet;
+  accounting?: RoleEmailSet;
+  estimating?: RoleEmailSet;
+  pm?: RoleEmailSet;
+}
+export interface Customer {
+  id: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  contactName?: string;
+  notes?: string;
+  emails: CustomerRoleEmails;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export interface SmtpSettings {
   host: string;
   port: number;
@@ -162,6 +186,9 @@ export interface Project {
   name: string;
   createdAt: number;
   contractor?: string;
+  customerId?: string;
+  /** Optional project-specific role-email overrides (rides in project meta). */
+  contactEmails?: CustomerRoleEmails;
   address?: string;
   bidDueDate?: number | null;
   planSets?: PlanSet[];

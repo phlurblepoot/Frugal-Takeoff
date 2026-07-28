@@ -2,11 +2,12 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject } from '../utils/store';
+import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
+import { readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -20,7 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { NewTakeoffModal } from '../components/NewTakeoffModal';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
-import { StickyNote } from 'lucide-react';
+import { StickyNote, ListChecks } from 'lucide-react';
 import { useNotes } from '../context/NotesContext';
 import { useCollaboration } from '../context/CollaborationContext';
 import { useToast } from '../components/Toast';
@@ -36,6 +37,7 @@ import {
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
+import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { TakeoffEditModal } from './project/TakeoffEditModal';
 import { TakeoffDeleteModals } from './project/TakeoffDeleteModals';
 
@@ -66,6 +68,7 @@ export const ProjectView: React.FC = () => {
     setSearchParams(searchParams, { replace: true });
   };
   const [project, setProject] = useState<Project | null>(null);
+  const [projectTasks, setProjectTasks] = useState<TaskListItem[] | null>(null);
   const [takeoffToDelete, setTakeoffToDelete] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
@@ -231,6 +234,9 @@ export const ProjectView: React.FC = () => {
   const [isNamingExistingPages, setIsNamingExistingPages] = useState(false);
   const [pendingPages, setPendingPages] = useState<any[]>([]);
   const [pendingThumbnails, setPendingThumbnails] = useState<Record<string, string>>({});
+  // Medium-res per-page images for AI reading, kept so the manual "AI Scan"
+  // button can re-run reads without re-rendering the PDF.
+  const [aiImages, setAiImages] = useState<Record<string, string>>({});
   const [newPlanSetName, setNewPlanSetName] = useState('');
   const [newPlanSetDate, setNewPlanSetDate] = useState(new Date().toISOString().split('T')[0]);
   const [newPlanSetFiles, setNewPlanSetFiles] = useState<File[]>([]);
@@ -333,6 +339,11 @@ export const ProjectView: React.FC = () => {
     fetchActivePages();
     const interval = setInterval(fetchActivePages, 5000);
     return () => clearInterval(interval);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    getTasks({ projectId }).then(setProjectTasks).catch(() => setProjectTasks([]));
   }, [projectId]);
 
   useEffect(() => {
@@ -661,6 +672,11 @@ export const ProjectView: React.FC = () => {
 
       const extractedPages: any[] = [];
       const thumbnails: Record<string, string> = {};
+      // Transient per-page medium-res images for AI reading (not stored).
+      const aiImages: Record<string, string> = {};
+      // Render the AI image whenever auto-naming is on so the manual "AI Scan"
+      // button always has a good image; the auto pass also requires readiness.
+      const aiWanted = aiAutoNameEnabled();
 
       // Build map of existing page numbers for revision detection
       const existingPageNums = new Map<string, string>(); // normalised → display
@@ -703,7 +719,7 @@ export const ProjectView: React.FC = () => {
           const generator = loadPdfPagesGenerator(file, (status, current, total) => {
             if (total > 0) fileExpected = total;
             setAddProgress(prev => ({ ...prev, status, current, total }));
-          }, undefined, { includeFullPageRaster: !sourcePdfFileId });
+          }, undefined, { includeFullPageRaster: !sourcePdfFileId, includeAiImage: aiWanted });
 
           for await (const pageData of generator) {
             fileYielded++;
@@ -754,6 +770,7 @@ export const ProjectView: React.FC = () => {
               };
 
               extractedPages.push(newPage);
+              if (pageData.aiImageDataUrl) aiImages[newPage.id] = pageData.aiImageDataUrl;
 
               const newProjectPage = {
                 id: newPage.id,
@@ -852,6 +869,7 @@ export const ProjectView: React.FC = () => {
 
       setPendingPages(extractedPages);
       setPendingThumbnails(thumbnails);
+      setAiImages(aiImages);
       setAddPagesStep('name_pages');
     } catch (error) {
       console.error('Error processing PDFs:', error);
@@ -1421,6 +1439,61 @@ export const ProjectView: React.FC = () => {
     setShowAddPagesModal(true);
   };
 
+  // Manual "AI Scan" — load the model on demand, read every page, then match.
+  const handleAiScan = async (report: (p: AiScanProgress) => void) => {
+    report({ phase: 'loading' });
+    const idleMs = await getAiIdleTimeoutMs();
+    await warmupAi(idleMs);
+    const ready = await waitForAiReady(() => report({ phase: 'loading' }));
+    if (!ready) {
+      toast('AI model unavailable.', { type: 'error' });
+      return;
+    }
+    const pages = pendingPages;
+    let count = 0;
+    report({ phase: 'scanning', done: 0, total: pages.length });
+    const reads = await runWithConcurrency(
+      pages.map(pg => async () => {
+        const result = await readSheet({
+          imageId: aiImages[pg.id] ? undefined : (pg.imageId || undefined),
+          imageBase64: aiImages[pg.id] || (pg.imageId ? undefined : pendingThumbnails[pg.thumbnailId]),
+          embeddedText: pg.extractedText,
+          idleTimeoutMs: idleMs,
+        });
+        count++;
+        report({ phase: 'scanning', done: count, total: pages.length });
+        return result;
+      }),
+      3,
+    );
+    let named = pages.map((pg, i) => (reads[i] ? applyReadToPage(pg, reads[i]!) : pg));
+    if (!isNamingExistingPages && project) {
+      const pendingIds = new Set(pages.map(p => p.id));
+      const priorPages = project.pages.filter(p => !pendingIds.has(p.id));
+      const model = computeRevisionModel({ ...project, pages: priorPages }, '');
+      const existingRefs: { sheetId: string; number: string; title: string }[] = [];
+      for (const [, currentPageId] of model.latestPageIdBySheet) {
+        const pg = priorPages.find(p => p.id === currentPageId);
+        if (pg) existingRefs.push({ sheetId: effectiveSheetId(pg), number: pg.pageNumber || '', title: pg.description || pg.name || '' });
+      }
+      if (existingRefs.length) {
+        const matches = await runWithConcurrency(
+          named.map((_pg, i) => async () => {
+            const read = reads[i];
+            if (!read || (!read.sheetNumber && !read.sheetTitle)) return null;
+            return matchSheet({ page: read, existingSheets: existingRefs, idleTimeoutMs: idleMs });
+          }),
+          3,
+        );
+        named = named.map((pg, i) => (matches[i] ? applyMatchToPage(pg, matches[i]!) : pg));
+      }
+    }
+    setPendingPages(named);
+    const hits = reads.filter(Boolean).length;
+    toast(`AI read ${hits} of ${pages.length} page${pages.length === 1 ? '' : 's'}.`, { type: hits ? 'success' : 'error' });
+    report({ phase: 'done' });
+  };
+
   const handleConfirmAddPages = async () => {
     if (!project) return;
     setIsAddingPages(true);
@@ -1812,6 +1885,13 @@ export const ProjectView: React.FC = () => {
                 <StickyNote size={14} />
                 Notes Board
               </button>
+              <button
+                onClick={() => navigate(`/tasks?projectId=${projectId}`)}
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
+              >
+                <ListChecks size={14} />
+                Tasks
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500 dark:text-slate-400">
@@ -1895,6 +1975,19 @@ export const ProjectView: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="mt-4 md:mt-6 max-w-md">
+          <UpcomingTasksCard
+            items={upcomingTaskItems(projectTasks ?? [])}
+            loading={projectTasks === null}
+            title="Upcoming tasks"
+            to={`/tasks?projectId=${projectId}`}
+            emptyDescription="Tasks linked to this project with due dates show up here."
+            headerActions={
+              <Link to={`/tasks?projectId=${projectId}`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>
+            }
+          />
         </div>
 
         {/* Tabs */}
@@ -2128,6 +2221,7 @@ export const ProjectView: React.FC = () => {
         fileInputRef={fileInputRef}
         onAddPages={handleAddPages}
         onConfirmAddPages={handleConfirmAddPages}
+        onAiScan={handleAiScan}
       />
 
 

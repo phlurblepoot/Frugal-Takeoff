@@ -23,8 +23,16 @@ export interface EmailComposerProps {
   /** The generated document — shown as a fixed, non-removable chip. */
   primaryAttachmentName: string;
   defaultTo?: string;
+  /** Pre-seed the Cc field when the composer opens (e.g. the user's always-CC list). */
+  defaultCc?: string;
+  /** Pre-seed the Bcc field when the composer opens; also auto-shows the Cc/Bcc row. */
+  defaultBcc?: string;
   defaultSubject: string;
   defaultBody: string;
+  /** When provided and non-empty, renders a "Document shows email:" select. */
+  headerEmailOptions?: { label: string; value: string }[];
+  /** Initial selection for the header-email dropdown. */
+  defaultHeaderEmail?: string;
   onSend: (msg: {
     to: string;
     cc?: string;
@@ -32,6 +40,8 @@ export interface EmailComposerProps {
     subject: string;
     body: string;
     attachmentFileIds: string[];
+    /** The email address to stamp on the generated document header (from dropdown). */
+    headerEmail?: string;
   }) => Promise<void>;
 }
 
@@ -42,8 +52,12 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   title = 'Send email',
   primaryAttachmentName,
   defaultTo,
+  defaultCc,
+  defaultBcc,
   defaultSubject,
   defaultBody,
+  headerEmailOptions,
+  defaultHeaderEmail,
   onSend,
 }) => {
   const { toast } = useToast();
@@ -53,6 +67,7 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [headerEmail, setHeaderEmail] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -63,11 +78,15 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   useEffect(() => {
     if (!open) return;
     setTo(defaultTo ?? '');
-    setCc('');
-    setBcc('');
-    setShowCcBcc(false);
+    // Seed CC/BCC from defaults; auto-show the Cc/Bcc fields if either is present.
+    const seedCc = defaultCc?.trim() ?? '';
+    const seedBcc = defaultBcc?.trim() ?? '';
+    setCc(seedCc);
+    setBcc(seedBcc);
+    setShowCcBcc(!!(seedCc || seedBcc));
     setSubject(defaultSubject);
     setBody(defaultBody);
+    setHeaderEmail(defaultHeaderEmail ?? '');
     setAttachments([]);
     setUploading(false);
     setSending(false);
@@ -122,6 +141,7 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
         subject,
         body,
         attachmentFileIds: attachments.map(a => a.fileId),
+        headerEmail: headerEmail || undefined,
       });
       onClose();
     } catch {
@@ -178,6 +198,21 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
               <Input id="ec-bcc" value={bcc} onChange={e => setBcc(e.target.value)} placeholder="name@example.com" />
             </Field>
           </>
+        )}
+
+        {headerEmailOptions && headerEmailOptions.length > 0 && (
+          <Field label="Document shows email:" htmlFor="ec-header-email">
+            <select
+              id="ec-header-email"
+              value={headerEmail}
+              onChange={e => setHeaderEmail(e.target.value)}
+              className="w-full rounded-lg border border-edge bg-surface px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent-500"
+            >
+              {headerEmailOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </Field>
         )}
 
         <Field label="Subject" htmlFor="ec-subject">

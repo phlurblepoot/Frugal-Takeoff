@@ -43,6 +43,7 @@ export function loadProject(db: Database.Database, id: string): any | null {
   put(project, 'contractor', row.contractor);
   put(project, 'address', row.address);
   put(project, 'bidDueDate', row.bidDueDate);
+  put(project, 'customerId', row.customerId);
   Object.assign(project, meta);
 
   const planSetRows = db.prepare('SELECT * FROM plan_sets WHERE projectId = ? ORDER BY sortOrder').all(id) as any[];
@@ -143,7 +144,7 @@ export function deriveStatus(meta: any, existing?: string): string {
 // transaction. Never touches the files table (spec §3.3 rule 4).
 export function decomposeProject(db: Database.Database, payload: any, version: number): void {
   const {
-    id, name, createdAt, contractor, address, bidDueDate,
+    id, name, createdAt, contractor, customerId, address, bidDueDate,
     planSets, pages, takeoffs, version: _v, status: _s, ...meta
   } = payload;
 
@@ -162,6 +163,13 @@ export function decomposeProject(db: Database.Database, payload: any, version: n
     JSON.stringify(meta),
     id
   );
+
+  // customerId is a dedicated column added in migration 16. Skip the write
+  // when the column doesn't exist yet (e.g. when migration 5 calls us).
+  const cols = (db.prepare('PRAGMA table_info(projects)').all() as any[]).map((c: any) => c.name);
+  if (cols.includes('customerId')) {
+    db.prepare('UPDATE projects SET customerId = ? WHERE id = ?').run(customerId ?? null, id);
+  }
 
   for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
     db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
@@ -240,8 +248,10 @@ export function saveProject(db: Database.Database, id: string, payload: any): { 
 // pageIds are included so the client can keep its "page is being edited"
 // deletion guard without loading full aggregates.
 export function listProjectSummaries(db: Database.Database, id?: string, includeBilling = true): any[] {
+  // Include customerId when the column exists (added in migration 16).
+  const hasCustCol = (db.prepare('PRAGMA table_info(projects)').all() as any[]).some((c: any) => c.name === 'customerId');
   const rows = db.prepare(`
-    SELECT id, name, status, contractor, address, bidDueDate, version, createdAt, updatedAt,
+    SELECT id, name, status, contractor, ${hasCustCol ? 'customerId,' : ''} address, bidDueDate, version, createdAt, updatedAt,
            COALESCE(json_extract(meta, '$.archived'), 0) AS archived
     FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
   `).all(...(id ? [id] : [])) as any[];
@@ -268,6 +278,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       name: r.name ?? 'Untitled',
       status: r.status ?? 'estimating',
       contractor: r.contractor ?? null,
+      customerId: r.customerId ?? null,
       address: r.address ?? null,
       bidDueDate: r.bidDueDate ?? null,
       version: r.version ?? 1,

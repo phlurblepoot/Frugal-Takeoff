@@ -429,6 +429,7 @@ export interface ProjectSummary {
   name: string;
   status: string;
   contractor: string | null;
+  customerId: string | null;
   address: string | null;
   bidDueDate: number | null;
   version: number;
@@ -909,6 +910,9 @@ export const removeIssuePhoto = async (issueId: string, fileId: string): Promise
 export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
 };
+export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
+  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
+};
 
 // ── Phase 4c: punch list ──────────────────────────────────────────────────────
 
@@ -969,6 +973,8 @@ export interface Task {
   id: string; category: string; title: string; notes: string;
   assigneeUserId: string | null; assigneeUsername: string | null;
   status: string; dueDate: string | null; sortOrder: number;
+  projectId: string | null; customerId: string | null;
+  projectName: string | null; customerName: string | null;
   version: number; createdAt: number; createdBy: string | null;
   photos: TaskPhoto[];
 }
@@ -976,6 +982,8 @@ export interface TaskListItem {
   id: string; category: string; title: string; notes: string;
   assigneeUserId: string | null; assigneeUsername: string | null;
   status: string; dueDate: string | null; sortOrder: number;
+  projectId: string | null; customerId: string | null;
+  projectName: string | null; customerName: string | null;
   version: number; createdAt: number; createdBy: string | null;
   photoCount: number;
 }
@@ -991,15 +999,20 @@ export const getAssignableUsers = async (): Promise<AssignableUser[]> => {
   const res = await fetchWithRetry('/api/users/list', { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const getTasks = async (): Promise<TaskListItem[]> => {
-  const res = await fetchWithRetry('/api/tasks', { headers: { ...getAuthHeaders() } });
+export const getTasks = async (params?: { projectId?: string; customerId?: string; assigneeUserId?: string }): Promise<TaskListItem[]> => {
+  const qs = new URLSearchParams();
+  if (params?.projectId) qs.set('projectId', params.projectId);
+  if (params?.customerId) qs.set('customerId', params.customerId);
+  if (params?.assigneeUserId) qs.set('assigneeUserId', params.assigneeUserId);
+  const url = qs.toString() ? `/api/tasks?${qs.toString()}` : '/api/tasks';
+  const res = await fetchWithRetry(url, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
 export const getTask = async (id: string): Promise<Task> => {
   const res = await fetchWithRetry(`/api/tasks/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createTask = async (input: { category?: string; title: string; assigneeUserId?: string | null; dueDate?: string | null; notes?: string }): Promise<{ id: string }> => {
+export const createTask = async (input: { category?: string; title: string; assigneeUserId?: string | null; dueDate?: string | null; notes?: string; projectId?: string | null; customerId?: string | null }): Promise<{ id: string }> => {
   const res = await taskJson('POST', '/api/tasks', input);
   await handleResponse(res); return res.json();
 };
@@ -1010,6 +1023,8 @@ export const saveTask = async (id: string, task: Task): Promise<{ version: numbe
     notes: task.notes,
     assigneeUserId: task.assigneeUserId,
     dueDate: task.dueDate,
+    projectId: task.projectId,
+    customerId: task.customerId,
     version: task.version,
   });
   if (res.status === 409) throw new ConflictError(id);
@@ -1149,6 +1164,40 @@ export const getAiaSettings = async (projectId: string): Promise<AiaSettings> =>
 export const saveAiaSettings = async (projectId: string, settings: AiaSettings): Promise<void> => {
   const res = await aiaJson('PUT', `/api/projects/${projectId}/aia/settings`, settings);
   await handleResponse(res);
+};
+
+// ── Per-user always-CC helper ─────────────────────────────────────────────────
+// Reads the `emailAlwaysCc` pref (a plain string, comma/semicolon-separated).
+// Async because getUserPreferences() fetches from the server; there is no
+// synchronous pref cache in this module.
+export const getAlwaysCc = async (): Promise<string> => {
+  try {
+    const prefs = await getUserPreferences();
+    return prefs['emailAlwaysCc'] ?? '';
+  } catch {
+    return '';
+  }
+};
+
+// ── Customers ────────────────────────────────────────────────────────────────
+
+export const getCustomers = async () => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
+export const getCustomer = async (id: string) => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
+export const getCustomerProjects = async (id: string) => (await fetch(`/api/customers/${id}/projects`, { headers: getAuthHeaders() })).json();
+export const saveCustomer = async (c: any) => {
+  const res = await fetch(c.id ? '/api/customers/' + c.id : '/api/customers', {
+    method: c.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(c),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'save failed');
+  return res.json();
+};
+export const deleteCustomer = async (id: string) => {
+  const res = await fetch('/api/customers/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'delete failed');
+};
+export const mergeCustomers = async (targetId: string, sourceIds: string[]) => {
+  const res = await fetch('/api/customers/merge', { method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ targetId, sourceIds }) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'merge failed');
 };
 
 // Derive a Schedule of Values seed from the project's estimate (takeoffs grouped

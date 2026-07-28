@@ -3,12 +3,13 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity as ActivityIcon, Calendar, Clock, FolderKanban, Plus } from 'lucide-react';
 import {
-  ProjectSummary, ActivityItem, TimeEntryLite,
-  getProjectsSummary, getActivity, getMyTimeEntries,
+  ProjectSummary, ActivityItem, TimeEntryLite, TaskListItem,
+  getProjectsSummary, getActivity, getMyTimeEntries, getTasks,
 } from '../utils/store';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, ProjectStatusPill, Skeleton,
 } from '../components/ui';
+import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { GROUP_DEFS } from './ProjectsPage';
 
 const DAY = 86_400_000;
@@ -50,12 +51,15 @@ export const Dashboard: React.FC = () => {
   const [summaries, setSummaries] = useState<ProjectSummary[] | null>(null);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [hours, setHours] = useState<number | null>(null);
+  const [tasks, setTasks] = useState<TaskListItem[] | null>(null);
+  const [taskScope, setTaskScope] = useState<'mine' | 'all'>('mine');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   useEffect(() => {
     getProjectsSummary().then(setSummaries).catch(() => setSummaries([]));
     getActivity(10).then(setActivity).catch(() => setActivity([]));
     getMyTimeEntries().then(e => setHours(hoursThisWeek(e))).catch(() => setHours(0));
+    getTasks().then(setTasks).catch(() => setTasks([]));
   }, []);
 
   const visible = (summaries ?? []).filter(s => !s.archived);
@@ -67,6 +71,10 @@ export const Dashboard: React.FC = () => {
     .filter(s => ACTIVE.includes(s.status))
     .sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt))
     .slice(0, 5);
+
+  const taskList = tasks ?? [];
+  const scopedTasks = taskScope === 'mine' ? taskList.filter(t => t.assigneeUserId === user.id) : taskList;
+  const upcomingTasks = upcomingTaskItems(scopedTasks);
 
   const loading = summaries === null;
 
@@ -111,6 +119,24 @@ export const Dashboard: React.FC = () => {
             )}
           </CardBody>
         </Card>
+
+        {/* Upcoming task deadlines */}
+        <UpcomingTasksCard
+          items={upcomingTasks}
+          loading={tasks === null}
+          showContext
+          emptyDescription={taskScope === 'mine' ? 'Tasks assigned to you with due dates show up here.' : 'Tasks with due dates show up here.'}
+          headerActions={
+            <div className="flex rounded-lg bg-sunken p-0.5 text-xs">
+              {(['mine', 'all'] as const).map(s => (
+                <button key={s} type="button" onClick={() => setTaskScope(s)}
+                  className={`rounded-md px-2 py-1 font-medium transition-colors ${taskScope === s ? 'bg-raised text-ink shadow-sm' : 'text-ink-faint hover:text-ink'}`}>
+                  {s === 'mine' ? 'Mine' : 'All'}
+                </button>
+              ))}
+            </div>
+          }
+        />
 
         {/* Active projects */}
         <Card>

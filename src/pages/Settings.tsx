@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders, getUserPreferences, saveUserPreferences } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
+import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 
@@ -499,6 +500,44 @@ const PreferencesTab: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [autoName, setAutoName] = useState<boolean>(aiAutoNameEnabled());
+  const [aiIdleMinutes, setAiIdleMinutes] = useState<string>('5');
+  const [aiSettings, setAiSettings] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      const s = await getAiStatus(true);
+      if (cancelled) return;
+      setAiStatus(s);
+      // While the model is downloading/loading, keep polling so the page flips
+      // to "ready" on its own without a manual refresh.
+      if (s.state === 'loading') timer = setTimeout(tick, 5000);
+    };
+    tick();
+    // Load the idle-timeout setting
+    getSettings().then(s => {
+      if (cancelled) return;
+      setAiSettings(s);
+      if (s['aiIdleTimeoutMinutes'] !== undefined) setAiIdleMinutes(s['aiIdleTimeoutMinutes']);
+    }).catch(() => {});
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
+  const handleAiIdleBlur = async () => {
+    const val = aiIdleMinutes.trim();
+    const num = parseFloat(val);
+    const safe = isNaN(num) || num < 0 ? '5' : String(num);
+    setAiIdleMinutes(safe);
+    try {
+      await saveSettings({ ...(aiSettings ?? {}), aiIdleTimeoutMinutes: safe });
+      setAiSettings(prev => ({ ...(prev ?? {}), aiIdleTimeoutMinutes: safe }));
+    } catch (err: any) {
+      toast(err?.message?.includes('admin') || err?.message?.includes('403') ? 'Only admins can change this.' : (err?.message ?? 'Failed to save.'), { type: 'error' });
+    }
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword.length < 6) {
@@ -662,6 +701,62 @@ const PreferencesTab: React.FC = () => {
         </div>
       </div>
 
+      {/* AI Sheet Reading */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Sparkles size={18} /> AI Sheet Reading
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            {aiStatus?.state === 'ready'
+              ? `Local model ready: ${aiStatus.model} (${aiStatus.device}).`
+              : aiStatus?.state === 'loading'
+              ? 'Model is starting up — on first run it downloads the weights (this can take several minutes). Watch the container log for download progress. This will update automatically.'
+              : aiStatus?.state === 'idle'
+              ? `Local model idle: ${aiStatus.model} (${aiStatus.device}).`
+              : 'No local model detected. Page naming falls back to text/OCR extraction. See the ops runbook to enable it.'}
+          </p>
+        </div>
+        <div className="p-6 space-y-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white">Enable AI sheet reading</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Renders page images for AI and shows the AI Scan button on the naming screen. Nothing runs until you click AI Scan.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoName}
+              disabled={!aiStatus?.available}
+              onClick={() => { const next = !autoName; setAutoName(next); setAiAutoNameEnabled(next); }}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed ${autoName && aiStatus?.available ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+            >
+              <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-all ${autoName && aiStatus?.available ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <p className="text-sm font-medium text-slate-900 dark:text-white">Unload model after (minutes idle)</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Frees GPU memory when idle. 0 = keep loaded.
+              </p>
+            </div>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={aiIdleMinutes}
+              onChange={e => setAiIdleMinutes(e.target.value)}
+              onBlur={handleAiIdleBlur}
+              disabled={!aiStatus?.available}
+              className="w-24 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm focus:ring-2 focus:ring-accent-500 outline-none disabled:opacity-50"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Change Password */}
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 dark:border-slate-700">
@@ -734,13 +829,16 @@ const EmailTab: React.FC = () => {
   const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [smtpTestMsg, setSmtpTestMsg] = useState('');
   const [showSmtpPass, setShowSmtpPass] = useState(false);
+  const [alwaysCc, setAlwaysCc] = useState('');
+  const [alwaysCcSaving, setAlwaysCcSaving] = useState(false);
 
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
     try {
-      const smtpData = await getSmtpSettings();
+      const [smtpData, prefs] = await Promise.all([getSmtpSettings(), getUserPreferences()]);
       setSmtp(smtpData);
+      setAlwaysCc(prefs['emailAlwaysCc'] ?? '');
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
@@ -768,10 +866,44 @@ const EmailTab: React.FC = () => {
     }
   };
 
+  const handleAlwaysCcSave = async () => {
+    setAlwaysCcSaving(true);
+    try {
+      await saveUserPreferences({ emailAlwaysCc: alwaysCc });
+      toast('Always CC saved.', { type: 'success' });
+    } catch { toast('Failed to save Always CC.', { type: 'error' }); }
+    finally { setAlwaysCcSaving(false); }
+  };
+
   if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
 
   return (
     <div className="space-y-6">
+      {/* Always CC */}
+      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Always CC</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These addresses are added to CC on every template you send.</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className={labelCls}>Always CC addresses</label>
+            <input
+              className={inputCls}
+              value={alwaysCc}
+              onChange={e => setAlwaysCc(e.target.value)}
+              placeholder="e.g. boss@company.com, records@company.com"
+            />
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">Separate multiple addresses with a comma or semicolon.</p>
+          </div>
+          <div className="flex items-center gap-3 pt-2">
+            <button onClick={handleAlwaysCcSave} disabled={alwaysCcSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
+              <Save size={16} /> {alwaysCcSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* SMTP */}
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 dark:border-slate-700">

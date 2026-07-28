@@ -790,4 +790,95 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 16,
+    name: 'customers-from-contractor',
+    // SUPERVISED, data-transforming, NON-DESTRUCTIVE. Creates the customers table
+    // + projects.customerId, then makes one Customer per distinct (trimmed,
+    // lower-cased) contractor string and links its projects. Projects with a
+    // blank/null contractor go to a single well-known "Unassigned" customer so
+    // they remain reachable. `contractor` is left untouched.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(projects)`).all() as any[]).map(c => c.name);
+      if (!cols.includes('customerId')) db.exec(`ALTER TABLE projects ADD COLUMN customerId TEXT;`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customers (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, address TEXT,
+          contactName TEXT, notes TEXT, generalEmail TEXT, accountingEmail TEXT,
+          estimatingEmail TEXT, pmEmail TEXT, createdAt INTEGER, updatedAt INTEGER, attrs TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_customerId ON projects (customerId);
+      `);
+      const now = Date.now();
+      db.prepare(`INSERT OR IGNORE INTO customers (id,name,createdAt,updatedAt) VALUES (?,?,?,?)`)
+        .run('customer-unassigned', 'Unassigned', now, now);
+
+      // Only touch not-yet-linked projects so a re-run is a no-op (idempotent).
+      const rows = db.prepare(`SELECT id, contractor FROM projects WHERE customerId IS NULL OR customerId = ''`).all() as any[];
+      const byNorm = new Map<string, string>();
+      let seq = 0;
+      const link = db.prepare(`UPDATE projects SET customerId = ? WHERE id = ?`);
+      for (const r of rows) {
+        const raw = (r.contractor ?? '').trim();
+        if (!raw) { link.run('customer-unassigned', r.id); continue; }
+        const norm = raw.toLowerCase();
+        let cid = byNorm.get(norm);
+        if (!cid) {
+          cid = `customer-mig-${now}-${seq++}`;
+          db.prepare(`INSERT INTO customers (id,name,createdAt,updatedAt) VALUES (?,?,?,?)`).run(cid, raw, now, now);
+          byNorm.set(norm, cid);
+        }
+        link.run(cid, r.id);
+      }
+    },
+  },
+  {
+    version: 17,
+    name: 'customer-emails-json',
+    // ADDITIVE, NON-DESTRUCTIVE, IDEMPOTENT. Upgrades customer role emails from
+    // 4 flat string columns (generalEmail etc.) to a single JSON column `emails`
+    // whose shape is CustomerRoleEmails (each role holds {to?, cc?, bcc?}).
+    // The old columns are left untouched so rollback is safe.
+    up({ db }) {
+      // Add the column idempotently.
+      const cols = (db.prepare(`PRAGMA table_info(customers)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('emails')) {
+        db.exec(`ALTER TABLE customers ADD COLUMN emails TEXT;`);
+      }
+
+      // Backfill: only touch rows where emails is still NULL (re-run safe).
+      const rows = db.prepare(
+        `SELECT id, generalEmail, accountingEmail, estimatingEmail, pmEmail
+         FROM customers WHERE emails IS NULL`
+      ).all() as { id: string; generalEmail: string | null; accountingEmail: string | null; estimatingEmail: string | null; pmEmail: string | null }[];
+
+      const upd = db.prepare(`UPDATE customers SET emails = ? WHERE id = ?`);
+      for (const r of rows) {
+        const obj: Record<string, { to: string }> = {};
+        if (r.generalEmail) obj.general = { to: r.generalEmail };
+        if (r.accountingEmail) obj.accounting = { to: r.accountingEmail };
+        if (r.estimatingEmail) obj.estimating = { to: r.estimatingEmail };
+        if (r.pmEmail) obj.pm = { to: r.pmEmail };
+        // Only write non-empty objects; rows with all-null columns stay NULL.
+        if (Object.keys(obj).length > 0) {
+          upd.run(JSON.stringify(obj), r.id);
+        }
+      }
+    },
+  },
+  {
+    version: 18,
+    name: 'task-relations',
+    // ADDITIVE. A task may relate to a project and/or customer as its SUBJECT
+    // (not its doer). Setting a project derives+locks its customer; that
+    // invariant is enforced in taskStore, not here. Existing tasks stay NULL.
+    up({ db }) {
+      db.exec(`
+        ALTER TABLE tasks ADD COLUMN projectId TEXT;
+        ALTER TABLE tasks ADD COLUMN customerId TEXT;
+        CREATE INDEX idx_tasks_projectId ON tasks (projectId);
+        CREATE INDEX idx_tasks_customerId ON tasks (customerId);
+      `);
+    },
+  },
 ];

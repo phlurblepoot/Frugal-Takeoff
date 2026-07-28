@@ -8,12 +8,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
-import { Project, Printout } from '../../types';
+import { Project, Printout, Customer } from '../../types';
 import {
   getProject, saveProject, saveFile, getFile, deleteFile, getSettings,
+  getSmtpSettings, getAlwaysCc, getCustomer,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
   uploadProjectFile, getImageUrl,
 } from '../../utils/store';
+import { resolveRecipient } from '../../utils/recipients';
 import { computeRevisionModel } from '../../utils/planSets';
 import {
   computeTakeoffTotals,
@@ -72,6 +74,48 @@ export const ProjectProposal: React.FC = () => {
   // Send-proposal controls.
   const [sendFileId, setSendFileId] = useState('');
   const [composing, setComposing] = useState(false);
+
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    defaultBcc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
+
+  // Load email defaults (once per project mount).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, proj] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (proj?.customerId) {
+          customer = await getCustomer(proj.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('proposal', proj?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = () => {
     if (!projectId) return;
@@ -618,13 +662,81 @@ export const ProjectProposal: React.FC = () => {
         projectId={project.id}
         title="Send proposal"
         primaryAttachmentName={pdfPrintouts.find(pr => pr.fileId === sendFileId)?.name || 'Proposal.pdf'}
-        defaultTo={project.email?.from || ''}
+        defaultTo={emailDefaults.defaultTo || project.email?.from || ''}
+        defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`}
         defaultBody={`Please find our proposal attached. Don't hesitate to reach out with any questions.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
         onSend={async (m) => {
+          let fileIdToSend = sendFileId;
+          // If the user chose a non-default header email, regenerate the proposal PDF
+          // with the chosen email stamped in the letterhead.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          if (effectiveHeaderEmail && project) {
+            try {
+              const settings = await getSettings();
+              const photoDataUrls: string[] = [];
+              for (const id of project.proposalPhotoIds || []) {
+                try { const url = await getFile(id); if (url) photoDataUrls.push(url); } catch { /* skip */ }
+              }
+              let logoDataUrl: string | undefined = settings.logoUrl || undefined;
+              if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
+                try {
+                  const blob = await (await fetch(logoDataUrl)).blob();
+                  logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
+                } catch { logoDataUrl = undefined; }
+              }
+              if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+                logoDataUrl = await invertImageDataUrl(logoDataUrl);
+              }
+              const options: ProposalOptions = {
+                includeCostDetail,
+                includeHighlights,
+                headerColor,
+                coverNotes,
+                fontFamily,
+                validUntil,
+                terms,
+                includeSignature,
+                includeTakeoffList,
+                customTitle,
+                highlightQuality,
+                priceMode,
+                fixedPriceTotal: Number(fixedPrice) || 0,
+                photoDataUrls,
+                headerEmail: effectiveHeaderEmail,
+                letterhead: {
+                  brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+                  company: {
+                    name: settings.companyName || settings.appName,
+                    phone: settings.companyPhone,
+                    email: settings.companyEmail,
+                    address: settings.companyAddress,
+                  },
+                  logoDataUrl,
+                },
+              };
+              const totals = computeTakeoffTotals(project, currentPageIds);
+              const { pdfBytes } = await generateProposalPdf(
+                project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
+              );
+              const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+              const base64data: string = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(pdfBlob);
+              });
+              const tempFileId = uuidv4();
+              await saveFile(tempFileId, base64data);
+              fileIdToSend = tempFileId;
+            } catch { /* fall back to the pre-generated printout */ }
+          }
           const updated = await sendProjectProposal(project.id, {
             to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-            fileId: sendFileId, attachmentFileIds: m.attachmentFileIds,
+            fileId: fileIdToSend, attachmentFileIds: m.attachmentFileIds,
           });
           setProject(updated);
           setSendFileId('');

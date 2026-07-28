@@ -22,6 +22,15 @@ COPY . .
 # Build the frontend
 RUN npm run build
 
+# --- Local AI (sheet reading) ----------------------------------------------
+# This CPU image does NOT bundle the llama.cpp server, so the AI sheet-reading
+# feature stays disabled here and page naming falls back to OCR. For GPU
+# inference build the CUDA image instead: `Dockerfile.cuda` (see
+# docs/ai-sheet-reading-runbook.md). The /models volume + AI_MODELS_DIR are
+# declared for parity so the same compose/template works for both images.
+ENV AI_MODELS_DIR=/models
+VOLUME ["/models"]
+
 # Set environment variables
 ENV NODE_ENV=production
 ENV STORAGE_PATH=/app/data

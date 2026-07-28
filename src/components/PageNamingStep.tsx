@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, FileText, Loader2, Check, Eye, Hash, Search, ZoomIn, ZoomOut, Maximize, X, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
@@ -8,6 +8,7 @@ import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } fr
 import { reconcileExtract } from '../utils/extractMatch';
 import { findDuplicatePageNumbers, suffixPageNumber } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
+import { AiScanProgress } from '../utils/aiSheets';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
 
@@ -124,6 +125,9 @@ export interface NamingStepPage {
    *  change it via the per-row match dropdown. Only meaningful when the review
    *  UI is enabled (existingSheets provided). */
   matchSheetId?: string;
+  /** Confidence 0..1 from the local AI read, when the page was AI-named. Drives
+   *  the "AI" badge + tooltip in the review grid; absent for OCR/heuristic names. */
+  aiConfidence?: number;
 }
 
 /** One existing logical sheet the incoming pages can be matched against in the
@@ -156,6 +160,11 @@ export interface PageNamingStepProps {
   /** Plan set the incoming pages belong to — scopes the within-set duplicate
    *  check (the same page number across sets is a revision, not a duplicate). */
   planSetId?: string;
+  /** When provided, shows an "AI Scan" button that re-runs local AI reading on
+   *  every page (used to invoke it manually, e.g. if the model wasn't ready at
+   *  upload time). The parent owns the images/status and mutates pendingPages.
+   *  The reporter callback receives loading/scanning/done progress updates. */
+  onAiScan?: (report: (p: AiScanProgress) => void) => Promise<void>;
 }
 
 export const PageNamingStep: React.FC<PageNamingStepProps> = ({
@@ -170,9 +179,12 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   subtitle = 'Review and rename the imported pages.',
   existingSheets,
   planSetId,
+  onAiScan,
 }) => {
   const { toast } = useToast();
   // ── Internal UI state — none of this leaks to the parent ─────────────────
+  const [aiScanning, setAiScanning] = useState(false);
+  const [aiScanProgress, setAiScanProgress] = useState<AiScanProgress | null>(null);
   const [previewPageId, setPreviewPageId] = useState<string | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [extractionType, setExtractionType] = useState<'pageNumber' | 'description' | null>(null);
@@ -227,6 +239,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       }
       return updated;
     }));
+  };
+
+  // Re-run the page-number auto-match for EVERY page against its CURRENT page
+  // number. Useful after correcting numbers (e.g. via AI Scan): the initial
+  // auto-match ran on the original, often-wrong numbers, so matches go stale.
+  const rematchAll = () => {
+    setPendingPages(pendingPages.map(p => ({ ...p, matchSheetId: autoMatch(p.pageNumber || '') })));
+    toast('Re-matched pages to sheets by their current page number.', { type: 'success' });
   };
 
   // Explicit match-dropdown change: '' = New sheet, otherwise a target sheetId.
@@ -520,17 +540,69 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
           </div>
           <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
-            <button
-              onClick={onConfirm}
-              disabled={isConfirming || hasDuplicates}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-            >
-              {isConfirming ? (
-                <><Loader2 size={18} className="animate-spin" /> Saving...</>
-              ) : (
-                <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+            <div className="w-full sm:w-auto flex items-center gap-2">
+              {reviewMode && (
+                <button
+                  type="button"
+                  onClick={rematchAll}
+                  disabled={aiScanning || isConfirming}
+                  title="Re-check each page's revision match against its current page number"
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <RefreshCw size={18} /> Re-match by page #
+                </button>
               )}
-            </button>
+              {onAiScan && (
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setAiScanning(true);
+                      setAiScanProgress(null);
+                      try { await onAiScan(setAiScanProgress); }
+                      finally { setAiScanning(false); setAiScanProgress(null); }
+                    }}
+                    disabled={aiScanning || isConfirming}
+                    title="Read every page's number and description with the local AI"
+                    className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 hover:bg-accent-100 dark:hover:bg-accent-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {aiScanning ? <><Loader2 size={18} className="animate-spin" /> Scanning…</> : <><Sparkles size={18} /> AI Scan</>}
+                  </button>
+                  {aiScanning && aiScanProgress && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 min-w-0">
+                      {aiScanProgress.phase === 'loading' ? (
+                        <>
+                          <Loader2 size={12} className="animate-spin shrink-0" />
+                          <span>Loading model…</span>
+                          <span className="text-slate-400 dark:text-slate-500">(first run ~30s)</span>
+                        </>
+                      ) : aiScanProgress.phase === 'scanning' && aiScanProgress.total !== undefined ? (
+                        <>
+                          <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-accent-500 rounded-full transition-all"
+                              style={{ width: `${Math.round(((aiScanProgress.done ?? 0) / aiScanProgress.total) * 100)}%` }}
+                            />
+                          </div>
+                          <span>{aiScanProgress.done ?? 0}/{aiScanProgress.total}</span>
+                        </>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={onConfirm}
+                disabled={isConfirming || hasDuplicates || aiScanning}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium text-white bg-accent-600 hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+              >
+                {isConfirming ? (
+                  <><Loader2 size={18} className="animate-spin" /> Saving...</>
+                ) : (
+                  <>{confirmIcon ?? <Check size={18} />} {confirmLabel}{needsReviewCount > 0 ? ` (${needsReviewCount} need review)` : ''}</>
+                )}
+              </button>
+            </div>
             {reviewMode && hasDuplicates && (
               <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 flex items-center gap-1">
                 <AlertTriangle size={12} /> Resolve duplicate page numbers to continue
@@ -594,6 +666,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md text-accent-600 text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm border border-accent-100">
                     PAGE {index + 1}
                   </div>
+                  {page.aiConfidence !== undefined && (
+                    <div
+                      className="absolute bottom-3 left-3 bg-accent-600/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm"
+                      title={`Named by AI (${Math.round(page.aiConfidence * 100)}% confidence)`}
+                    >
+                      AI {Math.round(page.aiConfidence * 100)}%
+                    </div>
+                  )}
                   {reviewMode ? (
                     needsReview && (
                       <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">

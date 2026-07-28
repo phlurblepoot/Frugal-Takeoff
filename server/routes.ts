@@ -44,6 +44,7 @@ import {
   ConflictError as AiaConflictError,
   NotFoundError as AiaNotFoundError,
 } from './aiaStore';
+import { listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer } from './customerStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -498,7 +499,16 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   };
 
   app.get('/api/tasks', authenticateToken, (req, res) => {
-    try { res.json(listTasks(db)); } catch (e) { taskErr(e, res); }
+    try {
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : undefined;
+      const assigneeUserId = typeof req.query.assigneeUserId === 'string' ? req.query.assigneeUserId : undefined;
+      res.json(listTasks(db, {
+        ...(projectId ? { projectId } : {}),
+        ...(customerId ? { customerId } : {}),
+        ...(assigneeUserId ? { assigneeUserId } : {}),
+      }));
+    } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks', authenticateToken, (req, res) => {
     try { res.json(createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null })); } catch (e) { taskErr(e, res); }
@@ -950,6 +960,33 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       res.status(500).json({ error: 'Failed to delete draft' });
     }
   });
+
+  // ── Customers ────────────────────────────────────────────────────────────────
+
+  app.get('/api/customers', authenticateToken, (_req, res) => res.json(listCustomers(db)));
+  app.get('/api/customers/:id', authenticateToken, (req, res) => {
+    const c = getCustomer(db, req.params.id);
+    return c ? res.json(c) : res.status(404).json({ error: 'not found' });
+  });
+  app.get('/api/customers/:id/projects', authenticateToken, (req, res) =>
+    res.json(listProjectsForCustomer(db, req.params.id)));
+  app.post('/api/customers', authenticateToken, (req, res) => {
+    if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
+    const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    res.json(saveCustomer(db, { ...req.body, id }));
+  });
+  app.put('/api/customers/:id', authenticateToken, (req, res) => {
+    if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
+    res.json(saveCustomer(db, { ...req.body, id: req.params.id }));
+  });
+  app.delete('/api/customers/:id', authenticateToken, (req, res) => {
+    try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
+    catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }
+  });
+  app.post('/api/customers/merge', authenticateToken, (req, res) => {
+    try { mergeCustomers(db, req.body.targetId, req.body.sourceIds || []); res.json({ success: true }); }
+    catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+  });
 }
 
 // ── Email send routes ────────────────────────────────────────────────────────
@@ -1183,6 +1220,27 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     } catch (e: any) {
       console.error('Error sending change order:', e);
       res.status(500).json({ error: e.message || 'Failed to send change order' });
+    }
+  });
+
+  // Send a punch-list report PDF via SMTP (any authenticated user)
+  app.post('/api/projects/:id/send-punch', authenticateToken, async (req, res) => {
+    try {
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await send((req as any).user.id, {
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || 'Punch List Report',
+        text: body ?? message ?? 'Please find the attached punch list report.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: 'punch-list.pdf' }, attachmentFileIds),
+      });
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'punch_sent', message: `Punch list report emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending punch report:', e);
+      res.status(500).json({ error: e.message || 'Failed to send punch report' });
     }
   });
 

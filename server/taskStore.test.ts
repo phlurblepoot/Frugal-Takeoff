@@ -19,6 +19,8 @@ beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-task-')), migrations);
   db.prepare("INSERT INTO users (id, username, password, role) VALUES ('u1','alice','x','user'),('u2','bob','x','admin')").run();
+  db.prepare("INSERT INTO customers (id, name, createdAt) VALUES ('c1','Acme',0),('c2','Globex',0)").run();
+  db.prepare("INSERT INTO projects (id, name, customerId, version, createdAt) VALUES ('p1','Plaza','c1',1,0),('p2','Tower',NULL,1,0)").run();
 });
 
 describe('tasks', () => {
@@ -148,5 +150,82 @@ describe('deleteTask', () => {
     expect(getTask(db, id)).toBeNull();
     const count = (db.prepare('SELECT COUNT(*) c FROM task_photos WHERE taskId = ?').get(id) as any).c;
     expect(count).toBe(0);
+  });
+});
+
+describe('task relations', () => {
+  it('derives customer from project on create (client customer ignored)', () => {
+    const { id } = createTask(db, { title: 'T', projectId: 'p1', customerId: 'c2' });
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBe('p1');
+    expect(t.customerId).toBe('c1'); // derived from p1, not the passed c2
+    expect(t.projectName).toBe('Plaza');
+    expect(t.customerName).toBe('Acme');
+  });
+
+  it('allows a customer-only task (no project)', () => {
+    const { id } = createTask(db, { title: 'T', customerId: 'c2' });
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBeNull();
+    expect(t.customerId).toBe('c2');
+    expect(t.customerName).toBe('Globex');
+  });
+
+  it('project with null customer yields null customerId', () => {
+    const { id } = createTask(db, { title: 'T', projectId: 'p2' });
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBe('p2');
+    expect(t.customerId).toBeNull();
+  });
+
+  it('rejects unknown project or customer', () => {
+    expect(() => createTask(db, { title: 'T', projectId: 'nope' })).toThrow(ValidationError);
+    expect(() => createTask(db, { title: 'T', customerId: 'nope' })).toThrow(ValidationError);
+  });
+
+  it('clearing the project on save clears the derived customer', () => {
+    const { id } = createTask(db, { title: 'T', projectId: 'p1' });
+    const v = getTask(db, id)!.version;
+    saveTask(db, id, { title: 'T', projectId: null, customerId: null, version: v });
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBeNull();
+    expect(t.customerId).toBeNull();
+  });
+
+  it('save can set a customer-only relation', () => {
+    const { id } = createTask(db, { title: 'T' });
+    const v = getTask(db, id)!.version;
+    saveTask(db, id, { title: 'T', customerId: 'c1', version: v });
+    expect(getTask(db, id)!.customerId).toBe('c1');
+  });
+
+  it('setTaskStatus does not change project/customer relations', () => {
+    const { id } = createTask(db, { title: 'T', projectId: 'p1' });
+    setTaskStatus(db, id, 'in_progress');
+    const t = getTask(db, id)!;
+    expect(t.projectId).toBe('p1');
+    expect(t.customerId).toBe('c1');
+  });
+});
+
+describe('listTasks filters', () => {
+  beforeEach(() => {
+    createTask(db, { title: 'onP1', projectId: 'p1' });   // customer c1
+    createTask(db, { title: 'onC2', customerId: 'c2' });
+    createTask(db, { title: 'mineU2', assigneeUserId: 'u2' });
+  });
+
+  it('filters by projectId', () => {
+    expect(listTasks(db, { projectId: 'p1' }).map(t => t.title)).toEqual(['onP1']);
+  });
+  it('filters by customerId (includes project-derived customers)', () => {
+    expect(listTasks(db, { customerId: 'c1' }).map(t => t.title)).toEqual(['onP1']);
+    expect(listTasks(db, { customerId: 'c2' }).map(t => t.title)).toEqual(['onC2']);
+  });
+  it('filters by assigneeUserId', () => {
+    expect(listTasks(db, { assigneeUserId: 'u2' }).map(t => t.title)).toEqual(['mineU2']);
+  });
+  it('no filter returns all', () => {
+    expect(listTasks(db).length).toBe(3);
   });
 });

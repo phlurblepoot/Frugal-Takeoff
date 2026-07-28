@@ -42,13 +42,17 @@ export interface ChangeOrderPdfContext {
   /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
   letterhead: LetterheadContext;
   photoDataUrls: string[]; // pre-fetched (caller resolves each fileId → dataURL)
+  /** When provided and non-empty, overrides the company email shown in the document header. */
+  headerEmail?: string;
 }
 
 export function buildChangeOrderPdf(ctx: ChangeOrderPdfContext): Uint8Array {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = doc.internal.pageSize.getWidth();
   const M = 48;
-  const lc = ctx.letterhead;
+  const lc: LetterheadContext = ctx.headerEmail
+    ? { ...ctx.letterhead, company: { ...ctx.letterhead.company, email: ctx.headerEmail } }
+    : ctx.letterhead;
   const [ar, ag, ab] = lc.brandRgb;
   const co = ctx.changeOrder;
 

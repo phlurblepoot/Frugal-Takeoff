@@ -2,6 +2,7 @@ import React from 'react';
 import { X, FileImage, Trash2, Plus, Upload, Loader2 } from 'lucide-react';
 import { Project } from '../types';
 import { PageNamingStep, NamingStepPage, ExistingSheet } from './PageNamingStep';
+import { AiScanProgress } from '../utils/aiSheets';
 
 export interface AddPagesProgress {
   status: string;
@@ -50,6 +51,7 @@ export interface AddPagesModalProps {
 
   onAddPages: (e: React.FormEvent) => void | Promise<void>;
   onConfirmAddPages: () => void | Promise<void>;
+  onAiScan?: (report: (p: AiScanProgress) => void) => Promise<void>;
 }
 
 export const AddPagesModal: React.FC<AddPagesModalProps> = ({
@@ -79,6 +81,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
   fileInputRef,
   onAddPages,
   onConfirmAddPages,
+  onAiScan,
 }) => {
   if (!open) return null;
 
@@ -265,20 +268,23 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
             </div>
           </form>
         ) : (
-          <PageNamingStep
-            pendingPages={pendingPages}
-            setPendingPages={setPendingPages}
-            pendingThumbnails={pendingThumbnails}
-            onConfirm={onConfirmAddPages}
-            isConfirming={isAddingPages}
-            confirmLabel={isNamingExistingPages ? 'Save Changes' : 'Add Pages'}
-            title={isNamingExistingPages ? 'Name Pages' : 'Revision Review'}
-            subtitle={isNamingExistingPages
-              ? 'Review and rename the imported pages.'
-              : 'Confirm each incoming page: name it, match it to an existing sheet (or mark New), and resolve duplicates before committing.'}
-            existingSheets={isNamingExistingPages ? undefined : reviewSheets}
-            planSetId={isNamingExistingPages ? undefined : reviewPlanSetId}
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            <PageNamingStep
+              pendingPages={pendingPages}
+              setPendingPages={setPendingPages}
+              pendingThumbnails={pendingThumbnails}
+              onConfirm={onConfirmAddPages}
+              isConfirming={isAddingPages}
+              confirmLabel={isNamingExistingPages ? 'Save Changes' : 'Add Pages'}
+              title={isNamingExistingPages ? 'Name Pages' : 'Revision Review'}
+              subtitle={isNamingExistingPages
+                ? 'Review and rename the imported pages.'
+                : 'Confirm each incoming page: name it, match it to an existing sheet (or mark New), and resolve duplicates before committing.'}
+              existingSheets={isNamingExistingPages ? undefined : reviewSheets}
+              planSetId={isNamingExistingPages ? undefined : reviewPlanSetId}
+              onAiScan={onAiScan}
+            />
+          </div>
         )}
       </div>
     </div>

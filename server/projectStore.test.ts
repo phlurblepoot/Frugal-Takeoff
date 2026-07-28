@@ -87,6 +87,11 @@ describe('migration 5 + loadProject round-trip', () => {
       expect(pg.sheetId).toBeTruthy();
       delete pg.sheetId;
     }
+    // Migration 16 backfills customerId from contractor; strip it for the
+    // legacy-shape comparison (it was never in the original blob).
+    expect(typeof loaded.customerId).toBe('string');
+    expect(loaded.customerId).toBeTruthy();
+    delete loaded.customerId;
     expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'proposal_sent' });
   });
 
@@ -193,6 +198,19 @@ describe('saveProject', () => {
     saveProject(db, 'proj1', p);
     const after = db.prepare('SELECT COUNT(*) as c FROM files').get() as any;
     expect(after.c).toBe(before.c); // orphaned, NOT deleted
+  });
+
+  it('round-trips customerId through the dedicated column (not the meta blob)', () => {
+    const p = loadProject(db, 'proj1')!;
+    p.customerId = 'c1';
+    saveProject(db, 'proj1', p);
+    // Verify the value is stored in the dedicated column, not the meta JSON blob
+    const row = db.prepare('SELECT customerId, meta FROM projects WHERE id = ?').get('proj1') as any;
+    expect(row.customerId).toBe('c1');
+    const meta = JSON.parse(row.meta);
+    expect(meta.customerId).toBeUndefined(); // must NOT be leaked into meta
+    const reloaded = loadProject(db, 'proj1')!;
+    expect(reloaded.customerId).toBe('c1');
   });
 });
 

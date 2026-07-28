@@ -9,14 +9,15 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Settings as SettingsIcon, ShieldAlert, Trash2, Archive, ArchiveRestore } from 'lucide-react';
-import { Project } from '../../types';
-import { getProject, saveProject, deleteProject, patchProject, ConflictError } from '../../utils/store';
+import { Project, Customer, CustomerRoleEmails } from '../../types';
+import { getProject, saveProject, deleteProject, patchProject, ConflictError, getCustomers } from '../../utils/store';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
 import { ProjectStageControl } from '../../components/ProjectStageControl';
+import { RoleEmailsEditor } from '../../components/RoleEmailsEditor';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
 } from '../../components/ui';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
@@ -39,6 +40,19 @@ export const ProjectSettings: React.FC = () => {
   const [address, setAddress] = useState('');
   const [dueDate, setDueDate] = useState('');
 
+  // Customer picker
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | undefined>(undefined);
+
+  // Project-specific contact email overrides
+  const [contactEmails, setContactEmails] = useState<CustomerRoleEmails>({});
+
+  useEffect(() => {
+    getCustomers()
+      .then(setCustomers)
+      .catch(err => console.error('Failed to load customers:', err));
+  }, []);
+
   const reload = () => {
     if (!projectId || !admin) return;
     setLoading(true);
@@ -50,6 +64,8 @@ export const ProjectSettings: React.FC = () => {
           setContractor(p.contractor ?? '');
           setAddress(p.address ?? '');
           setDueDate(p.bidDueDate ? new Date(p.bidDueDate).toISOString().split('T')[0] : '');
+          setSelectedCustomerId(p.customerId ?? undefined);
+          setContactEmails(p.contactEmails ?? {});
         }
       })
       .catch(() => setProject(null))
@@ -103,6 +119,8 @@ export const ProjectSettings: React.FC = () => {
       setContractor(previous.contractor ?? '');
       setAddress(previous.address ?? '');
       setDueDate(previous.bidDueDate ? new Date(previous.bidDueDate).toISOString().split('T')[0] : '');
+      setSelectedCustomerId(previous.customerId ?? undefined);
+      setContactEmails(previous.contactEmails ?? {});
       const msg = error instanceof ConflictError
         ? `Project changed elsewhere — couldn't save ${label}`
         : `Failed to save ${label}. Please try again.`;
@@ -132,6 +150,18 @@ export const ProjectSettings: React.FC = () => {
     setDueDate(value);
     // Match ProjectView.handleSaveDueDate: 'YYYY-MM-DD' ↔ ms epoch.
     saveField({ bidDueDate: value ? new Date(value).getTime() : undefined }, 'due date');
+  };
+  const saveCustomerLink = (custId: string) => {
+    setSelectedCustomerId(custId || undefined);
+    const found = customers.find(c => c.id === custId);
+    // Keep contractor in sync with the linked customer name.
+    const nextContractor = found ? found.name : contractor;
+    setContractor(nextContractor);
+    saveField({ customerId: custId || undefined, contractor: nextContractor || undefined }, 'customer');
+  };
+  const saveContactEmails = (next: CustomerRoleEmails) => {
+    setContactEmails(next);
+    saveField({ contactEmails: next }, 'contact emails');
   };
 
   const isArchived = !!project.archived;
@@ -186,11 +216,14 @@ export const ProjectSettings: React.FC = () => {
                 onBlur={saveName}
                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
             </Field>
-            <Field label="Contractor" htmlFor="ps-contractor">
-              <Input id="ps-contractor" value={contractor} disabled={busy}
-                onChange={e => setContractor(e.target.value)}
-                onBlur={saveContractor}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+            <Field label="Customer" htmlFor="ps-customer">
+              <Select id="ps-customer" value={selectedCustomerId ?? ''} disabled={busy}
+                onChange={e => saveCustomerLink(e.target.value)}>
+                <option value="">— None —</option>
+                {customers.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
             </Field>
             <Field label="Address" htmlFor="ps-address">
               <AddressAutocomplete value={address} onChange={saveAddress} disabled={busy} />
@@ -212,6 +245,21 @@ export const ProjectSettings: React.FC = () => {
           </div>
 
           {/* DEFERRED: contract value is a billing rollup, managed in Billing */}
+        </CardBody>
+      </Card>
+
+      {/* Project-specific contact overrides */}
+      <Card>
+        <CardHeader title="Project contacts (override customer)" />
+        <CardBody>
+          <p className="text-xs text-ink-faint mb-4">
+            These email addresses are used for this project only and override any emails set on the linked customer.
+          </p>
+          <RoleEmailsEditor
+            value={contactEmails}
+            onChange={next => { setContactEmails(next); saveContactEmails(next); }}
+            disabled={busy}
+          />
         </CardBody>
       </Card>
 

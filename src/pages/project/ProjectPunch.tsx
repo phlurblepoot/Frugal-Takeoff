@@ -1,14 +1,18 @@
 // src/pages/project/ProjectPunch.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { CheckSquare, Plus, Download, ImageIcon } from 'lucide-react';
+import { CheckSquare, Plus, Download, ImageIcon, Send } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
+  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport, uploadProjectFile,
 } from '../../utils/store';
+import { Customer } from '../../types';
+import { resolveRecipient } from '../../utils/recipients';
 import { useToast } from '../../components/Toast';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, ProgressBar, Skeleton,
 } from '../../components/ui';
+import { EmailComposer } from '../../components/EmailComposer';
 import { PunchItemEditor } from './punch/PunchItemEditor';
 import { buildPunchPdf } from './punch/punchPdf';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
@@ -26,6 +30,48 @@ export const ProjectPunch: React.FC = () => {
   const [editing, setEditing] = useState<PunchItem | null>(null);
   const [newArea, setNewArea] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  const [composing, setComposing] = useState(false);
+
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    defaultBcc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, project] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (project?.customerId) {
+          customer = await getCustomer(project.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('punch', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = () => {
     if (!projectId) return;
@@ -94,33 +140,39 @@ export const ProjectPunch: React.FC = () => {
     } catch { toast('Failed to create item', { type: 'error' }); }
   };
 
+  const buildPunchDoc = async (headerEmail?: string) => {
+    const projectName = summary?.name || 'project';
+    const settings = await getSettings();
+    let logoDataUrl: string | undefined = settings.logoUrl || undefined;
+    if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
+      const blob = await (await fetch(logoDataUrl)).blob();
+      logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
+    }
+    if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+      logoDataUrl = await invertImageDataUrl(logoDataUrl);
+    }
+    return buildPunchPdf({
+      items: list.map(i => ({ area: i.area, description: i.description, done: i.done })),
+      projectName,
+      photoDataUrls: {}, // text-only v1; param kept so photos can be added later
+      letterhead: {
+        brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+        company: {
+          name: settings.companyName || settings.appName,
+          phone: settings.companyPhone,
+          email: settings.companyEmail,
+          address: settings.companyAddress,
+        },
+        logoDataUrl,
+      },
+      headerEmail: headerEmail || undefined,
+    });
+  };
+
   const handleDownload = async () => {
     try {
       const projectName = summary?.name || 'project';
-      const settings = await getSettings();
-      let logoDataUrl: string | undefined = settings.logoUrl || undefined;
-      if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
-        const blob = await (await fetch(logoDataUrl)).blob();
-        logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
-      }
-      if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
-        logoDataUrl = await invertImageDataUrl(logoDataUrl);
-      }
-      const doc = buildPunchPdf({
-        items: list.map(i => ({ area: i.area, description: i.description, done: i.done })),
-        projectName,
-        photoDataUrls: {}, // text-only v1; param kept so photos can be added later
-        letterhead: {
-          brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
-          company: {
-            name: settings.companyName || settings.appName,
-            phone: settings.companyPhone,
-            email: settings.companyEmail,
-            address: settings.companyAddress,
-          },
-          logoDataUrl,
-        },
-      });
+      const doc = await buildPunchDoc();
       doc.save(`${projectName}-punch-list.pdf`);
     } catch { toast('Failed to generate report', { type: 'error' }); }
   };
@@ -129,7 +181,10 @@ export const ProjectPunch: React.FC = () => {
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
       <div className="mb-4 flex items-center justify-between gap-2">
         <h1 className="text-xl font-bold text-ink">Punch list</h1>
-        <Button variant="secondary" onClick={handleDownload}><Download size={15} />Download report</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={handleDownload}><Download size={15} />Download report</Button>
+          <Button variant="secondary" onClick={() => setComposing(true)} disabled={list.length === 0}><Send size={15} />Send report</Button>
+        </div>
       </div>
 
       {total > 0 && (
@@ -213,6 +268,34 @@ export const ProjectPunch: React.FC = () => {
           onSaved={async () => { try { setEditing(await getPunchItem(editing.id)); } catch { setEditing(null); } reload(); }}
         />
       )}
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={projectId ?? ''}
+        title="Send punch list report"
+        primaryAttachmentName={`${summary?.name || 'project'}-punch-list.pdf`}
+        defaultTo={emailDefaults.defaultTo || undefined}
+        defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
+        defaultSubject={`Punch List Report — ${summary?.name || 'Project'}`}
+        defaultBody={`Hello,\n\nPlease find attached the punch list report for ${summary?.name || 'the project'}.\n\nThank you.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
+        onSend={async (m) => {
+          if (!projectId) return;
+          // Always regenerate with the chosen header email so the PDF contact matches.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          const doc = await buildPunchDoc(effectiveHeaderEmail);
+          const arrayBuf = doc.output('arraybuffer');
+          const pdfBlob = new Blob([new Uint8Array(arrayBuf)], { type: 'application/pdf' });
+          const projectName = summary?.name || 'project';
+          const file = new File([pdfBlob], `${projectName}-punch-list.pdf`, { type: 'application/pdf' });
+          const fileId = await uploadProjectFile(projectId, file, 'punch-report');
+          await sendPunchReport(projectId, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
+          toast('Punch list report sent', { type: 'success' });
+        }}
+      />
     </div>
   );
 };

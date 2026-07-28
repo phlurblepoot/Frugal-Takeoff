@@ -1,11 +1,13 @@
 // src/pages/project/billing/ChangeOrderEditor.tsx
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,
-  saveChangeOrder, setChangeOrderStatus, getSettings, sendChangeOrder,
+  saveChangeOrder, setChangeOrderStatus, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
   uploadProjectFile, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
 } from '../../../utils/store';
+import { Customer } from '../../../types';
+import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
@@ -38,6 +40,46 @@ export const ChangeOrderEditor: React.FC<{
   const [composing, setComposing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    defaultBcc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, project] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (project?.customerId) {
+          customer = await getCustomer(project.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('changeOrder', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const lumpCents = Math.round((Number(lumpSumAmount) || 0) * 100);
   const total = draftTotalCents(lines) + lumpCents;
@@ -89,7 +131,7 @@ export const ChangeOrderEditor: React.FC<{
     try { await removeCOPhoto(co.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
   };
 
-  const buildBytes = async (): Promise<Uint8Array> => {
+  const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;
@@ -136,6 +178,7 @@ export const ChangeOrderEditor: React.FC<{
         logoDataUrl,
       },
       photoDataUrls,
+      headerEmail: headerEmail || undefined,
     });
   };
 
@@ -252,10 +295,17 @@ export const ChangeOrderEditor: React.FC<{
         projectId={projectId}
         title="Send change order request"
         primaryAttachmentName={`CO-${co.number || 'change-order'}.pdf`}
+        defaultTo={emailDefaults.defaultTo || undefined}
+        defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
         defaultSubject={`Change Order Request CO-${co.number} — ${projectName}`}
         defaultBody={`Hello,\n\nPlease find attached Change Order Request CO-${co.number} for ${projectName}${co.description ? ', covering: ' + co.description : ''}.\n\nPlease review and approve at your convenience.\n\nThank you.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
         onSend={async (m) => {
-          const bytes = await buildBytes();
+          // Always regenerate with the chosen header email so the PDF contact matches.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          const bytes = await buildBytes(effectiveHeaderEmail);
           const file = new File([bytes], `CO-${co.number || 'change-order'}.pdf`, { type: 'application/pdf' });
           // The PDF is uploaded as a project document before sending; if the send
           // fails the file remains in Documents (project-attributed), and a retry
