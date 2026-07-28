@@ -1,0 +1,128 @@
+// server/rfiStore.ts
+import type Database from 'better-sqlite3';
+import crypto from 'crypto';
+
+export class ValidationError extends Error {}
+export class ConflictError extends Error {}
+export class NotFoundError extends Error {}
+
+export const RFI_STATUSES = ['open', 'sent', 'answered', 'closed'] as const;
+
+function requireProject(db: Database.Database, projectId: string): void {
+  if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new NotFoundError('Project not found');
+}
+
+interface RfiInput {
+  title?: string; question?: string; specRef?: string; drawingRef?: string;
+  attention?: string; responseNeededBy?: string; status?: string;
+}
+
+function photoCount(db: Database.Database, rfiId: string): number {
+  return (db.prepare('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId = ?').get(rfiId) as any).c;
+}
+
+export function getRfi(db: Database.Database, id: string): any | null {
+  const row = db.prepare('SELECT * FROM rfis WHERE id = ?').get(id) as any;
+  if (!row) return null;
+  const photos = db.prepare('SELECT id, fileId, sortOrder FROM rfi_photos WHERE rfiId = ? ORDER BY sortOrder, createdAt').all(id);
+  return { ...row, photos };
+}
+
+export function listRfis(db: Database.Database, projectId: string): any[] {
+  const rows = db.prepare('SELECT * FROM rfis WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
+  return rows.map(r => ({ ...r, photoCount: photoCount(db, r.id) }));
+}
+
+export function createRfi(db: Database.Database, projectId: string, input: RfiInput): { id: string; number: number } {
+  requireProject(db, projectId);
+  if (typeof input.title !== 'string' || !input.title.trim()) throw new ValidationError('RFI title is required');
+  if (input.status !== undefined && !(RFI_STATUSES as readonly string[]).includes(input.status)) {
+    throw new ValidationError(`Invalid RFI status: ${input.status}`);
+  }
+  const id = crypto.randomUUID();
+  let number = 0;
+  const tx = db.transaction(() => {
+    const max = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM rfis WHERE projectId = ?').get(projectId) as any).m;
+    number = max + 1;
+    db.prepare(`INSERT INTO rfis (id, projectId, number, title, question, specRef, drawingRef, attention, responseNeededBy,
+                responseText, responseFileId, status, version, sentAt, answeredAt, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?)`)
+      .run(id, projectId, number, input.title!.trim(), input.question ?? null, input.specRef ?? null,
+           input.drawingRef ?? null, input.attention ?? null, input.responseNeededBy ?? null,
+           input.status ?? 'open', Date.now());
+  });
+  tx();
+  return { id, number };
+}
+
+export function saveRfi(db: Database.Database, id: string, input: RfiInput & { version?: number }): { version: number } {
+  if (typeof input.title !== 'string' || !input.title.trim()) throw new ValidationError('RFI title is required');
+  if (!Number.isInteger(input.version) || (input.version as number) < 1) throw new ValidationError('Missing or invalid version — reload the RFI');
+  let newVersion = 0;
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT version FROM rfis WHERE id = ?').get(id) as { version: number } | undefined;
+    if (!row) throw new NotFoundError('RFI not found');
+    if (row.version !== input.version) throw new ConflictError(`RFI changed since it was loaded (server v${row.version}, payload v${input.version})`);
+    newVersion = row.version + 1;
+    db.prepare('UPDATE rfis SET title = ?, question = ?, specRef = ?, drawingRef = ?, attention = ?, responseNeededBy = ?, version = ? WHERE id = ?')
+      .run(input.title!.trim(), input.question ?? null, input.specRef ?? null, input.drawingRef ?? null,
+           input.attention ?? null, input.responseNeededBy ?? null, newVersion, id);
+  });
+  tx();
+  return { version: newVersion };
+}
+
+export function setRfiStatus(db: Database.Database, id: string, status: string): { status: string } {
+  if (!(RFI_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid RFI status: ${status}`);
+  const row = db.prepare('SELECT id FROM rfis WHERE id = ?').get(id);
+  if (!row) throw new NotFoundError('RFI not found');
+  db.prepare('UPDATE rfis SET status = ?, version = version + 1 WHERE id = ?').run(status, id);
+  return { status };
+}
+
+export function deleteRfi(db: Database.Database, id: string): void {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM rfi_photos WHERE rfiId = ?').run(id);
+    db.prepare('DELETE FROM rfis WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+export function addPhoto(db: Database.Database, rfiId: string, fileId: string): void {
+  if (!db.prepare('SELECT id FROM rfis WHERE id = ?').get(rfiId)) throw new NotFoundError('RFI not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const exists = db.prepare('SELECT id FROM rfi_photos WHERE rfiId = ? AND fileId = ?').get(rfiId, fileId);
+  if (exists) return; // idempotent
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM rfi_photos WHERE rfiId = ?').get(rfiId) as any).m;
+  db.prepare('INSERT INTO rfi_photos (id, rfiId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), rfiId, fileId, max + 1, Date.now());
+}
+
+export function removePhoto(db: Database.Database, rfiId: string, fileId: string): void {
+  db.prepare('DELETE FROM rfi_photos WHERE rfiId = ? AND fileId = ?').run(rfiId, fileId);
+}
+
+export function markRfiSent(db: Database.Database, id: string): void {
+  db.prepare("UPDATE rfis SET status = 'sent', sentAt = ?, version = version + 1 WHERE id = ?").run(Date.now(), id);
+}
+
+// Records the answer. Usually the response arrives as a PDF (fileId of an
+// uploaded shared file, kind 'rfi-response'); text covers phone/verbal answers.
+// Only the provided fields are written, so a file and text can coexist.
+// Auto-advances to 'answered' unless the RFI was already closed.
+export function setRfiResponse(db: Database.Database, id: string, input: { fileId?: string; text?: string }): { status: string } {
+  const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!row) throw new NotFoundError('RFI not found');
+  const hasFile = typeof input.fileId === 'string' && input.fileId.trim() !== '';
+  const hasText = typeof input.text === 'string' && input.text.trim() !== '';
+  if (!hasFile && !hasText) throw new ValidationError('A response file or response text is required');
+  const nextStatus = row.status === 'closed' ? 'closed' : 'answered';
+  const tx = db.transaction(() => {
+    if (hasFile) db.prepare('UPDATE rfis SET responseFileId = ? WHERE id = ?').run(input.fileId!.trim(), id);
+    if (hasText) db.prepare('UPDATE rfis SET responseText = ? WHERE id = ?').run(input.text!.trim(), id);
+    db.prepare('UPDATE rfis SET status = ?, answeredAt = COALESCE(answeredAt, ?), version = version + 1 WHERE id = ?')
+      .run(nextStatus, Date.now(), id);
+  });
+  tx();
+  return { status: nextStatus };
+}
