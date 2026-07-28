@@ -24,6 +24,11 @@ import {
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
 import {
+  listRfis, getRfi, createRfi, saveRfi, setRfiStatus, deleteRfi,
+  addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, markRfiSent, setRfiResponse,
+  ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
+} from './rfiStore';
+import {
   getPunchItem, listPunchItems, createPunchItem, savePunchItem,
   setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
   ValidationError as PunchValidationError,
@@ -431,6 +436,68 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.delete('/api/issues/:id/photos/:fileId', authenticateToken, (req, res) => {
     try { removePhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { issueErr(e, res); }
+  });
+
+  // ── RFIs (any authenticated user — field-created, like issues) ─────────────
+  const rfiErr = (e: unknown, res: express.Response) => {
+    if (e instanceof RfiNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof RfiConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof RfiValidationError) return res.status(400).json({ error: e.message });
+    console.error('RFI error:', e);
+    return res.status(500).json({ error: 'RFI operation failed' });
+  };
+  const rfiNo = (n: number) => `RFI-${String(n).padStart(3, '0')}`;
+
+  app.get('/api/projects/:id/rfis', authenticateToken, (req, res) => {
+    try { res.json(listRfis(db, req.params.id)); } catch (e) { rfiErr(e, res); }
+  });
+  app.post('/api/projects/:id/rfis', authenticateToken, (req, res) => {
+    try {
+      const r = createRfi(db, req.params.id, req.body);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'rfi_created', message: `RFI ${rfiNo(r.number)} opened: ${req.body?.title ?? ''}` });
+      res.json(r);
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.get('/api/rfis/:id', authenticateToken, (req, res) => {
+    try { const rfi = getRfi(db, req.params.id); if (!rfi) return res.status(404).json({ error: 'RFI not found' }); res.json(rfi); } catch (e) { rfiErr(e, res); }
+  });
+  app.put('/api/rfis/:id', authenticateToken, (req, res) => {
+    try { res.json({ success: true, ...saveRfi(db, req.params.id, req.body) }); } catch (e) { rfiErr(e, res); }
+  });
+  app.patch('/api/rfis/:id', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
+      const before = getRfi(db, req.params.id); // read once, before the change
+      const r = setRfiStatus(db, req.params.id, req.body.status);
+      if (req.body.status === 'closed' && before) {
+        logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_closed', message: `RFI ${rfiNo(before.number)} closed` });
+      }
+      res.json({ success: true, ...r });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.delete('/api/rfis/:id', authenticateToken, (req, res) => {
+    try { deleteRfi(db, req.params.id); res.json({ success: true }); } catch (e) { rfiErr(e, res); }
+  });
+  app.post('/api/rfis/:id/photos', authenticateToken, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addRfiPhoto(db, req.params.id, req.body.fileId);
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.delete('/api/rfis/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try { removeRfiPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { rfiErr(e, res); }
+  });
+  // Record the answer — usually an uploaded response PDF, optionally text.
+  app.post('/api/rfis/:id/response', authenticateToken, (req, res) => {
+    try {
+      const before = getRfi(db, req.params.id);
+      const r = setRfiResponse(db, req.params.id, { fileId: req.body?.fileId, text: req.body?.text });
+      if (before) {
+        logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_answered', message: `RFI ${rfiNo(before.number)} answered` });
+      }
+      res.json({ success: true, ...r });
+    } catch (e) { rfiErr(e, res); }
   });
 
   // ── Punch & Checklists (any authenticated user — field-created, spec §4.2) ──

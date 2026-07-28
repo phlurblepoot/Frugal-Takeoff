@@ -781,6 +781,19 @@ describe('deleteProject issues cascade', () => {
   });
 });
 
+describe('deleteProject rfis cascade', () => {
+  it('removes rfis and rfi_photos for the project', async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+    const rfi = await request(app).post('/api/projects/p1/rfis').send({ title: 'Detail question', question: 'Which finish?' });
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('img'));
+    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'ph1' });
+    await request(app).delete('/api/projects/p1');
+    expect((db.prepare('SELECT COUNT(*) c FROM rfis WHERE projectId = ?').get('p1') as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').get('p1') as any).c).toBe(0);
+  });
+});
+
 describe('issue routes', () => {
   beforeEach(async () => {
     await request(app).post('/api/projects').send(PROJECT); // id p1
@@ -820,6 +833,107 @@ describe('issue routes', () => {
     expect((await request(app).post('/api/projects/p1/issues').send({ title: '' })).status).toBe(400);
     expect((await request(app).get('/api/issues/nope')).status).toBe(404);
     expect((await request(app).patch('/api/issues/nope').send({ status: 'open' })).status).toBe(404);
+  });
+});
+
+describe('rfi routes', () => {
+  beforeEach(async () => {
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  it('create → number 1, then 2 (per project); 400 with no title; 404 unknown project', async () => {
+    const c1 = await request(app).post('/api/projects/p1/rfis').send({ title: 'First question' });
+    expect(c1.status).toBe(200);
+    expect(c1.body.number).toBe(1);
+    const c2 = await request(app).post('/api/projects/p1/rfis').send({ title: 'Second question' });
+    expect(c2.status).toBe(200);
+    expect(c2.body.number).toBe(2);
+    expect((await request(app).post('/api/projects/p1/rfis').send({ title: '' })).status).toBe(400);
+    expect((await request(app).post('/api/projects/nope/rfis').send({ title: 'X' })).status).toBe(404);
+  });
+
+  it('create stores specRef/drawingRef/attention/responseNeededBy (GET returns them)', async () => {
+    const create = await request(app).post('/api/projects/p1/rfis').send({
+      title: 'Finish clarification',
+      specRef: '09 30 00',
+      drawingRef: 'A-501',
+      attention: 'Architect',
+      responseNeededBy: '2026-08-01',
+    });
+    expect(create.status).toBe(200);
+    const get = await request(app).get(`/api/rfis/${create.body.id}`);
+    expect(get.status).toBe(200);
+    expect(get.body.specRef).toBe('09 30 00');
+    expect(get.body.drawingRef).toBe('A-501');
+    expect(get.body.attention).toBe('Architect');
+    expect(get.body.responseNeededBy).toBe('2026-08-01');
+  });
+
+  it('GET unknown id → 404', async () => {
+    expect((await request(app).get('/api/rfis/nope')).status).toBe(404);
+  });
+
+  it('PUT round-trip bumps version; stale version → 409 with code version_conflict', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'A' })).body.id;
+    const rfi = (await request(app).get(`/api/rfis/${id}`)).body;
+    const ok = await request(app).put(`/api/rfis/${id}`).send({ ...rfi, title: 'A2' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.success).toBe(true);
+    expect(ok.body.version).toBe(rfi.version + 1);
+    const stale = await request(app).put(`/api/rfis/${id}`).send({ ...rfi, title: 'Clobber' });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
+  });
+
+  it('PATCH status → answered ok; bogus → 400; PATCH to closed succeeds', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'A' })).body.id;
+    const answered = await request(app).patch(`/api/rfis/${id}`).send({ status: 'answered' });
+    expect(answered.status).toBe(200);
+    expect((await request(app).get(`/api/rfis/${id}`)).body.status).toBe('answered');
+    const bogus = await request(app).patch(`/api/rfis/${id}`).send({ status: 'bogus' });
+    expect(bogus.status).toBe(400);
+    const closed = await request(app).patch(`/api/rfis/${id}`).send({ status: 'closed' });
+    expect(closed.status).toBe(200);
+    expect((await request(app).get(`/api/rfis/${id}`)).body.status).toBe('closed');
+  });
+
+  it('DELETE removes; photos: POST without fileId → 400, POST+DELETE round-trip, photoCount in list', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'A' })).body.id;
+    const badPhoto = await request(app).post(`/api/rfis/${id}/photos`).send({});
+    expect(badPhoto.status).toBe(400);
+    await request(app).post('/api/files/ph1?projectId=p1&kind=photo&name=p.jpg').set('Content-Type', 'image/jpeg').send(Buffer.from('x'));
+    await request(app).post(`/api/rfis/${id}/photos`).send({ fileId: 'ph1' }).expect(200);
+    let list = await request(app).get('/api/projects/p1/rfis');
+    expect(list.body.find((r: any) => r.id === id).photoCount).toBe(1);
+    await request(app).delete(`/api/rfis/${id}/photos/ph1`).expect(200);
+    list = await request(app).get('/api/projects/p1/rfis');
+    expect(list.body.find((r: any) => r.id === id).photoCount).toBe(0);
+    await request(app).delete(`/api/rfis/${id}`).expect(200);
+    expect((await request(app).get(`/api/rfis/${id}`)).status).toBe(404);
+  });
+
+  it('POST /api/rfis/:id/response handles missing input, text, file, closed RFI, and unknown id', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'A' })).body.id;
+
+    expect((await request(app).post(`/api/rfis/${id}/response`).send({})).status).toBe(400);
+
+    const textRes = await request(app).post(`/api/rfis/${id}/response`).send({ text: 'Per detail 5/A-501' });
+    expect(textRes.status).toBe(200);
+    const afterText = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(afterText.status).toBe('answered');
+    expect(afterText.answeredAt).toBeTruthy();
+    expect(afterText.responseText).toBe('Per detail 5/A-501');
+
+    const fileRes = await request(app).post(`/api/rfis/${id}/response`).send({ fileId: 'file-1' });
+    expect(fileRes.status).toBe(200);
+    expect((await request(app).get(`/api/rfis/${id}`)).body.responseFileId).toBe('file-1');
+
+    await request(app).patch(`/api/rfis/${id}`).send({ status: 'closed' });
+    const closedRes = await request(app).post(`/api/rfis/${id}/response`).send({ text: 'Additional note' });
+    expect(closedRes.status).toBe(200);
+    expect((await request(app).get(`/api/rfis/${id}`)).body.status).toBe('closed');
+
+    expect((await request(app).post('/api/rfis/nope/response').send({ text: 'x' })).status).toBe(404);
   });
 });
 
