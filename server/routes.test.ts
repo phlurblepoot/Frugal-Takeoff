@@ -1300,6 +1300,57 @@ describe('email send routes', () => {
     expect(m.attachments.map((a: any) => a.filename)).toEqual(['ISS-001.pdf', 'Photo.jpg']);
   });
 
+  it('rfi send: authenticated non-admin allowed; default RFI subject/name; cc/bcc + extras', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    const memberApp = buildEmailApp('member'); // NOT admin-gated
+    const res = await request(memberApp).post(`/api/rfis/${rfi.id}/send`).send({
+      to: 'gc@example.com', bcc: 'log@example.com', fileId: 'primary', attachmentFileIds: ['extra2'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('RFI RFI-001 — Ceiling height');
+    expect(m.bcc).toBe('log@example.com');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Photo.jpg']);
+  });
+
+  it('rfi send: requires to + fileId; 404 for unknown rfi', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    expect((await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ fileId: 'primary' })).status).toBe(400);
+    expect((await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ to: 'a@b.com' })).status).toBe(400);
+    expect((await request(emailApp).post('/api/rfis/nope/send').send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(404);
+  });
+
+  it('rfi send: explicit subject/cc/bcc/body pass through; extra attachmentFileIds appended', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({
+      to: 'client@example.com',
+      cc: ' cc@example.com ',
+      bcc: 'bcc@example.com',
+      subject: 'Custom Subject',
+      body: 'Custom body text',
+      fileId: 'primary',
+      attachmentFileIds: ['extra1', 'extra2'],
+    });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.to).toBe('client@example.com');
+    expect(m.cc).toBe('cc@example.com');
+    expect(m.bcc).toBe('bcc@example.com');
+    expect(m.subject).toBe('Custom Subject');
+    expect(m.text).toBe('Custom body text');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Photo.jpg']);
+  });
+
+  it('rfi send: marks rfi sent with sentAt set after send', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    expect((await request(app).get(`/api/rfis/${rfi.id}`)).body.status).toBe('open');
+    const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    const after = (await request(app).get(`/api/rfis/${rfi.id}`)).body;
+    expect(after.status).toBe('sent');
+    expect(typeof after.sentAt).toBe('number');
+  });
+
   it('proposal send: to override + custom subject/body + extras; inReplyTo threaded; sets proposalSentAt', async () => {
     // project with an associated email to reply to
     await request(app).post('/api/projects').send({

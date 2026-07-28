@@ -1335,4 +1335,29 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       res.status(500).json({ error: e.message || 'Failed to send issue' });
     }
   });
+
+  // Send an RFI PDF via SMTP (any authenticated user — field members send RFIs)
+  app.post('/api/rfis/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const rfi = getRfi(db, req.params.id);
+      if (!rfi) return res.status(404).json({ error: 'RFI not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const padded = String(rfi.number).padStart(3, '0');
+      await send((req as any).user.id, {
+        to,
+        cc,
+        bcc,
+        subject: subject?.trim() || `RFI RFI-${padded}${rfi.title ? ` — ${rfi.title}` : ''}`,
+        text: body ?? message ?? 'Please find the attached RFI.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: `RFI-${padded}.pdf` }, attachmentFileIds),
+      });
+      try { markRfiSent(db, req.params.id); } catch { /* best effort */ }
+      logActivity(db, { projectId: rfi.projectId, userId: (req as any).user?.id, type: 'rfi_sent', message: `RFI RFI-${padded} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending RFI:', e);
+      res.status(500).json({ error: e.message || 'Failed to send RFI' });
+    }
+  });
 }
