@@ -75,6 +75,11 @@ export const RfiEditor: React.FC<{
 
   const handlePhotos = async (list: FileList | null) => {
     if (!list || !list.length) return;
+    if (isDirty()) {
+      toast('Save your changes first', { type: 'warning' });
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setUploading(true);
     let ok = 0;
     for (const f of Array.from(list)) {
@@ -96,6 +101,11 @@ export const RfiEditor: React.FC<{
 
   const handleResponseFile = async (list: FileList | null) => {
     if (!list || !list.length) return;
+    if (isDirty()) {
+      toast('Save your changes first', { type: 'warning' });
+      if (responseFileRef.current) responseFileRef.current.value = '';
+      return;
+    }
     setUploadingResponse(true);
     try {
       const fileId = await uploadProjectFile(projectId, list[0], 'rfi-response');
@@ -113,8 +123,9 @@ export const RfiEditor: React.FC<{
     if (!rfi.responseFileId) return;
     try {
       const blob = await fetchFileBlob(rfi.responseFileId);
+      const ext = blob.type === 'application/pdf' ? '.pdf' : blob.type === 'image/jpeg' ? '.jpg' : blob.type === 'image/png' ? '.png' : '';
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `RFI-${padded}-response`;
+      const a = document.createElement('a'); a.href = url; a.download = `RFI-${padded}-response${ext}`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { toast('Failed to download response', { type: 'error' }); }
@@ -170,13 +181,19 @@ export const RfiEditor: React.FC<{
   const [composing, setComposing] = useState(false);
   const padded = String(rfi.number).padStart(3, '0');
 
+  // A typed-but-unsaved response counts as dirty too, so a remount-triggering
+  // action (status change, photo upload, response-file upload) never silently
+  // discards it.
+  const responseDirty = responseDraft.trim() !== (rfi.responseText ?? '');
+
   const isDirty = () =>
     title.trim() !== (rfi.title ?? '') ||
     question !== (rfi.question ?? '') ||
     specRef !== (rfi.specRef ?? '') ||
     drawingRef !== (rfi.drawingRef ?? '') ||
     attention !== (rfi.attention ?? '') ||
-    (responseNeededBy || '') !== (rfi.responseNeededBy ?? '');
+    (responseNeededBy || '') !== (rfi.responseNeededBy ?? '') ||
+    responseDirty;
 
   // Save-first guard: don't open the composer with unsaved edits.
   const openComposer = () => {
@@ -192,6 +209,11 @@ export const RfiEditor: React.FC<{
     setSaving(true);
     try {
       await saveRfi(rfi.id, { ...rfi, title: title.trim(), question: question || null, specRef: specRef || null, drawingRef: drawingRef || null, attention: attention || null, responseNeededBy: responseNeededBy || null });
+      // Save also persists a typed-but-unsaved response, so switching status,
+      // uploading a photo, etc. right after Save never loses the draft.
+      if (responseDirty && responseDraft.trim()) {
+        await setRfiResponse(rfi.id, { text: responseDraft.trim() });
+      }
       toast('RFI saved', { type: 'success' });
       onSaved();
     } catch (e) {

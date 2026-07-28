@@ -141,6 +141,30 @@ describe('rfiStore', () => {
     expect(typeof rfi.sentAt).toBe('number');
   });
 
+  it('markRfiSent does not demote an answered RFI, but refreshes sentAt', () => {
+    const { id } = createRfi(db, 'p1', { title: 'A' });
+    setRfiResponse(db, id, { text: 'Answer' });
+    const before = getRfi(db, id)!;
+    expect(before.status).toBe('answered');
+    const beforeVersion = before.version;
+    markRfiSent(db, id);
+    const rfi = getRfi(db, id)!;
+    expect(rfi.status).toBe('answered');
+    expect(typeof rfi.sentAt).toBe('number');
+    expect(rfi.version).toBe(beforeVersion + 1);
+  });
+
+  it('markRfiSent does not demote a closed RFI, but refreshes sentAt', () => {
+    const { id } = createRfi(db, 'p1', { title: 'A' });
+    setRfiStatus(db, id, 'closed');
+    const beforeVersion = getRfi(db, id)!.version;
+    markRfiSent(db, id);
+    const rfi = getRfi(db, id)!;
+    expect(rfi.status).toBe('closed');
+    expect(typeof rfi.sentAt).toBe('number');
+    expect(rfi.version).toBe(beforeVersion + 1);
+  });
+
   describe('setRfiResponse', () => {
     it('requires fileId or text', () => {
       const { id } = createRfi(db, 'p1', { title: 'A' });

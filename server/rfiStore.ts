@@ -102,8 +102,13 @@ export function removePhoto(db: Database.Database, rfiId: string, fileId: string
   db.prepare('DELETE FROM rfi_photos WHERE rfiId = ? AND fileId = ?').run(rfiId, fileId);
 }
 
+// Advances status to 'sent' only from 'open'; answered/closed are never demoted
+// by a (re)send. sentAt is always refreshed and version always bumps.
 export function markRfiSent(db: Database.Database, id: string): void {
-  db.prepare("UPDATE rfis SET status = 'sent', sentAt = ?, version = version + 1 WHERE id = ?").run(Date.now(), id);
+  const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!row) throw new NotFoundError('RFI not found');
+  const nextStatus = row.status === 'open' ? 'sent' : row.status;
+  db.prepare('UPDATE rfis SET status = ?, sentAt = ?, version = version + 1 WHERE id = ?').run(nextStatus, Date.now(), id);
 }
 
 // Records the answer. Usually the response arrives as a PDF (fileId of an
