@@ -1,18 +1,23 @@
 name: Docker CUDA Image CI
 
-# Builds the GPU image (Dockerfile.cuda) and publishes ghcr.io/<repo>:cuda
-# (plus a :cuda-<sha> for traceability). It tracks the `testing` branch: every
-# push to testing rebuilds :cuda, mirroring how the CPU :testing tag works, so
-# the GPU image stays in sync with your live box. You can also build on demand:
+# Builds the GPU image (Dockerfile.cuda) and publishes two moving GPU tags,
+# mirroring how the CPU image tags branches:
+#   * ghcr.io/<repo>:cuda         -> tracks `testing` (your live/dev GPU box)
+#   * ghcr.io/<repo>:cuda-stable  -> tracks `main`    (stable release GPU image)
+# Plus a :cuda-<sha> on every build for traceability. Every push to testing
+# rebuilds :cuda; every push to main (i.e. a testing->main merge) rebuilds
+# :cuda-stable. You can also build on demand:
 #   * Actions tab -> "Docker CUDA Image CI" -> Run workflow (any branch), OR
 #   * push a git tag matching `cuda-*` (e.g. `git tag cuda-1 && git push origin cuda-1`).
+# On-demand/tag builds off a non-main ref publish :cuda.
 # GPU builds are large/slow; GHA layer caching keeps incremental builds faster.
-# Point your Unraid container's Repository at the :cuda tag and re-pull to update.
+# Point your Unraid container's Repository at :cuda (dev) or :cuda-stable
+# (stable) and re-pull to update.
 
 on:
   workflow_dispatch:
   push:
-    branches: [ "testing" ]
+    branches: [ "testing", "main" ]
     tags: [ 'cuda-*' ]
 
 env:
@@ -54,7 +59,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=cuda
+            type=raw,value=cuda-stable,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=cuda,enable=${{ github.ref != 'refs/heads/main' }}
             type=sha,prefix=cuda-
 
       - name: Set up Docker Buildx
