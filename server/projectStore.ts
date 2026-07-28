@@ -314,6 +314,9 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     // Issue rows (Phase 4b) — photos link to issues, delete photos first.
     db.prepare('DELETE FROM issue_photos WHERE issueId IN (SELECT id FROM issues WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM issues WHERE projectId = ?').run(id);
+    // RFI rows — photos link to rfis, delete photos first.
+    db.prepare('DELETE FROM rfi_photos WHERE rfiId IN (SELECT id FROM rfis WHERE projectId = ?)').run(id);
+    db.prepare('DELETE FROM rfis WHERE projectId = ?').run(id);
     // Punch rows (Phase 4c) — photos link to punch items, delete photos first.
     db.prepare('DELETE FROM punch_photos WHERE punchItemId IN (SELECT id FROM punch_items WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM punch_items WHERE projectId = ?').run(id);

@@ -881,4 +881,43 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 19,
+    name: 'rfis',
+    // ADDITIVE. RFIs — numbered Requests For Information, like issues but with
+    // header fields (spec/drawing ref, attention), a response-needed-by date,
+    // and a tracked response (uploaded PDF and/or text). Photos mirror
+    // issue_photos. No FKs (project convention); cascades are manual.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE rfis (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          title TEXT,
+          question TEXT,
+          specRef TEXT,
+          drawingRef TEXT,
+          attention TEXT,
+          responseNeededBy TEXT,
+          responseText TEXT,
+          responseFileId TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          version INTEGER NOT NULL DEFAULT 1,
+          sentAt INTEGER,
+          answeredAt INTEGER,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_rfis_projectId ON rfis (projectId);
+        CREATE TABLE rfi_photos (
+          id TEXT PRIMARY KEY,
+          rfiId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_rfi_photos_rfiId ON rfi_photos (rfiId);
+      `);
+    },
+  },
 ];
