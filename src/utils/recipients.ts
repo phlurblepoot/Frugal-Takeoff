@@ -1,6 +1,6 @@
 import type { CustomerRoleEmails, RoleEmailSet } from '../types';
 
-export type TemplateType = 'proposal' | 'invoice' | 'changeOrder' | 'issue' | 'punch';
+export type TemplateType = 'proposal' | 'invoice' | 'changeOrder' | 'issue' | 'punch' | 'rfi';
 
 export interface ResolvedRecipients {
   to: string;
@@ -14,7 +14,8 @@ export function roleForTemplate(t: TemplateType): keyof CustomerRoleEmails {
     case 'invoice':
     case 'changeOrder': return 'accounting';
     case 'issue':
-    case 'punch': return 'pm';
+    case 'punch':
+    case 'rfi': return 'pm';
   }
 }
 

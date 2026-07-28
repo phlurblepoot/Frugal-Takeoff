@@ -910,6 +910,81 @@ export const removeIssuePhoto = async (issueId: string, fileId: string): Promise
 export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
 };
+
+// ── RFIs ─────────────────────────────────────────────────────────────────────
+
+export interface RfiPhoto { id: string; fileId: string; sortOrder: number; }
+export interface Rfi {
+  id: string;
+  projectId: string;
+  number: number;
+  title: string | null;
+  question: string | null;
+  specRef: string | null;
+  drawingRef: string | null;
+  attention: string | null;
+  responseNeededBy: string | null; // ISO date (yyyy-mm-dd)
+  responseText: string | null;
+  responseFileId: string | null;
+  status: string; // open | sent | answered | closed
+  version: number;
+  sentAt: number | null;
+  answeredAt: number | null;
+  createdAt: number;
+  photos: RfiPhoto[];
+}
+export interface RfiListItem {
+  id: string; projectId: string; number: number; title: string | null;
+  question: string | null; specRef: string | null; drawingRef: string | null;
+  attention: string | null; responseNeededBy: string | null;
+  responseText: string | null; responseFileId: string | null;
+  status: string; version: number; sentAt: number | null; answeredAt: number | null;
+  createdAt: number; photoCount: number;
+}
+
+const rfiJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getRfis = async (projectId: string): Promise<RfiListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/rfis`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getRfi = async (id: string): Promise<Rfi> => {
+  const res = await fetchWithRetry(`/api/rfis/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createRfi = async (projectId: string, input: { title: string; question?: string }): Promise<{ id: string; number: number }> => {
+  const res = await rfiJson('POST', `/api/projects/${projectId}/rfis`, input);
+  await handleResponse(res); return res.json();
+};
+export const saveRfi = async (id: string, rfi: Rfi): Promise<{ version: number }> => {
+  const res = await rfiJson('PUT', `/api/rfis/${id}`, rfi);
+  if (res.status === 409) throw new ConflictError(id);
+  await handleResponse(res); return res.json();
+};
+export const setRfiStatus = async (id: string, status: string): Promise<void> => {
+  const res = await rfiJson('PATCH', `/api/rfis/${id}`, { status }); await handleResponse(res);
+};
+export const deleteRfi = async (id: string): Promise<void> => {
+  const res = await rfiJson('DELETE', `/api/rfis/${id}`); await handleResponse(res);
+};
+export const addRfiPhoto = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('POST', `/api/rfis/${rfiId}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeRfiPhoto = async (rfiId: string, fileId: string): Promise<void> => {
+  const res = await rfiJson('DELETE', `/api/rfis/${rfiId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const setRfiResponse = async (id: string, input: { fileId?: string; text?: string }): Promise<void> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/response`, input); await handleResponse(res);
+};
+export const sendRfi = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res);
+};
+
 export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
   const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
 };
