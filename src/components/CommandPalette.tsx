@@ -5,6 +5,7 @@ import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
   AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
+  MessageCircleQuestion,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -98,6 +99,7 @@ export const CommandPalette: React.FC = () => {
     if (!projectId) return [];
     const actions: Action[] = [
       { id: 'ctx:new-issue', type: 'action' as const, title: 'New issue', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues?new=1`) },
+      { id: 'ctx:new-rfi', type: 'action' as const, title: 'New RFI', subtitle: 'Project', icon: <MessageCircleQuestion size={16} />, run: () => navigate(`/project/${projectId}/rfis?new=1`) },
       { id: 'ctx:new-punch', type: 'action' as const, title: 'New punch item', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch?new=1`) },
       { id: 'ctx:new-task', type: 'action' as const, title: 'New task', subtitle: 'Project', icon: <ListTodo size={16} />, run: () => navigate('/tasks?new=1') },
       { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
@@ -106,6 +108,7 @@ export const CommandPalette: React.FC = () => {
       { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/project/${projectId}/documents`) },
       { id: 'ctx:punch', type: 'action' as const, title: 'Punch & checklists', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch`) },
       { id: 'ctx:issues', type: 'action' as const, title: 'Issues', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues`) },
+      { id: 'ctx:rfis', type: 'action' as const, title: 'RFIs', subtitle: 'Project', icon: <MessageCircleQuestion size={16} />, run: () => navigate(`/project/${projectId}/rfis`) },
       { id: 'ctx:time', type: 'action' as const, title: 'Time', subtitle: 'Project', icon: <Clock size={16} />, run: () => navigate(`/project/${projectId}/time`) },
       { id: 'ctx:notes', type: 'action' as const, title: 'Notes', subtitle: 'Project', icon: <StickyNote size={16} />, run: () => navigate(`/project/${projectId}/notes`) },
     ];
