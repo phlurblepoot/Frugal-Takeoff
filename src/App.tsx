@@ -13,6 +13,7 @@ import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
+import { ProjectRfis } from './pages/project/ProjectRfis';
 import { ProjectPunch } from './pages/project/ProjectPunch';
 import { ProjectProposal } from './pages/project/ProjectProposal';
 import { ProjectSettings } from './pages/project/ProjectSettings';
@@ -121,6 +122,7 @@ export default function App() {
             { path: 'time', element: <ProjectTime /> },
             { path: 'punch', element: <ProjectPunch /> },
             { path: 'issues', element: <ProjectIssues /> },
+            { path: 'rfis', element: <ProjectRfis /> },
             { path: 'billing', element: <ProjectBilling /> },
             { path: 'settings', element: <ProjectSettings /> },
             { path: 'page/:pageId', element: <CanvasView /> },

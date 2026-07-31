@@ -881,4 +881,56 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 19,
+    name: 'rfis',
+    // ADDITIVE. RFIs — numbered Requests For Information, like issues but with
+    // header fields (spec/drawing ref, attention), a response-needed-by date,
+    // and a tracked response (uploaded PDF and/or text). Photos mirror
+    // issue_photos. No FKs (project convention); cascades are manual.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE rfis (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          title TEXT,
+          question TEXT,
+          specRef TEXT,
+          drawingRef TEXT,
+          attention TEXT,
+          responseNeededBy TEXT,
+          responseText TEXT,
+          responseFileId TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          version INTEGER NOT NULL DEFAULT 1,
+          sentAt INTEGER,
+          answeredAt INTEGER,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_rfis_projectId ON rfis (projectId);
+        CREATE TABLE rfi_photos (
+          id TEXT PRIMARY KEY,
+          rfiId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_rfi_photos_rfiId ON rfi_photos (rfiId);
+      `);
+    },
+  },
+  {
+    version: 20,
+    name: 'rfi-counter',
+    // ADDITIVE. RFI numbers are referenced in external correspondence, so an
+    // issued number must never be reused after a delete. Numbering moves from
+    // MAX(number)+1 to a per-project high-water counter, backfilled to each
+    // project's current max.
+    up({ db }) {
+      db.exec('ALTER TABLE projects ADD COLUMN rfiCounter INTEGER NOT NULL DEFAULT 0;');
+      db.exec(`UPDATE projects SET rfiCounter = COALESCE(
+        (SELECT MAX(number) FROM rfis WHERE rfis.projectId = projects.id), 0)`);
+    },
+  },
 ];
