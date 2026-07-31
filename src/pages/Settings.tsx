@@ -20,6 +20,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.3',
+    date: 'July 30, 2026',
+    changes: [
+      'RFIs (new): every project now has an RFIs section for formal Requests For Information. Write the question with spec/drawing references, who it\'s directed to, and a response-needed-by date; attach site photos; then download a branded RFI PDF or email it straight to the GC/architect. When the answer comes back, attach the response PDF (or type the response) and the RFI is marked answered — the list highlights overdue RFIs in red until then. RFIs move through Open → Sent → Answered → Closed.',
+      'RFI numbers are permanent: RFIs are numbered RFI-001, RFI-002, … per project, and a number is never reused — even if an RFI is deleted — so the numbers you reference in correspondence stay unambiguous.',
+      'Download SOV before billing starts: the Billing → Schedule of Values tab now has a "Download SOV" button that exports the standard AIA G702/G703 Excel with all billing at $0 — for presenting the schedule of values for approval before the first pay application. Uses your uploaded AIA template when one is configured.',
+      'Fix: AIA Excel exports no longer show a #DIV/0! error in the change-order totals % cell on projects with no change orders.',
+      'Tasks now relate to projects and customers: a task can be linked to the project or customer it\'s about (picking a project fills in its customer automatically). Project and customer pages have a Tasks link showing just their tasks, the global task list can be filtered by project or customer, and upcoming task deadlines appear on the Dashboard and on each project\'s Overview.',
+    ],
+  },
+  {
     version: '2.2',
     date: 'July 1, 2026',
     changes: [
