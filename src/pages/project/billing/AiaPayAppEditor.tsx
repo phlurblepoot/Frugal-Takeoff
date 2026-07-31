@@ -3,9 +3,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AiaPayApp, AiaPayAppLine, AiaG703Row, AiaG702,
   getPayApp, savePayAppLines, setPayApp,
-  getProject, getSettings, getAiaSettings, getSov, getFile,
 } from '../../../utils/store';
-import { exportAiaXlsx, type AiaTemplateMapping } from './aiaExcel';
+import { exportAiaXlsx } from './aiaExcel';
+import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import {
@@ -138,66 +138,20 @@ export const AiaPayAppEditor: React.FC<{
     setExporting(true);
     try {
       const projectId = data.app.projectId;
-      const [project, settings, aiaSettings, sovLines] = await Promise.all([
-        getProject(projectId),
-        getSettings(),
-        getAiaSettings(projectId),
-        getSov(projectId),
-      ]);
-
-      // Resolve logo to a data URL the same way Invoice/Proposal exports do.
-      let logoDataUrl: string | undefined;
-      const logoUrl = settings.logoUrl;
-      if (logoUrl) {
-        if (logoUrl.startsWith('data:')) {
-          logoDataUrl = logoUrl;
-        } else {
-          try {
-            const resp = await fetch(logoUrl);
-            const blob = await resp.blob();
-            logoDataUrl = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-          } catch { /* skip logo on fetch error */ }
-        }
+      const env = await resolveAiaExportEnv(projectId);
+      if (env.templateLoadFailed) {
+        toast('AIA template failed to load — exporting standard G702/G703 instead', { type: 'error' });
       }
-
-      // Resolve an admin-configured template (best-effort: fall back to the
-      // recreation on any load/parse error so export always works).
-      let template: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping } | undefined;
-      const templateFileId = settings.aiaTemplateFileId;
-      if (templateFileId) {
-        try {
-          const dataUrl = await getFile(templateFileId);
-          if (!dataUrl) throw new Error('template file missing');
-          const buf = await (await fetch(dataUrl)).arrayBuffer();
-          const mapping = JSON.parse(settings.aiaTemplateMapping || '{}') as AiaTemplateMapping;
-          template = { templateBuf: buf, mapping };
-        } catch {
-          toast('AIA template failed to load — exporting standard G702/G703 instead', { type: 'error' });
-          template = undefined;
-        }
-      }
-
       await exportAiaXlsx({
-        projectName: project?.name ?? 'Project',
-        contractor: project?.contractor ?? undefined,
-        company: {
-          name: settings.companyName || settings.appName,
-          address: settings.companyAddress,
-          phone: settings.companyPhone,
-          email: settings.companyEmail,
-          logoDataUrl,
-        },
-        aiaSettings,
+        projectName: env.project?.name ?? 'Project',
+        contractor: env.project?.contractor ?? undefined,
+        company: env.company,
+        aiaSettings: env.aiaSettings,
         app: data.app,
-        sovLines,
+        sovLines: env.sovLines,
         g702: data.g702,
         g703: data.g703,
-      }, template);
+      }, env.template);
     } catch {
       toast('Excel export failed', { type: 'error' });
     } finally {
