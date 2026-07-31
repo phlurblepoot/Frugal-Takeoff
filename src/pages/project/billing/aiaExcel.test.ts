@@ -155,4 +155,33 @@ describe('buildAiaWorkbook', () => {
     const g702 = wb.getWorksheet('G702')!;
     expect(g702.getCell('H3').value).toBe('');
   });
+
+  it('guards H-column % formulas with IFERROR to prevent #DIV/0! on zero sections', async () => {
+    // Blank SOV export: no change-order lines, zero CO sums in g702.
+    const blankCtx: AiaExportCtx = {
+      ...ctx,
+      g703: g703.filter((row) => !row.isChangeOrder), // contract only, no COs
+      g702: {
+        ...ctx.g702,
+        changeOrders: { additionsCents: 0, deductionsCents: 0, netCents: 0 },
+      },
+    };
+
+    const wb = await buildAiaWorkbook(blankCtx);
+    const ws = wb.getWorksheet('G703')!;
+
+    // With zero CO lines, the CO TOTALS row will divide by zero (empty section).
+    // CO layout: contract section rows 11-12 (2 items), TOTALS 13, then
+    // CO-label 15, CO-header 17, CO-start 21, CO-totals (0 items) 21.
+    const coZeroTotalRow = CO_START; // when no CO items, TOTALS sits at CO_START
+
+    // Item-row H formula should contain IFERROR.
+    const itemFormula = formulaOf(ws.getCell(`H${CONTRACT_START}`).value);
+    expect(itemFormula).toContain('IFERROR');
+    expect(itemFormula).toContain(`G${CONTRACT_START}/C${CONTRACT_START}`);
+
+    // CO TOTALS-row H formula should also contain IFERROR (protects against C=0).
+    const coTotalFormula = formulaOf(ws.getCell(`H${coZeroTotalRow}`).value);
+    expect(coTotalFormula).toContain('IFERROR');
+  });
 });

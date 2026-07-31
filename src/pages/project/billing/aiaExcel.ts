@@ -248,7 +248,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
     setCell(ws, `E${rowNum}`, dollars(row.thisPeriodCents), { money: true, border: true });
     setCell(ws, `F${rowNum}`, dollars(row.storedCents), { money: true, border: true });
     setCell(ws, `G${rowNum}`, { formula: `D${rowNum}+E${rowNum}+F${rowNum}` }, { money: true, border: true });
-    setCell(ws, `H${rowNum}`, { formula: `G${rowNum}/C${rowNum}` }, { border: true, align: 'center' }).numFmt = '0.00%';
+    setCell(ws, `H${rowNum}`, { formula: `IFERROR(G${rowNum}/C${rowNum},0)` }, { border: true, align: 'center' }).numFmt = '0.00%';
     setCell(ws, `I${rowNum}`, { formula: `C${rowNum}-G${rowNum}` }, { money: true, border: true });
     setCell(ws, `J${rowNum}`, { formula: `SUM(D${rowNum}:E${rowNum})*'G702'!$G$22` }, { money: true, border: true });
   };
@@ -261,7 +261,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
       const ref = last >= first ? `SUM(${col}${first}:${col}${last})` : '0';
       setCell(ws, `${col}${totalRow}`, { formula: ref }, { money: true, bold: true, border: true });
     }
-    setCell(ws, `H${totalRow}`, { formula: `G${totalRow}/C${totalRow}` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
+    setCell(ws, `H${totalRow}`, { formula: `IFERROR(G${totalRow}/C${totalRow},0)` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
   };
 
   // ── Contract section ──────────────────────────────────────────────────────
@@ -289,7 +289,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
   for (const col of ['C', 'D', 'E', 'F', 'G', 'I', 'J']) {
     setCell(ws, `${col}${grandRow}`, { formula: `${col}${contractTotalRow}+${col}${coTotalRow}` }, { money: true, bold: true, border: true });
   }
-  setCell(ws, `H${grandRow}`, { formula: `G${grandRow}/C${grandRow}` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
+  setCell(ws, `H${grandRow}`, { formula: `IFERROR(G${grandRow}/C${grandRow},0)` }, { bold: true, border: true, align: 'center' }).numFmt = '0.00%';
 
   return { contractStart, contractTotalRow, coStart, coTotalRow, grandRow };
 }
