@@ -1,7 +1,7 @@
 // src/pages/project/billing/AiaScheduleOfValues.tsx
 import React, { useEffect, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle } from 'lucide-react';
+import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle, Download } from 'lucide-react';
 import {
   AiaSovLine, getSov, createSovLine, saveSovLine, deleteSovLine,
   seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate,
@@ -9,6 +9,8 @@ import {
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
+import { exportAiaXlsx, sanitizeFilename } from './aiaExcel';
+import { resolveAiaExportEnv, buildBlankSovContext } from './aiaExportShared';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Skeleton,
   Table, TBody, TD, TH, THead, TR,
@@ -21,6 +23,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
   const confirm = useConfirm();
   const [lines, setLines] = useState<AiaSovLine[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -41,6 +44,36 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
     getSov(projectId).then(setLines).catch(() => setLines([]));
   };
   useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Zero-charge SOV export — the same G702/G703 workbook (or admin template) a
+  // pay-app export produces, with all billing at $0. Lets the SOV be presented
+  // for approval before any pay application exists.
+  const handleDownloadSov = async () => {
+    if (!lines || lines.length === 0) return;
+    setDownloading(true);
+    try {
+      const env = await resolveAiaExportEnv(projectId);
+      if (env.templateLoadFailed) {
+        toast('AIA template failed to load — exporting standard G702/G703 instead', { type: 'error' });
+      }
+      const blank = buildBlankSovContext(env.sovLines, env.aiaSettings, projectId);
+      await exportAiaXlsx({
+        projectName: env.project?.name ?? 'Project',
+        contractor: env.project?.contractor ?? undefined,
+        company: env.company,
+        aiaSettings: env.aiaSettings,
+        app: blank.app,
+        sovLines: env.sovLines,
+        g702: blank.g702,
+        g703: blank.g703,
+      }, env.template, `AIA-${sanitizeFilename(env.project?.name ?? 'Project')}-SOV.xlsx`);
+      toast('SOV downloaded', { type: 'success' });
+    } catch {
+      toast('Failed to export SOV', { type: 'error' });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const seedFromEstimate = async () => {
     if (!projectId) return;
@@ -191,6 +224,10 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
       <CardHeader title="Schedule of values"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={handleDownloadSov}
+              disabled={busy || downloading || !lines || lines.length === 0}>
+              <Download size={14} />{downloading ? 'Exporting…' : 'Download SOV'}
+            </Button>
             <Button size="sm" variant="secondary" onClick={seedFromEstimate} disabled={busy}>Seed from estimate</Button>
             <Button size="sm" variant="secondary" onClick={syncCos} disabled={busy}>Sync approved change orders</Button>
             <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />Upload sheet</Button>

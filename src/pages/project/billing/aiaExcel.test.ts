@@ -149,4 +149,10 @@ describe('buildAiaWorkbook', () => {
     expect(formulaOf(ws.getCell('H22').value))
       .toBe(`'G703'!J${CONTRACT_TOTAL_ROW}+'G703'!J${CO_TOTAL_ROW}`);
   });
+
+  it('leaves the Application No blank for a zero-numbered (blank SOV) app', async () => {
+    const wb = await buildAiaWorkbook({ ...ctx, app: { ...ctx.app, number: 0 } });
+    const g702 = wb.getWorksheet('G702')!;
+    expect(g702.getCell('H3').value).toBe('');
+  });
 });

@@ -328,7 +328,7 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
   setCell(ws, 'D3', ctx.projectName, {}); // input — referenced by G703 D2
   ws.mergeCells('D3:F3');
   setCell(ws, 'G3', 'APPLICATION NO:', { bold: true });
-  setCell(ws, 'H3', app.number, { align: 'right' }); // input — G703 I3
+  setCell(ws, 'H3', app.number > 0 ? app.number : '', { align: 'right' }); // input — G703 I3
 
   setCell(ws, 'G5', 'PERIOD FROM:', { bold: true });
   setCell(ws, 'H5', '', { align: 'right' }); // input (blank — not tracked) — G703 I4
@@ -473,7 +473,7 @@ export async function buildAiaWorkbookFromTemplate(
   setMapped(g702ws, c.contractorName, ctx.company.name ?? '');
   setMapped(g702ws, c.architectName, a.architectName ?? '');
   setMapped(g702ws, c.contractFor, a.contractFor ?? '');
-  setMapped(g702ws, c.applicationNo, app.number);
+  setMapped(g702ws, c.applicationNo, app.number > 0 ? app.number : '');
   setMapped(g702ws, c.periodTo, app.periodTo ?? '');
   setMapped(g702ws, c.applicationDate, app.applicationDate ?? '');
   setMapped(g702ws, c.contractDate, a.contractDate ?? '');
@@ -526,7 +526,7 @@ export async function buildAiaWorkbookFromTemplate(
   return wb;
 }
 
-function sanitizeFilename(name: string): string {
+export function sanitizeFilename(name: string): string {
   return (name || 'project').replace(/[^a-zA-Z0-9 _.-]+/g, '_').replace(/\s+/g, '_').slice(0, 80) || 'project';
 }
 
@@ -536,6 +536,7 @@ function sanitizeFilename(name: string): string {
 export async function exportAiaXlsx(
   ctx: AiaExportCtx,
   template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
+  filename?: string,
 ): Promise<void> {
   const wb = template
     ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
@@ -547,7 +548,7 @@ export async function exportAiaXlsx(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `AIA-${sanitizeFilename(ctx.projectName)}-App${ctx.app.number}.xlsx`;
+  a.download = filename ?? `AIA-${sanitizeFilename(ctx.projectName)}-App${ctx.app.number}.xlsx`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
