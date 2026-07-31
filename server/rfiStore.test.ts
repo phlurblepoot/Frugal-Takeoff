@@ -32,6 +32,27 @@ describe('rfiStore', () => {
     expect(c.number).toBe(1);
   });
 
+  it('never reuses a deleted RFI number', () => {
+    createRfi(db, 'p1', { title: 'a' });                      // RFI-001
+    const b = createRfi(db, 'p1', { title: 'b' });            // RFI-002
+    deleteRfi(db, b.id);
+    expect(createRfi(db, 'p1', { title: 'c' }).number).toBe(3); // not 2
+  });
+
+  it('continues numbering after all RFIs are deleted', () => {
+    const a = createRfi(db, 'p1', { title: 'a' });
+    const b = createRfi(db, 'p1', { title: 'b' });
+    deleteRfi(db, a.id);
+    deleteRfi(db, b.id);
+    expect(createRfi(db, 'p1', { title: 'c' }).number).toBe(3); // not 1
+  });
+
+  it('recovers when the counter is behind existing rows (max guard)', () => {
+    createRfi(db, 'p1', { title: 'a' });                       // counter → 1
+    db.prepare('UPDATE projects SET rfiCounter = 0 WHERE id = ?').run('p1');
+    expect(createRfi(db, 'p1', { title: 'b' }).number).toBe(2); // MAX guard wins
+  });
+
   it('requires a title on create', () => {
     expect(() => createRfi(db, 'p1', {})).toThrow(ValidationError);
   });

@@ -920,4 +920,17 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 20,
+    name: 'rfi-counter',
+    // ADDITIVE. RFI numbers are referenced in external correspondence, so an
+    // issued number must never be reused after a delete. Numbering moves from
+    // MAX(number)+1 to a per-project high-water counter, backfilled to each
+    // project's current max.
+    up({ db }) {
+      db.exec('ALTER TABLE projects ADD COLUMN rfiCounter INTEGER NOT NULL DEFAULT 0;');
+      db.exec(`UPDATE projects SET rfiCounter = COALESCE(
+        (SELECT MAX(number) FROM rfis WHERE rfis.projectId = projects.id), 0)`);
+    },
+  },
 ];

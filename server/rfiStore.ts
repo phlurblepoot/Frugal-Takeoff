@@ -42,14 +42,19 @@ export function createRfi(db: Database.Database, projectId: string, input: RfiIn
   const id = crypto.randomUUID();
   let number = 0;
   const tx = db.transaction(() => {
+    // Never reuse an issued number: the high-water counter survives deletes.
+    // MAX(number) is a guard so numbering can't collide even if the counter
+    // were ever behind (e.g., imported rows).
+    const counter = (db.prepare('SELECT rfiCounter c FROM projects WHERE id = ?').get(projectId) as any).c;
     const max = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM rfis WHERE projectId = ?').get(projectId) as any).m;
-    number = max + 1;
+    number = Math.max(counter, max) + 1;
     db.prepare(`INSERT INTO rfis (id, projectId, number, title, question, specRef, drawingRef, attention, responseNeededBy,
                 responseText, responseFileId, status, version, sentAt, answeredAt, createdAt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?)`)
       .run(id, projectId, number, input.title!.trim(), input.question ?? null, input.specRef ?? null,
            input.drawingRef ?? null, input.attention ?? null, input.responseNeededBy ?? null,
            input.status ?? 'open', Date.now());
+    db.prepare('UPDATE projects SET rfiCounter = ? WHERE id = ?').run(number, projectId);
   });
   tx();
   return { id, number };
