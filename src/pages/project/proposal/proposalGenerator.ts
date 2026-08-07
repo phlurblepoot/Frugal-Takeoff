@@ -7,6 +7,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 import { jsPDF } from 'jspdf';
 import { Project, MeasurementTakeoff } from '../../../types';
 import { getFile, getImage } from '../../../utils/store';
+import { viewBox, overlayPlacement } from '../../../utils/pdfOverlayTransform';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -93,16 +94,18 @@ export async function buildHighlightsPdf(
 
     // Build the destination page. Two paths:
     //   • Vector: copy the original PDF page so its native content (text,
-    //     vectors, embedded images) survives. The measurements layer needs to
-    //     scale from the project's 2.0× coord space down to PDF points (×0.5).
+    //     vectors, embedded images) survives. The measurements were captured
+    //     against the page's *view box* (CropBox ∩ MediaBox) rendered at 2.0×,
+    //     so the overlay must be scaled AND translated into that box — CAD
+    //     exports often have an offset (e.g. center-origin) MediaBox, and
+    //     assuming (0,0) shifts every highlight diagonally.
     //   • Legacy: a blank page sized to the stored raster dimensions, with
     //     that raster embedded as a full-page JPEG. Measurements are drawn
     //     in their native 1:1 coord space.
     let outPage: any = null;
-    let scaleFactor = 1.0;
-    let pageWidth = page.imageWidth;
-    let pageHeight = page.imageHeight;
-    let rotation = 0;
+    // Legacy default: page IS the image rect — sf 1, origin (0,0), no rotation.
+    let placement = overlayPlacement(
+      { x0: 0, y0: 0, x1: page.imageWidth, y1: page.imageHeight }, 0, page.imageWidth);
 
     if (page.sourcePdfFileId && page.sourcePdfPageNum) {
       const srcDoc = await loadSourceDoc(page.sourcePdfFileId);
@@ -113,10 +116,10 @@ export async function buildHighlightsPdf(
             const [copied] = await outDoc.copyPages(srcDoc, [idx]);
             outDoc.addPage(copied);
             outPage = copied;
-            rotation = copied.getRotation().angle;
-            pageWidth = copied.getWidth();
-            pageHeight = copied.getHeight();
-            scaleFactor = 0.5; // imageWidth = 2.0 × natural PDF points
+            placement = overlayPlacement(
+              viewBox(copied.getMediaBox(), copied.getCropBox()),
+              copied.getRotation().angle,
+              page.imageWidth);
           }
         } catch (e) {
           console.warn(`Failed to copy source page ${page.sourcePdfPageNum} of ${page.sourcePdfFileId}`, e);
@@ -126,9 +129,8 @@ export async function buildHighlightsPdf(
 
     if (!outPage) {
       // Legacy raster fallback.
-      pageWidth = page.imageWidth;
-      pageHeight = page.imageHeight;
-      scaleFactor = 1.0;
+      const pageWidth = page.imageWidth;
+      const pageHeight = page.imageHeight;
       outPage = outDoc.addPage([pageWidth, pageHeight]);
       if (page.imageId) {
         try {
@@ -146,30 +148,22 @@ export async function buildHighlightsPdf(
     }
 
     // Measurements are captured on the *displayed* page — pdf.js rasterizes the
-    // canvas via getViewport({ scale: 2.0 }), which honours /Rotate, so the
-    // coords live in the rotated, viewer-facing image space. The page we copied,
-    // however, exposes its *unrotated* content box (getWidth/getHeight ignore
-    // /Rotate). So we compose the overlay in displayed space and concat a
-    // transform matrix that maps it into the page's unrotated content space;
-    // the viewer's /Rotate then renders both the page and our marks together.
-    const rot = ((rotation % 360) + 360) % 360;
-    const swapsAxes = rot === 90 || rot === 270;
-    const dispH = swapsAxes ? pageWidth : pageHeight; // displayed (viewer) height in PDF points
-
-    // Maps a displayed-space point (Y-up) to unrotated content space.
-    let rotationMatrix: [number, number, number, number, number, number] | null = null;
-    if (rot === 90) rotationMatrix = [0, 1, -1, 0, pageWidth, 0];
-    else if (rot === 180) rotationMatrix = [-1, 0, 0, -1, pageWidth, pageHeight];
-    else if (rot === 270) rotationMatrix = [0, -1, 1, 0, 0, pageHeight];
-    if (rotationMatrix) {
-      outPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(...rotationMatrix));
+    // view box via getViewport({ scale: 2.0 }), which honours /Rotate and
+    // subtracts the box origin, so the coords live in the rotated, origin-zero,
+    // viewer-facing image space. The page we copied, however, exposes its raw
+    // unrotated content space, whose view box may start anywhere. Compose the
+    // overlay in displayed space and concat the placement matrix that carries
+    // it into content space (rotation + view-origin translation together); the
+    // viewer's /Rotate then renders both the page and our marks as one.
+    const { sf, dispH } = placement;
+    if (!placement.isIdentity) {
+      outPage.pushOperators(pushGraphicsState(), concatTransformationMatrix(...placement.matrix));
     }
 
     // ── Vector overlay: measurements ────────────────────────────────────────
     // SVG path origin is top-left with Y-down (pdf-lib flips to PDF Y-up when
     // drawn at y=dispH). All measurement coords are scaled into PDF points
     // first so the drawSvgPath origin maps cleanly.
-    const sf = scaleFactor;
     const pdfX = (mx: number) => mx * sf;
     const pdfY = (my: number) => dispH - my * sf; // for non-SVG primitives (Y-up)
 
@@ -389,8 +383,8 @@ export async function buildHighlightsPdf(
       }
     }
 
-    // Balance the graphics-state push from the rotation transform above.
-    if (rotationMatrix) {
+    // Balance the graphics-state push from the placement transform above.
+    if (!placement.isIdentity) {
       outPage.pushOperators(popGraphicsState());
     }
   }
