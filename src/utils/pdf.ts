@@ -169,8 +169,19 @@ export async function buildRegionCrop(
   const sw = Math.max(1, Math.min(naturalW - sx, (region.width / 100) * naturalW));
   const sh = Math.max(1, Math.min(naturalH - sy, (region.height / 100) * naturalH));
   const upscale = Math.min(6, Math.max(1, 200 / Math.min(sw, sh)));
-  const dw = Math.max(1, Math.round(sw * upscale));
-  const dh = Math.max(1, Math.round(sh * upscale));
+  let dw = Math.max(1, Math.round(sw * upscale));
+  let dh = Math.max(1, Math.round(sh * upscale));
+  // Cap the long side so a huge selected region can't produce a multi-megapixel
+  // crop that blows the model's request timeout — scale both dimensions down
+  // proportionally so the crop's aspect ratio (and the earlier short-side
+  // upscale) is preserved.
+  const MAX_LONG_SIDE = 1536;
+  const longSide = Math.max(dw, dh);
+  if (longSide > MAX_LONG_SIDE) {
+    const downscale = MAX_LONG_SIDE / longSide;
+    dw = Math.max(1, Math.round(dw * downscale));
+    dh = Math.max(1, Math.round(dh * downscale));
+  }
   const canvas = document.createElement('canvas');
   canvas.width = dw; canvas.height = dh;
   const ctx = canvas.getContext('2d');

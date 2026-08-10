@@ -106,17 +106,18 @@ export interface NamingStepPage {
   sourcePdfFileId?: string;
   sourcePdfPageNum?: number;
   extractedText?: string;
-  /** Set in the add-pages-to-existing-project flow when a new page replaces
-   *  an existing one (matched by page number). Only the add-pages caller
-   *  populates this — the new-project upload leaves it undefined. */
-  revisionOf?: string;
-  /** Confidence of the import-time auto-detection ('low' = fell back to OCR /
-   *  filename heuristics). Updated by the manual Extract tool to reflect the
-   *  hybrid reconcile result. Task 7's review UI flags 'low' rows. */
+  /** Confidence of the manual Extract tool's read for this row (hybrid
+   *  raw-text+OCR reconcile, or the AI region-read when that engine is
+   *  selected). 'low' means the extract ran but couldn't confidently resolve
+   *  a value — distinct from a FAILED AI read (network/model unavailable),
+   *  which leaves this field untouched entirely. The review UI flags 'low'
+   *  rows as needing a second look. */
   extractConfidence?: 'high' | 'low';
-  /** Import-time detection confidence carried from the PDF generator. Used as
-   *  the initial "needs review" signal until the user runs the manual Extract
-   *  (which writes `extractConfidence`). */
+  /** Confidence signal driving the "needs review" badge before (or instead
+   *  of) a manual Extract run. 'low' = the page still carries its import-time
+   *  placeholder number (e.g. "1", "2") and hasn't been confirmed — either by
+   *  editing the field directly (`updateField` bumps this to 'high') or by a
+   *  confident extraction. 'high' = user-confirmed or confidently read. */
   detectionConfidence?: 'high' | 'low';
   /** Revision Review match: the durable sheetId this incoming page is a revision
    *  of (reuses that sheet's id + carries its measurements forward on commit).
@@ -239,6 +240,10 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         const num = field === 'pageNumber' ? value : (p.pageNumber || '');
         const desc = field === 'description' ? value : (p.description || '');
         updated.name = composePageName(num, desc, p.name);
+        // A manual edit is the user confirming this row — clear the "needs
+        // review" signal so the amber badge doesn't linger on a row they've
+        // already looked at.
+        updated.detectionConfidence = 'high';
       }
       // Editing the page number re-runs the match (the duplicate check is derived
       // live from pendingPages, so it recomputes automatically on render).
@@ -290,7 +295,10 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
     const c = extractConfidence[p.id] ?? p.extractConfidence ?? p.detectionConfidence;
     return c === 'low';
   };
-  const needsReviewCount = reviewMode ? pendingPages.filter(rowNeedsReview).length : 0;
+  // Needs-review is a signal for every naming flow, not just the add-set
+  // review step — a fresh upload's placeholder page numbers ("1", "2", …)
+  // are just as unconfirmed as a low-confidence AI/OCR read.
+  const needsReviewCount = pendingPages.filter(rowNeedsReview).length;
 
   // One-time auto-match seed: when the review step opens, preselect "Revision of
   // {sheet}" for any incoming page whose number matches an existing sheet's
@@ -410,22 +418,36 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
     };
 
     try {
+      // Resolved once per extract run rather than per page — the setting is
+      // static for the duration of the run, and "extract all" over dozens of
+      // pages shouldn't pay a settings round-trip for each one.
+      const aiIdleTimeoutMs = extractEngine === 'ai' ? await getAiIdleTimeoutMs() : undefined;
+
       // Always gather BOTH raw text-layer candidates AND an OCR read, then
       // reconcile. Returns the cleaned value + a confidence flag for the row.
       // When the AI engine is selected, skip straight to a vision-model read
-      // of the same region crop instead.
-      const recognizePage = async (p: NamingStepPage): Promise<{ value: string; confidence: 'high' | 'low' }> => {
+      // of the same region crop instead. `failed: true` marks a read that
+      // came back null (network error, model unavailable, timeout) or threw —
+      // distinct from "the model read the crop and found nothing" — so
+      // callers leave the row's existing value/match/confidence untouched
+      // instead of overwriting them with a blank.
+      const recognizePage = async (p: NamingStepPage): Promise<{ value: string; confidence: 'high' | 'low'; failed?: true }> => {
         if (extractEngine === 'ai') {
-          const src = await getPageRenderSrc(p);
-          const crop = await buildRegionCrop(src, region);
-          const result = await transcribeRegion({
-            imageBase64: crop,
-            mode: mode === 'pageNumber' ? 'number' : 'description',
-            idleTimeoutMs: await getAiIdleTimeoutMs(),
-          });
-          const rawText = result?.text ?? '';
-          const cleaned = cleanValue(rawText);
-          return { value: cleaned, confidence: (result && result.confidence >= 0.5 && cleaned) ? 'high' : 'low' };
+          try {
+            const src = await getPageRenderSrc(p);
+            const crop = await buildRegionCrop(src, region);
+            const result = await transcribeRegion({
+              imageBase64: crop,
+              mode: mode === 'pageNumber' ? 'number' : 'description',
+              idleTimeoutMs: aiIdleTimeoutMs,
+            });
+            if (!result) return { value: '', confidence: 'low', failed: true };
+            const cleaned = cleanValue(result.text ?? '');
+            return { value: cleaned, confidence: (result.confidence >= 0.5 && cleaned) ? 'high' : 'low' };
+          } catch (err) {
+            console.warn('AI region read failed', err);
+            return { value: '', confidence: 'low', failed: true };
+          }
         }
 
         let rawCandidates: string[] = [];
@@ -460,8 +482,18 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       if (applyToAll) {
         const updated = [...pendingPages];
         setExtractProgress({ done: 0, total: updated.length });
+        let failCount = 0;
         for (let i = 0; i < updated.length; i++) {
-          const { value, confidence } = await recognizePage(updated[i]);
+          const result = await recognizePage(updated[i]);
+          if (result.failed) {
+            // Leave this row exactly as it was — old value, old matchSheetId
+            // (recomputed below from the unchanged page number), old
+            // extractConfidence — rather than silently blanking it.
+            failCount++;
+            setExtractProgress({ done: i + 1, total: updated.length });
+            continue;
+          }
+          const { value, confidence } = result;
           const num = mode === 'pageNumber' ? value : (updated[i].pageNumber || '');
           const desc = mode === 'description' ? value : (updated[i].description || '');
           updated[i] = {
@@ -476,16 +508,28 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         // Extracted page numbers can change which existing sheet a row
         // matches — recompute in the same state update (same logic
         // updateField/rematchAll use) so matchSheetId doesn't go stale.
+        // Failed rows keep their original (unchanged) page number, so
+        // re-running autoMatch on them is a no-op that reproduces their
+        // existing match rather than resetting it.
         if (reviewMode && mode === 'pageNumber') {
           for (let i = 0; i < updated.length; i++) {
             updated[i] = { ...updated[i], matchSheetId: autoMatch(updated[i].pageNumber || '') };
           }
         }
         setPendingPages(updated);
+        if (failCount > 0) {
+          toast(`AI could not read ${failCount} of ${updated.length} page(s)`, {
+            type: failCount === updated.length ? 'error' : 'warning',
+          });
+        }
       } else {
-        const { value, confidence } = await recognizePage(previewedPage);
-        updateField(previewPageId, mode, value);
-        confidenceUpdates[previewPageId] = confidence;
+        const result = await recognizePage(previewedPage);
+        if (result.failed) {
+          toast('AI read failed — is the AI model available?', { type: 'error' });
+        } else {
+          updateField(previewPageId, mode, result.value);
+          confidenceUpdates[previewPageId] = result.confidence;
+        }
       }
 
       if (Object.keys(confidenceUpdates).length) {
@@ -659,7 +703,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                 <AlertTriangle size={12} /> Resolve duplicate page numbers to continue
               </p>
             )}
-            {reviewMode && !hasDuplicates && needsReviewCount > 0 && (
+            {!hasDuplicates && needsReviewCount > 0 && (
               <p className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
                 <AlertTriangle size={12} /> {needsReviewCount} row{needsReviewCount === 1 ? '' : 's'} flagged — double-check before committing
               </p>
@@ -678,7 +722,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               const thumbSrc =
                 pendingThumbnails[page.thumbnailId] || pendingThumbnails[page.imageId];
               const isDuplicate = duplicateIds.has(page.id);
-              const needsReview = reviewMode && rowNeedsReview(page);
+              const needsReview = rowNeedsReview(page);
               const borderClass = isDuplicate
                 ? 'border-red-400 dark:border-red-500'
                 : needsReview
@@ -725,24 +769,18 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                       AI {Math.round(page.aiConfidence * 100)}%
                     </div>
                   )}
-                  {reviewMode ? (
-                    needsReview && (
-                      <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">
-                        <AlertTriangle size={11} /> NEEDS REVIEW
-                      </div>
-                    )
-                  ) : page.revisionOf ? (
-                    <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm">
-                      REVISION
+                  {needsReview && (
+                    <div className="absolute top-3 right-3 bg-amber-500/90 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1.5 rounded-lg shadow-sm flex items-center gap-1">
+                      <AlertTriangle size={11} /> NEEDS REVIEW
                     </div>
-                  ) : null}
+                  )}
                 </div>
 
                 <div className="p-5 space-y-5">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">
                       <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Page Number</label>
-                      {page.pageNumber && <Check size={12} className="text-green-500" />}
+                      {page.pageNumber && !needsReview && <Check size={12} className="text-green-500" />}
                     </div>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
@@ -773,11 +811,6 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                           Suffix
                         </button>
                       </div>
-                    )}
-                    {!reviewMode && page.revisionOf && (
-                      <p className="text-[11px] text-amber-600 dark:text-amber-400 px-1">
-                        Replaces existing page {page.revisionOf} — measurements will carry over.
-                      </p>
                     )}
                   </div>
 

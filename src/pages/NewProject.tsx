@@ -25,8 +25,9 @@ interface PendingPage {
   sourcePdfPageNum?: number;
   searchTextIndexed?: boolean;
   extractedText?: string;
-  /** 'low' when auto-detection fell back to OCR/filename heuristics (Task 4).
-   *  Task 7's review UI flags these as "needs review". */
+  /** 'low' = the page still carries its import-time placeholder number and
+   *  hasn't been confirmed yet (by manual edit or a confident AI read).
+   *  The review UI flags 'low' rows as "needs review". */
   detectionConfidence?: 'high' | 'low';
 }
 

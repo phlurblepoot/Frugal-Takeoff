@@ -8,7 +8,7 @@ import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
 import { readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
-import { composePageName } from '../utils/sheetNaming';
+import { composePageName, nextPlaceholderStart } from '../utils/sheetNaming';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -679,18 +679,13 @@ export const ProjectView: React.FC = () => {
       // button always has a good image; the auto pass also requires readiness.
       const aiWanted = aiAutoNameEnabled();
 
-      // Build map of existing page numbers for revision detection
-      const existingPageNums = new Map<string, string>(); // normalised → display
-      for (const pg of project.pages) {
-        if (pg.pageNumber?.trim()) {
-          existingPageNums.set(pg.pageNumber.trim().toLowerCase(), pg.pageNumber.trim());
-        }
-      }
-
       // Placeholder sequence is scoped to the TARGET plan set (a brand new set
-      // naturally starts at 0 since no page yet carries its fresh id).
-      const existingInSet = project.pages.filter(p => (p.planSetId ?? null) === (planSetId ?? null)).length;
-      let startingPageNum = existingInSet + 1;
+      // naturally starts at 1 since no page yet carries its fresh id). Seeded
+      // from the max existing NUMERIC page number in the set (not the page
+      // count) so a fresh placeholder can never collide with a real page
+      // number already in the set — e.g. a set holding "1","2","10" must
+      // start the next placeholder at 11, not 4.
+      let startingPageNum = nextPlaceholderStart(project.pages, planSetId);
       const failures: Array<{ fileName: string; pageNum: number | null; reason: string }> = [];
       let totalExpected = 0;
       let totalProcessed = 0;
@@ -749,15 +744,11 @@ export const ProjectView: React.FC = () => {
               thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
               // Placeholder numbering: pages arrive named 1, 2, 3, … continuing
-              // after any pages already in the target plan set; all real naming
-              // happens in the naming modal (extract tools / AI). Sequence
-              // spans every file in the batch.
+              // after any pages already in the target plan set (collision-safe
+              // seed computed above); all real naming happens in the naming
+              // modal (extract tools / AI). Sequence spans every file in the
+              // batch.
               const placeholder = String(startingPageNum);
-              const normNum = placeholder.trim().toLowerCase();
-              // Placeholder-to-placeholder matches are intended here.
-              const revisionOf = existingPageNums.has(normNum)
-                ? existingPageNums.get(normNum)!
-                : undefined;
 
               const newPage = {
                 id: uuidv4(),
@@ -773,7 +764,6 @@ export const ProjectView: React.FC = () => {
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 detectionConfidence: 'low' as const,
-                revisionOf,
               };
 
               extractedPages.push(newPage);
@@ -900,13 +890,6 @@ export const ProjectView: React.FC = () => {
       if (!freshProject) throw new Error('Project not found');
       let workingProject: Project = freshProject;
 
-      const existingPageNums = new Map<string, string>();
-      for (const pg of workingProject.pages) {
-        if (pg.pageNumber?.trim()) {
-          existingPageNums.set(pg.pageNumber.trim().toLowerCase(), pg.pageNumber.trim());
-        }
-      }
-
       const byFile = new Map<string, { pageNums: number[]; allPages: boolean }>();
       for (const f of uploadFailures) {
         const entry = byFile.get(f.fileName) ?? { pageNums: [], allPages: false };
@@ -920,9 +903,9 @@ export const ProjectView: React.FC = () => {
       const newThumbnails: Record<string, string> = {};
       let newlyProcessed = 0;
       // Placeholder sequence is scoped to the TARGET plan set, matching the
-      // main upload run so retried pages continue the same numbering.
-      const existingInSet = workingProject.pages.filter(p => (p.planSetId ?? null) === (retryPlanSetId ?? null)).length;
-      let nextPageNum = existingInSet + 1;
+      // main upload run's collision-safe (max-numeric-based) seed so retried
+      // pages continue the same numbering without colliding with real pages.
+      let nextPageNum = nextPlaceholderStart(workingProject.pages, retryPlanSetId);
 
       for (const [fileName, info] of byFile) {
         const file = uploadFilesByName.get(fileName);
@@ -989,14 +972,9 @@ export const ProjectView: React.FC = () => {
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              // Placeholder numbering continues from the count of pages already
-              // in the target plan set (nextPageNum tracks that above).
+              // Placeholder numbering continues from the collision-safe seed
+              // (nextPageNum tracks that above).
               const placeholder = String(nextPageNum);
-              const normNum = placeholder.trim().toLowerCase();
-              // Placeholder-to-placeholder matches are intended here.
-              const revisionOf = existingPageNums.has(normNum)
-                ? existingPageNums.get(normNum)!
-                : undefined;
 
               const newPage = {
                 id: uuidv4(),
@@ -1012,7 +990,6 @@ export const ProjectView: React.FC = () => {
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
                 detectionConfidence: 'low' as const,
-                revisionOf,
               };
 
               newPendingPages.push(newPage);
@@ -1638,8 +1615,9 @@ export const ProjectView: React.FC = () => {
       const page = priorPages.find(p => p.id === currentPageId);
       sheets.push({ sheetId: effectiveSheetId(page!), pageNumber: page?.pageNumber || '' });
     }
-    // Sort by page number for a stable, scannable dropdown.
-    sheets.sort((a, b) => a.pageNumber.localeCompare(b.pageNumber));
+    // Sort by page number for a stable, scannable dropdown. Numeric-aware so
+    // placeholder-numbered sheets list 1, 2, 10 rather than 1, 10, 2.
+    sheets.sort((a, b) => a.pageNumber.localeCompare(b.pageNumber, undefined, { numeric: true, sensitivity: 'base' }));
     const firstPending = project.pages.find(p => pendingIds.has(p.id));
     return { sheets, planSetId: firstPending?.planSetId };
   }, [project, isNamingExistingPages, pendingPages]);

@@ -88,7 +88,10 @@ describe('handleTranscribeRegion', () => {
     expect(r.status).toBe(400);
   });
   it('400 when imageBase64 undecodable', async () => {
-    const r = await handleTranscribeRegion(fakeRunner(), { imageBase64: '', mode: 'number' });
+    // '!!!' is truthy (so it doesn't short-circuit on the missing-imageBase64
+    // guard) but contains no valid base64 characters, decoding to an empty
+    // Buffer — this exercises the actual "bad imageBase64" 400 branch.
+    const r = await handleTranscribeRegion(fakeRunner(), { imageBase64: '!!!', mode: 'number' });
     expect(r.status).toBe(400);
   });
   it("400 when mode is not 'number'/'description'", async () => {
