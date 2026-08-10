@@ -90,6 +90,20 @@ export async function matchSheet(input: { page: SheetRead; existingSheets: Exist
   } catch { return null; }
 }
 
+export interface TranscribeResult { text: string; confidence: number; }
+
+/** Read a small cropped region (a page-number or description box) with the
+ *  local vision model. Used by the naming modal's AI engine toggle as an
+ *  alternative to the Text/OCR extract path for a single user-drawn region. */
+export async function transcribeRegion(input: { imageBase64: string; mode: 'number' | 'description'; idleTimeoutMs?: number }): Promise<TranscribeResult | null> {
+  try {
+    const res = await fetch('/api/ai/transcribe-region', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(input),
+    });
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
+}
+
 /** Run thunks with a bounded concurrency, preserving result order. */
 export async function runWithConcurrency<T>(thunks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
   const results = new Array<T>(thunks.length);

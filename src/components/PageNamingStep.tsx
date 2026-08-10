@@ -4,11 +4,11 @@ import { createWorker } from 'tesseract.js';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
-import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
+import { buildOcrCrop, buildRegionCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { reconcileExtract } from '../utils/extractMatch';
 import { findDuplicatePageNumbers, suffixPageNumber, composePageName } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
-import { AiScanProgress } from '../utils/aiSheets';
+import { AiScanProgress, getAiStatus, warmupAi, getAiIdleTimeoutMs, transcribeRegion } from '../utils/aiSheets';
 import { PdfPagePreview } from './PdfPagePreview';
 import { useToast } from './Toast';
 
@@ -197,6 +197,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   // Per-page extract confidence from the hybrid reconcile (raw text + OCR),
   // keyed by page id. 'low' rows are flagged for review in Task 7's UI.
   const [extractConfidence, setExtractConfidence] = useState<Record<string, 'high' | 'low'>>({});
+  // Extract tool engine: 'text' is the existing hybrid raw-text+OCR reconcile;
+  // 'ai' sends the cropped region to the local vision model instead. Disabled
+  // in the UI until the AI status check below confirms it's available.
+  const [extractEngine, setExtractEngine] = useState<'text' | 'ai'>('text');
+  const [aiEngineAvailable, setAiEngineAvailable] = useState(false);
+  // Lightweight progress for "Extract All Pages" — both engines update it, but
+  // it matters most for the AI engine where each page costs a model inference.
+  const [extractProgress, setExtractProgress] = useState<{ done: number; total: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -299,6 +307,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewMode, pendingPages]);
 
+  // Check AI availability each time the preview modal opens — the toggle
+  // should reflect the current server state, not a stale check from earlier
+  // in the session (the model may have been loaded/unloaded meanwhile).
+  useEffect(() => {
+    if (!previewPageId) return;
+    getAiStatus().then(s => setAiEngineAvailable(!!s.available)).catch(() => setAiEngineAvailable(false));
+  }, [previewPageId]);
+
   const closePreview = () => {
     setPreviewPageId(null);
     setExtractionRect(null);
@@ -364,53 +380,77 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
     // Accumulate confidence updates so a multi-page "extract all" writes state once.
     const confidenceUpdates: Record<string, 'high' | 'low'> = {};
 
+    // Resolve a single full-resolution image source for a page: cached
+    // source-PDF render → loaded preview src → stored image → thumbnail.
+    // Shared by the Text/OCR reconcile path AND the AI region-read path so
+    // the two engines never diverge on which pixels they're reading.
+    const getPageRenderSrc = async (p: NamingStepPage): Promise<string> => {
+      if (p.sourcePdfFileId && p.sourcePdfPageNum) {
+        try {
+          const proxy = await getProxy(p.sourcePdfFileId);
+          const pdfPage = await proxy.getPage(p.sourcePdfPageNum);
+          const cacheKey = `${p.sourcePdfFileId}#${p.sourcePdfPageNum}`;
+          let rendered = renderCache.get(cacheKey);
+          if (!rendered) {
+            rendered = await renderPdfPageToDataUrl(pdfPage);
+            renderCache.set(cacheKey, rendered);
+          }
+          return rendered;
+        } catch (err) {
+          console.warn('Source PDF render failed; falling back to stored image', err);
+        }
+      }
+      return (
+        p.id === previewPageId && previewImageSrc
+          ? previewImageSrc
+          : p.imageId
+          ? getImageUrl(p.imageId)
+          : pendingThumbnails[p.thumbnailId]
+      ) || '';
+    };
+
     try {
       // Always gather BOTH raw text-layer candidates AND an OCR read, then
       // reconcile. Returns the cleaned value + a confidence flag for the row.
+      // When the AI engine is selected, skip straight to a vision-model read
+      // of the same region crop instead.
       const recognizePage = async (p: NamingStepPage): Promise<{ value: string; confidence: 'high' | 'low' }> => {
-        let rawCandidates: string[] = [];
-        let ocrText = '';
+        if (extractEngine === 'ai') {
+          const src = await getPageRenderSrc(p);
+          const crop = await buildRegionCrop(src, region);
+          const result = await transcribeRegion({
+            imageBase64: crop,
+            mode: mode === 'pageNumber' ? 'number' : 'description',
+            idleTimeoutMs: await getAiIdleTimeoutMs(),
+          });
+          const rawText = result?.text ?? '';
+          const cleaned = cleanValue(rawText);
+          return { value: cleaned, confidence: (result && result.confidence >= 0.5 && cleaned) ? 'high' : 'low' };
+        }
 
-        // Vector page: pull the per-item embedded strings as raw candidates and
-        // OCR a full-resolution render of the same region crop.
+        let rawCandidates: string[] = [];
+        // Vector page: pull the per-item embedded strings as raw candidates.
         if (p.sourcePdfFileId && p.sourcePdfPageNum) {
           try {
             const proxy = await getProxy(p.sourcePdfFileId);
             const pdfPage = await proxy.getPage(p.sourcePdfPageNum);
             rawCandidates = await extractTextItemsFromVectorRegion(pdfPage, region);
-            const cacheKey = `${p.sourcePdfFileId}#${p.sourcePdfPageNum}`;
-            let rendered = renderCache.get(cacheKey);
-            if (!rendered) {
-              rendered = await renderPdfPageToDataUrl(pdfPage);
-              renderCache.set(cacheKey, rendered);
-            }
-            const cropUrl = await buildOcrCrop(rendered, region);
-            const w = await getWorker();
-            const { data: { text } } = await w.recognize(cropUrl);
-            ocrText = text || '';
           } catch (err) {
-            console.warn('Vector text extract failed; falling back to raster', err);
+            console.warn('Vector text extract failed', err);
           }
         }
 
-        // Legacy raster path (no source PDF, or the vector path threw above and
-        // produced no OCR yet). rawCandidates stays [] so reconcile falls back
-        // to OCR — correct for scanned pages. Reuse the preview modal's
-        // already-loaded image for the active page when possible; otherwise the
-        // stored full-size raster URL; thumbnail only as a last resort.
-        if (!ocrText && rawCandidates.length === 0) {
-          const srcUrl =
-            p.id === previewPageId && previewImageSrc
-              ? previewImageSrc
-              : p.imageId
-              ? getImageUrl(p.imageId)
-              : pendingThumbnails[p.thumbnailId];
+        let ocrText = '';
+        try {
+          const srcUrl = await getPageRenderSrc(p);
           if (srcUrl) {
             const cropUrl = await buildOcrCrop(srcUrl, region);
             const w = await getWorker();
             const { data: { text } } = await w.recognize(cropUrl);
             ocrText = text || '';
           }
+        } catch (err) {
+          console.warn('OCR failed', err);
         }
 
         const { value, confidence } = reconcileExtract({ rawCandidates, ocrText });
@@ -419,6 +459,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
 
       if (applyToAll) {
         const updated = [...pendingPages];
+        setExtractProgress({ done: 0, total: updated.length });
         for (let i = 0; i < updated.length; i++) {
           const { value, confidence } = await recognizePage(updated[i]);
           const num = mode === 'pageNumber' ? value : (updated[i].pageNumber || '');
@@ -430,6 +471,15 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             name: composePageName(num, desc, updated[i].name),
           };
           confidenceUpdates[updated[i].id] = confidence;
+          setExtractProgress({ done: i + 1, total: updated.length });
+        }
+        // Extracted page numbers can change which existing sheet a row
+        // matches — recompute in the same state update (same logic
+        // updateField/rematchAll use) so matchSheetId doesn't go stale.
+        if (reviewMode && mode === 'pageNumber') {
+          for (let i = 0; i < updated.length; i++) {
+            updated[i] = { ...updated[i], matchSheetId: autoMatch(updated[i].pageNumber || '') };
+          }
         }
         setPendingPages(updated);
       } else {
@@ -455,6 +505,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
         try { await p.destroy(); } catch { /* noop */ }
       }
       setIsExtracting(false);
+      setExtractProgress(null);
     }
   };
 
@@ -836,6 +887,36 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               </div>
             </div>
 
+            {extractionType && (
+              <div className="px-3 sm:px-4 py-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center gap-2 text-xs">
+                <span className="text-slate-400 dark:text-slate-500">Engine:</span>
+                <button
+                  type="button"
+                  onClick={() => setExtractEngine('text')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    extractEngine === 'text'
+                      ? 'bg-accent-600 text-white shadow-md'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                  }`}
+                >
+                  Text/OCR
+                </button>
+                <button
+                  type="button"
+                  disabled={!aiEngineAvailable}
+                  title={aiEngineAvailable ? 'Read the selected region with the local AI model' : 'AI model not available on this server'}
+                  onClick={async () => { setExtractEngine('ai'); warmupAi(await getAiIdleTimeoutMs()); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                    extractEngine === 'ai'
+                      ? 'bg-accent-600 text-white shadow-md'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                  }`}
+                >
+                  AI read
+                </button>
+              </div>
+            )}
+
             {/* Mobile note (Phase 8): the OCR region-select drag below uses
                 mouse events only (onMouseDown/Move/Up), so the rectangular
                 crop is desktop / tablet-mouse only. Phones are read-only for
@@ -894,6 +975,11 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   : 'Select Extract Number or Extract Description, then draw a box.'}
               </div>
               <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                {extractProgress && (
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Extracting… {extractProgress.done}/{extractProgress.total}
+                  </span>
+                )}
                 <button
                   onClick={() => setExtractionRect(null)}
                   disabled={!extractionRect || isExtracting}

@@ -154,6 +154,35 @@ export async function buildOcrCrop(
   return canvas.toDataURL('image/png');
 }
 
+/** Crop a region (0–100 percentages) as a plain COLOR JPEG for the vision
+ *  model — same geometry as buildOcrCrop but without the Tesseract-oriented
+ *  grayscale/contrast preprocessing. Upscaled so the short side is ≥200px. */
+export async function buildRegionCrop(
+  imageUrl: string,
+  region: { x: number; y: number; width: number; height: number }
+): Promise<string> {
+  const img = await loadImage(imageUrl);
+  const naturalW = img.naturalWidth || img.width;
+  const naturalH = img.naturalHeight || img.height;
+  const sx = Math.max(0, (region.x / 100) * naturalW);
+  const sy = Math.max(0, (region.y / 100) * naturalH);
+  const sw = Math.max(1, Math.min(naturalW - sx, (region.width / 100) * naturalW));
+  const sh = Math.max(1, Math.min(naturalH - sy, (region.height / 100) * naturalH));
+  const upscale = Math.min(6, Math.max(1, 200 / Math.min(sw, sh)));
+  const dw = Math.max(1, Math.round(sw * upscale));
+  const dh = Math.max(1, Math.round(sh * upscale));
+  const canvas = document.createElement('canvas');
+  canvas.width = dw; canvas.height = dh;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not create canvas context for region crop');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, dw, dh);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
 /** Tesseract parameters tuned for the kind of text being extracted. */
 export function ocrParamsFor(mode: 'pageNumber' | 'description'): { tessedit_char_whitelist: string; tessedit_pageseg_mode: PSM } {
   return mode === 'pageNumber'
