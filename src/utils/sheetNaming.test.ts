@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findDuplicatePageNumbers, suffixPageNumber } from './sheetNaming';
+import { findDuplicatePageNumbers, suffixPageNumber, composePageName } from './sheetNaming';
 
 it('flags duplicate non-blank page numbers within one set (case-insensitive)', () => {
   const rows = [
@@ -18,4 +18,18 @@ it('suffixes to the next free " (n)" within the set', () => {
   const taken = new Set(['a-101', 'a-101 (2)']);
   expect(suffixPageNumber('A-101', taken)).toBe('A-101 (3)');
   expect(suffixPageNumber('A-102', taken)).toBe('A-102 (2)');
+});
+
+describe('composePageName', () => {
+  it('joins number and description', () => {
+    expect(composePageName('A-101', 'First Floor Plan')).toBe('A-101 - First Floor Plan');
+  });
+  it('number only / description only', () => {
+    expect(composePageName('A-101', '')).toBe('A-101');
+    expect(composePageName('', 'Roof Plan')).toBe('Roof Plan');
+  });
+  it('both blank → fallback', () => {
+    expect(composePageName('', '', 'Page 3')).toBe('Page 3');
+    expect(composePageName(undefined, null)).toBe('');
+  });
 });

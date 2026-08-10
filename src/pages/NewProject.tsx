@@ -9,6 +9,7 @@ import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
 import { readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
+import { composePageName } from '../utils/sheetNaming';
 import { useToast } from '../components/Toast';
 
 interface PendingPage {
@@ -623,7 +624,7 @@ export const NewProject: React.FC = () => {
         const existing = idx !== -1 ? updatedServerPages[idx] : undefined;
         const merged: ProjectPage = {
           id: p.id,
-          name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+          name: composePageName(p.pageNumber, p.description, p.name),
           pageNumber: p.pageNumber,
           description: p.description,
           imageId: p.imageId,

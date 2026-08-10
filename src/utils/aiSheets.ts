@@ -1,4 +1,5 @@
 import { getAuthHeaders, getSettings } from './store';
+import { composePageName } from './sheetNaming';
 
 export interface SheetRead { sheetNumber: string; sheetTitle: string; discipline?: string; confidence: number; }
 export interface SheetMatch { matchSheetId: string | null; confidence: number; reason?: string; }
@@ -116,7 +117,7 @@ export function applyReadToPage<T extends AiPage>(page: T, read: SheetRead): T {
   if (!read.sheetNumber && !read.sheetTitle) return page;
   const pageNumber = read.sheetNumber || page.pageNumber || '';
   const description = read.sheetTitle || page.description || '';
-  const name = pageNumber && description ? `${pageNumber} - ${description}` : pageNumber || description || page.name;
+  const name = composePageName(pageNumber, description, page.name);
   return {
     ...page,
     pageNumber,

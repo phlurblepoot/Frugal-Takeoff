@@ -6,7 +6,7 @@ import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { buildOcrCrop, ocrParamsFor, cleanSheetNumber, cleanDescriptionText } from '../utils/pdf';
 import { reconcileExtract } from '../utils/extractMatch';
-import { findDuplicatePageNumbers, suffixPageNumber } from '../utils/sheetNaming';
+import { findDuplicatePageNumbers, suffixPageNumber, composePageName } from '../utils/sheetNaming';
 import { getImageUrl } from '../utils/store';
 import { AiScanProgress } from '../utils/aiSheets';
 import { PdfPagePreview } from './PdfPagePreview';
@@ -230,7 +230,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       if (field === 'pageNumber' || field === 'description') {
         const num = field === 'pageNumber' ? value : (p.pageNumber || '');
         const desc = field === 'description' ? value : (p.description || '');
-        updated.name = num && desc ? `${num} - ${desc}` : (num || desc || p.name);
+        updated.name = composePageName(num, desc, p.name);
       }
       // Editing the page number re-runs the match (the duplicate check is derived
       // live from pendingPages, so it recomputes automatically on render).
@@ -427,7 +427,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
             ...updated[i],
             [mode]: value,
             extractConfidence: confidence,
-            name: num && desc ? `${num} - ${desc}` : (num || desc || updated[i].name),
+            name: composePageName(num, desc, updated[i].name),
           };
           confidenceUpdates[updated[i].id] = confidence;
         }

@@ -22,3 +22,15 @@ export function suffixPageNumber(base: string, takenNormalized: Set<string>): st
   while (takenNormalized.has(norm(`${base} (${n})`))) n++;
   return `${base} (${n})`;
 }
+
+/** The one canonical display-name formula: "NUM - DESC", else whichever
+ *  part exists, else the fallback. Previously duplicated at 6 call sites. */
+export function composePageName(
+  pageNumber?: string | null,
+  description?: string | null,
+  fallback = '',
+): string {
+  const num = (pageNumber ?? '').trim();
+  const desc = (description ?? '').trim();
+  return num && desc ? `${num} - ${desc}` : num || desc || fallback;
+}

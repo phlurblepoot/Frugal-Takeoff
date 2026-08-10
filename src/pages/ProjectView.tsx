@@ -8,6 +8,7 @@ import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../
 import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
 import { computeRevisionModel, orderedPlanSets, summarizePlanSet, effectiveSheetId, carryForwardFrom } from '../utils/planSets';
 import { readSheet, matchSheet, runWithConcurrency, applyReadToPage, applyMatchToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
+import { composePageName } from '../utils/sheetNaming';
 import { PlanSetManager } from '../components/PlanSetManager';
 import { PlanSetRevisions } from '../components/PlanSetRevisions';
 import { PlanSetCompare } from '../components/PlanSetCompare';
@@ -620,7 +621,7 @@ export const ProjectView: React.FC = () => {
 
     const num = editingPageNumber.trim();
     const desc = editingPageDescription.trim();
-    const newName = num && desc ? `${num} - ${desc}` : (num || desc || editingPageName.trim());
+    const newName = composePageName(num, desc, editingPageName.trim());
 
     if (!newName) return;
 
@@ -1542,7 +1543,7 @@ export const ProjectView: React.FC = () => {
 
           const named = {
             ...pp,
-            name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+            name: composePageName(p.pageNumber, p.description, p.name),
             pageNumber: p.pageNumber,
             description: p.description,
           };
