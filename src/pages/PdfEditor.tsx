@@ -22,6 +22,7 @@ import {
 } from '../utils/store';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { viewBox } from '../utils/pdfOverlayTransform';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -1175,7 +1176,11 @@ export const PdfEditor: React.FC = () => {
       if (!overlay) continue;
 
       const page = pdfPages[i];
-      const { width: rawW, height: rawH } = page.getSize();
+      // The overlay canvas covers what pdf.js rendered — the page's view box
+      // (CropBox ∩ MediaBox), which may not start at (0,0) in user space
+      // (center-origin CAD MediaBoxes, inset CropBoxes). Place the flattened
+      // image into that box, not an assumed (0,0)+MediaBox rect.
+      const view = viewBox(page.getMediaBox(), page.getCropBox());
       const rot = page.getRotation().angle;
 
       // pdfjs already renders the page with /Rotate applied visually, so our overlay
@@ -1205,8 +1210,12 @@ export const PdfEditor: React.FC = () => {
       prepared.width = 0; prepared.height = 0;
       const overlayImg = await pdfDoc.embedPng(overlayBytes);
 
-      // Always place at the full raw page rect; viewer then applies /Rotate visually
-      page.drawImage(overlayImg, { x: 0, y: 0, width: rawW, height: rawH });
+      // Place over the full view rect (counter-rotated above, so the rect is
+      // the unrotated view box); viewer then applies /Rotate visually.
+      page.drawImage(overlayImg, {
+        x: view.x0, y: view.y0,
+        width: view.x1 - view.x0, height: view.y1 - view.y0,
+      });
     }
 
     return await pdfDoc.save();
