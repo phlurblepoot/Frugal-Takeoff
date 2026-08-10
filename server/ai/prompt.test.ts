@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildReadPrompt, parseReadResponse, buildMatchPrompt, parseMatchResponse } from './prompt';
+import { buildReadPrompt, parseReadResponse, buildMatchPrompt, parseMatchResponse, buildTranscribePrompt, parseTranscribeResponse } from './prompt';
 
 describe('buildReadPrompt', () => {
   it('asks for strict JSON and mentions sheet number + title', () => {
@@ -64,5 +64,35 @@ describe('parseMatchResponse', () => {
   });
   it('returns null match on unparseable output', () => {
     expect(parseMatchResponse('nonsense', ids)).toEqual({ matchSheetId: null, confidence: 0, reason: undefined });
+  });
+});
+
+describe('buildTranscribePrompt', () => {
+  it('number mode mentions sheet number and JSON shape', () => {
+    const p = buildTranscribePrompt('number');
+    expect(p).toContain('sheet number');
+    expect(p).toContain('"text"');
+    expect(p).toContain('ONLY the text');
+  });
+  it('description mode does not steer toward sheet numbers', () => {
+    expect(buildTranscribePrompt('description')).not.toContain('sheet number');
+  });
+});
+
+describe('parseTranscribeResponse', () => {
+  it('parses text + clamps confidence', () => {
+    expect(parseTranscribeResponse('{"text":" A-101 ","confidence":1.7}'))
+      .toEqual({ text: 'A-101', confidence: 1 });
+  });
+  it('tolerates prose around the JSON', () => {
+    expect(parseTranscribeResponse('Sure! {"text":"ROOF PLAN","confidence":0.9} hope that helps'))
+      .toEqual({ text: 'ROOF PLAN', confidence: 0.9 });
+  });
+  it('malformed → empty low-confidence', () => {
+    expect(parseTranscribeResponse('nope')).toEqual({ text: '', confidence: 0 });
+  });
+  it('does not uppercase (cleaning is client-side)', () => {
+    expect(parseTranscribeResponse('{"text":"Level 06 Floor Plan","confidence":0.8}').text)
+      .toBe('Level 06 Floor Plan');
   });
 });

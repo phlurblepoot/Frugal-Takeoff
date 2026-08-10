@@ -58,6 +58,25 @@ export async function handleMatchSheet(
   }
 }
 
+export async function handleTranscribeRegion(
+  runner: AiRunner,
+  body: { imageBase64?: string; mode?: string; idleTimeoutMs?: number },
+): Promise<HandlerResult> {
+  if (!runner.configured()) return { status: 503, body: { error: 'ai unavailable' } };
+  if (body.mode !== 'number' && body.mode !== 'description') {
+    return { status: 400, body: { error: "mode must be 'number' or 'description'" } };
+  }
+  if (!body.imageBase64) return { status: 400, body: { error: 'imageBase64 required' } };
+  const image = decodeBase64Image(body.imageBase64);
+  if (!image) return { status: 400, body: { error: 'bad imageBase64' } };
+  try {
+    const result = await runner.transcribeRegion({ image, mode: body.mode, idleTimeoutMs: body.idleTimeoutMs });
+    return { status: 200, body: result };
+  } catch (e: any) {
+    return { status: 502, body: { error: String(e?.message ?? e) } };
+  }
+}
+
 export async function handleWarmup(
   runner: AiRunner,
   body: { idleTimeoutMs?: number },

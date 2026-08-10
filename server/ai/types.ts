@@ -37,6 +37,10 @@ export interface AiInfo {
 /** Runner lifecycle state. */
 export type AiState = 'off' | 'idle' | 'loading' | 'ready';
 
+/** Region transcription: read exactly what's in a small crop, no interpretation. */
+export type TranscribeMode = 'number' | 'description';
+export interface TranscribeResult { text: string; confidence: number; }
+
 /** The inference boundary. Faked in tests; real impl in runner.ts. */
 export interface AiRunner {
   /** Feature usable (enabled + binary present); NEVER spawns. */
@@ -48,4 +52,5 @@ export interface AiRunner {
   info(): AiInfo;
   readSheet(input: { image: Buffer; embeddedText?: string; prompt?: string; idleTimeoutMs?: number }): Promise<SheetRead>;
   matchSheet(input: { page: SheetRead; existing: ExistingSheetRef[]; idleTimeoutMs?: number }): Promise<SheetMatch>;
+  transcribeRegion(input: { image: Buffer; mode: TranscribeMode; idleTimeoutMs?: number }): Promise<TranscribeResult>;
 }
