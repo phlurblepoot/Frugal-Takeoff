@@ -4,11 +4,12 @@ import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucid
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage, Customer } from '../types';
 import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getCustomers, saveCustomer } from '../utils/store';
-import { loadPdfPagesGenerator, detectPageInfo } from '../utils/pdf';
+import { loadPdfPagesGenerator } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
 import { readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
+import { composePageName } from '../utils/sheetNaming';
 import { useToast } from '../components/Toast';
 
 interface PendingPage {
@@ -24,8 +25,9 @@ interface PendingPage {
   sourcePdfPageNum?: number;
   searchTextIndexed?: boolean;
   extractedText?: string;
-  /** 'low' when auto-detection fell back to OCR/filename heuristics (Task 4).
-   *  Task 7's review UI flags these as "needs review". */
+  /** 'low' = the page still carries its import-time placeholder number and
+   *  hasn't been confirmed yet (by manual edit or a confident AI read).
+   *  The review UI flags 'low' rows as "needs review". */
   detectionConfidence?: 'high' | 'low';
 }
 
@@ -271,14 +273,16 @@ export const NewProject: React.FC = () => {
               // UI can look them up uniformly for vector and legacy pages.
               thumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, file.name, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
+              // Placeholder numbering: pages arrive named 1, 2, 3, … (this is a
+              // brand-new project, so the target plan set starts empty); all
+              // real naming happens in the naming modal (extract tools / AI).
+              // Sequence spans every file in the batch via globalPageNum.
+              const placeholder = String(globalPageNum);
               const newPage: PendingPage = {
                 id: uuidv4(),
-                name: detected.pageNumber && detected.description
-                  ? `${detected.pageNumber} - ${detected.description}`
-                  : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${globalPageNum}`,
-                pageNumber: detected.pageNumber,
-                description: detected.description,
+                name: composePageName(placeholder, ''),
+                pageNumber: placeholder,
+                description: '',
                 imageId,
                 thumbnailId,
                 imageWidth: pageData.width,
@@ -287,7 +291,7 @@ export const NewProject: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
-                detectionConfidence: pageData.detectionConfidence,
+                detectionConfidence: 'low' as const,
               };
 
               extractedPages.push(newPage);
@@ -488,14 +492,16 @@ export const NewProject: React.FC = () => {
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
-              const detected = detectPageInfo(pageData.suggestedName, fileName, pageData.extractedText, { pageNumber: pageData.detectedPageNumber, description: pageData.detectedDescription });
+              // Placeholder numbering continues from the count of pages already
+              // in the target plan set (nextPageNum already tracks that —
+              // initialized from project.pages.length and incremented per page
+              // recovered, matching how the main run numbers pages).
+              const placeholder = String(nextPageNum);
               const newPage: PendingPage = {
                 id: uuidv4(),
-                name: detected.pageNumber && detected.description
-                  ? `${detected.pageNumber} - ${detected.description}`
-                  : detected.pageNumber || detected.description || pageData.suggestedName || `Page ${nextPageNum}`,
-                pageNumber: detected.pageNumber,
-                description: detected.description,
+                name: composePageName(placeholder, ''),
+                pageNumber: placeholder,
+                description: '',
                 imageId,
                 thumbnailId,
                 imageWidth: pageData.width,
@@ -504,7 +510,7 @@ export const NewProject: React.FC = () => {
                 sourcePdfPageNum: sourcePdfFileId ? pageData.pageNum : undefined,
                 searchTextIndexed: !!sourcePdfFileId,
                 extractedText: pageData.extractedText,
-                detectionConfidence: pageData.detectionConfidence,
+                detectionConfidence: 'low' as const,
               };
 
               newPendingPages.push(newPage);
@@ -623,7 +629,7 @@ export const NewProject: React.FC = () => {
         const existing = idx !== -1 ? updatedServerPages[idx] : undefined;
         const merged: ProjectPage = {
           id: p.id,
-          name: p.pageNumber && p.description ? `${p.pageNumber} - ${p.description}` : (p.pageNumber || p.description || p.name),
+          name: composePageName(p.pageNumber, p.description, p.name),
           pageNumber: p.pageNumber,
           description: p.description,
           imageId: p.imageId,

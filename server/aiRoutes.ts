@@ -1,6 +1,6 @@
 import type express from 'express';
 import { readFileContent } from './fileStore';
-import { handleStatus, handleReadSheet, handleMatchSheet, handleWarmup } from './ai/handlers';
+import { handleStatus, handleReadSheet, handleMatchSheet, handleWarmup, handleTranscribeRegion } from './ai/handlers';
 import type { AiRunner } from './ai/types';
 
 export interface AiRouteDeps {
@@ -30,6 +30,11 @@ export function registerAiRoutes(app: express.Express, deps: AiRouteDeps): void 
 
   app.post('/api/ai/match-sheet', authenticateToken, async (req, res) => {
     const r = await handleMatchSheet(runner, req.body || {});
+    res.status(r.status).json(r.body);
+  });
+
+  app.post('/api/ai/transcribe-region', authenticateToken, async (req, res) => {
+    const r = await handleTranscribeRegion(runner, req.body || {});
     res.status(r.status).json(r.body);
   });
 }

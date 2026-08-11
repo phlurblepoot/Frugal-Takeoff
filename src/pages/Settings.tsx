@@ -20,6 +20,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4',
+    date: 'August 11, 2026',
+    changes: [
+      'Page naming is now yours, not guessed: uploaded plan pages arrive numbered simply 1, 2, 3, … instead of the app trying to auto-detect sheet numbers and titles (which often guessed wrong). All naming happens in the naming window — type it, extract it from a selected region, or use AI Scan. Pages added to an existing set continue numbering after the set\'s highest number, so placeholders never collide.',
+      'AI can read just the region you select: the extract tool has a new engine switch — Text/OCR (as before) or AI read, which sends only your selected rectangle to the local AI model and uses exactly the text it sees for the page number or description. Works on one page or across all pages at once, with progress shown. (Needs the AI model available on the server, like AI Scan.)',
+      'Clearer "still needs naming" cues: pages that haven\'t been given a real name show an amber Needs-review badge in every naming flow (not just revision review), and the green check only appears once a page is actually named.',
+      'Extract All Pages now refreshes revision matching automatically — extracted page numbers immediately re-link new pages to the sheets they revise, without pressing "Re-match by page #".',
+      'Fix: printed highlight pages could shift all measurements diagonally on some plan sheets (PDFs from certain CAD tools that place the page origin at the sheet center). Printouts, proposal plan appendices, and PDF-editor saves now place overlays exactly where they were drawn. Regenerate any affected printouts.',
+    ],
+  },
+  {
     version: '2.3',
     date: 'July 30, 2026',
     changes: [

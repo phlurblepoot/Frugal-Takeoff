@@ -7,9 +7,9 @@
 // whole thing sits behind the AiRunner interface, so nothing else changes.
 import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import type { AiRunner, AiInfo, AiState, SheetRead, SheetMatch, ExistingSheetRef } from './types';
+import type { AiRunner, AiInfo, AiState, SheetRead, SheetMatch, ExistingSheetRef, TranscribeMode, TranscribeResult } from './types';
 import { createSingleFlightQueue } from './queue';
-import { buildReadPrompt, parseReadResponse, buildMatchPrompt, parseMatchResponse } from './prompt';
+import { buildReadPrompt, parseReadResponse, buildMatchPrompt, parseMatchResponse, buildTranscribePrompt, parseTranscribeResponse } from './prompt';
 
 export interface RunnerConfig {
   serverBin: string;       // path to the llama-server binary
@@ -162,6 +162,26 @@ export function createLlamaServerRunner(cfg: RunnerConfig): AiRunner {
         const raw = await queue.enqueue(() => chat(messages));
         console.log('[ai] match-sheet raw:', (raw || '').slice(0, 400));
         return parseMatchResponse(raw, existing.map(e => e.sheetId));
+      } finally {
+        armIdle(idleTimeoutMs);
+      }
+    },
+
+    async transcribeRegion({ image, mode, idleTimeoutMs }: { image: Buffer; mode: TranscribeMode; idleTimeoutMs?: number }): Promise<TranscribeResult> {
+      clearIdle();
+      await waitReady();
+      const dataUrl = `data:image/jpeg;base64,${image.toString('base64')}`;
+      const messages = [{
+        role: 'user',
+        content: [
+          { type: 'text', text: buildTranscribePrompt(mode) },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      }];
+      try {
+        const raw = await queue.enqueue(() => chat(messages));
+        console.log('[ai] transcribe raw:', (raw || '').slice(0, 400));
+        return parseTranscribeResponse(raw);
       } finally {
         armIdle(idleTimeoutMs);
       }

@@ -10,5 +10,6 @@ export function createDisabledRunner(reason = 'disabled'): AiRunner {
     info: () => ({ model: reason, device: 'none' }),
     readSheet: unavailable,
     matchSheet: unavailable,
+    transcribeRegion: unavailable,
   };
 }

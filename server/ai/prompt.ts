@@ -1,4 +1,4 @@
-import type { SheetRead, SheetMatch, ExistingSheetRef } from './types';
+import type { SheetRead, SheetMatch, ExistingSheetRef, TranscribeMode, TranscribeResult } from './types';
 
 /** Pull the first balanced JSON object out of a string, tolerant of surrounding prose. */
 function extractJson(raw: string): any | null {
@@ -77,4 +77,26 @@ export function parseMatchResponse(raw: string, validIds: string[]): SheetMatch 
   const matchSheetId = validIds.includes(id) ? id : null;
   const reason = obj.reason ? String(obj.reason).trim().slice(0, 200) : undefined;
   return { matchSheetId, confidence: clamp01(obj.confidence), reason };
+}
+
+export function buildTranscribePrompt(mode: TranscribeMode): string {
+  const target = mode === 'number'
+    ? `The crop should contain a drawing sheet number (e.g. "A-101", "S2.1", "RC-A-106"). Return just that token as written, reading each character and digit carefully.`
+    : `The crop should contain a sheet title or description. Return it verbatim as written.`;
+  return (
+    `This image is a small cropped region of a construction drawing. ` +
+    `Read ONLY the text visible in the image. Do not interpret, summarize, expand abbreviations, or add anything that is not printed. ` +
+    target +
+    ` If the crop contains several lines, return them joined with single spaces in reading order.\n` +
+    `Respond with ONLY a JSON object, no prose, exactly of the form ` +
+    `{"text": string, "confidence": number between 0 and 1}. ` +
+    `Use an empty string and low confidence if the crop is unreadable.`
+  );
+}
+
+export function parseTranscribeResponse(raw: string): TranscribeResult {
+  const obj = extractJson(raw);
+  if (!obj) return { text: '', confidence: 0 };
+  // No uppercasing here — the client applies the same cleaners as the OCR path.
+  return { text: String(obj.text ?? '').trim(), confidence: clamp01(obj.confidence) };
 }
