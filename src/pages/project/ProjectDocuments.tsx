@@ -44,7 +44,16 @@ const KIND_FILTERS = [
   { id: 'plan', label: 'Plan assets' },
 ];
 
+// Kinds hidden from the unfiltered 'all' view — 'plan' (internal canvas
+// assets) and 'printout' (history lives in the Proposal section instead).
+// Only gates 'all': an explicit filter selection (e.g. the "Plan assets"
+// chip) must still show its own kind.
 const HIDDEN_KINDS = new Set(['plan', 'printout']);
+
+export const visibleFiles = (files: ProjectFile[], filter: string): ProjectFile[] => {
+  if (filter === 'all') return files.filter(f => !HIDDEN_KINDS.has(f.kind));
+  return files.filter(f => f.kind === filter);
+};
 
 const downloadBlob = (blob: Blob, name: string) => {
   const url = URL.createObjectURL(blob);
@@ -83,11 +92,7 @@ export const ProjectDocuments: React.FC = () => {
     return c;
   }, [files]);
 
-  const visible = useMemo(() => {
-    const all = files ?? [];
-    if (filter === 'all') return all.filter(f => !HIDDEN_KINDS.has(f.kind));
-    return all.filter(f => f.kind === filter && !HIDDEN_KINDS.has(f.kind));
-  }, [files, filter]);
+  const visible = useMemo(() => visibleFiles(files ?? [], filter), [files, filter]);
 
   const handleUpload = async (list: FileList | null) => {
     if (!list || !projectId) return;
@@ -146,7 +151,7 @@ export const ProjectDocuments: React.FC = () => {
       <div className="mb-4 flex flex-wrap gap-1.5">
         {KIND_FILTERS.map(k => {
           const count = k.id === 'all'
-            ? (files ?? []).filter(f => !HIDDEN_KINDS.has(f.kind)).length
+            ? visibleFiles(files ?? [], 'all').length
             : counts.get(k.id) ?? 0;
           if (k.id !== 'all' && count === 0) return null;
           return (
