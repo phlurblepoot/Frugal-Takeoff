@@ -218,7 +218,7 @@ export interface Project {
   status?: string;
 }
 
-export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region';
+export type Tool = 'pan' | 'scale' | 'length' | 'area' | 'count' | 'region' | 'subtract';
 
 export interface NoteElement {
   id: string;

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Hand, Ruler, Square, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical, History } from 'lucide-react';
+import { Hand, Ruler, Square, SquareMinus, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical, History } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import { v4 as uuidv4 } from 'uuid';
 import { PdfCanvas } from '../components/PdfCanvas';
@@ -10,7 +10,7 @@ import { KeyboardShortcutsModal } from '../components/canvas/KeyboardShortcutsMo
 import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
 import { MeasurementSidebar } from '../components/canvas/MeasurementSidebar';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
-import { calculatePolylineLength, calculatePolygonArea, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
+import { calculatePolylineLength, measurementAreaPx, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
 import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
@@ -172,7 +172,7 @@ const CanvasViewInner: React.FC = () => {
 
   // Clear multi-select when switching to a drawing tool
   useEffect(() => {
-    if (currentTool === 'length' || currentTool === 'area' || currentTool === 'count' || currentTool === 'scale') {
+    if (currentTool === 'length' || currentTool === 'area' || currentTool === 'subtract' || currentTool === 'count' || currentTool === 'scale') {
       setMultiSelectedIds(new Set());
       setIsMultiSelectMode(false);
     }
@@ -504,6 +504,19 @@ const CanvasViewInner: React.FC = () => {
       setCurrentTool('pan');
     }
   }, [selectedTakeoffId, selectedMeasurementId]);
+
+  // Subtract needs a real area measurement to cut into — a takeoff-only
+  // selection can't receive a hole. Drop back to pan the moment that stops
+  // being true (deselect, delete, or a switch to a length/count measurement).
+  useEffect(() => {
+    if (currentTool !== 'subtract') return;
+    const selected = selectedMeasurementId && project
+      ? project.pages.flatMap(p => p.measurements).find(m => m.id === selectedMeasurementId)
+      : null;
+    if (!selected || selected.type !== 'area') {
+      setCurrentTool('pan');
+    }
+  }, [currentTool, selectedMeasurementId, project]);
 
   // Expand the containing takeoff and scroll to the selected measurement in the sidebar.
   useEffect(() => {
@@ -916,13 +929,16 @@ const CanvasViewInner: React.FC = () => {
     if (segmentIdx === -1) {
       // Deleting primary segment
       const extraSegs = measurement.segments ?? [];
-      if (extraSegs.length === 0) {
-        // No other segments — delete the whole measurement
+      // Promote the first additive segment to primary. A cutout can't become
+      // the primary polygon, so if only cutouts (or nothing) remain the whole
+      // measurement goes.
+      const promoteIdx = extraSegs.findIndex(s => !s.subtract);
+      if (promoteIdx === -1) {
         deleteMeasurement(measurementId);
         return;
       }
-      // Promote first extra segment to primary
-      const [newPrimary, ...rest] = extraSegs;
+      const newPrimary = extraSegs[promoteIdx];
+      const rest = extraSegs.filter((_, i) => i !== promoteIdx);
       updatedMeasurement = {
         ...measurement,
         points: newPrimary.points,
@@ -933,7 +949,9 @@ const CanvasViewInner: React.FC = () => {
       // Deleting an extra segment
       const extraSegs = measurement.segments ?? [];
       const newSegs = extraSegs.filter((_, i) => i !== segmentIdx);
-      if (newSegs.length === 0 && (!measurement.points || measurement.points.length === 0)) {
+      // Nothing additive left to measure — cutouts alone aren't a measurement.
+      const noPrimary = !measurement.points || measurement.points.length === 0;
+      if ((newSegs.length === 0 || newSegs.every(s => s.subtract)) && noPrimary) {
         deleteMeasurement(measurementId);
         return;
       }
@@ -1095,7 +1113,9 @@ const CanvasViewInner: React.FC = () => {
         if (takeoff.type === 'length' && m.type === 'length') {
           pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         } else if (takeoff.type === 'area' && m.type === 'area') {
-          pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+          // Net of cutouts; the helper expands arcs itself, so it takes the
+          // measurement's raw geometry rather than allMPts.
+          pixelValue = measurementAreaPx({ points: m.points, arcMidIndices: m.arcMidIndices, segments: m.segments });
         } else if (takeoff.type === 'area' && m.type === 'length') {
           pixelValue = allMPts.reduce((sum, pts) =>
             sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
@@ -1258,6 +1278,18 @@ const CanvasViewInner: React.FC = () => {
                 else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
                 else if (hasNoSelection) setToolDisabledMessage("Select a measurement to enable drawing tools.");
                 else setToolDisabledMessage(`Tool is locked to ${activeType} for the selected item.`);
+              }}
+            />
+            <ToolButton
+              active={currentTool === 'subtract'}
+              onClick={() => setCurrentTool('subtract')}
+              icon={<SquareMinus size={18} />}
+              label="Subtract"
+              disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedMeasurementId}
+              onDisabledClick={() => {
+                if (readOnly) handlePhoneToolBlocked();
+                else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                else setToolDisabledMessage("Select an area measurement to subtract from.");
               }}
             />
             <ToolButton
@@ -1886,6 +1918,20 @@ const CanvasViewInner: React.FC = () => {
                 }}
               />
               <ToolButton
+                testId="tool-subtract"
+                active={currentTool === 'subtract'}
+                onClick={() => setCurrentTool('subtract')}
+                icon={<SquareMinus size={20} />}
+                label="Subtract"
+                showLabel
+                disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedMeasurementId}
+                onDisabledClick={() => {
+                  if (readOnly) handlePhoneToolBlocked();
+                  else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  else setToolDisabledMessage("Select an area measurement to subtract from.");
+                }}
+              />
+              <ToolButton
                 testId="tool-count"
                 active={currentTool === 'count'}
                 onClick={() => setCurrentTool('count')}
@@ -2088,6 +2134,7 @@ const CanvasViewInner: React.FC = () => {
               {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
               {currentTool === 'length' && `Click points to draw a line. ${finishHint}`}
               {currentTool === 'area' && `Click points to draw a polygon. ${finishHint}`}
+              {currentTool === 'subtract' && `Click points to cut an opening out of the selected area. ${finishHint}`}
               {currentTool === 'region' && `Click points to define a scale region. ${finishHint}`}
             </div>
           )}

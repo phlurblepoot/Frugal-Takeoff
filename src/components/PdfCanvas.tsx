@@ -5,7 +5,7 @@ import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from '
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
-import { calculateDistance, calculatePolylineLength, calculatePolygonArea, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
+import { calculateDistance, calculatePolylineLength, calculatePolygonArea, measurementAreaPx, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
 import { useToast } from './Toast';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -147,6 +147,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   readOnly = false,
 }) => {
   const { toast } = useToast();
+  // The subtract (cutout) tool draws exactly like the area tool — same clicks,
+  // arcs, preview and finalize gestures — it only differs in what finalizeSegment
+  // does with the polygon. Sites that decide *drawing mechanics* test this;
+  // sites that create or style a NEW measurement stay area-only.
+  const isAreaLikeTool = currentTool === 'area' || currentTool === 'subtract';
   // `useImage` is the legacy raster path; new vector-source pages populate
   // `pdfImage` instead. `image` (used by the existing code below) resolves to
   // whichever one is current — that lets the Konva background, zoom-fit logic,
@@ -733,7 +738,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       // a new segment must keep the selected measurement so the segment is
       // appended to it. (Drawing tools enter this branch for the very first
       // click of a segment, where activePoints is still empty.)
-      const isDrawingTool = currentTool === 'length' || currentTool === 'area';
+      const isDrawingTool = currentTool === 'length' || isAreaLikeTool;
       if (activePoints.length === 0 && !isDrawingTool) {
         if (!e.evt.ctrlKey && !e.evt.metaKey && !isMultiSelectMode) {
           onSelectMeasurement(null);
@@ -800,7 +805,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         regionId,
       };
       onAddMeasurement(newMeasurement);
-    } else if (currentTool === 'length' || currentTool === 'area') {
+    } else if (currentTool === 'length' || isAreaLikeTool) {
       if (activePoints.length === 0 && isMultiRegion) {
         const region = scaleRegions.find(r => isPointInPolygon(pos, r.points));
         if (!region) {
@@ -965,7 +970,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       if (e.key === 'Escape') {
         cancelDrawing();
       } else if (e.key === 'Enter') {
-        if (activePoints.length > 1 && (currentTool === 'length' || currentTool === 'area' || currentTool === 'region')) {
+        if (activePoints.length > 1 && (currentTool === 'length' || isAreaLikeTool || currentTool === 'region')) {
           if (currentTool === 'region') {
             if (activePoints.length > 2) {
               const newRegion: ScaleRegion = {
@@ -999,7 +1004,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           }
         }
       } else if (e.key.toLowerCase() === 'a') {
-        if (activePoints.length > 0 && arcMode === 'inactive' && (currentTool === 'length' || currentTool === 'area')) {
+        if (activePoints.length > 0 && arcMode === 'inactive' && (currentTool === 'length' || isAreaLikeTool)) {
           setArcMode('waiting_mid');
         }
       }
@@ -1024,6 +1029,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   // Append target = the currently selected measurement (when its type matches
   // the active tool). Otherwise create a fresh measurement and select it.
   const finalizeSegment = () => {
+    // Frozen history / phone read-only: nothing gets written. CanvasView also
+    // forces the tool back to pan, so this is belt-and-braces for the write.
+    if (readOnly) { cancelDrawing(); return; }
     if (activePoints.length <= 1) return;
 
     let regionId: string | undefined = undefined;
@@ -1036,14 +1044,17 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const segArcMids: MeasurementSegment['arcMidIndices'] = activeArcMidIndices.length > 0
       ? [...activeArcMidIndices]
       : undefined;
-    const drawingType = currentTool as 'length' | 'area';
+    const isSubtract = currentTool === 'subtract';
+    const drawingType = isSubtract ? 'area' : (currentTool as 'length' | 'area');
 
     if (resumeMeasurementId) {
       const existing = measurements.find(m => m.id === resumeMeasurementId);
       if (resumingSegmentIdx >= 0 && existing) {
         // Resuming an additional segment — rewrite that segment in place.
+        // Spread the existing segment so a cutout stays a cutout when its
+        // outline is redrawn.
         const newSegments = (existing.segments ?? []).map((s, i) =>
-          i === resumingSegmentIdx ? { points: segPoints, arcMidIndices: segArcMids } : s
+          i === resumingSegmentIdx ? { ...s, points: segPoints, arcMidIndices: segArcMids } : s
         );
         onUpdateMeasurement(resumeMeasurementId, { segments: newSegments });
       } else {
@@ -1066,7 +1077,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         : null;
       const canAppend = !!selected && selected.type === drawingType;
 
-      if (canAppend && selected) {
+      if (isSubtract) {
+        // Cutouts attach to the selected area measurement or nowhere — the
+        // tool is gated on selection, so a miss just drops the polygon.
+        if (canAppend && selected && selected.points.length > 0 && activePoints.length > 2) {
+          const newSeg: MeasurementSegment = { points: segPoints, arcMidIndices: segArcMids, subtract: true };
+          onUpdateMeasurement(selected.id, { segments: [...(selected.segments ?? []), newSeg] });
+        }
+      } else if (canAppend && selected) {
         if (selected.points.length === 0) {
           // Empty placeholder created via "New Measurement" — fill the first segment.
           onUpdateMeasurement(selected.id, {
@@ -1129,7 +1147,16 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const flatPoints = displayPoints.flatMap(p => [p.x, p.y]);
     const arcMidSet = new Set(activeArcMidIndices);
 
-    const color = currentTool === 'scale' ? '#ef4444' : currentTool === 'length' ? '#3b82f6' : currentTool === 'region' ? '#8b5cf6' : '#10b981';
+    // A cutout previews in its parent measurement's color so it reads as part
+    // of that shape rather than as a new one.
+    const selectedColor = selectedMeasurementId
+      ? measurements.find(mm => mm.id === selectedMeasurementId)?.color
+      : undefined;
+    const color = currentTool === 'scale' ? '#ef4444'
+      : currentTool === 'length' ? '#3b82f6'
+      : currentTool === 'region' ? '#8b5cf6'
+      : currentTool === 'subtract' ? (selectedColor ?? '#10b981')
+      : '#10b981';
 
     return (
       <Group>
@@ -1139,8 +1166,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           strokeWidth={4 / stageScale}
           lineJoin="round"
           lineCap="round"
-          dash={currentTool === 'scale' ? [5 / stageScale, 5 / stageScale] : undefined}
-          closed={(currentTool === 'area' || currentTool === 'region') && activePoints.length > 2 && arcMode === 'inactive'}
+          dash={
+            currentTool === 'scale' ? [5 / stageScale, 5 / stageScale]
+            : currentTool === 'subtract' ? [8 / stageScale, 6 / stageScale]
+            : undefined
+          }
+          closed={(isAreaLikeTool || currentTool === 'region') && activePoints.length > 2 && arcMode === 'inactive'}
+          // No fill while subtracting — the hole is what's being removed, so a
+          // solid preview over the parent area would read backwards.
           fill={(currentTool === 'area' || currentTool === 'region') ? `${color}40` : undefined}
         />
         {activePoints.map((p, i) => (
@@ -1250,7 +1283,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         const pxLen = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
         text = formatMeasurement(pxLen, 'length', currentScale, takeoff);
       } else {
-        const pxArea = allSegDisplayPoints.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+        // `points` (not displayPoints) — the helper expands arcs itself, and
+        // this keeps the label live while a vertex is being dragged.
+        const pxArea = measurementAreaPx({ points, arcMidIndices: m.arcMidIndices, segments: m.segments });
         text = formatMeasurement(pxArea, 'area', currentScale, takeoff);
       }
 
@@ -1260,7 +1295,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const isPrimarySelected = isSelected && (selectedSegmentIdx === null || selectedSegmentIdx === -1);
       const isSegmentSelected = (segIdx: number) => isSelected && (selectedSegmentIdx === null || selectedSegmentIdx === segIdx);
       const isMultiSelected = multiSelectedIds?.has(m.id) ?? false;
-      const isDrawingTool = currentTool === 'length' || currentTool === 'area' || currentTool === 'count';
+      const isDrawingTool = currentTool === 'length' || isAreaLikeTool || currentTool === 'count';
 
       // Per-segment click — falls through to whole-measurement select if no handler is wired.
       const handleSegmentClick = (e: any, segIdx: number) => {
@@ -2106,7 +2141,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             const onBackground = e.target === stageRef.current || e.target.name() === 'backgroundImage';
             if (!onBackground) return;
             if (activePoints.length <= 1) return;
-            if (currentTool === 'length' || currentTool === 'area') {
+            if (currentTool === 'length' || isAreaLikeTool) {
               finalizeSegment();
             } else if (currentTool === 'region' && activePoints.length > 2) {
               const newRegion: ScaleRegion = {
