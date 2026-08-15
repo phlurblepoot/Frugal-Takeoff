@@ -1,4 +1,6 @@
-import { test, expect, seedProjectWithPage, seedProjectWithAreaTakeoffLength, login } from './fixtures/test';
+import {
+  test, expect, seedProjectWithPage, seedProjectWithAreaTakeoffLength, seedProjectWithSupersededRevision, login,
+} from './fixtures/test';
 import type { Page } from '@playwright/test';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -534,6 +536,136 @@ test.describe('CanvasView right-sidebar interactions', () => {
     await authedPage.getByTestId('btn-confirm-delete').click();
 
     // After confirming, the two measurements have collapsed into one.
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CanvasView — Subtract (cutout) tool characterization.
+//
+// The Subtract tool cuts a hole out of a SELECTED area measurement: click
+// points to draw an inner polygon, finish with Enter (same finish gesture as
+// the area tool), and the measurement's readout + sidebar total reflect the
+// NET area (primary − holes). Internally this APPENDS a `{ subtract: true }`
+// segment to the existing measurement via updateMeasurement({ segments }) —
+// it does NOT create a new measurement — so the row count never changes
+// across a cut, and undo is a single 'update' history entry that restores the
+// segments array (removing the hole) rather than deleting a row.
+//
+// tool-subtract lives on the same floating toolbar as tool-area/tool-length/
+// tool-count (the only toolbar instance with data-testid hooks), so it's
+// selected exactly like those tools above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('CanvasView subtract (cutout) tool', () => {
+  test('cutting a hole reduces the area readout; undo restores it', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const { projectId, pageId } = await seedProjectWithPage(request, token, { withScale: false });
+    await gotoCanvas(authedPage, projectId, pageId);
+    const box = await surfaceBox(authedPage);
+
+    const cy = box.height / 2;
+    const left = box.width / 2 - 200;
+    const right = box.width / 2 + 200; // 400px span = 10 ft
+    await calibrate(authedPage, box, [left, cy], [right, cy], '10');
+
+    await createTakeoff(authedPage, 'Surface', 'area');
+    await expect(authedPage.getByTestId('tool-area')).toBeEnabled();
+
+    // Primary rectangle: 400px x 200px -> 10ft x 5ft = 50 sq ft (same geometry
+    // as the 'area measurement reads ~expected square feet' test above).
+    const top = cy - 100;
+    const bot = cy + 100;
+    await authedPage.getByTestId('tool-area').click();
+    await clickCanvas(authedPage, box, left, top);
+    await clickCanvas(authedPage, box, right, top);
+    await clickCanvas(authedPage, box, right, bot);
+    await clickCanvas(authedPage, box, left, bot);
+    await authedPage.keyboard.press('Enter');
+
+    const value = authedPage.getByTestId('measurement-value').first();
+    await expect(value).toBeVisible();
+    let sqft = parseValue(await value.innerText());
+    expect(sqft).toBeGreaterThan(45);
+    expect(sqft).toBeLessThan(55);
+
+    // finalizeSegment auto-selects the just-drawn area measurement, so the
+    // Subtract tool is enabled with no extra selection step.
+    await expect(authedPage.getByTestId('tool-subtract')).toBeEnabled();
+    await authedPage.getByTestId('tool-subtract').click();
+
+    // Inner cutout: 200px x 100px -> 5ft x 2.5ft = 12.5 sq ft hole.
+    // Net expected: 50 - 12.5 = 37.5 sq ft.
+    const cutTop = cy - 50;
+    const cutBot = cy + 50;
+    const cutLeft = box.width / 2 - 100;
+    const cutRight = box.width / 2 + 100;
+    await clickCanvas(authedPage, box, cutLeft, cutTop);
+    await clickCanvas(authedPage, box, cutRight, cutTop);
+    await clickCanvas(authedPage, box, cutRight, cutBot);
+    await clickCanvas(authedPage, box, cutLeft, cutBot);
+    await authedPage.keyboard.press('Enter');
+
+    sqft = parseValue(await value.innerText());
+    // Same ±5 sq ft tolerance idiom as the area test.
+    expect(sqft).toBeGreaterThan(32.5);
+    expect(sqft).toBeLessThan(42.5);
+
+    // Sidebar shows the cutout as a negative deduction row under the measurement.
+    const sidebar = authedPage.getByTestId('measurement-sidebar');
+    await expect(sidebar.getByText('Cutout 1')).toBeVisible();
+
+    // Visual proof of the punch-out for human review (canvas changes need a
+    // screenshot, not just a numeric assertion).
+    await authedPage.screenshot({ path: 'test-results/subtract-punchout.png' });
+
+    // One undo removes the cutout (an 'update' history entry on the segments
+    // array, not a new measurement) and restores the original 50 sq ft value.
+    await authedPage.getByTestId('btn-undo').click();
+    sqft = parseValue(await value.innerText());
+    expect(sqft).toBeGreaterThan(45);
+    expect(sqft).toBeLessThan(55);
+    await expect(sidebar.getByText('Cutout 1')).toHaveCount(0);
+    // Still one row throughout — subtract never creates a second measurement.
+    await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CanvasView — Subtract tool read-only gate (mirrors plan-set-readonly.spec.ts).
+//
+// On a superseded plan-set revision, readOnly is forced true and
+// handlePhoneToolBlocked() fires FIRST in every ToolButton's onDisabledClick,
+// regardless of the tool's other enablement criteria — so clicking the
+// (soft-disabled) Subtract button always surfaces the "Tool Restricted" modal
+// with the superseded-revision message instead of activating the tool.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('CanvasView subtract tool is read-only-gated', () => {
+  test('subtract tool cannot cut on a superseded revision', async ({ authedPage, request }) => {
+    const { token } = await login(request);
+    const seed = await seedProjectWithSupersededRevision(request, token);
+    await gotoCanvas(authedPage, seed.projectId, seed.supersededPageId);
+
+    await expect(authedPage.getByTestId('canvas-superseded-banner')).toBeVisible();
+
+    // Select the existing measurement so the tool has a real candidate to cut
+    // into — the read-only gate must still block it regardless.
+    const row = authedPage.getByTestId('measurement-row').first();
+    await expect(row).toBeVisible();
+    await row.click();
+
+    // ToolButton's disabled state is SOFT: the button still renders and is
+    // clickable, but routes to onDisabledClick (a "Tool Restricted" modal)
+    // instead of activating the tool — so we assert the modal, not toBeDisabled().
+    await authedPage.getByTestId('tool-subtract').click();
+    await expect(authedPage.getByText('Tool Restricted')).toBeVisible();
+    // Scope to the modal's <p> — the always-visible superseded BANNER (a
+    // <span>) contains an overlapping substring of the same message.
+    await expect(authedPage.locator('p', { hasText: /read-only history/i })).toBeVisible();
+    await authedPage.getByRole('button', { name: 'Got it' }).click();
+
+    // No drawing happened: still exactly the one seeded measurement/row.
     await expect(authedPage.getByTestId('measurement-row')).toHaveCount(1);
   });
 });
