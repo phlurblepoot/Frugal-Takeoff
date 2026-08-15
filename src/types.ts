@@ -5,6 +5,9 @@ export type MeasurementType = 'scale' | 'length' | 'area' | 'count';
 export interface MeasurementSegment {
   points: Point[];
   arcMidIndices?: number[];
+  /** Cutout: this polygon's area subtracts from the measurement's net area
+   *  (windows/doors). Only meaningful on area measurements. */
+  subtract?: boolean;
 }
 
 export interface Measurement {
