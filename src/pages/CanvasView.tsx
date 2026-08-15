@@ -739,7 +739,13 @@ const CanvasViewInner: React.FC = () => {
     } else {
       setSelectedColor(m.color);
     }
-    if (m.type !== 'scale') setCurrentTool(m.type as Tool);
+    // Selecting an area measurement while cutting holes shouldn't kick the
+    // user out of subtract mode back to the plain area tool.
+    if (currentTool === 'subtract' && m.type === 'area') {
+      // keep tool
+    } else if (m.type !== 'scale') {
+      setCurrentTool(m.type as Tool);
+    }
   };
 
   // Canvas-click selection: highlight a single segment within a measurement.
@@ -939,11 +945,27 @@ const CanvasViewInner: React.FC = () => {
       }
       const newPrimary = extraSegs[promoteIdx];
       const rest = extraSegs.filter((_, i) => i !== promoteIdx);
+      // Dangling-cutout rule: a hole cut from the polygon that just got
+      // deleted has no additive shape left to punch out of, so it must not
+      // silently start subtracting from an unrelated polygon that happens to
+      // remain. Keep additive segments as-is; keep a subtract segment only
+      // if it still lands inside some remaining additive polygon (including
+      // the newly promoted primary). Drop the rest.
+      const remainingAdditivePolys = [
+        expandArcPoints(newPrimary.points, newPrimary.arcMidIndices),
+        ...rest.filter(s => !s.subtract).map(s => expandArcPoints(s.points, s.arcMidIndices)),
+      ];
+      const keptRest = rest.filter(s => {
+        if (!s.subtract) return true;
+        const pts = expandArcPoints(s.points, s.arcMidIndices);
+        if (pts.length === 0) return false;
+        return remainingAdditivePolys.some(poly => isPointInPolygon(pts[0], poly));
+      });
       updatedMeasurement = {
         ...measurement,
         points: newPrimary.points,
         arcMidIndices: newPrimary.arcMidIndices,
-        segments: rest.length > 0 ? rest : undefined,
+        segments: keptRest.length > 0 ? keptRest : undefined,
       };
     } else {
       // Deleting an extra segment
