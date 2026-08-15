@@ -20,6 +20,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.5',
+    date: 'August 15, 2026',
+    changes: [
+      'New Subtract tool for area measurements: cut window and door openings straight out of an area. Select an area measurement, pick Subtract (next to Area, on phone too), and draw the opening — the hole shows the plan through it with a dashed outline, the sidebar lists each cutout as a deduction (e.g. −12.50 sq ft), and every total (canvas, legend, proposal, printouts) uses the net area. Cutouts edit like any segment: drag vertices, move them, undo/redo, and they carry forward across plan revisions.',
+      'Fix: printing takeoffs on large plan sets no longer hangs forever or fails. Printouts and proposals were silently rejected by a server upload limit once the PDF got big (about 24+ sheets on heavy plan sets); saves now stream directly without that ceiling, and any failure shows an error message instead of an endless "Generating PDF" spinner. The same silent-hang bug was also fixed in the Excel export.',
+      'New Email-ready quality option when printing or generating proposals: keeps the final PDF under 18MB so it clears the ~25MB attachment limits of Gmail/Outlook after email encoding. Small jobs pass through untouched at full quality; big ones are compressed page by page just enough to fit, and if a huge set still can\'t fit at readable quality it saves anyway and warns you with the actual size. The old Full/Large/Standard/Compact choices (which no longer did anything) are gone — it\'s now just Best quality and Email-ready.',
+      'Printout downloads are faster and printout files no longer clutter the project Documents list — printout history lives in the Proposal section as before.',
+    ],
+  },
+  {
     version: '2.4',
     date: 'August 11, 2026',
     changes: [
