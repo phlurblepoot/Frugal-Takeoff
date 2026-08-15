@@ -23,6 +23,7 @@ import {
   getProposalPrefsKey,
   HIGHLIGHT_QUALITY_PRESETS,
   HighlightQuality,
+  normalizeHighlightQuality,
   ProposalOptions,
 } from './proposal/proposalGenerator';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
@@ -69,7 +70,7 @@ export const ProjectProposal: React.FC = () => {
   const [includeHighlights, setIncludeHighlights] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(false);
   const [includeTakeoffList, setIncludeTakeoffList] = useState(true);
-  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('best');
 
   // Send-proposal controls.
   const [sendFileId, setSendFileId] = useState('');
@@ -150,7 +151,7 @@ export const ProjectProposal: React.FC = () => {
         if (p.includeHighlights != null)  setIncludeHighlights(p.includeHighlights);
         if (p.includeSignature  != null)  setIncludeSignature(p.includeSignature);
         if (p.includeTakeoffList != null) setIncludeTakeoffList(p.includeTakeoffList);
-        if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+        if (p.highlightQuality)           setHighlightQuality(normalizeHighlightQuality(p.highlightQuality));
         if (p.priceMode === 'fixed' || p.priceMode === 'takeoffs') setPriceMode(p.priceMode);
         if (typeof p.fixedPrice === 'string') setFixedPrice(p.fixedPrice);
       }
@@ -163,7 +164,7 @@ export const ProjectProposal: React.FC = () => {
       if (prefs['proposal-includeHighlights'] != null)  setIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
       if (prefs['proposal-includeSignature']  != null)  setIncludeSignature(prefs['proposal-includeSignature'] === 'true');
       if (prefs['proposal-includeTakeoffList'] != null) setIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
-      if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-highlightQuality'])           setHighlightQuality(normalizeHighlightQuality(prefs['proposal-highlightQuality']));
       if (prefs['proposal-priceMode'] === 'fixed' || prefs['proposal-priceMode'] === 'takeoffs') setPriceMode(prefs['proposal-priceMode'] as 'takeoffs' | 'fixed');
       if (prefs['proposal-fixedPrice'] != null)         setFixedPrice(prefs['proposal-fixedPrice']);
     }).catch(() => { /* offline — localStorage values already applied */ });

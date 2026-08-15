@@ -52,7 +52,7 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
-  _quality: HighlightQuality = 'standard',
+  _quality: HighlightQuality = 'best',
   onProgress?: (msg: string) => void,
   currentPageIds?: Set<string>,
 ): Promise<ArrayBuffer | null> {
@@ -396,13 +396,19 @@ export async function buildHighlightsPdf(
 }
 
 // ── Highlight quality presets ────────────────────────────────────────────────
+// 'best' keeps the copied vector pages untouched. 'email' post-shrinks the
+// result to EMAIL_TARGET_BYTES (see shrinkPdf.ts) so it survives provider
+// attachment limits. The old Full/Large/Standard/Compact raster presets died
+// with the raster pipeline — stored prefs holding them normalize to 'best'.
 export const HIGHLIGHT_QUALITY_PRESETS = {
-  full:     { label: 'Full Resolution',              maxDim: Infinity, jpegQuality: 0.90 },
-  large:    { label: 'Large  (≈A2 — high quality)',  maxDim: 1680,     jpegQuality: 0.85 },
-  standard: { label: 'Standard  (≈A3)',              maxDim: 1190,     jpegQuality: 0.80 },
-  compact:  { label: 'Compact  (near A4)',            maxDim: 680,      jpegQuality: 0.72 },
+  best:  { label: 'Best quality (vector)' },
+  email: { label: 'Email-ready (under 25MB sent)' },
 } as const;
 export type HighlightQuality = keyof typeof HIGHLIGHT_QUALITY_PRESETS;
+
+export function normalizeHighlightQuality(value: unknown): HighlightQuality {
+  return value === 'email' || value === 'best' ? value : 'best';
+}
 
 // ── Per-user localStorage key for proposal preferences ───────────────────────
 export function getProposalPrefsKey(): string {

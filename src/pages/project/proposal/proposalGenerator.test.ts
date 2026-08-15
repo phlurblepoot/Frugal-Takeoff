@@ -82,36 +82,24 @@ describe('dataUrlToUint8Array', () => {
 });
 
 // ── HIGHLIGHT_QUALITY_PRESETS ────────────────────────────────────────────────
+// The old raster pipeline (Full/Large/Standard/Compact, maxDim/jpegQuality)
+// was replaced by the vector pipeline's two live presets — see
+// proposalGenerator.highlights.test.ts for the current preset + normalization
+// coverage.
 describe('HIGHLIGHT_QUALITY_PRESETS', () => {
-  it('has keys: full, large, standard, compact', () => {
+  it('has keys: best, email', () => {
     const keys = Object.keys(HIGHLIGHT_QUALITY_PRESETS);
-    expect(keys).toContain('full');
-    expect(keys).toContain('large');
-    expect(keys).toContain('standard');
-    expect(keys).toContain('compact');
+    expect(keys).toContain('best');
+    expect(keys).toContain('email');
   });
 
-  it.each(['full', 'large', 'standard', 'compact'] as const)(
-    '%s preset has label (string), maxDim (number), jpegQuality (number)',
+  it.each(['best', 'email'] as const)(
+    '%s preset has label (string)',
     (key) => {
       const preset = HIGHLIGHT_QUALITY_PRESETS[key];
       expect(typeof preset.label).toBe('string');
-      expect(typeof preset.maxDim).toBe('number');
-      expect(typeof preset.jpegQuality).toBe('number');
     }
   );
-
-  it('full preset uses Infinity maxDim and 0.90 jpegQuality', () => {
-    expect(HIGHLIGHT_QUALITY_PRESETS.full.maxDim).toBe(Infinity);
-    expect(HIGHLIGHT_QUALITY_PRESETS.full.jpegQuality).toBe(0.90);
-  });
-
-  it('compact preset has the smallest maxDim', () => {
-    const dims = (['full', 'large', 'standard', 'compact'] as const).map(
-      k => HIGHLIGHT_QUALITY_PRESETS[k].maxDim
-    );
-    expect(HIGHLIGHT_QUALITY_PRESETS.compact.maxDim).toBe(Math.min(...dims));
-  });
 });
 
 // ── getProposalPrefsKey ──────────────────────────────────────────────────────
@@ -160,7 +148,7 @@ describe('resolveGrandTotal', () => {
     includeSignature: false,
     includeTakeoffList: false,
     customTitle: '',
-    highlightQuality: 'standard',
+    highlightQuality: 'best',
     ...over,
   });
 

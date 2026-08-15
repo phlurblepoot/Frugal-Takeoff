@@ -34,6 +34,7 @@ import {
   buildHighlightsPdf,
   computeTakeoffTotals,
   HighlightQuality,
+  normalizeHighlightQuality,
 } from './project/proposal/proposalGenerator';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
@@ -123,7 +124,7 @@ export const ProjectView: React.FC = () => {
   // Blueprint print quality for the Print (highlighted plans) export. Persisted
   // per-user via the proposal-prefs effect below since it's shared with the
   // proposal section's highlight quality.
-  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('best');
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
   const scrollKey = `projectView-scroll-${projectId}`;
@@ -155,7 +156,7 @@ export const ProjectView: React.FC = () => {
   // the pages-tab view/sort modes.
   useEffect(() => {
     getUserPreferences().then(prefs => {
-      if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-highlightQuality'])             setHighlightQuality(normalizeHighlightQuality(prefs['proposal-highlightQuality']));
       if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
       const sort = prefs['pages-sortMode'];
       // 'name' was an earlier option that effectively duplicated pageNumber
