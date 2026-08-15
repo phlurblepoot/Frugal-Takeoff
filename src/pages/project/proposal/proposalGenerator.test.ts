@@ -248,3 +248,41 @@ describe('computeTakeoffTotals only counts the current living revision', () => {
     expect(t1.totalRealValue).not.toBeCloseTo(200);
   });
 });
+
+// ── computeTakeoffTotals: subtract (cutout) segments net out of the area ──────
+// A subtract segment on an area measurement (src/pages/project/proposal
+// buildHighlightsPdf task 5, math.ts task 1's measurementAreaPx) must reduce
+// the takeoff total, not just get drawn as a visual hole.
+describe('computeTakeoffTotals nets subtract segments out of area totals', () => {
+  // Same fixture style as the revision-dedup describe above.
+  const mkPage = (o: Partial<ProjectPage>): ProjectPage => ({
+    id: 'p', name: '', pageNumber: '', description: '', imageId: '', thumbnailId: '',
+    imageWidth: 0, imageHeight: 0, measurements: [], scaleConfig: null, ...o,
+  } as ProjectPage);
+
+  const mkProj = (pages: ProjectPage[], takeoffs: any[]): Project => ({
+    id: 'pr', name: 'x', createdAt: 0, pages, takeoffs, planSets: [],
+  } as Project);
+
+  it('10x10 px square with a 2x2 px subtract hole totals net (96-based)', () => {
+    // 1:1 scale so px² reads directly as sq ft — isolates the area math from
+    // unit conversion.
+    const scaleConfig = { pixelDistance: 1, realWorldDistance: 1, unit: 'ft' } as any;
+    const areaMeasurement = {
+      id: 'm1', type: 'area', name: 'm1', color: '#000', takeoffId: 't1',
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], // 100 px²
+      segments: [{
+        points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 3 }], // 4 px² hole
+        subtract: true,
+      }],
+    } as any;
+    const page = mkPage({ id: 'a1', scaleConfig, measurements: [areaMeasurement] });
+    const takeoffs = [{ id: 't1', name: 'Slab', color: '#000', type: 'area', unit: 'sq ft' }];
+    const project = mkProj([page], takeoffs);
+
+    const totals = computeTakeoffTotals(project, new Set(['a1']));
+    const t1 = totals.find(t => t.id === 't1')!;
+
+    expect(t1.totalRealValue).toBeCloseTo(96);
+  });
+});

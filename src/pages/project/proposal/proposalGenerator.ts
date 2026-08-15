@@ -16,7 +16,6 @@ import {
 } from '../../../utils/documentLetterhead';
 import {
   calculatePolylineLength,
-  calculatePolygonArea,
   calculateRealValue,
   formatMeasurement,
   calculateSurfaceAreaPx,
@@ -26,6 +25,8 @@ import {
   calculateTakeoffCostDetails,
   roundUpTo100,
   expandArcPoints,
+  measurementAreaPx,
+  measurementRings,
 } from '../../../utils/math';
 
 // Converts a data URL (e.g. "data:application/pdf;base64,...") to a fresh Uint8Array.
@@ -201,25 +202,53 @@ export async function buildHighlightsPdf(
       }
 
       // Polyline / polygon for length & area, with arcs expanded.
-      const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
-        { points: m.points, arcMidIndices: m.arcMidIndices },
-        ...(m.segments ?? []),
-      ];
-      for (const seg of allSegs) {
-        if (!seg.points || seg.points.length === 0) continue;
-        const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
-        if (dispPts.length < 2) continue;
-        const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
-        for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
-        if (m.type === 'area') cmds.push('Z');
-        const path = cmds.join(' ');
-        outPage.drawSvgPath(path, {
-          x: 0, y: dispH,
-          borderColor: rgb(c.r, c.g, c.b),
-          borderWidth: stroke,
-          color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
-          opacity: m.type === 'area' ? 0.25 : undefined,
-        });
+      if (m.type === 'area') {
+        // measurementRings arc-expands and winding-normalizes (additive CCW,
+        // subtract CW) — one compound path filled under pdf-lib's nonzero
+        // rule punches real holes instead of re-filling over them.
+        const rings = measurementRings(m).filter(r => r.points.length >= 3);
+        const ringPath = (pts: typeof m.points) => {
+          const cmds: string[] = [`M ${pts[0].x * sf} ${pts[0].y * sf}`];
+          for (let j = 1; j < pts.length; j++) cmds.push(`L ${pts[j].x * sf} ${pts[j].y * sf}`);
+          cmds.push('Z');
+          return cmds.join(' ');
+        };
+        if (rings.length > 0) {
+          const compoundPath = rings.map(r => ringPath(r.points)).join(' ');
+          outPage.drawSvgPath(compoundPath, {
+            x: 0, y: dispH,
+            color: rgb(c.r, c.g, c.b),
+            opacity: 0.25,
+          });
+        }
+        // Borders drawn per ring: solid for the additive outline, dashed for
+        // subtract (cutout) rings so a punch-out reads distinctly on paper.
+        for (const ring of rings) {
+          outPage.drawSvgPath(ringPath(ring.points), {
+            x: 0, y: dispH,
+            borderColor: rgb(c.r, c.g, c.b),
+            borderWidth: stroke,
+            ...(ring.subtract ? { borderDashArray: [10 * sf, 7 * sf] } : {}),
+          });
+        }
+      } else {
+        const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
+          { points: m.points, arcMidIndices: m.arcMidIndices },
+          ...(m.segments ?? []),
+        ];
+        for (const seg of allSegs) {
+          if (!seg.points || seg.points.length === 0) continue;
+          const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
+          if (dispPts.length < 2) continue;
+          const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
+          for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
+          const path = cmds.join(' ');
+          outPage.drawSvgPath(path, {
+            x: 0, y: dispH,
+            borderColor: rgb(c.r, c.g, c.b),
+            borderWidth: stroke,
+          });
+        }
       }
 
       // Label centered on the primary segment.
@@ -238,7 +267,7 @@ export async function buildHighlightsPdf(
       let text = '';
       if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
       else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
-      else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
+      else text = formatMeasurement(measurementAreaPx(m), 'area', page.scaleConfig, takeoff);
 
       if (text) {
         const fontSize = 14 * sf;
@@ -279,7 +308,7 @@ export async function buildHighlightsPdf(
           const allMPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
           let pixelValue = 0;
           if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = measurementAreaPx(m);
           else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
           else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
           if (pixelValue > 0) {
@@ -481,7 +510,7 @@ export function computeTakeoffTotals(
             if (takeoff.type === 'length' && m.type === 'length') {
               pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
             } else if (takeoff.type === 'area' && m.type === 'area') {
-              pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+              pixelValue = measurementAreaPx(m);
             } else if (takeoff.type === 'area' && m.type === 'length') {
               pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
             }
