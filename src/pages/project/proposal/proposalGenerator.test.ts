@@ -82,36 +82,24 @@ describe('dataUrlToUint8Array', () => {
 });
 
 // ── HIGHLIGHT_QUALITY_PRESETS ────────────────────────────────────────────────
+// The old raster pipeline (Full/Large/Standard/Compact, maxDim/jpegQuality)
+// was replaced by the vector pipeline's two live presets — see
+// proposalGenerator.highlights.test.ts for the current preset + normalization
+// coverage.
 describe('HIGHLIGHT_QUALITY_PRESETS', () => {
-  it('has keys: full, large, standard, compact', () => {
+  it('has keys: best, email', () => {
     const keys = Object.keys(HIGHLIGHT_QUALITY_PRESETS);
-    expect(keys).toContain('full');
-    expect(keys).toContain('large');
-    expect(keys).toContain('standard');
-    expect(keys).toContain('compact');
+    expect(keys).toContain('best');
+    expect(keys).toContain('email');
   });
 
-  it.each(['full', 'large', 'standard', 'compact'] as const)(
-    '%s preset has label (string), maxDim (number), jpegQuality (number)',
+  it.each(['best', 'email'] as const)(
+    '%s preset has label (string)',
     (key) => {
       const preset = HIGHLIGHT_QUALITY_PRESETS[key];
       expect(typeof preset.label).toBe('string');
-      expect(typeof preset.maxDim).toBe('number');
-      expect(typeof preset.jpegQuality).toBe('number');
     }
   );
-
-  it('full preset uses Infinity maxDim and 0.90 jpegQuality', () => {
-    expect(HIGHLIGHT_QUALITY_PRESETS.full.maxDim).toBe(Infinity);
-    expect(HIGHLIGHT_QUALITY_PRESETS.full.jpegQuality).toBe(0.90);
-  });
-
-  it('compact preset has the smallest maxDim', () => {
-    const dims = (['full', 'large', 'standard', 'compact'] as const).map(
-      k => HIGHLIGHT_QUALITY_PRESETS[k].maxDim
-    );
-    expect(HIGHLIGHT_QUALITY_PRESETS.compact.maxDim).toBe(Math.min(...dims));
-  });
 });
 
 // ── getProposalPrefsKey ──────────────────────────────────────────────────────
@@ -160,7 +148,7 @@ describe('resolveGrandTotal', () => {
     includeSignature: false,
     includeTakeoffList: false,
     customTitle: '',
-    highlightQuality: 'standard',
+    highlightQuality: 'best',
     ...over,
   });
 
@@ -258,5 +246,43 @@ describe('computeTakeoffTotals only counts the current living revision', () => {
     expect(t1.totalRealValue).toBeCloseTo(100);
     // Explicitly not the double-counted sum of both revisions.
     expect(t1.totalRealValue).not.toBeCloseTo(200);
+  });
+});
+
+// ── computeTakeoffTotals: subtract (cutout) segments net out of the area ──────
+// A subtract segment on an area measurement (src/pages/project/proposal
+// buildHighlightsPdf task 5, math.ts task 1's measurementAreaPx) must reduce
+// the takeoff total, not just get drawn as a visual hole.
+describe('computeTakeoffTotals nets subtract segments out of area totals', () => {
+  // Same fixture style as the revision-dedup describe above.
+  const mkPage = (o: Partial<ProjectPage>): ProjectPage => ({
+    id: 'p', name: '', pageNumber: '', description: '', imageId: '', thumbnailId: '',
+    imageWidth: 0, imageHeight: 0, measurements: [], scaleConfig: null, ...o,
+  } as ProjectPage);
+
+  const mkProj = (pages: ProjectPage[], takeoffs: any[]): Project => ({
+    id: 'pr', name: 'x', createdAt: 0, pages, takeoffs, planSets: [],
+  } as Project);
+
+  it('10x10 px square with a 2x2 px subtract hole totals net (96-based)', () => {
+    // 1:1 scale so px² reads directly as sq ft — isolates the area math from
+    // unit conversion.
+    const scaleConfig = { pixelDistance: 1, realWorldDistance: 1, unit: 'ft' } as any;
+    const areaMeasurement = {
+      id: 'm1', type: 'area', name: 'm1', color: '#000', takeoffId: 't1',
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], // 100 px²
+      segments: [{
+        points: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }, { x: 1, y: 3 }], // 4 px² hole
+        subtract: true,
+      }],
+    } as any;
+    const page = mkPage({ id: 'a1', scaleConfig, measurements: [areaMeasurement] });
+    const takeoffs = [{ id: 't1', name: 'Slab', color: '#000', type: 'area', unit: 'sq ft' }];
+    const project = mkProj([page], takeoffs);
+
+    const totals = computeTakeoffTotals(project, new Set(['a1']));
+    const t1 = totals.find(t => t.id === 't1')!;
+
+    expect(t1.totalRealValue).toBeCloseTo(96);
   });
 });

@@ -83,6 +83,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                 {selectedTakeoffIds.size > 0 && (
                   <div className="flex items-center gap-2 w-full sm:w-auto">
                     <select
+                      data-testid="print-quality-select"
                       value={highlightQuality}
                       onChange={e => setHighlightQuality(e.target.value as HighlightQuality)}
                       title="Blueprint print quality"

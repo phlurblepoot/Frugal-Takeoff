@@ -15,7 +15,7 @@ vi.mock('../../../utils/store', () => ({
   getImage: vi.fn(async () => null),
 }));
 
-import { buildHighlightsPdf } from './proposalGenerator';
+import { buildHighlightsPdf, HIGHLIGHT_QUALITY_PRESETS, normalizeHighlightQuality } from './proposalGenerator';
 
 async function makeSourcePdf(mediaBox: [number, number, number, number]): Promise<string> {
   const { PDFDocument } = await import('pdf-lib');
@@ -87,5 +87,22 @@ describe('buildHighlightsPdf view-box placement', () => {
     // in behavior for ordinary pages.
     const ops = await buildContentStreams([0, 0, 600, 400]);
     expect(ops).not.toMatch(/1 0 0 1 -[\d.]+ -[\d.]+ cm/);
+  });
+});
+
+describe('highlight quality presets', () => {
+  it('offers exactly best + email', () => {
+    expect(Object.keys(HIGHLIGHT_QUALITY_PRESETS)).toEqual(['best', 'email']);
+  });
+
+  it('normalizes legacy stored preset values to best', () => {
+    for (const legacy of ['full', 'large', 'standard', 'compact', '', undefined, null, 42]) {
+      expect(normalizeHighlightQuality(legacy)).toBe('best');
+    }
+  });
+
+  it('keeps valid values', () => {
+    expect(normalizeHighlightQuality('email')).toBe('email');
+    expect(normalizeHighlightQuality('best')).toBe('best');
   });
 });

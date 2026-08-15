@@ -1,4 +1,4 @@
-import { Point, ScaleConfig, MeasurementTakeoff } from '../types';
+import { Point, ScaleConfig, MeasurementTakeoff, MeasurementSegment } from '../types';
 
 export const parseFeetAndInches = (input: string, defaultUnit: string = 'ft'): number | null => {
   const cleanInput = input.trim();
@@ -178,6 +178,65 @@ export const isPointInPolygon = (point: Point, polygon: Point[]): boolean => {
     if (intersect) inside = !inside;
   }
   return inside;
+};
+
+// Shoelace WITH sign. In the y-down screen coords these points live in, a
+// positive result means the ring winds CLOCKWISE on screen. calculatePolygonArea
+// (abs) stays for single-polygon magnitudes; this exists for winding-aware ring
+// normalization.
+export const signedPolygonArea = (points: Point[]): number => {
+  if (points.length < 3) return 0;
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    area += points[i].x * points[j].y;
+    area -= points[j].x * points[i].y;
+  }
+  return area / 2;
+};
+
+type MeasurementGeometry = {
+  points: Point[];
+  arcMidIndices?: number[];
+  segments?: MeasurementSegment[];
+};
+
+// Net pixel area of an area measurement: additive segments minus subtract
+// segments (arcs expanded), clamped at 0 so an oversized hole can't drive a
+// takeoff negative.
+export const measurementAreaPx = (m: MeasurementGeometry): number => {
+  const segs = [
+    { points: m.points, arcMidIndices: m.arcMidIndices, subtract: false },
+    ...(m.segments ?? []).map(s => ({ points: s.points, arcMidIndices: s.arcMidIndices, subtract: !!s.subtract })),
+  ];
+  const net = segs.reduce((sum, s) => {
+    const a = calculatePolygonArea(expandArcPoints(s.points, s.arcMidIndices));
+    return sum + (s.subtract ? -a : a);
+  }, 0);
+  return Math.max(0, net);
+};
+
+// Arc-expanded rings with winding normalized for nonzero-rule fills: additive
+// rings get positive signed area (on-screen clockwise in these y-down coords),
+// subtract rings negative. Only the OPPOSITION matters to the nonzero rule —
+// which side is which is arbitrary — and it is what lets one compound path
+// punch real holes in both the Konva canvas and the pdf-lib printout.
+// Degenerate (<3 point) rings are dropped.
+export const measurementRings = (m: MeasurementGeometry): { points: Point[]; subtract: boolean }[] => {
+  const segs = [
+    { points: m.points, arcMidIndices: m.arcMidIndices, subtract: false },
+    ...(m.segments ?? []).map(s => ({ points: s.points, arcMidIndices: s.arcMidIndices, subtract: !!s.subtract })),
+  ];
+  const rings: { points: Point[]; subtract: boolean }[] = [];
+  for (const s of segs) {
+    const pts = expandArcPoints(s.points, s.arcMidIndices);
+    if (pts.length < 3) continue;
+    const signed = signedPolygonArea(pts);
+    const wantPositive = !s.subtract;
+    const isPositive = signed > 0;
+    rings.push({ points: wantPositive === isPositive ? pts : [...pts].reverse(), subtract: !!s.subtract });
+  }
+  return rings;
 };
 
 export const calculateSurfaceAreaPx = (

@@ -105,5 +105,32 @@ test('Print records a PDF printout in the Proposal section', async ({
     timeout: 30_000,
   });
   await expect(authedPage.getByText('Printout history')).toBeVisible();
-  await expect(authedPage.getByText(/^Printout -/)).toBeVisible({ timeout: 15_000 });
+  // .first(): the Send-proposal card's "Attach proposal" <select> below also
+  // renders an <option> with this same printout name — a pre-existing
+  // strict-mode ambiguity (reproduces on the pre-SDD base commit too),
+  // unrelated to this change. Disambiguate to the visible history list item.
+  await expect(authedPage.getByText(/^Printout -/).first()).toBeVisible({ timeout: 15_000 });
+});
+
+test('Print with Email-ready quality records a printout (pass-through path)', async ({
+  authedPage,
+  apiToken,
+  request,
+}) => {
+  const { token } = apiToken;
+  const { projectId } = await seedProjectWithTakeoffMeasurement(request, token);
+
+  await gotoTakeoffsTab(authedPage, projectId);
+  await selectFirstTakeoff(authedPage);
+
+  await authedPage.getByTestId('print-quality-select').selectOption('email');
+  await authedPage.getByTestId('btn-print').click();
+
+  // Small seeded page → shrinkPdfToBudget's result is far under 18MB → the
+  // pass-through path (no re-render needed), and a printout is still recorded.
+  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal`), {
+    timeout: 30_000,
+  });
+  await expect(authedPage.getByText('Printout history')).toBeVisible();
+  await expect(authedPage.getByText(/^Printout -/).first()).toBeVisible({ timeout: 15_000 });
 });

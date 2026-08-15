@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
 import { Project, Printout, Customer } from '../../types';
 import {
-  getProject, saveProject, saveFile, getFile, deleteFile, getSettings,
+  getProject, saveProject, saveBinaryFile, getFile, deleteFile, getSettings,
   getSmtpSettings, getAlwaysCc, getCustomer,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
   uploadProjectFile, getImageUrl,
@@ -23,6 +23,7 @@ import {
   getProposalPrefsKey,
   HIGHLIGHT_QUALITY_PRESETS,
   HighlightQuality,
+  normalizeHighlightQuality,
   ProposalOptions,
 } from './proposal/proposalGenerator';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
@@ -69,7 +70,7 @@ export const ProjectProposal: React.FC = () => {
   const [includeHighlights, setIncludeHighlights] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(false);
   const [includeTakeoffList, setIncludeTakeoffList] = useState(true);
-  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('best');
 
   // Send-proposal controls.
   const [sendFileId, setSendFileId] = useState('');
@@ -150,7 +151,7 @@ export const ProjectProposal: React.FC = () => {
         if (p.includeHighlights != null)  setIncludeHighlights(p.includeHighlights);
         if (p.includeSignature  != null)  setIncludeSignature(p.includeSignature);
         if (p.includeTakeoffList != null) setIncludeTakeoffList(p.includeTakeoffList);
-        if (p.highlightQuality)           setHighlightQuality(p.highlightQuality);
+        if (p.highlightQuality)           setHighlightQuality(normalizeHighlightQuality(p.highlightQuality));
         if (p.priceMode === 'fixed' || p.priceMode === 'takeoffs') setPriceMode(p.priceMode);
         if (typeof p.fixedPrice === 'string') setFixedPrice(p.fixedPrice);
       }
@@ -163,7 +164,7 @@ export const ProjectProposal: React.FC = () => {
       if (prefs['proposal-includeHighlights'] != null)  setIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
       if (prefs['proposal-includeSignature']  != null)  setIncludeSignature(prefs['proposal-includeSignature'] === 'true');
       if (prefs['proposal-includeTakeoffList'] != null) setIncludeTakeoffList(prefs['proposal-includeTakeoffList'] === 'true');
-      if (prefs['proposal-highlightQuality'])           setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-highlightQuality'])           setHighlightQuality(normalizeHighlightQuality(prefs['proposal-highlightQuality']));
       if (prefs['proposal-priceMode'] === 'fixed' || prefs['proposal-priceMode'] === 'takeoffs') setPriceMode(prefs['proposal-priceMode'] as 'takeoffs' | 'fixed');
       if (prefs['proposal-fixedPrice'] != null)         setFixedPrice(prefs['proposal-fixedPrice']);
     }).catch(() => { /* offline — localStorage values already applied */ });
@@ -271,7 +272,7 @@ export const ProjectProposal: React.FC = () => {
         },
       };
       const totals = computeTakeoffTotals(project, currentPageIds);
-      const { pdfBytes, suggestedName } = await generateProposalPdf(
+      const { pdfBytes, suggestedName, overBudget } = await generateProposalPdf(
         project,
         totals,
         selectedTakeoffIds,
@@ -282,15 +283,10 @@ export const ProjectProposal: React.FC = () => {
       );
 
       setProgress('Saving…');
-      const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const base64data: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(pdfBlob);
-      });
       const fileId = uuidv4();
-      await saveFile(fileId, base64data);
+      await saveBinaryFile(fileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
+        projectId: project.id, kind: 'printout', name: suggestedName,
+      });
       const newPrintout: Printout = {
         id: uuidv4(),
         name: suggestedName,
@@ -300,6 +296,9 @@ export const ProjectProposal: React.FC = () => {
       };
       const updated = { ...project, printouts: [...(project.printouts || []), newPrintout] };
       await saveProject(updated);
+      if (overBudget) {
+        toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+      }
       toast('Proposal generated', { type: 'success' });
       reload();
     } catch (error) {
@@ -318,16 +317,23 @@ export const ProjectProposal: React.FC = () => {
   };
 
   const handleDownload = async (printout: Printout) => {
-    const dataUrl = await getFile(printout.fileId);
-    if (!dataUrl) return;
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    const isExcel = printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    const extension = isExcel ? '.xlsx' : '.pdf';
-    link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const res = await fetch(getImageUrl(printout.fileId));
+      if (!res.ok) { toast('Failed to download file.', { type: 'error' }); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
+      const extension = isExcel ? '.xlsx' : '.pdf';
+      link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast('Failed to download file.', { type: 'error' });
+    }
   };
 
   const handleShare = async (printout: Printout) => {
@@ -719,19 +725,17 @@ export const ProjectProposal: React.FC = () => {
                 },
               };
               const totals = computeTakeoffTotals(project, currentPageIds);
-              const { pdfBytes } = await generateProposalPdf(
+              const { pdfBytes, overBudget } = await generateProposalPdf(
                 project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
               );
-              const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-              const base64data: string = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = () => reject(reader.error);
-                reader.readAsDataURL(pdfBlob);
-              });
               const tempFileId = uuidv4();
-              await saveFile(tempFileId, base64data);
+              // Throwaway attachment for this one send — no projectId/kind/name
+              // so it never shows up in project Documents.
+              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }));
               fileIdToSend = tempFileId;
+              if (overBudget) {
+                toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+              }
             } catch { /* fall back to the pre-generated printout */ }
           }
           const updated = await sendProjectProposal(project.id, {

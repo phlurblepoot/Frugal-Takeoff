@@ -18,6 +18,9 @@ import {
   formatFeetAndInches,
   formatRealValue,
   formatMeasurement,
+  signedPolygonArea,
+  measurementAreaPx,
+  measurementRings,
 } from './math';
 import { Point, ScaleConfig, MeasurementTakeoff } from '../types';
 
@@ -393,6 +396,68 @@ describe('parsing & formatting', () => {
       };
       // characterization: 100px * (5/10)^2 = 25 sq ft
       expect(formatMeasurement(100, 'area', scale)).toBe('25.00 sq ft');
+    });
+  });
+
+  describe('signedPolygonArea', () => {
+    // On screen (y grows downward) this square winds clockwise, which is the
+    // winding the shoelace formula scores positive.
+    const screenCwSquare = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }];
+    it('returns signed area (sign flips with winding)', () => {
+      const a = signedPolygonArea(screenCwSquare);
+      const b = signedPolygonArea([...screenCwSquare].reverse());
+      expect(Math.abs(a)).toBe(16);
+      expect(b).toBe(-a);
+    });
+    it('returns 0 for degenerate polygons', () => {
+      expect(signedPolygonArea([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBe(0);
+    });
+  });
+
+  describe('measurementAreaPx', () => {
+    const outer = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]; // 100
+    const hole = [{ x: 2, y: 2 }, { x: 4, y: 2 }, { x: 4, y: 4 }, { x: 2, y: 4 }];      // 4
+
+    it('sums plain measurements exactly like the old per-polygon sum', () => {
+      expect(measurementAreaPx({ points: outer })).toBe(100);
+      expect(measurementAreaPx({ points: outer, segments: [{ points: hole }] })).toBe(104);
+    });
+    it('subtract segments reduce the net area', () => {
+      expect(measurementAreaPx({ points: outer, segments: [{ points: hole, subtract: true }] })).toBe(96);
+    });
+    it('multiple holes all deduct', () => {
+      const hole2 = [{ x: 6, y: 6 }, { x: 8, y: 6 }, { x: 8, y: 8 }, { x: 6, y: 8 }];
+      expect(measurementAreaPx({
+        points: outer,
+        segments: [{ points: hole, subtract: true }, { points: hole2, subtract: true }],
+      })).toBe(92);
+    });
+    it('clamps at 0 when holes exceed the parent', () => {
+      const bigHole = [{ x: -10, y: -10 }, { x: 20, y: -10 }, { x: 20, y: 20 }, { x: -10, y: 20 }]; // 900
+      expect(measurementAreaPx({ points: outer, segments: [{ points: bigHole, subtract: true }] })).toBe(0);
+    });
+    it('hole winding direction does not matter (magnitudes subtract)', () => {
+      expect(measurementAreaPx({ points: outer, segments: [{ points: [...hole].reverse(), subtract: true }] })).toBe(96);
+    });
+  });
+
+  describe('measurementRings', () => {
+    const outer = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+    const hole = [{ x: 2, y: 2 }, { x: 4, y: 2 }, { x: 4, y: 4 }, { x: 2, y: 4 }];
+
+    it('normalizes winding: additive rings positive, subtract rings negative', () => {
+      const rings = measurementRings({
+        points: [...outer].reverse(), // negative signed area — must be flipped
+        segments: [{ points: hole, subtract: true }], // positive signed area — must be flipped
+      });
+      expect(rings).toHaveLength(2);
+      expect(rings[0].subtract).toBe(false);
+      expect(signedPolygonArea(rings[0].points)).toBeGreaterThan(0);
+      expect(rings[1].subtract).toBe(true);
+      expect(signedPolygonArea(rings[1].points)).toBeLessThan(0);
+    });
+    it('drops degenerate rings', () => {
+      expect(measurementRings({ points: outer, segments: [{ points: [{ x: 0, y: 0 }] }] })).toHaveLength(1);
     });
   });
 });

@@ -32,16 +32,28 @@ export const openTargetFor = (f: Pick<ProjectFile, 'id' | 'mime'>):
 
 // Display order + labels for the kind filter. 'plan' covers internal canvas
 // assets (page rasters/thumbnails/source pdfs) and is excluded from 'all'.
+// 'printout' is also excluded — printout history already lives in the
+// Proposal section, so it never needs to double up here.
 const KIND_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'document', label: 'Documents' },
   { id: 'proposal', label: 'Proposals' },
-  { id: 'printout', label: 'Printouts' },
   { id: 'spreadsheet', label: 'Spreadsheets' },
   { id: 'photo', label: 'Photos' },
   { id: 'other', label: 'Other' },
   { id: 'plan', label: 'Plan assets' },
 ];
+
+// Kinds hidden from the unfiltered 'all' view — 'plan' (internal canvas
+// assets) and 'printout' (history lives in the Proposal section instead).
+// Only gates 'all': an explicit filter selection (e.g. the "Plan assets"
+// chip) must still show its own kind.
+const HIDDEN_KINDS = new Set(['plan', 'printout']);
+
+export const visibleFiles = (files: ProjectFile[], filter: string): ProjectFile[] => {
+  if (filter === 'all') return files.filter(f => !HIDDEN_KINDS.has(f.kind));
+  return files.filter(f => f.kind === filter);
+};
 
 const downloadBlob = (blob: Blob, name: string) => {
   const url = URL.createObjectURL(blob);
@@ -80,11 +92,7 @@ export const ProjectDocuments: React.FC = () => {
     return c;
   }, [files]);
 
-  const visible = useMemo(() => {
-    const all = files ?? [];
-    if (filter === 'all') return all.filter(f => f.kind !== 'plan');
-    return all.filter(f => f.kind === filter);
-  }, [files, filter]);
+  const visible = useMemo(() => visibleFiles(files ?? [], filter), [files, filter]);
 
   const handleUpload = async (list: FileList | null) => {
     if (!list || !projectId) return;
@@ -143,7 +151,7 @@ export const ProjectDocuments: React.FC = () => {
       <div className="mb-4 flex flex-wrap gap-1.5">
         {KIND_FILTERS.map(k => {
           const count = k.id === 'all'
-            ? (files ?? []).filter(f => f.kind !== 'plan').length
+            ? visibleFiles(files ?? [], 'all').length
             : counts.get(k.id) ?? 0;
           if (k.id !== 'all' && count === 0) return null;
           return (

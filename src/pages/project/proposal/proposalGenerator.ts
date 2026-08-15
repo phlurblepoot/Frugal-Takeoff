@@ -8,6 +8,7 @@ import { jsPDF } from 'jspdf';
 import { Project, MeasurementTakeoff } from '../../../types';
 import { getFile, getImage } from '../../../utils/store';
 import { viewBox, overlayPlacement } from '../../../utils/pdfOverlayTransform';
+import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './shrinkPdf';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -15,7 +16,6 @@ import {
 } from '../../../utils/documentLetterhead';
 import {
   calculatePolylineLength,
-  calculatePolygonArea,
   calculateRealValue,
   formatMeasurement,
   calculateSurfaceAreaPx,
@@ -25,6 +25,8 @@ import {
   calculateTakeoffCostDetails,
   roundUpTo100,
   expandArcPoints,
+  measurementAreaPx,
+  measurementRings,
 } from '../../../utils/math';
 
 // Converts a data URL (e.g. "data:application/pdf;base64,...") to a fresh Uint8Array.
@@ -52,7 +54,6 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
-  _quality: HighlightQuality = 'standard',
   onProgress?: (msg: string) => void,
   currentPageIds?: Set<string>,
 ): Promise<ArrayBuffer | null> {
@@ -201,25 +202,54 @@ export async function buildHighlightsPdf(
       }
 
       // Polyline / polygon for length & area, with arcs expanded.
-      const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
-        { points: m.points, arcMidIndices: m.arcMidIndices },
-        ...(m.segments ?? []),
-      ];
-      for (const seg of allSegs) {
-        if (!seg.points || seg.points.length === 0) continue;
-        const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
-        if (dispPts.length < 2) continue;
-        const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
-        for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
-        if (m.type === 'area') cmds.push('Z');
-        const path = cmds.join(' ');
-        outPage.drawSvgPath(path, {
-          x: 0, y: dispH,
-          borderColor: rgb(c.r, c.g, c.b),
-          borderWidth: stroke,
-          color: m.type === 'area' ? rgb(c.r, c.g, c.b) : undefined,
-          opacity: m.type === 'area' ? 0.25 : undefined,
-        });
+      if (m.type === 'area') {
+        // measurementRings arc-expands, drops degenerate rings, and winds
+        // additive and subtract rings oppositely — one compound path filled
+        // under pdf-lib's nonzero rule punches real holes instead of
+        // re-filling over them.
+        const rings = measurementRings(m);
+        const ringPath = (pts: typeof m.points) => {
+          const cmds: string[] = [`M ${pts[0].x * sf} ${pts[0].y * sf}`];
+          for (let j = 1; j < pts.length; j++) cmds.push(`L ${pts[j].x * sf} ${pts[j].y * sf}`);
+          cmds.push('Z');
+          return cmds.join(' ');
+        };
+        if (rings.length > 0) {
+          const compoundPath = rings.map(r => ringPath(r.points)).join(' ');
+          outPage.drawSvgPath(compoundPath, {
+            x: 0, y: dispH,
+            color: rgb(c.r, c.g, c.b),
+            opacity: 0.25,
+          });
+        }
+        // Borders drawn per ring: solid for the additive outline, dashed for
+        // subtract (cutout) rings so a punch-out reads distinctly on paper.
+        for (const ring of rings) {
+          outPage.drawSvgPath(ringPath(ring.points), {
+            x: 0, y: dispH,
+            borderColor: rgb(c.r, c.g, c.b),
+            borderWidth: stroke,
+            ...(ring.subtract ? { borderDashArray: [10 * sf, 7 * sf] } : {}),
+          });
+        }
+      } else {
+        const allSegs: { points: typeof m.points; arcMidIndices?: number[] }[] = [
+          { points: m.points, arcMidIndices: m.arcMidIndices },
+          ...(m.segments ?? []),
+        ];
+        for (const seg of allSegs) {
+          if (!seg.points || seg.points.length === 0) continue;
+          const dispPts = expandArcPoints(seg.points, seg.arcMidIndices);
+          if (dispPts.length < 2) continue;
+          const cmds: string[] = [`M ${dispPts[0].x * sf} ${dispPts[0].y * sf}`];
+          for (let j = 1; j < dispPts.length; j++) cmds.push(`L ${dispPts[j].x * sf} ${dispPts[j].y * sf}`);
+          const path = cmds.join(' ');
+          outPage.drawSvgPath(path, {
+            x: 0, y: dispH,
+            borderColor: rgb(c.r, c.g, c.b),
+            borderWidth: stroke,
+          });
+        }
       }
 
       // Label centered on the primary segment.
@@ -238,7 +268,7 @@ export async function buildHighlightsPdf(
       let text = '';
       if (isSurfaceArea) text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, page.scaleConfig), 0), 'area', page.scaleConfig, takeoff);
       else if (m.type === 'length') text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0), 'length', page.scaleConfig, takeoff);
-      else text = formatMeasurement(allSegPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0), 'area', page.scaleConfig, takeoff);
+      else text = formatMeasurement(measurementAreaPx(m), 'area', page.scaleConfig, takeoff);
 
       if (text) {
         const fontSize = 14 * sf;
@@ -279,7 +309,7 @@ export async function buildHighlightsPdf(
           const allMPts = [m.points, ...(m.segments ?? []).map(s => s.points)];
           let pixelValue = 0;
           if (takeoff.type === 'length' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
-          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = allMPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+          else if (takeoff.type === 'area' && m.type === 'area') pixelValue = measurementAreaPx(m);
           else if (takeoff.type === 'area' && m.type === 'length') pixelValue = allMPts.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
           else if (takeoff.type === 'count' && m.type === 'count') pixelValue = 1;
           if (pixelValue > 0) {
@@ -396,13 +426,19 @@ export async function buildHighlightsPdf(
 }
 
 // ── Highlight quality presets ────────────────────────────────────────────────
+// 'best' keeps the copied vector pages untouched. 'email' post-shrinks the
+// result to EMAIL_TARGET_BYTES (see shrinkPdf.ts) so it survives provider
+// attachment limits. The old Full/Large/Standard/Compact raster presets died
+// with the raster pipeline — stored prefs holding them normalize to 'best'.
 export const HIGHLIGHT_QUALITY_PRESETS = {
-  full:     { label: 'Full Resolution',              maxDim: Infinity, jpegQuality: 0.90 },
-  large:    { label: 'Large  (≈A2 — high quality)',  maxDim: 1680,     jpegQuality: 0.85 },
-  standard: { label: 'Standard  (≈A3)',              maxDim: 1190,     jpegQuality: 0.80 },
-  compact:  { label: 'Compact  (near A4)',            maxDim: 680,      jpegQuality: 0.72 },
+  best:  { label: 'Best quality (vector)' },
+  email: { label: 'Email-ready (under 25MB sent)' },
 } as const;
 export type HighlightQuality = keyof typeof HIGHLIGHT_QUALITY_PRESETS;
+
+export function normalizeHighlightQuality(value: unknown): HighlightQuality {
+  return value === 'email' || value === 'best' ? value : 'best';
+}
 
 // ── Per-user localStorage key for proposal preferences ───────────────────────
 export function getProposalPrefsKey(): string {
@@ -475,7 +511,7 @@ export function computeTakeoffTotals(
             if (takeoff.type === 'length' && m.type === 'length') {
               pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0);
             } else if (takeoff.type === 'area' && m.type === 'area') {
-              pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0);
+              pixelValue = measurementAreaPx(m);
             } else if (takeoff.type === 'area' && m.type === 'length') {
               pixelValue = allMPtsTotals.reduce((sum, pts) => sum + calculateSurfaceAreaPx(pts, m.heights || [], m.isTwoSided || false, currentScale), 0);
             }
@@ -551,7 +587,7 @@ export interface ProposalOptions {
   headerEmail?: string;
 }
 
-export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; }
+export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; overBudget?: boolean }
 
 export const formatCurrency = (n: number) =>
   '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1034,7 +1070,6 @@ export async function generateProposalPdf(
     const highlightsBuffer = await buildHighlightsPdf(
       project,
       selectedTakeoffIds,
-      highlightQuality,
       (msg) => onProgress?.(msg),
       currentPageIds,
     );
@@ -1058,9 +1093,18 @@ export async function generateProposalPdf(
     pdfBytes = pdf.output('arraybuffer') as ArrayBuffer;
   }
 
+  // Email-ready mode post-shrinks the final (possibly merged) PDF down to the
+  // attachment target regardless of whether highlights were included.
+  let overBudget = false;
+  if (highlightQuality === 'email') {
+    const shrunk = await shrinkPdfToBudget(pdfBytes, EMAIL_TARGET_BYTES, onProgress);
+    pdfBytes = shrunk.bytes;
+    overBudget = shrunk.overBudget;
+  }
+
   const suggestedName = (proposalCustomTitle || project.name).trim()
     ? `Proposal – ${proposalCustomTitle || project.name}`
     : `Proposal – ${new Date().toLocaleString()}`;
 
-  return { pdfBytes, suggestedName };
+  return { pdfBytes, suggestedName, overBudget };
 }

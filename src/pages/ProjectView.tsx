@@ -34,7 +34,9 @@ import {
   buildHighlightsPdf,
   computeTakeoffTotals,
   HighlightQuality,
+  normalizeHighlightQuality,
 } from './project/proposal/proposalGenerator';
+import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './project/proposal/shrinkPdf';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
@@ -123,7 +125,7 @@ export const ProjectView: React.FC = () => {
   // Blueprint print quality for the Print (highlighted plans) export. Persisted
   // per-user via the proposal-prefs effect below since it's shared with the
   // proposal section's highlight quality.
-  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('standard');
+  const [highlightQuality, setHighlightQuality] = useState<HighlightQuality>('best');
 
   // ── Scroll position memory for pages tab ─────────────────────────────────
   const scrollKey = `projectView-scroll-${projectId}`;
@@ -155,7 +157,7 @@ export const ProjectView: React.FC = () => {
   // the pages-tab view/sort modes.
   useEffect(() => {
     getUserPreferences().then(prefs => {
-      if (prefs['proposal-highlightQuality'])             setHighlightQuality(prefs['proposal-highlightQuality'] as HighlightQuality);
+      if (prefs['proposal-highlightQuality'])             setHighlightQuality(normalizeHighlightQuality(prefs['proposal-highlightQuality']));
       if (prefs['pages-viewMode'] === 'grid' || prefs['pages-viewMode'] === 'list') setPagesViewMode(prefs['pages-viewMode']);
       const sort = prefs['pages-sortMode'];
       // 'name' was an earlier option that effectively duplicated pageNumber
@@ -1111,51 +1113,57 @@ export const ProjectView: React.FC = () => {
       const pdfBuffer = await buildHighlightsPdf(
         project,
         selectedTakeoffIds,
-        highlightQuality,
         (msg) => setProgressMessage(msg),
         revisionModel.currentPageIds,
       );
 
       if (!pdfBuffer) {
         toast('No pages found with the selected takeoffs.', { type: 'warning' });
-        setIsPrinting(false);
-        setProgressMessage('');
         return;
       }
 
+      let outBuffer: ArrayBuffer = pdfBuffer;
+      let overBudget = false;
+      if (highlightQuality === 'email') {
+        const shrunk = await shrinkPdfToBudget(pdfBuffer, EMAIL_TARGET_BYTES, (msg) => setProgressMessage(msg));
+        outBuffer = shrunk.bytes;
+        overBudget = shrunk.overBudget;
+      }
+
       setProgressMessage('Saving…');
-      const pdfBlob = new Blob([pdfBuffer], { type: 'application/pdf' });
-      const reader = new FileReader();
-      reader.readAsDataURL(pdfBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        const fileId = uuidv4();
-        await saveFile(fileId, base64data);
+      const name = `Printout - ${new Date().toLocaleString()}`;
+      const fileId = uuidv4();
+      // Raw streaming save — base64-in-JSON dies at the server's JSON body cap
+      // for big plan-set printouts, and silently at that (413).
+      await saveBinaryFile(fileId, new Blob([outBuffer], { type: 'application/pdf' }), {
+        projectId: project.id, kind: 'printout', name,
+      });
+      if (overBudget) {
+        toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+      }
 
-        const newPrintout: Printout = {
-          id: uuidv4(),
-          name: `Printout - ${new Date().toLocaleString()}`,
-          fileId,
-          createdAt: Date.now(),
-          type: 'pdf',
-        };
-
-        const updatedProject = {
-          ...project,
-          printouts: [...(project.printouts || []), newPrintout],
-        };
-
-        await saveProject(updatedProject);
-        setProject(updatedProject);
-        setIsPrinting(false);
-        setProgressMessage('');
-        setSelectedTakeoffIds(new Set());
-        // Printout history now lives in the Proposal section.
-        navigate(`/project/${projectId}/proposal`);
+      const newPrintout: Printout = {
+        id: uuidv4(),
+        name,
+        fileId,
+        createdAt: Date.now(),
+        type: 'pdf',
       };
+
+      const updatedProject = {
+        ...project,
+        printouts: [...(project.printouts || []), newPrintout],
+      };
+
+      await saveProject(updatedProject);
+      setProject(updatedProject);
+      setSelectedTakeoffIds(new Set());
+      // Printout history now lives in the Proposal section.
+      navigate(`/project/${projectId}/proposal`);
     } catch (error) {
       console.error('Error generating PDF:', error);
       toast('Failed to generate PDF.', { type: 'error' });
+    } finally {
       setIsPrinting(false);
       setProgressMessage('');
     }
@@ -1303,37 +1311,38 @@ export const ProjectView: React.FC = () => {
       
       const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const excelBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      
-      const reader = new FileReader();
-      reader.readAsDataURL(excelBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        const fileId = uuidv4();
-        await saveFile(fileId, base64data);
-        
-        const newPrintout: Printout = {
-          id: uuidv4(),
-          name: `Excel Export - ${new Date().toLocaleString()}`,
-          fileId,
-          createdAt: Date.now(),
-          type: 'excel',
-        };
-        
-        const updatedProject = {
-          ...project,
-          printouts: [...(project.printouts || []), newPrintout],
-        };
-        
-        await saveProject(updatedProject);
-        setProject(updatedProject);
-        setIsExportingExcel(false);
-        setSelectedTakeoffIds(new Set());
-        // Printout history now lives in the Proposal section.
-        navigate(`/project/${projectId}/proposal`);
+
+      const base64data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error ?? new Error('Failed to read Excel export'));
+        reader.readAsDataURL(excelBlob);
+      });
+      const fileId = uuidv4();
+      await saveFile(fileId, base64data);
+
+      const newPrintout: Printout = {
+        id: uuidv4(),
+        name: `Excel Export - ${new Date().toLocaleString()}`,
+        fileId,
+        createdAt: Date.now(),
+        type: 'excel',
       };
+
+      const updatedProject = {
+        ...project,
+        printouts: [...(project.printouts || []), newPrintout],
+      };
+
+      await saveProject(updatedProject);
+      setProject(updatedProject);
+      setSelectedTakeoffIds(new Set());
+      // Printout history now lives in the Proposal section.
+      navigate(`/project/${projectId}/proposal`);
     } catch (error) {
       console.error('Error generating Excel:', error);
       toast('Failed to generate Excel.', { type: 'error' });
+    } finally {
       setIsExportingExcel(false);
     }
   };
