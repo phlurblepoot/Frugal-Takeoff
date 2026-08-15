@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Edit2, Trash2 } from 'lucide-react';
 import { Measurement, ScaleConfig, MeasurementTakeoff } from '../../types';
-import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateSurfaceAreaPx, expandArcPoints } from '../../utils/math';
+import { calculatePolylineLength, calculatePolygonArea, formatMeasurement, calculateSurfaceAreaPx, expandArcPoints, measurementAreaPx } from '../../utils/math';
 
 export function MeasurementItem({
   measurement,
@@ -149,9 +149,7 @@ export function MeasurementItem({
                         : formatMeasurement(
                             allPts.reduce((sum, pts) => sum + calculatePolylineLength(pts), 0),
                             'length', scaleConfig, takeoff))
-                    : formatMeasurement(
-                        allPts.reduce((sum, pts) => sum + calculatePolygonArea(pts), 0),
-                        'area', scaleConfig, takeoff);
+                    : formatMeasurement(measurementAreaPx(measurement), 'area', scaleConfig, takeoff);
                 })()
             }
           </span>
@@ -179,6 +177,21 @@ export function MeasurementItem({
           </div>
         </div>
       </div>
+
+      {measurement.type === 'area' && (measurement.segments ?? []).some(s => s.subtract) && (
+        <div className="flex flex-col gap-0.5 pl-1">
+          {(measurement.segments ?? [])
+            .filter(s => s.subtract)
+            .map((s, i) => (
+              <div key={i} className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+                <span>Cutout {i + 1}</span>
+                <span className="font-medium">
+                  −{formatMeasurement(calculatePolygonArea(expandArcPoints(s.points, s.arcMidIndices)), 'area', scaleConfig, takeoff)}
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
 
       {selected && !isEditing && (
         <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
