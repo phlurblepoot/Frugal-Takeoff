@@ -203,10 +203,11 @@ export async function buildHighlightsPdf(
 
       // Polyline / polygon for length & area, with arcs expanded.
       if (m.type === 'area') {
-        // measurementRings arc-expands and winding-normalizes (additive CCW,
-        // subtract CW) — one compound path filled under pdf-lib's nonzero
-        // rule punches real holes instead of re-filling over them.
-        const rings = measurementRings(m).filter(r => r.points.length >= 3);
+        // measurementRings arc-expands, drops degenerate rings, and winds
+        // additive and subtract rings oppositely — one compound path filled
+        // under pdf-lib's nonzero rule punches real holes instead of
+        // re-filling over them.
+        const rings = measurementRings(m);
         const ringPath = (pts: typeof m.points) => {
           const cmds: string[] = [`M ${pts[0].x * sf} ${pts[0].y * sf}`];
           for (let j = 1; j < pts.length; j++) cmds.push(`L ${pts[j].x * sf} ${pts[j].y * sf}`);

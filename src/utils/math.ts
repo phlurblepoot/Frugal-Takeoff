@@ -180,9 +180,10 @@ export const isPointInPolygon = (point: Point, polygon: Point[]): boolean => {
   return inside;
 };
 
-// Shoelace WITH sign — positive for counter-clockwise winding in screen
-// coords. calculatePolygonArea (abs) stays for single-polygon magnitudes;
-// this exists for winding-aware ring normalization.
+// Shoelace WITH sign. In the y-down screen coords these points live in, a
+// positive result means the ring winds CLOCKWISE on screen. calculatePolygonArea
+// (abs) stays for single-polygon magnitudes; this exists for winding-aware ring
+// normalization.
 export const signedPolygonArea = (points: Point[]): number => {
   if (points.length < 3) return 0;
   let area = 0;
@@ -215,10 +216,12 @@ export const measurementAreaPx = (m: MeasurementGeometry): number => {
   return Math.max(0, net);
 };
 
-// Arc-expanded rings with winding normalized for nonzero-rule fills:
-// additive rings counter-clockwise (positive signed area), subtract rings
-// clockwise — so one compound path punches real holes in both the Konva
-// canvas and the pdf-lib printout. Degenerate (<3 point) rings are dropped.
+// Arc-expanded rings with winding normalized for nonzero-rule fills: additive
+// rings get positive signed area (on-screen clockwise in these y-down coords),
+// subtract rings negative. Only the OPPOSITION matters to the nonzero rule —
+// which side is which is arbitrary — and it is what lets one compound path
+// punch real holes in both the Konva canvas and the pdf-lib printout.
+// Degenerate (<3 point) rings are dropped.
 export const measurementRings = (m: MeasurementGeometry): { points: Point[]; subtract: boolean }[] => {
   const segs = [
     { points: m.points, arcMidIndices: m.arcMidIndices, subtract: false },

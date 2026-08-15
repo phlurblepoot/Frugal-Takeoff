@@ -400,10 +400,12 @@ describe('parsing & formatting', () => {
   });
 
   describe('signedPolygonArea', () => {
-    const ccwSquare = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }];
+    // On screen (y grows downward) this square winds clockwise, which is the
+    // winding the shoelace formula scores positive.
+    const screenCwSquare = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }];
     it('returns signed area (sign flips with winding)', () => {
-      const a = signedPolygonArea(ccwSquare);
-      const b = signedPolygonArea([...ccwSquare].reverse());
+      const a = signedPolygonArea(screenCwSquare);
+      const b = signedPolygonArea([...screenCwSquare].reverse());
       expect(Math.abs(a)).toBe(16);
       expect(b).toBe(-a);
     });
@@ -445,8 +447,8 @@ describe('parsing & formatting', () => {
 
     it('normalizes winding: additive rings positive, subtract rings negative', () => {
       const rings = measurementRings({
-        points: [...outer].reverse(), // drawn clockwise — must be flipped
-        segments: [{ points: hole, subtract: true }], // drawn ccw — must be flipped
+        points: [...outer].reverse(), // negative signed area — must be flipped
+        segments: [{ points: hole, subtract: true }], // positive signed area — must be flipped
       });
       expect(rings).toHaveLength(2);
       expect(rings[0].subtract).toBe(false);

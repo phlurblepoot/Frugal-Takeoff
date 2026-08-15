@@ -199,6 +199,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [activeArcMidIndices, setActiveArcMidIndices] = useState<number[]>([]);
   
   const [draggingPoint, setDraggingPoint] = useState<{ mId: string, idx: number, x: number, y: number, segIdx?: number } | null>(null);
+  // Live offset of a segment subgroup being dragged (segIdx -1 = primary).
+  // Konva already translates the dragged subgroup's own children, so this is
+  // only consumed by the compound punch-out Shape, which lives in the OUTER
+  // group and would otherwise stay put until the drag commits.
+  const [draggingSegment, setDraggingSegment] = useState<{ mId: string, segIdx: number, dx: number, dy: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; measurementId: string | null } | null>(null);
 
   const [resumeMeasurementId, setResumeMeasurementId] = useState<string | null>(null);
@@ -1078,11 +1083,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       const canAppend = !!selected && selected.type === drawingType;
 
       if (isSubtract) {
-        // Cutouts attach to the selected area measurement or nowhere — the
-        // tool is gated on selection, so a miss just drops the polygon.
+        // Cutouts attach to the selected area measurement or nowhere. The
+        // toolbar gates the tool on an area measurement selected ON THIS PAGE;
+        // this branch is the backstop so a dropped polygon is never silent.
         if (canAppend && selected && selected.points.length > 0 && activePoints.length > 2) {
           const newSeg: MeasurementSegment = { points: segPoints, arcMidIndices: segArcMids, subtract: true };
           onUpdateMeasurement(selected.id, { segments: [...(selected.segments ?? []), newSeg] });
+        } else if (!canAppend || !selected || selected.points.length === 0) {
+          toast('Cutout discarded — select an area measurement on this page first.', { type: 'warning' });
         }
       } else if (canAppend && selected) {
         if (selected.points.length === 0) {
@@ -1257,7 +1265,21 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         ...s,
         points: adjustPoints(s.points, segIdx),
       }));
-      const adjustedGeometry = { points, arcMidIndices: m.arcMidIndices, segments: adjustedSegments };
+
+      // Apply a segment subgroup's in-progress drag offset. ONLY the compound
+      // Shape gets this: it sits outside the dragged subgroup, whereas the
+      // Lines are inside it and Konva translates them natively — feeding them
+      // the same offset would move them twice.
+      const withSegmentDrag = (pts: Point[], segIdx: number) => {
+        const d = draggingSegment;
+        if (!d || d.mId !== m.id || d.segIdx !== segIdx || (d.dx === 0 && d.dy === 0)) return pts;
+        return pts.map(p => ({ x: p.x + d.dx, y: p.y + d.dy }));
+      };
+      const adjustedGeometry = {
+        points: withSegmentDrag(points, -1),
+        arcMidIndices: m.arcMidIndices,
+        segments: adjustedSegments.map((s, segIdx) => ({ ...s, points: withSegmentDrag(s.points, segIdx) })),
+      };
 
       // Calculate center for text (use display points for position)
       let centerX = 0, centerY = 0;
@@ -1327,14 +1349,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       // Shared drag handlers used by each segment subgroup. Each subgroup is
       // independently draggable so multi-segment measurements move per segment
       // rather than as a single rigid shape.
-      const segmentDragStart = (e: any) => {
+      // segIdx: -1 = primary segment, 0+ = that extra segment. Tracking the
+      // live offset only matters when a punch-out Shape has to follow along.
+      const trackSegmentDrag = (e: any, segIdx: number) => {
+        if (!hasHoles || e.target !== e.currentTarget) return;
+        setDraggingSegment({ mId: m.id, segIdx, dx: e.target.x(), dy: e.target.y() });
+      };
+      const segmentDragStart = (e: any, segIdx: number) => {
         if (readOnly || (e.evt && e.evt.button !== 0) || isMiddleMouseDownRef.current) {
           e.target.stopDrag();
           return;
         }
         e.cancelBubble = true;
+        trackSegmentDrag(e, segIdx);
       };
-      const segmentDragMove = (e: any) => { if (readOnly) return; e.cancelBubble = true; };
+      const segmentDragMove = (e: any, segIdx: number) => {
+        if (readOnly) return;
+        e.cancelBubble = true;
+        trackSegmentDrag(e, segIdx);
+      };
 
       // Double-click on a segment line inserts a new vertex at the click,
       // ordered between the surrounding vertices.
@@ -1439,11 +1472,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               x={points[0].x}
               y={points[0].y}
               draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
-              onDragStart={segmentDragStart}
-              onDragMove={segmentDragMove}
+              onDragStart={(e) => segmentDragStart(e, -1)}
+              onDragMove={(e) => segmentDragMove(e, -1)}
               onDragEnd={(e) => {
                 if (readOnly) return;
                 e.cancelBubble = true;
+                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: [{ x: e.target.x(), y: e.target.y() }] });
               }}
             >
@@ -1479,8 +1513,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           ) : (
             <Group
               draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
-              onDragStart={segmentDragStart}
-              onDragMove={segmentDragMove}
+              onDragStart={(e) => segmentDragStart(e, -1)}
+              onDragMove={(e) => segmentDragMove(e, -1)}
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
@@ -1493,6 +1527,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 e.target.x(0);
                 e.target.y(0);
                 const newPoints = m.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: newPoints });
               }}
             >
@@ -1607,8 +1642,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               <Group
                 key={`extra-seg-${segIdx}`}
                 draggable={!readOnly && currentTool === 'pan' && !isMiddleMouseDown}
-                onDragStart={segmentDragStart}
-                onDragMove={segmentDragMove}
+                onDragStart={(e) => segmentDragStart(e, segIdx)}
+                onDragMove={(e) => segmentDragMove(e, segIdx)}
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
@@ -1625,6 +1660,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
                       : s
                   );
+                  setDraggingSegment(null);
                   onUpdateMeasurement(m.id, { segments: newSegments });
                 }}
               >

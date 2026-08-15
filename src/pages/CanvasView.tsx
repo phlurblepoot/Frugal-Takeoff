@@ -1175,6 +1175,10 @@ const CanvasViewInner: React.FC = () => {
   // should still lock the tool to length.
   const activeType = selectedMeasurement?.type ?? activeTakeoff?.type ?? null;
   const hasNoSelection = !selectedTakeoffId && !selectedMeasurementId;
+  // The sidebar lists measurements from every page, but a cutout is drawn on
+  // THIS page's canvas and PdfCanvas only ever sees this page's measurements —
+  // so a cross-page selection would silently swallow the polygon.
+  const selectedIsOnThisPage = !!selectedMeasurementId && page.measurements.some(m => m.id === selectedMeasurementId);
 
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-900 overflow-hidden font-sans relative">
@@ -1307,10 +1311,11 @@ const CanvasViewInner: React.FC = () => {
               onClick={() => setCurrentTool('subtract')}
               icon={<SquareMinus size={18} />}
               label="Subtract"
-              disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedMeasurementId}
+              disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedIsOnThisPage}
               onDisabledClick={() => {
                 if (readOnly) handlePhoneToolBlocked();
                 else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                else if (activeType === 'area' && !selectedIsOnThisPage) setToolDisabledMessage("The selected area measurement is on another page. Select one on this page to subtract from.");
                 else setToolDisabledMessage("Select an area measurement to subtract from.");
               }}
             />
@@ -1946,10 +1951,11 @@ const CanvasViewInner: React.FC = () => {
                 icon={<SquareMinus size={20} />}
                 label="Subtract"
                 showLabel
-                disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedMeasurementId}
+                disabled={readOnly || !page.scaleConfig || hasNoSelection || activeType !== 'area' || !selectedIsOnThisPage}
                 onDisabledClick={() => {
                   if (readOnly) handlePhoneToolBlocked();
                   else if (!page.scaleConfig) setToolDisabledMessage("Please set the scale first to enable measurement tools.");
+                  else if (activeType === 'area' && !selectedIsOnThisPage) setToolDisabledMessage("The selected area measurement is on another page. Select one on this page to subtract from.");
                   else setToolDisabledMessage("Select an area measurement to subtract from.");
                 }}
               />

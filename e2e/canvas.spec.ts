@@ -649,8 +649,10 @@ test.describe('CanvasView subtract tool is read-only-gated', () => {
 
     await expect(authedPage.getByTestId('canvas-superseded-banner')).toBeVisible();
 
-    // Select the existing measurement so the tool has a real candidate to cut
-    // into — the read-only gate must still block it regardless.
+    // Select the seeded measurement first. It's a LENGTH measurement, so this
+    // does not by itself make Subtract a legal action — readOnly short-circuits
+    // every other enablement check anyway. It's here so the click below lands
+    // with a selection in place rather than on an empty canvas.
     const row = authedPage.getByTestId('measurement-row').first();
     await expect(row).toBeVisible();
     await row.click();
