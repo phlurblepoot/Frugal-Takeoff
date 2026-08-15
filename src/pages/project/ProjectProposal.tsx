@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
 import { Project, Printout, Customer } from '../../types';
 import {
-  getProject, saveProject, saveFile, getFile, deleteFile, getSettings,
+  getProject, saveProject, saveBinaryFile, getFile, deleteFile, getSettings,
   getSmtpSettings, getAlwaysCc, getCustomer,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
   uploadProjectFile, getImageUrl,
@@ -282,15 +282,10 @@ export const ProjectProposal: React.FC = () => {
       );
 
       setProgress('Saving…');
-      const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const base64data: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(pdfBlob);
-      });
       const fileId = uuidv4();
-      await saveFile(fileId, base64data);
+      await saveBinaryFile(fileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
+        projectId: project.id, kind: 'printout', name: suggestedName,
+      });
       const newPrintout: Printout = {
         id: uuidv4(),
         name: suggestedName,
@@ -318,16 +313,19 @@ export const ProjectProposal: React.FC = () => {
   };
 
   const handleDownload = async (printout: Printout) => {
-    const dataUrl = await getFile(printout.fileId);
-    if (!dataUrl) return;
+    const res = await fetch(getImageUrl(printout.fileId));
+    if (!res.ok) { toast('Failed to download file.', { type: 'error' }); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = dataUrl;
-    const isExcel = printout.type === 'excel' || dataUrl.startsWith('data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    link.href = url;
+    const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
     const extension = isExcel ? '.xlsx' : '.pdf';
     link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleShare = async (printout: Printout) => {
@@ -722,15 +720,10 @@ export const ProjectProposal: React.FC = () => {
               const { pdfBytes } = await generateProposalPdf(
                 project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
               );
-              const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-              const base64data: string = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = () => reject(reader.error);
-                reader.readAsDataURL(pdfBlob);
-              });
               const tempFileId = uuidv4();
-              await saveFile(tempFileId, base64data);
+              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
+                projectId: project.id, kind: 'printout', name: 'Proposal (header email override)',
+              });
               fileIdToSend = tempFileId;
             } catch { /* fall back to the pre-generated printout */ }
           }

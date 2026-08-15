@@ -1118,44 +1118,40 @@ export const ProjectView: React.FC = () => {
 
       if (!pdfBuffer) {
         toast('No pages found with the selected takeoffs.', { type: 'warning' });
-        setIsPrinting(false);
-        setProgressMessage('');
         return;
       }
 
       setProgressMessage('Saving…');
-      const pdfBlob = new Blob([pdfBuffer], { type: 'application/pdf' });
-      const reader = new FileReader();
-      reader.readAsDataURL(pdfBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        const fileId = uuidv4();
-        await saveFile(fileId, base64data);
+      const name = `Printout - ${new Date().toLocaleString()}`;
+      const fileId = uuidv4();
+      // Raw streaming save — base64-in-JSON dies at the server's JSON body cap
+      // for big plan-set printouts, and silently at that (413).
+      await saveBinaryFile(fileId, new Blob([pdfBuffer], { type: 'application/pdf' }), {
+        projectId: project.id, kind: 'printout', name,
+      });
 
-        const newPrintout: Printout = {
-          id: uuidv4(),
-          name: `Printout - ${new Date().toLocaleString()}`,
-          fileId,
-          createdAt: Date.now(),
-          type: 'pdf',
-        };
-
-        const updatedProject = {
-          ...project,
-          printouts: [...(project.printouts || []), newPrintout],
-        };
-
-        await saveProject(updatedProject);
-        setProject(updatedProject);
-        setIsPrinting(false);
-        setProgressMessage('');
-        setSelectedTakeoffIds(new Set());
-        // Printout history now lives in the Proposal section.
-        navigate(`/project/${projectId}/proposal`);
+      const newPrintout: Printout = {
+        id: uuidv4(),
+        name,
+        fileId,
+        createdAt: Date.now(),
+        type: 'pdf',
       };
+
+      const updatedProject = {
+        ...project,
+        printouts: [...(project.printouts || []), newPrintout],
+      };
+
+      await saveProject(updatedProject);
+      setProject(updatedProject);
+      setSelectedTakeoffIds(new Set());
+      // Printout history now lives in the Proposal section.
+      navigate(`/project/${projectId}/proposal`);
     } catch (error) {
       console.error('Error generating PDF:', error);
       toast('Failed to generate PDF.', { type: 'error' });
+    } finally {
       setIsPrinting(false);
       setProgressMessage('');
     }

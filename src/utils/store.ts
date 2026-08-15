@@ -211,12 +211,21 @@ export const getFile = getImage;
 // produce for large PDFs (which can OOM Chrome on plan-set uploads). The
 // server base64-encodes once before storing so the file appears in the same
 // images table and the existing /api/images/:id/raw read path works unchanged.
-export const saveBinaryFile = async (id: string, blob: Blob): Promise<void> => {
+export const saveBinaryFile = async (
+  id: string,
+  blob: Blob,
+  opts?: { projectId?: string; kind?: string; name?: string },
+): Promise<void> => {
   const headers: Record<string, string> = {
     'Content-Type': blob.type || 'application/octet-stream',
     ...getAuthHeaders(),
   };
-  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+  const q = new URLSearchParams();
+  if (opts?.projectId) q.set('projectId', opts.projectId);
+  if (opts?.kind) q.set('kind', opts.kind);
+  if (opts?.name) q.set('name', opts.name);
+  const qs = q.toString();
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`, {
     method: 'POST',
     headers,
     body: blob,
