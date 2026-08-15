@@ -36,6 +36,7 @@ import {
   HighlightQuality,
   normalizeHighlightQuality,
 } from './project/proposal/proposalGenerator';
+import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './project/proposal/shrinkPdf';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
@@ -1112,7 +1113,6 @@ export const ProjectView: React.FC = () => {
       const pdfBuffer = await buildHighlightsPdf(
         project,
         selectedTakeoffIds,
-        highlightQuality,
         (msg) => setProgressMessage(msg),
         revisionModel.currentPageIds,
       );
@@ -1122,12 +1122,21 @@ export const ProjectView: React.FC = () => {
         return;
       }
 
+      let outBuffer: ArrayBuffer = pdfBuffer;
+      if (highlightQuality === 'email') {
+        const shrunk = await shrinkPdfToBudget(pdfBuffer, EMAIL_TARGET_BYTES, (msg) => setProgressMessage(msg));
+        outBuffer = shrunk.bytes;
+        if (shrunk.overBudget) {
+          toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+        }
+      }
+
       setProgressMessage('Saving…');
       const name = `Printout - ${new Date().toLocaleString()}`;
       const fileId = uuidv4();
       // Raw streaming save — base64-in-JSON dies at the server's JSON body cap
       // for big plan-set printouts, and silently at that (413).
-      await saveBinaryFile(fileId, new Blob([pdfBuffer], { type: 'application/pdf' }), {
+      await saveBinaryFile(fileId, new Blob([outBuffer], { type: 'application/pdf' }), {
         projectId: project.id, kind: 'printout', name,
       });
 

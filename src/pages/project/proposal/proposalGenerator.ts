@@ -8,6 +8,7 @@ import { jsPDF } from 'jspdf';
 import { Project, MeasurementTakeoff } from '../../../types';
 import { getFile, getImage } from '../../../utils/store';
 import { viewBox, overlayPlacement } from '../../../utils/pdfOverlayTransform';
+import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './shrinkPdf';
 import {
   LetterheadContext,
   drawLetterheadHeader,
@@ -52,7 +53,6 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export async function buildHighlightsPdf(
   project: Project,
   selectedTakeoffIds: Set<string>,
-  _quality: HighlightQuality = 'best',
   onProgress?: (msg: string) => void,
   currentPageIds?: Set<string>,
 ): Promise<ArrayBuffer | null> {
@@ -557,7 +557,7 @@ export interface ProposalOptions {
   headerEmail?: string;
 }
 
-export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; }
+export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; overBudget?: boolean }
 
 export const formatCurrency = (n: number) =>
   '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1040,7 +1040,6 @@ export async function generateProposalPdf(
     const highlightsBuffer = await buildHighlightsPdf(
       project,
       selectedTakeoffIds,
-      highlightQuality,
       (msg) => onProgress?.(msg),
       currentPageIds,
     );
@@ -1064,9 +1063,18 @@ export async function generateProposalPdf(
     pdfBytes = pdf.output('arraybuffer') as ArrayBuffer;
   }
 
+  // Email-ready mode post-shrinks the final (possibly merged) PDF down to the
+  // attachment target regardless of whether highlights were included.
+  let overBudget = false;
+  if (highlightQuality === 'email') {
+    const shrunk = await shrinkPdfToBudget(pdfBytes, EMAIL_TARGET_BYTES, onProgress);
+    pdfBytes = shrunk.bytes;
+    overBudget = shrunk.overBudget;
+  }
+
   const suggestedName = (proposalCustomTitle || project.name).trim()
     ? `Proposal – ${proposalCustomTitle || project.name}`
     : `Proposal – ${new Date().toLocaleString()}`;
 
-  return { pdfBytes, suggestedName };
+  return { pdfBytes, suggestedName, overBudget };
 }

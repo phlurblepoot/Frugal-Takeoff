@@ -272,7 +272,7 @@ export const ProjectProposal: React.FC = () => {
         },
       };
       const totals = computeTakeoffTotals(project, currentPageIds);
-      const { pdfBytes, suggestedName } = await generateProposalPdf(
+      const { pdfBytes, suggestedName, overBudget } = await generateProposalPdf(
         project,
         totals,
         selectedTakeoffIds,
@@ -296,6 +296,9 @@ export const ProjectProposal: React.FC = () => {
       };
       const updated = { ...project, printouts: [...(project.printouts || []), newPrintout] };
       await saveProject(updated);
+      if (overBudget) {
+        toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+      }
       toast('Proposal generated', { type: 'success' });
       reload();
     } catch (error) {
