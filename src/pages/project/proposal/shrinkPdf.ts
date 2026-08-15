@@ -46,6 +46,25 @@ export function attemptSequence(startLongSide: number = START_LONG_SIDE): Ladder
   return steps;
 }
 
+/** Fraction of a page's budget under which the page is considered to have
+ *  finished "comfortably" — small enough to justify spending a render on
+ *  recovering quality for the next page. */
+export const COMFORTABLE_UNDER_RATIO = 0.7;
+
+/** Ladder index the next page's walk should start from, given the index in
+ *  `attemptSequence()` that satisfied the previous page. Carrying the index
+ *  forward means a page that needed a small/low-quality encoding doesn't
+ *  force every later page to re-walk the same doomed high-quality attempts
+ *  (the degenerate case on large page counts: an early overshoot used to
+ *  drive every later page through a full ~20-step walk, including full
+ *  pdf.js re-renders). Backing off one step toward higher quality when the
+ *  previous page landed comfortably under its budget lets quality recover
+ *  once the content allows it. */
+export function nextStartIndex(succeededIndex: number, succeededBytes: number, budgetBytes: number): number {
+  const comfortablyUnder = budgetBytes > 0 && succeededBytes <= budgetBytes * COMFORTABLE_UNDER_RATIO;
+  return comfortablyUnder ? Math.max(0, succeededIndex - 1) : succeededIndex;
+}
+
 /** Decoded byte size of a base64 data URL (without materializing the bytes). */
 export function dataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(',');
@@ -78,6 +97,10 @@ export async function shrinkPdfToBudget(
   try {
     const pageCount = srcPdf.numPages;
     let remaining = usableBudget(budgetBytes);
+    // Full ladder walked once; each page starts partway through it (carried
+    // forward from the previous page) instead of restarting at the top.
+    const ladder = attemptSequence();
+    let startIndex = 0;
 
     for (let i = 1; i <= pageCount; i++) {
       onProgress?.(`Compressing page ${i} of ${pageCount}…`);
@@ -85,33 +108,46 @@ export async function shrinkPdfToBudget(
       const vp1 = page.getViewport({ scale: 1 }); // PDF points
       const maxDim = Math.max(vp1.width, vp1.height);
       const budget = pageBudget(remaining, pageCount - i + 1);
+      // Reset every page: the canvas may hold the previous page's content at
+      // a scale that happens to match this page's first attempt, and a
+      // stale-content skip would silently reuse the wrong page's raster.
+      let renderedScale = 0;
 
-      let best: { dataUrl: string; bytes: number } | null = null;
-      let renderedLongSide = 0;
-      for (const step of attemptSequence()) {
+      const attempt = async (idx: number) => {
+        const step = ladder[idx];
         // Cap at 2× — matches the app's standard raster space; upscaling a
-        // small (e.g. letter-size) page past that only inflates bytes.
+        // small (e.g. letter-size) page past that only inflates bytes. Keyed
+        // on the *effective* scale (not the raw longSide target) so rounds
+        // the cap flattens to the same scale don't re-render identically.
         const scale = Math.min(2, step.longSide / maxDim);
-        if (Math.round(vp1.width * scale) !== canvas.width || step.longSide !== renderedLongSide) {
+        if (Math.round(vp1.width * scale) !== canvas.width || scale !== renderedScale) {
           const vp = page.getViewport({ scale });
           canvas.width = Math.round(vp.width);
           canvas.height = Math.round(vp.height);
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           await page.render({ canvasContext: ctx, viewport: vp, intent: 'print' } as any).promise;
-          renderedLongSide = step.longSide;
+          renderedScale = scale;
         }
         const dataUrl = canvas.toDataURL('image/jpeg', step.quality);
-        const bytes = dataUrlBytes(dataUrl);
-        best = { dataUrl, bytes }; // keep the last attempt — it's the smallest so far
-        if (bytes <= budget) break;
+        return { dataUrl, bytes: dataUrlBytes(dataUrl) };
+      };
+
+      const startAt = Math.min(startIndex, ladder.length - 1);
+      let bestIndex = startAt;
+      let best = await attempt(startAt);
+      for (let idx = startAt + 1; best.bytes > budget && idx < ladder.length; idx++) {
+        const candidate = await attempt(idx);
+        if (candidate.bytes < best.bytes) { best = candidate; bestIndex = idx; }
+        if (candidate.bytes <= budget) break;
       }
 
-      const jpg = await outDoc.embedJpg(best!.dataUrl);
+      const jpg = await outDoc.embedJpg(best.dataUrl);
       // Page keeps its original physical size in points so prints stay to scale.
       const outPage = outDoc.addPage([vp1.width, vp1.height]);
       outPage.drawImage(jpg, { x: 0, y: 0, width: vp1.width, height: vp1.height });
-      remaining -= best!.bytes;
+      remaining -= best.bytes;
+      startIndex = nextStartIndex(bestIndex, best.bytes, budget);
       page.cleanup();
     }
   } finally {

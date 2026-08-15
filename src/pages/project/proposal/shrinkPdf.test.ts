@@ -5,6 +5,8 @@ import {
   pageBudget,
   attemptSequence,
   dataUrlBytes,
+  nextStartIndex,
+  COMFORTABLE_UNDER_RATIO,
   JPEG_QUALITY_LADDER,
   START_LONG_SIDE,
   MIN_LONG_SIDE,
@@ -66,5 +68,26 @@ describe('dataUrlBytes', () => {
   it('reports the decoded byte size of a base64 data URL', () => {
     // "hello" → 5 bytes → base64 "aGVsbG8="
     expect(dataUrlBytes('data:image/jpeg;base64,aGVsbG8=')).toBe(5);
+  });
+});
+
+describe('nextStartIndex (ladder carry-forward)', () => {
+  it('carries the succeeded index forward unchanged when the page was not comfortably under budget', () => {
+    // 900 bytes against a 1000-byte budget is a tight fit (> 70%) — don't
+    // spend renders trying to recover quality on the next page.
+    expect(nextStartIndex(5, 900, 1000)).toBe(5);
+  });
+  it('backs off one step toward higher quality when the page finished comfortably under budget', () => {
+    expect(nextStartIndex(5, 600, 1000)).toBe(4);
+  });
+  it('never backs off past the top of the ladder', () => {
+    expect(nextStartIndex(0, 100, 1000)).toBe(0);
+  });
+  it('treats an exact threshold hit as comfortable (inclusive)', () => {
+    const bytes = 1000 * COMFORTABLE_UNDER_RATIO;
+    expect(nextStartIndex(3, bytes, 1000)).toBe(2);
+  });
+  it('does not back off when the budget is zero (nothing is "comfortable")', () => {
+    expect(nextStartIndex(5, 0, 0)).toBe(5);
   });
 });

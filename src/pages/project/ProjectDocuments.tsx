@@ -32,16 +32,19 @@ export const openTargetFor = (f: Pick<ProjectFile, 'id' | 'mime'>):
 
 // Display order + labels for the kind filter. 'plan' covers internal canvas
 // assets (page rasters/thumbnails/source pdfs) and is excluded from 'all'.
+// 'printout' is also excluded — printout history already lives in the
+// Proposal section, so it never needs to double up here.
 const KIND_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'document', label: 'Documents' },
   { id: 'proposal', label: 'Proposals' },
-  { id: 'printout', label: 'Printouts' },
   { id: 'spreadsheet', label: 'Spreadsheets' },
   { id: 'photo', label: 'Photos' },
   { id: 'other', label: 'Other' },
   { id: 'plan', label: 'Plan assets' },
 ];
+
+const HIDDEN_KINDS = new Set(['plan', 'printout']);
 
 const downloadBlob = (blob: Blob, name: string) => {
   const url = URL.createObjectURL(blob);
@@ -82,8 +85,8 @@ export const ProjectDocuments: React.FC = () => {
 
   const visible = useMemo(() => {
     const all = files ?? [];
-    if (filter === 'all') return all.filter(f => f.kind !== 'plan');
-    return all.filter(f => f.kind === filter);
+    if (filter === 'all') return all.filter(f => !HIDDEN_KINDS.has(f.kind));
+    return all.filter(f => f.kind === filter && !HIDDEN_KINDS.has(f.kind));
   }, [files, filter]);
 
   const handleUpload = async (list: FileList | null) => {
@@ -143,7 +146,7 @@ export const ProjectDocuments: React.FC = () => {
       <div className="mb-4 flex flex-wrap gap-1.5">
         {KIND_FILTERS.map(k => {
           const count = k.id === 'all'
-            ? (files ?? []).filter(f => f.kind !== 'plan').length
+            ? (files ?? []).filter(f => !HIDDEN_KINDS.has(f.kind)).length
             : counts.get(k.id) ?? 0;
           if (k.id !== 'all' && count === 0) return null;
           return (

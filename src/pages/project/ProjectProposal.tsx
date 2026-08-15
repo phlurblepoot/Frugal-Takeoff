@@ -317,19 +317,23 @@ export const ProjectProposal: React.FC = () => {
   };
 
   const handleDownload = async (printout: Printout) => {
-    const res = await fetch(getImageUrl(printout.fileId));
-    if (!res.ok) { toast('Failed to download file.', { type: 'error' }); return; }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
-    const extension = isExcel ? '.xlsx' : '.pdf';
-    link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    try {
+      const res = await fetch(getImageUrl(printout.fileId));
+      if (!res.ok) { toast('Failed to download file.', { type: 'error' }); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const isExcel = printout.type === 'excel' || printout.name.toLowerCase().endsWith('.xlsx');
+      const extension = isExcel ? '.xlsx' : '.pdf';
+      link.download = printout.name.endsWith(extension) ? printout.name : `${printout.name}${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast('Failed to download file.', { type: 'error' });
+    }
   };
 
   const handleShare = async (printout: Printout) => {
@@ -725,9 +729,9 @@ export const ProjectProposal: React.FC = () => {
                 project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
               );
               const tempFileId = uuidv4();
-              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
-                projectId: project.id, kind: 'printout', name: 'Proposal (header email override)',
-              });
+              // Throwaway attachment for this one send — no projectId/kind/name
+              // so it never shows up in project Documents.
+              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }));
               fileIdToSend = tempFileId;
               if (overBudget) {
                 toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });

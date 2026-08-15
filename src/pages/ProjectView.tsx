@@ -1123,12 +1123,11 @@ export const ProjectView: React.FC = () => {
       }
 
       let outBuffer: ArrayBuffer = pdfBuffer;
+      let overBudget = false;
       if (highlightQuality === 'email') {
         const shrunk = await shrinkPdfToBudget(pdfBuffer, EMAIL_TARGET_BYTES, (msg) => setProgressMessage(msg));
         outBuffer = shrunk.bytes;
-        if (shrunk.overBudget) {
-          toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
-        }
+        overBudget = shrunk.overBudget;
       }
 
       setProgressMessage('Saving…');
@@ -1139,6 +1138,9 @@ export const ProjectView: React.FC = () => {
       await saveBinaryFile(fileId, new Blob([outBuffer], { type: 'application/pdf' }), {
         projectId: project.id, kind: 'printout', name,
       });
+      if (overBudget) {
+        toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
+      }
 
       const newPrintout: Printout = {
         id: uuidv4(),
@@ -1309,37 +1311,38 @@ export const ProjectView: React.FC = () => {
       
       const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const excelBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      
-      const reader = new FileReader();
-      reader.readAsDataURL(excelBlob);
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        const fileId = uuidv4();
-        await saveFile(fileId, base64data);
-        
-        const newPrintout: Printout = {
-          id: uuidv4(),
-          name: `Excel Export - ${new Date().toLocaleString()}`,
-          fileId,
-          createdAt: Date.now(),
-          type: 'excel',
-        };
-        
-        const updatedProject = {
-          ...project,
-          printouts: [...(project.printouts || []), newPrintout],
-        };
-        
-        await saveProject(updatedProject);
-        setProject(updatedProject);
-        setIsExportingExcel(false);
-        setSelectedTakeoffIds(new Set());
-        // Printout history now lives in the Proposal section.
-        navigate(`/project/${projectId}/proposal`);
+
+      const base64data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error ?? new Error('Failed to read Excel export'));
+        reader.readAsDataURL(excelBlob);
+      });
+      const fileId = uuidv4();
+      await saveFile(fileId, base64data);
+
+      const newPrintout: Printout = {
+        id: uuidv4(),
+        name: `Excel Export - ${new Date().toLocaleString()}`,
+        fileId,
+        createdAt: Date.now(),
+        type: 'excel',
       };
+
+      const updatedProject = {
+        ...project,
+        printouts: [...(project.printouts || []), newPrintout],
+      };
+
+      await saveProject(updatedProject);
+      setProject(updatedProject);
+      setSelectedTakeoffIds(new Set());
+      // Printout history now lives in the Proposal section.
+      navigate(`/project/${projectId}/proposal`);
     } catch (error) {
       console.error('Error generating Excel:', error);
       toast('Failed to generate Excel.', { type: 'error' });
+    } finally {
       setIsExportingExcel(false);
     }
   };
