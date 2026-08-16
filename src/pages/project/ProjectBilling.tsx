@@ -128,7 +128,7 @@ export const ProjectBilling: React.FC = () => {
       </div>
 
       {/* Active section */}
-      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} />}
+      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} aiaSettings={aiaSettings} />}
       {projectId && activeTab === 'change-orders' && (
         <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
       )}

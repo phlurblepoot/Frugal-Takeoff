@@ -19,8 +19,8 @@ export const AiaSettingsForm: React.FC<{
   const { toast } = useToast();
   const [retainagePercent, setRetainagePercent] = useState(
     settings.retainagePercent != null ? String(settings.retainagePercent) : '10');
-  const [storedRetainagePercent, setStoredRetainagePercent] = useState(
-    settings.storedRetainagePercent != null ? String(settings.storedRetainagePercent) : '10');
+  const [retainageMode, setRetainageMode] = useState<'uniform' | 'perLine'>(
+    settings.retainageMode === 'perLine' ? 'perLine' : 'uniform');
   const [ownerName, setOwnerName] = useState(settings.ownerName ?? '');
   const [ownerAddress, setOwnerAddress] = useState(settings.ownerAddress ?? '');
   const [architectName, setArchitectName] = useState(settings.architectName ?? '');
@@ -37,7 +37,7 @@ export const AiaSettingsForm: React.FC<{
     const next: AiaSettings = {
       ...settings,
       retainagePercent: numOrUndefined(retainagePercent) ?? 10,
-      storedRetainagePercent: numOrUndefined(storedRetainagePercent) ?? 10,
+      retainageMode,
       ownerName: ownerName || undefined,
       ownerAddress: ownerAddress || undefined,
       architectName: architectName || undefined,
@@ -81,13 +81,30 @@ export const AiaSettingsForm: React.FC<{
       </button>
       {open && (
       <CardBody id="aia-settings-body" className="border-t border-edge">
+        <div className="mb-3">
+          <Field label="Retainage %" htmlFor="aia-ret" hint="Per-line reveals a retainage column on the Schedule of Values; pay applications follow this choice.">
+            <Input id="aia-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} placeholder="10" className="max-w-xs" />
+          </Field>
+          <div className="mt-2 inline-flex rounded-lg border border-edge p-0.5">
+            <button
+              type="button"
+              onClick={() => setRetainageMode('uniform')}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${retainageMode === 'uniform' ? 'bg-accent-600 text-white' : 'text-ink-faint hover:text-ink'}`}
+              aria-pressed={retainageMode === 'uniform'}
+            >
+              Uniform rate
+            </button>
+            <button
+              type="button"
+              onClick={() => setRetainageMode('perLine')}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${retainageMode === 'perLine' ? 'bg-accent-600 text-white' : 'text-ink-faint hover:text-ink'}`}
+              aria-pressed={retainageMode === 'perLine'}
+            >
+              Per-line rates
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Retainage % (work)" htmlFor="aia-ret">
-            <Input id="aia-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} placeholder="10" />
-          </Field>
-          <Field label="Retainage % (stored materials)" htmlFor="aia-ret-stored">
-            <Input id="aia-ret-stored" type="number" value={storedRetainagePercent} onChange={e => setStoredRetainagePercent(e.target.value)} placeholder="10" />
-          </Field>
           <Field label="Owner name" htmlFor="aia-owner">
             <Input id="aia-owner" value={ownerName} onChange={e => setOwnerName(e.target.value)} />
           </Field>

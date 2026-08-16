@@ -1177,6 +1177,7 @@ export interface AiaG702 {
 }
 export interface AiaSettings {
   billingMode?: string; retainagePercent?: number; storedRetainagePercent?: number;
+  retainageMode?: 'uniform' | 'perLine';
   ownerName?: string; ownerAddress?: string;
   architectName?: string; architectAddress?: string;
   contractDate?: string; ownerProjectNumber?: string; architectProjectNumber?: string;
