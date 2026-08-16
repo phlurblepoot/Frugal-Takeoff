@@ -8,6 +8,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
+  patchProject, normalizeProjectStatus,
   ValidationError, ConflictError,
 } from './projectStore';
 
@@ -92,7 +93,10 @@ describe('migration 5 + loadProject round-trip', () => {
     expect(typeof loaded.customerId).toBe('string');
     expect(loaded.customerId).toBeTruthy();
     delete loaded.customerId;
-    expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'proposal_sent' });
+    // Two-stage lifecycle (spec 2026-08-16): full-document saves normalize to
+    // bidding|in_progress; meta.accepted drives in_progress, everything else
+    // (including this fixture's submitted:true) is a bid.
+    expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'bidding' });
   });
 
   it('nulls out the legacy data blob', () => {
@@ -112,9 +116,16 @@ describe('migration 5 + loadProject round-trip', () => {
     expect(kind('att1')).toEqual({ projectId: 'proj1', kind: 'document' });
   });
 
-  it('derives status from legacy flags', () => {
+  it('derives status from legacy flags (archived no longer drives status — it is orthogonal)', () => {
     seedLegacyAndNormalize({ ...LEGACY_PROJECT, id: 'p2', submitted: false, archived: true });
-    expect(loadProject(db, 'p2')!.status).toBe('archived');
+    const loaded = loadProject(db, 'p2')!;
+    expect(loaded.status).toBe('bidding');
+    expect(loaded.archived).toBe(true);
+  });
+
+  it('derives in_progress status from meta.accepted', () => {
+    seedLegacyAndNormalize({ ...LEGACY_PROJECT, id: 'p3', submitted: false, accepted: true });
+    expect(loadProject(db, 'p3')!.status).toBe('in_progress');
   });
 
   it('skips non-object blobs without failing the migration (data preserved)', () => {
@@ -265,5 +276,37 @@ describe('createProject / listProjects / deleteProject', () => {
     db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('paya', 'payapp', 'app1', 20, 1)`).run();
     deleteProject(db, dir, 'proj1');
     expect((db.prepare(`SELECT COUNT(*) as c FROM payments`).get() as any).c).toBe(0);
+  });
+});
+
+describe('two-stage lifecycle', () => {
+  it('normalizes every legacy status per the collapse table', () => {
+    const cases: [string, string][] = [
+      ['estimating', 'bidding'], ['proposal_sent', 'bidding'],
+      ['awarded', 'in_progress'], ['in_progress', 'in_progress'],
+      ['punch_list', 'in_progress'], ['complete', 'in_progress'],
+      ['lost', 'bidding'], ['archived', 'in_progress'],
+      ['garbage', 'bidding'],
+    ];
+    for (const [oldS, newS] of cases) expect(normalizeProjectStatus(oldS)).toBe(newS);
+  });
+
+  it('patchProject rejects legacy statuses and accepts the two live ones', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    const v1 = loadProject(db, 'proj1')!.version;
+    const result = patchProject(db, 'proj1', { version: v1, status: 'bidding' });
+    expect(result.status).toBe('bidding');
+    expect(loadProject(db, 'proj1')!.status).toBe('bidding');
+    const v2 = result.version;
+    expect(() => patchProject(db, 'proj1', { version: v2, status: 'estimating' })).toThrow(ValidationError);
+  });
+
+  it('patchProject accepts lostBid boolean and stores it in meta', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    const v1 = loadProject(db, 'proj1')!.version;
+    patchProject(db, 'proj1', { version: v1, lostBid: true });
+    expect(loadProject(db, 'proj1')!.lostBid).toBe(true);
+    const v2 = loadProject(db, 'proj1')!.version;
+    expect(() => patchProject(db, 'proj1', { version: v2, lostBid: 'yes' })).toThrow(ValidationError);
   });
 });

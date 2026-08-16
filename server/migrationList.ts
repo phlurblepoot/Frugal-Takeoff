@@ -933,4 +933,28 @@ export const migrations: Migration[] = [
         (SELECT MAX(number) FROM rfis WHERE rfis.projectId = projects.id), 0)`);
     },
   },
+  {
+    version: 21,
+    name: 'two-stage-lifecycle',
+    // Collapses the 8 legacy stages to bidding|in_progress. complete/lost
+    // auto-archive (lost also gets meta.lostBid for the Archive view's badge).
+    // Only projects.status + meta.archived/meta.lostBid change — idempotent.
+    up({ db }) {
+      const rows = db.prepare('SELECT id, status, meta FROM projects').all() as any[];
+      const upd = db.prepare('UPDATE projects SET status = ?, meta = ? WHERE id = ?');
+      for (const r of rows) {
+        const old = r.status ?? 'estimating';
+        const meta = r.meta ? JSON.parse(r.meta) : {};
+        let status: string;
+        if (old === 'bidding' || old === 'in_progress') status = old; // re-run safe
+        else if (['estimating', 'proposal_sent'].includes(old)) status = 'bidding';
+        else if (['awarded', 'punch_list'].includes(old)) status = 'in_progress';
+        else if (old === 'complete') { status = 'in_progress'; meta.archived = true; }
+        else if (old === 'archived') { status = 'in_progress'; meta.archived = true; }
+        else if (old === 'lost') { status = 'bidding'; meta.archived = true; meta.lostBid = true; }
+        else status = 'bidding';
+        upd.run(status, JSON.stringify(meta), r.id);
+      }
+    },
+  },
 ];

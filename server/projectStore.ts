@@ -8,12 +8,22 @@ export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
 
-// Project lifecycle stages (spec §2). 'archived' is reachable via the
-// archived flag rather than the stage dropdown, but remains a valid value.
-export const PROJECT_STATUSES = [
-  'estimating', 'proposal_sent', 'awarded', 'in_progress',
-  'punch_list', 'complete', 'archived', 'lost',
-] as const;
+// Project lifecycle stages (spec 2026-08-16: two-stage collapse). Archiving
+// and lost-bid tracking are independent meta flags, not stages.
+export const PROJECT_STATUSES = ['bidding', 'in_progress'] as const;
+
+// Collapse table for the two-stage lifecycle (spec 2026-08-16). Legacy values
+// arrive from old full-document saves and pre-migration rows; anything
+// unrecognized is treated as a bid so nothing vanishes.
+const LEGACY_STATUS_MAP: Record<string, 'bidding' | 'in_progress'> = {
+  estimating: 'bidding', proposal_sent: 'bidding', lost: 'bidding',
+  awarded: 'in_progress', in_progress: 'in_progress',
+  punch_list: 'in_progress', complete: 'in_progress', archived: 'in_progress',
+};
+export function normalizeProjectStatus(s: unknown): 'bidding' | 'in_progress' {
+  if (s === 'bidding' || s === 'in_progress') return s;
+  return LEGACY_STATUS_MAP[String(s)] ?? 'bidding';
+}
 
 const parse = (s: string | null): any => (s == null ? undefined : JSON.parse(s));
 
@@ -126,18 +136,12 @@ function validate(payload: any, id?: string): void {
   }
 }
 
-// Status is intentionally sticky: once a project leaves 'estimating', legacy
-// flags (submitted/accepted/archived) no longer drive it.
-// NOTE: patchProject can leave meta.archived and status transiently divergent
-// (PATCH archived:true keeps the real stage; the next full save re-derives
-// status='archived' here). Accepted for 3a — revisit when archived/status
-// are decoupled.
+// deriveStatus: full-document saves carry the client's status; normalize it.
+// The archived flag no longer influences status (it is orthogonal).
 export function deriveStatus(meta: any, existing?: string): string {
-  if (existing && existing !== 'estimating') return existing;
-  if (meta.archived) return 'archived';
-  if (meta.accepted) return 'awarded';
-  if (meta.submitted) return 'proposal_sent';
-  return 'estimating';
+  if (existing) return normalizeProjectStatus(existing);
+  if (meta.accepted) return 'in_progress';
+  return 'bidding';
 }
 
 // Splits a validated legacy-shaped payload into rows. Caller wraps in a
@@ -346,7 +350,7 @@ export function patchProject(
   if (!Number.isInteger(patch.version) || patch.version < 1) {
     throw new ValidationError('Missing or invalid version — reload the project and try again');
   }
-  const ALLOWED = ['version', 'name', 'status', 'archived', 'contractor', 'address', 'bidDueDate'];
+  const ALLOWED = ['version', 'name', 'status', 'archived', 'lostBid', 'contractor', 'address', 'bidDueDate'];
   for (const k of Object.keys(patch)) {
     if (!ALLOWED.includes(k)) throw new ValidationError(`Unknown field: ${k}`);
   }
@@ -358,6 +362,9 @@ export function patchProject(
   }
   if (patch.archived !== undefined && typeof patch.archived !== 'boolean') {
     throw new ValidationError('archived must be a boolean');
+  }
+  if (patch.lostBid !== undefined && typeof patch.lostBid !== 'boolean') {
+    throw new ValidationError('lostBid must be a boolean');
   }
   for (const k of ['contractor', 'address'] as const) {
     if (patch[k] !== undefined && patch[k] !== null && typeof patch[k] !== 'string') {
@@ -386,11 +393,17 @@ export function patchProject(
         vals.push(patch[k]);
       }
     }
-    if (patch.archived !== undefined) {
+    if (patch.archived !== undefined || patch.lostBid !== undefined) {
       let meta: any = {};
       try { meta = JSON.parse(row.meta || '{}'); } catch { /* keep {} */ }
-      if (patch.archived) meta.archived = true;
-      else delete meta.archived; // legacy shape omits the key when not archived
+      if (patch.archived !== undefined) {
+        if (patch.archived) meta.archived = true;
+        else delete meta.archived; // legacy shape omits the key when not archived
+      }
+      if (patch.lostBid !== undefined) {
+        if (patch.lostBid) meta.lostBid = true;
+        else delete meta.lostBid; // same omit-when-falsy shape as archived
+      }
       sets.push('meta = ?');
       vals.push(JSON.stringify(meta));
     }

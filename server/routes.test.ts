@@ -213,7 +213,7 @@ describe('GET /api/projects/summary', () => {
     expect(res.status).toBe(200);
     const row = res.body.find((r: any) => r.id === 'p1');
     expect(row).toMatchObject({
-      name: 'Test Project', status: 'estimating', version: 1, archived: false,
+      name: 'Test Project', status: 'bidding', version: 1, archived: false,
       pageCount: 2, takeoffCount: 1, contractor: 'GC Co',
     });
     expect(row.pageIds.sort()).toEqual(['pg1', 'pg2']);
@@ -233,11 +233,11 @@ describe('PATCH /api/projects/:id', () => {
   });
 
   it('updates status and bumps version', async () => {
-    const res = await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    const res = await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, version: 2, status: 'awarded' });
+    expect(res.body).toMatchObject({ success: true, version: 2, status: 'in_progress' });
     const get = await request(app).get('/api/projects/p1');
-    expect(get.body.status).toBe('awarded');
+    expect(get.body.status).toBe('in_progress');
     expect(get.body.version).toBe(2);
   });
 
@@ -267,7 +267,7 @@ describe('PATCH /api/projects/:id', () => {
   it('rejects invalid payloads with 400', async () => {
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, status: 'galactic' })).status).toBe(400);
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, nonsense: true })).status).toBe(400);
-    expect((await request(app).patch('/api/projects/p1').send({ status: 'awarded' })).status).toBe(400); // no version
+    expect((await request(app).patch('/api/projects/p1').send({ status: 'in_progress' })).status).toBe(400); // no version
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, name: '' })).status).toBe(400);
   });
 
@@ -279,7 +279,7 @@ describe('PATCH /api/projects/:id', () => {
 describe('GET /api/activity', () => {
   it('records project create and status change events', async () => {
     await request(app).post('/api/projects').send(PROJECT);
-    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     const res = await request(app).get('/api/activity');
     expect(res.status).toBe(200);
     const types = res.body.items.map((i: any) => i.type);
@@ -295,7 +295,7 @@ describe('GET /api/projects/:id/summary', () => {
     await request(app).post('/api/projects').send(PROJECT);
     const res = await request(app).get('/api/projects/p1/summary');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 'p1', name: 'Test Project', status: 'estimating', version: 1 });
+    expect(res.body).toMatchObject({ id: 'p1', name: 'Test Project', status: 'bidding', version: 1 });
     expect(res.body.pages).toBeUndefined();
   });
 
@@ -367,7 +367,7 @@ describe('GET /api/activity?projectId=', () => {
   it('filters the feed to one project', async () => {
     await request(app).post('/api/projects').send(PROJECT);
     await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', name: 'Other' });
-    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     const res = await request(app).get('/api/activity?projectId=p1');
     expect(res.body.items.length).toBeGreaterThan(0);
     for (const item of res.body.items) expect(item.projectId).toBe('p1');

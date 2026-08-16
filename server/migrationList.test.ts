@@ -352,3 +352,55 @@ describe('migration 18: task relations', () => {
     expect(cols).toContain('customerId');
   });
 });
+
+describe('migration 21: two-stage project lifecycle', () => {
+  const seedProject = (db: any, id: string, status: string, meta: any = {}) => {
+    db.prepare('INSERT INTO projects (id, status, meta, createdAt) VALUES (?, ?, ?, ?)')
+      .run(id, status, JSON.stringify(meta), Date.now());
+  };
+
+  const readRow = (db: any, id: string) => {
+    const row = db.prepare('SELECT status, meta FROM projects WHERE id = ?').get(id) as any;
+    const meta = row.meta ? JSON.parse(row.meta) : {};
+    return { status: row.status, archived: meta.archived, lostBid: meta.lostBid };
+  };
+
+  it('collapses every legacy status per the collapse table and auto-archives complete/lost', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 20));
+
+    seedProject(db, 'p-estimating', 'estimating');
+    seedProject(db, 'p-proposal', 'proposal_sent');
+    seedProject(db, 'p-awarded', 'awarded');
+    seedProject(db, 'p-inprogress', 'in_progress');
+    seedProject(db, 'p-punch', 'punch_list');
+    seedProject(db, 'p-complete', 'complete');
+    seedProject(db, 'p-archived', 'archived');
+    seedProject(db, 'p-lost', 'lost');
+    // a project already flagged archived under a legacy stage must keep archived:true
+    seedProject(db, 'p-already-archived', 'punch_list', { archived: true });
+
+    runMigrations(db, tmpDir(), migrations);
+
+    expect(readRow(db, 'p-estimating')).toEqual({ status: 'bidding', archived: undefined, lostBid: undefined });
+    expect(readRow(db, 'p-proposal')).toEqual({ status: 'bidding', archived: undefined, lostBid: undefined });
+    expect(readRow(db, 'p-awarded')).toEqual({ status: 'in_progress', archived: undefined, lostBid: undefined });
+    expect(readRow(db, 'p-inprogress')).toEqual({ status: 'in_progress', archived: undefined, lostBid: undefined });
+    expect(readRow(db, 'p-punch')).toEqual({ status: 'in_progress', archived: undefined, lostBid: undefined });
+    expect(readRow(db, 'p-complete')).toEqual({ status: 'in_progress', archived: true, lostBid: undefined });
+    expect(readRow(db, 'p-archived')).toEqual({ status: 'in_progress', archived: true, lostBid: undefined });
+    expect(readRow(db, 'p-lost')).toEqual({ status: 'bidding', archived: true, lostBid: true });
+    expect(readRow(db, 'p-already-archived')).toEqual({ status: 'in_progress', archived: true, lostBid: undefined });
+
+    // re-running the migration's up() directly (simulating a replay) must be a no-op
+    const mig21 = migrations.find(m => m.version === 21)!;
+    const before = ['p-estimating', 'p-proposal', 'p-awarded', 'p-inprogress', 'p-punch',
+      'p-complete', 'p-archived', 'p-lost', 'p-already-archived'].map(id => readRow(db, id));
+    mig21.up({ db, dataDir: tmpDir() });
+    const after = ['p-estimating', 'p-proposal', 'p-awarded', 'p-inprogress', 'p-punch',
+      'p-complete', 'p-archived', 'p-lost', 'p-already-archived'].map(id => readRow(db, id));
+    expect(after).toEqual(before);
+
+    db.close();
+  });
+});
