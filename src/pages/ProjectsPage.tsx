@@ -266,7 +266,7 @@ export const ProjectsPage: React.FC = () => {
         getCustomers().catch(() => [] as { id: string; name: string }[]),
       ]);
       setSummaries(sums);
-      setCustomerMap(new Map(custs.map((c: { id: string; name: string }) => [c.id, c.name])));
+      setCustomerMap(new Map(custs.map((c: { id: string; name: string }): [string, string] => [c.id, c.name])));
     } catch {
       toast('Failed to load projects', { type: 'error' });
     } finally {

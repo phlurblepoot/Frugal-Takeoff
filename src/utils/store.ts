@@ -1,4 +1,4 @@
-import { Project, TakeoffTemplate, SmtpSettings, ProjectNote } from '../types';
+import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '../types';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
 
@@ -1271,8 +1271,87 @@ export const getAlwaysCc = async (): Promise<string> => {
 
 // ── Customers ────────────────────────────────────────────────────────────────
 
-export const getCustomers = async () => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
-export const getCustomer = async (id: string) => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
+export interface CustomerProjectCounts {
+  bidding: number;
+  inProgress: number;
+  archived: number;
+}
+
+// Sidebar row shape for the customers split view. Server-derived (see
+// server/customerStore.ts customerSummaries).
+export interface CustomerSummary {
+  id: string;
+  name: string;
+  contactName: string | null;
+  phone: string | null;
+  projectCounts: CustomerProjectCounts;
+  openTaskCount: number;
+  overdueTaskCount: number;
+  // Admin-only (billing is gated server-side) — absent (not zero/null) for
+  // non-admins.
+  outstandingCents?: number;
+}
+
+export interface CustomerOverviewProject {
+  id: string;
+  name: string;
+  status: string; // already normalizeProjectStatus()'d server-side
+  archived: boolean;
+  lostBid: boolean;
+  bidDueDate: number | null;
+  updatedAt: number | null;
+  // Admin-only — absent for non-admins.
+  outstandingCents?: number;
+}
+
+export interface CustomerBillingLedgerEntry {
+  projectId: string;
+  projectName: string;
+  kind: 'invoice' | 'payapp';
+  number: string | number;
+  date: string | number | null;
+  status: string;
+  totalCents: number;
+  paidCents: number;
+  balanceCents: number;
+}
+
+export interface CustomerBilling {
+  contractTotalCents: number;
+  invoicedCents: number;
+  paidCents: number;
+  outstandingCents: number;
+  ledger: CustomerBillingLedgerEntry[];
+}
+
+export type CustomerAttentionItem =
+  | { type: 'overdue_task'; label: string; projectId?: string; taskId: string; date: string }
+  | { type: 'bid_due'; label: string; projectId: string; date: number; overdue?: true }
+  | { type: 'outstanding_invoice'; label: string; projectId: string; date?: string | number; ageDays?: number; balanceCents: number };
+
+export interface CustomerOverview {
+  customer: Customer;
+  projects: CustomerOverviewProject[];
+  // Admin-only — key is entirely absent (not null) for non-admins.
+  billing?: CustomerBilling;
+  attention: CustomerAttentionItem[];
+  taskCounts: { open: number; overdue: number };
+}
+
+export const getCustomersSummary = async (): Promise<CustomerSummary[]> => {
+  const res = await fetchWithRetry('/api/customers/summary', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getCustomerOverview = async (id: string): Promise<CustomerOverview> => {
+  const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getCustomers = async (): Promise<Customer[]> => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
+export const getCustomer = async (id: string): Promise<Customer> => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
 export const getCustomerProjects = async (id: string) => (await fetch(`/api/customers/${id}/projects`, { headers: getAuthHeaders() })).json();
 export const saveCustomer = async (c: any) => {
   const res = await fetch(c.id ? '/api/customers/' + c.id : '/api/customers', {
