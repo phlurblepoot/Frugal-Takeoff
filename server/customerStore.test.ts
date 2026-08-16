@@ -143,4 +143,44 @@ describe('customerSummaries / customerOverview', () => {
   it('returns null for an unknown customer', () => {
     expect(customerOverview(d, 'nope', true)).toBeNull();
   });
+
+  it('an overdue task tied to an archived project is excluded from counts and attention; the same task tied to a live project counts', () => {
+    const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10);
+    d.prepare(`INSERT INTO tasks (id, title, status, dueDate, customerId, projectId, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
+      .run('t-arch-task', 'Archived project task', 'todo', yesterday, cid, 'p-arch', Date.now());
+
+    // baseline already has 1 overdue/open task (t-overdue, no projectId) — the
+    // archived-project task must NOT add to it.
+    const before = customerSummaries(d, false).find(r => r.id === cid)!;
+    expect(before.overdueTaskCount).toBe(1);
+    expect(before.openTaskCount).toBe(1);
+
+    const ovBefore = customerOverview(d, cid, false)!;
+    expect(ovBefore.taskCounts).toEqual({ open: 1, overdue: 1 });
+    expect(ovBefore.attention.some((a: any) => a.taskId === 't-arch-task')).toBe(false);
+
+    // Retarget the same task to a live project — it must now count.
+    d.prepare(`UPDATE tasks SET projectId = ? WHERE id = ?`).run('p-prog', 't-arch-task');
+    const after = customerSummaries(d, false).find(r => r.id === cid)!;
+    expect(after.overdueTaskCount).toBe(2);
+    expect(after.openTaskCount).toBe(2);
+
+    const ovAfter = customerOverview(d, cid, false)!;
+    expect(ovAfter.taskCounts).toEqual({ open: 2, overdue: 2 });
+    expect(ovAfter.attention.some((a: any) => a.taskId === 't-arch-task')).toBe(true);
+  });
+
+  it('a bidding project with a past-due bidDueDate still appears in attention, flagged overdue', () => {
+    d.prepare(`INSERT INTO projects (id, name, customerId, status, bidDueDate, version, createdAt) VALUES (?, ?, ?, ?, ?, 1, ?)`)
+      .run('p-bid-late', 'Late Bid', cid, 'bidding', Date.now() - DAY, Date.now());
+
+    const ov = customerOverview(d, cid, false)!;
+    const late = ov.attention.find((a: any) => a.type === 'bid_due' && a.projectId === 'p-bid-late');
+    expect(late).toBeDefined();
+    expect(late.overdue).toBe(true);
+
+    // The existing upcoming bid (p-bid, +10 days) must NOT carry the overdue flag.
+    const upcoming = ov.attention.find((a: any) => a.type === 'bid_due' && a.projectId === 'p-bid');
+    expect(upcoming.overdue).toBeUndefined();
+  });
 });

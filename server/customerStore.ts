@@ -121,9 +121,12 @@ export function customerSummaries(db: Database.Database, includeBilling: boolean
     projectsByCustomer.get(r.customerId)!.push(r);
   }
 
+  const projectArchivedById = new Map<string, boolean>();
+  for (const r of projRows) projectArchivedById.set(r.id, !!Number(r.archived));
+
   const taskRows = db.prepare(`
-    SELECT customerId, status, dueDate FROM tasks WHERE customerId IS NOT NULL
-  `).all() as { customerId: string; status: string; dueDate: string | null }[];
+    SELECT customerId, status, dueDate, projectId FROM tasks WHERE customerId IS NOT NULL
+  `).all() as { customerId: string; status: string; dueDate: string | null; projectId: string | null }[];
   const tasksByCustomer = new Map<string, typeof taskRows>();
   for (const t of taskRows) {
     if (!tasksByCustomer.has(t.customerId)) tasksByCustomer.set(t.customerId, []);
@@ -144,6 +147,10 @@ export function customerSummaries(db: Database.Database, includeBilling: boolean
     let overdueTaskCount = 0;
     for (const t of tasks) {
       if (t.status === 'done') continue;
+      // A task tied to an archived project is excluded, same as that project's
+      // own billing/attention already are; customer-level tasks (no projectId)
+      // always count.
+      if (t.projectId && projectArchivedById.get(t.projectId)) continue;
       openTaskCount++;
       if (t.dueDate && t.dueDate < today) overdueTaskCount++;
     }
@@ -185,6 +192,7 @@ export function customerOverview(db: Database.Database, customerId: string, incl
   });
 
   const attention: any[] = [];
+  const projectArchivedById = new Map(projRows.map(p => [p.id, !!Number(p.archived)]));
 
   const taskRows = db.prepare(`
     SELECT id, title, status, dueDate, projectId FROM tasks WHERE customerId = ?
@@ -193,6 +201,10 @@ export function customerOverview(db: Database.Database, customerId: string, incl
   let overdueTaskCount = 0;
   for (const t of taskRows) {
     if (t.status === 'done') continue;
+    // A task tied to an archived project is excluded from both the count and
+    // attention, same as that project's own billing/attention already are;
+    // customer-level tasks (no projectId) always count.
+    if (t.projectId && projectArchivedById.get(t.projectId)) continue;
     openTaskCount++;
     if (t.dueDate && t.dueDate < today) {
       overdueTaskCount++;
@@ -206,14 +218,18 @@ export function customerOverview(db: Database.Database, customerId: string, incl
     }
   }
 
-  // Bidding projects with a bidDueDate in the next 14 days (archived excluded).
+  // Bidding projects with a bidDueDate within the next 14 days OR already past
+  // due (archived excluded) — a bid whose due date has already passed is more
+  // urgent than an upcoming one, so it stays in attention flagged `overdue`.
   const in14Days = now + 14 * 86400000;
   for (const p of projRows) {
     if (Number(p.archived)) continue;
     if (normalizeProjectStatus(p.status) !== 'bidding') continue;
     if (p.bidDueDate == null) continue;
-    if (p.bidDueDate >= now && p.bidDueDate <= in14Days) {
-      attention.push({ type: 'bid_due', label: p.name ?? 'Untitled', projectId: p.id, date: p.bidDueDate });
+    if (p.bidDueDate <= in14Days) {
+      const item: any = { type: 'bid_due', label: p.name ?? 'Untitled', projectId: p.id, date: p.bidDueDate };
+      if (p.bidDueDate < now) item.overdue = true;
+      attention.push(item);
     }
   }
 
