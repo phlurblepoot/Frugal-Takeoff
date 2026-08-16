@@ -256,7 +256,8 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
   const hasCustCol = (db.prepare('PRAGMA table_info(projects)').all() as any[]).some((c: any) => c.name === 'customerId');
   const rows = db.prepare(`
     SELECT id, name, status, contractor, ${hasCustCol ? 'customerId,' : ''} address, bidDueDate, version, createdAt, updatedAt,
-           COALESCE(json_extract(meta, '$.archived'), 0) AS archived
+           COALESCE(json_extract(meta, '$.archived'), 0) AS archived,
+           COALESCE(json_extract(meta, '$.lostBid'), 0) AS lostBid
     FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
   `).all(...(id ? [id] : [])) as any[];
 
@@ -289,6 +290,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       createdAt: r.createdAt ?? 0,
       updatedAt: r.updatedAt ?? null,
       archived: !!r.archived,
+      lostBid: !!r.lostBid,
       pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
       takeoffCount: takeoffCounts.get(r.id) ?? 0,
       pageIds: pageIdsByProject.get(r.id) ?? [],
@@ -298,7 +300,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
     };
     if (!includeBilling) return base;
     const bs = billingSummary(db, r.id);
-    return { ...base, contractValueCents: bs.contractValueCents, invoiceCount: bs.invoiceCount };
+    return { ...base, contractValueCents: bs.contractValueCents, invoiceCount: bs.invoiceCount, outstandingCents: bs.outstandingCents };
   });
 }
 

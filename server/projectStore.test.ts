@@ -8,7 +8,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
-  patchProject, normalizeProjectStatus,
+  patchProject, normalizeProjectStatus, listProjectSummaries,
   ValidationError, ConflictError,
 } from './projectStore';
 
@@ -308,5 +308,15 @@ describe('two-stage lifecycle', () => {
     expect(loadProject(db, 'proj1')!.lostBid).toBe(true);
     const v2 = loadProject(db, 'proj1')!.version;
     expect(() => patchProject(db, 'proj1', { version: v2, lostBid: 'yes' })).toThrow(ValidationError);
+  });
+
+  it('surfaces lostBid on summary rows so the Archive tab can badge it', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    expect(listProjectSummaries(db, 'proj1')[0].lostBid).toBe(false);
+
+    const v = loadProject(db, 'proj1')!.version;
+    patchProject(db, 'proj1', { version: v, archived: true, lostBid: true });
+    const row = listProjectSummaries(db, 'proj1')[0];
+    expect([row.archived, row.lostBid]).toEqual([true, true]);
   });
 });

@@ -1486,4 +1486,77 @@ describe('customers routes', () => {
     const del = await request(app).delete(`/api/customers/${cid}`);
     expect(del.status).toBe(409);
   });
+
+  it('PUT rename propagates to every owned project.contractor', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Old Co' });
+    const cid = post.body.id;
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-rn-1', customerId: cid,
+      pages: [{ id: 'pg-rn-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-rn-2', customerId: cid, contractor: 'Stale Name',
+      pages: [{ id: 'pg-rn-2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    const put = await request(app).put(`/api/customers/${cid}`).send({ name: 'New Co Name', emails: {} });
+    expect(put.status).toBe(200);
+
+    expect((await request(app).get('/api/projects/pc-rn-1')).body.contractor).toBe('New Co Name');
+    expect((await request(app).get('/api/projects/pc-rn-2')).body.contractor).toBe('New Co Name');
+  });
+
+  describe('GET /api/customers/summary and /:id/overview', () => {
+    let userApp: express.Express;
+
+    beforeEach(() => {
+      // A second app wired with a non-admin 'user' role — proves money fields are gated.
+      userApp = express();
+      userApp.use(express.json());
+      registerDataRoutes(userApp, {
+        db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+        authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
+        requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+        verifyToken: () => null,
+      });
+    });
+
+    it('summary includes outstandingCents for admin, omits it for non-admin', async () => {
+      const post = await request(app).post('/api/customers').send({ name: 'Billed Co' });
+      const cid = post.body.id;
+      await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc-sum-1', customerId: cid });
+      await request(app).post('/api/projects/pc-sum-1/invoices').send({ number: 'INV-1', status: 'sent', lines: [{ description: 'Work', qty: 1, unitPrice: 40 }] });
+
+      const admin = await request(app).get('/api/customers/summary');
+      expect(admin.status).toBe(200);
+      const adminRow = admin.body.find((r: any) => r.id === cid);
+      expect(adminRow.outstandingCents).toBe(4000);
+      expect(adminRow.projectCounts).toEqual({ bidding: 1, inProgress: 0, archived: 0 });
+
+      const nonAdmin = await request(userApp).get('/api/customers/summary');
+      expect(nonAdmin.status).toBe(200);
+      const nonAdminRow = nonAdmin.body.find((r: any) => r.id === cid);
+      expect(nonAdminRow.outstandingCents).toBeUndefined();
+    });
+
+    it('overview includes billing/attention money items for admin, omits them for non-admin; 404 for unknown id', async () => {
+      const post = await request(app).post('/api/customers').send({ name: 'Overview Co' });
+      const cid = post.body.id;
+      await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc-ov-1', customerId: cid });
+      await request(app).post('/api/projects/pc-ov-1/invoices').send({ number: 'INV-1', status: 'sent', lines: [{ description: 'Work', qty: 1, unitPrice: 40 }] });
+
+      const admin = await request(app).get(`/api/customers/${cid}/overview`);
+      expect(admin.status).toBe(200);
+      expect(admin.body.customer.id).toBe(cid);
+      expect(admin.body.billing.outstandingCents).toBe(4000);
+      expect(admin.body.billing.ledger).toHaveLength(1);
+
+      const nonAdmin = await request(userApp).get(`/api/customers/${cid}/overview`);
+      expect(nonAdmin.status).toBe(200);
+      expect(nonAdmin.body.billing).toBeUndefined();
+      expect(nonAdmin.body.attention.some((a: any) => a.type === 'outstanding_invoice')).toBe(false);
+
+      expect((await request(app).get('/api/customers/does-not-exist/overview')).status).toBe(404);
+    });
+  });
 });

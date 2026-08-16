@@ -49,7 +49,10 @@ import {
   ConflictError as AiaConflictError,
   NotFoundError as AiaNotFoundError,
 } from './aiaStore';
-import { listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer } from './customerStore';
+import {
+  listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
+  customerSummaries, customerOverview,
+} from './customerStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -1031,12 +1034,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Customers ────────────────────────────────────────────────────────────────
 
   app.get('/api/customers', authenticateToken, (_req, res) => res.json(listCustomers(db)));
+  // NOTE: must be registered before '/api/customers/:id' or Express matches
+  // 'summary' as a customer id (same gotcha as /api/projects/summary above).
+  app.get('/api/customers/summary', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      res.json(customerSummaries(db, isAdmin));
+    } catch (e) {
+      console.error('Error fetching customer summaries:', e);
+      res.status(500).json({ error: 'Failed to fetch customer summaries' });
+    }
+  });
   app.get('/api/customers/:id', authenticateToken, (req, res) => {
     const c = getCustomer(db, req.params.id);
     return c ? res.json(c) : res.status(404).json({ error: 'not found' });
   });
   app.get('/api/customers/:id/projects', authenticateToken, (req, res) =>
     res.json(listProjectsForCustomer(db, req.params.id)));
+  app.get('/api/customers/:id/overview', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      const overview = customerOverview(db, req.params.id, isAdmin);
+      if (!overview) return res.status(404).json({ error: 'not found' });
+      res.json(overview);
+    } catch (e) {
+      console.error('Error fetching customer overview:', e);
+      res.status(500).json({ error: 'Failed to fetch customer overview' });
+    }
+  });
   app.post('/api/customers', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
@@ -1044,7 +1069,13 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/customers/:id', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
-    res.json(saveCustomer(db, { ...req.body, id: req.params.id }));
+    const newName = String(req.body.name).trim();
+    const saved = saveCustomer(db, { ...req.body, id: req.params.id });
+    // Keep each project's legacy `contractor` string in sync with the customer
+    // name it belongs to (contractor was the pre-customerId identity; several
+    // reads/exports still display it directly).
+    db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
+    res.json(saved);
   });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {
     try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
