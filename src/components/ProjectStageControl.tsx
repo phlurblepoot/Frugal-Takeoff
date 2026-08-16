@@ -2,14 +2,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { patchProject, ConflictError } from '../utils/store';
-import { ProjectStatusPill, PROJECT_STATUS_META } from './ui';
+import { ProjectStatusPill, PROJECT_STATUS_META, normalizeProjectStatus } from './ui';
 import { useToast } from './Toast';
 
-// Stage options exclude 'archived' — archiving is its own explicit action.
-const STAGE_OPTIONS = [
-  'estimating', 'proposal_sent', 'awarded', 'in_progress',
-  'punch_list', 'complete', 'lost',
-];
+// The lifecycle is two stages. Archiving (and marking a bid lost) are separate
+// explicit actions in the project's Danger Zone, not stages you pick here.
+const STAGE_OPTIONS = ['bidding', 'in_progress'];
 
 export const ProjectStageControl: React.FC<{
   projectId: string;
@@ -31,9 +29,13 @@ export const ProjectStageControl: React.FC<{
     return () => window.removeEventListener('mousedown', onDown);
   }, [open]);
 
+  // A legacy status still shows (and compares as) the stage it collapses to,
+  // so picking that stage is a no-op instead of a redundant write.
+  const current = status ? normalizeProjectStatus(status) : undefined;
+
   const pick = async (next: string) => {
     setOpen(false);
-    if (next === status || saving) return;
+    if (next === current || saving) return;
     setSaving(true);
     try {
       // version is always set after a server round-trip; ?? 1 is a conservative
@@ -71,7 +73,7 @@ export const ProjectStageControl: React.FC<{
               key={s}
               onClick={() => pick(s)}
               className={`w-full px-3 py-1.5 text-left text-sm transition-colors hover:bg-hover ${
-                s === status ? 'font-medium text-ink' : 'text-ink-soft'
+                s === current ? 'font-medium text-ink' : 'text-ink-soft'
               }`}
             >
               {PROJECT_STATUS_META[s]?.label ?? s}

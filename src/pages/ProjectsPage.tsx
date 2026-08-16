@@ -10,40 +10,73 @@ import {
   getActivePages, getRecentProjects, ConflictError,
   getUserPreferences, saveUserPreferences, getCustomers,
 } from '../utils/store';
+import { formatMoney } from '../utils/money';
 import { useToast } from '../components/Toast';
 import {
-  Button, Card, EmptyState, Input, Modal, ProjectStatusPill, Select, Skeleton,
+  Button, Card, EmptyState, Input, LostBadge, Modal, ProjectStatusPill,
+  Select, Skeleton, StatusPill, normalizeProjectStatus,
 } from '../components/ui';
 
+export type TabId = 'bidding' | 'in_progress' | 'archive';
+
 export interface PipelineGroup {
-  id: string;
+  id: TabId;
   label: string;
   projects: ProjectSummary[];
 }
 
-// Semantic phase mapping (estimating / active / closed). The Dashboard derives
-// its "upcoming bids" and "active projects" status sets from this so the two
-// views can't drift. NOT used for the board layout — see STAGE_ORDER below.
+// Semantic phase mapping. The Dashboard derives its "upcoming bids" and "active
+// projects" status sets from this so the two views can't drift.
 export const GROUP_DEFS: { id: string; label: string; statuses: string[] }[] = [
-  { id: 'estimating', label: 'Estimating', statuses: ['estimating', 'proposal_sent'] },
-  { id: 'active', label: 'Active', statuses: ['awarded', 'in_progress', 'punch_list'] },
-  { id: 'closed', label: 'Complete & Closed', statuses: ['complete', 'lost'] },
+  { id: 'bidding', label: 'Bidding', statuses: ['bidding'] },
+  { id: 'active',  label: 'In progress', statuses: ['in_progress'] },
 ];
 
-// The board groups by individual lifecycle stage — one section per status, in
-// workflow order. Unknown statuses fold into Estimating so nothing vanishes.
-export const STAGE_ORDER: { id: string; label: string }[] = [
-  { id: 'estimating',    label: 'Estimating' },
-  { id: 'proposal_sent', label: 'Proposal Sent' },
-  { id: 'awarded',       label: 'Awarded' },
-  { id: 'in_progress',   label: 'In Progress' },
-  { id: 'punch_list',    label: 'Punch List' },
-  { id: 'complete',      label: 'Complete' },
-  { id: 'lost',          label: 'Lost' },
+// The board is three tabs: the two live stages plus the archive. Archived is a
+// flag rather than a stage, so it decides the tab regardless of status.
+export const TABS: { id: TabId; label: string }[] = [
+  { id: 'bidding',     label: 'Bidding' },
+  { id: 'in_progress', label: 'In progress' },
+  { id: 'archive',     label: 'Archive' },
 ];
-const STAGE_IDS = STAGE_ORDER.map(s => s.id);
+
+const TAB_EMPTY: Record<TabId, { title: string; description: string }> = {
+  bidding:     { title: 'No open bids',       description: 'Projects you are bidding show up here until they start.' },
+  in_progress: { title: 'Nothing in progress', description: 'Move a project to In Progress once the bid is won.' },
+  archive:     { title: 'No archived projects', description: 'Archived and lost projects live here and can be restored anytime.' },
+};
+
+// Old bookmarks carry pre-collapse ?stage= values (and the previous board's
+// group ids). Land them on the tab their projects actually moved to — migration
+// 21 auto-archived everything that was complete or lost.
+const LEGACY_STAGE_PARAMS: Record<string, TabId> = {
+  estimating: 'bidding', proposal_sent: 'bidding',
+  awarded: 'in_progress', punch_list: 'in_progress', active: 'in_progress',
+  complete: 'archive', lost: 'archive', archived: 'archive', closed: 'archive',
+};
+
+// Unrecognised ?stage= values fall back to Bidding rather than a blank board.
+export function resolveTab(param: string | null | undefined): TabId {
+  if (!param) return 'bidding';
+  if (TABS.some(t => t.id === param)) return param as TabId;
+  if (Object.hasOwn(LEGACY_STAGE_PARAMS, param)) return LEGACY_STAGE_PARAMS[param];
+  return 'bidding';
+}
+
+// Which tab a project belongs to. Unknown statuses fold into Bidding (via
+// normalizeProjectStatus) so nothing vanishes from the board.
+export function tabForProject(p: ProjectSummary): TabId {
+  if (p.archived) return 'archive';
+  return normalizeProjectStatus(p.status) === 'in_progress' ? 'in_progress' : 'bidding';
+}
 
 export type ProjectSort = 'updated' | 'created' | 'name' | 'bidDue';
+
+// Bidding is deadline-driven; elsewhere recency is the useful order. Used only
+// while the user hasn't picked a sort of their own.
+export const DEFAULT_SORT_BY_TAB: Record<TabId, ProjectSort> = {
+  bidding: 'bidDue', in_progress: 'updated', archive: 'updated',
+};
 
 export const SORT_OPTIONS: { id: ProjectSort; label: string }[] = [
   { id: 'updated', label: 'Last updated' },
@@ -74,36 +107,41 @@ export function sortProjects(list: ProjectSummary[], sort: ProjectSort): Project
   return arr;
 }
 
-// Buckets non-archived summaries into one group per lifecycle stage, each sorted
-// by the chosen key. Unknown statuses land in Estimating.
-export function groupSummaries(summaries: ProjectSummary[], sort: ProjectSort = 'updated'): PipelineGroup[] {
-  const visible = summaries.filter(s => !s.archived);
-  return STAGE_ORDER.map(def => {
-    const projects = sortProjects(
-      visible.filter(s =>
-        s.status === def.id || (def.id === 'estimating' && !STAGE_IDS.includes(s.status))
-      ),
-      sort
-    );
-    return { id: def.id, label: def.label, projects };
-  });
+// Buckets every summary into exactly one tab. A null `sort` means "use each
+// tab's own default"; an explicit user choice applies across all three.
+export function groupSummaries(
+  summaries: ProjectSummary[],
+  sort: ProjectSort | null = null
+): PipelineGroup[] {
+  return TABS.map(def => ({
+    id: def.id,
+    label: def.label,
+    projects: sortProjects(
+      summaries.filter(s => tabForProject(s) === def.id),
+      sort ?? DEFAULT_SORT_BY_TAB[def.id]
+    ),
+  }));
 }
 
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 
-const ProjectCard: React.FC<{
+const ProjectRow: React.FC<{
   p: ProjectSummary;
+  tab: TabId;
   customerName?: string;
   onOpen: () => void;
   onRename: (name: string) => void;
   onArchiveToggle: () => void;
   onDelete: () => void;
-}> = ({ p, customerName, onOpen, onRename, onArchiveToggle, onDelete }) => {
+}> = ({ p, tab, customerName, onOpen, onRename, onArchiveToggle, onDelete }) => {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(p.name);
-  // The bid due date only matters while a project is still being estimated.
-  const showBidDue = p.status === 'estimating' && !p.archived && p.bidDueDate !== null;
+  // A bid deadline only matters while the bid is still open.
+  const showBidDue = tab === 'bidding' && p.bidDueDate !== null;
   const overdue = showBidDue && p.bidDueDate! < Date.now();
+  // Outstanding balance is admin-gated server-side: absent, not zero, for
+  // everyone else. A settled project shows nothing rather than "$0.00".
+  const outstanding = tab === 'in_progress' ? p.outstandingCents : undefined;
 
   const commitRename = () => {
     setEditing(false);
@@ -113,13 +151,15 @@ const ProjectCard: React.FC<{
   };
 
   return (
-    <Card
-      className="cursor-pointer p-4 transition-colors hover:border-edge-strong"
+    <div
+      data-testid="project-row"
+      data-project-id={p.id}
       onClick={() => !editing && onOpen()}
+      className="flex cursor-pointer items-center gap-3 border-b border-edge px-3 py-3 transition-colors last:border-b-0 hover:bg-hover"
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0 flex-1">
         {editing ? (
-          <div className="flex flex-1 items-center gap-1" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
             <Input
               value={name}
               onChange={e => setName(e.target.value)}
@@ -128,46 +168,65 @@ const ProjectCard: React.FC<{
                 if (e.key === 'Escape') { setEditing(false); setName(p.name); }
               }}
               autoFocus
-              className="h-8 py-1 text-sm"
+              className="h-8 max-w-sm py-1 text-sm"
             />
             <Button variant="ghost" size="sm" onClick={commitRename} aria-label="Save name"><Check size={14} /></Button>
             <Button variant="ghost" size="sm" onClick={() => { setEditing(false); setName(p.name); }} aria-label="Cancel rename"><X size={14} /></Button>
           </div>
         ) : (
-          <h3 className="flex-1 truncate text-sm font-semibold text-ink" title={p.name}>{p.name}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-sm font-semibold text-ink" title={p.name}>{p.name}</h3>
+            {/* On the archive tab the row's own stage is no longer implied by
+                the tab, so spell it out alongside the lost-bid marker. */}
+            {tab === 'archive' && p.lostBid && <LostBadge className="shrink-0" />}
+            {tab === 'archive' && !p.lostBid && <ProjectStatusPill status={p.status} className="shrink-0" />}
+          </div>
         )}
-        <ProjectStatusPill status={p.archived ? 'archived' : p.status} />
-      </div>
 
-      <div className="mt-2 space-y-1 text-xs text-ink-soft">
-        {(customerName || p.contractor) && (
-          <p className="flex items-center gap-1.5 truncate"><Building2 size={12} className="shrink-0 text-ink-faint" />{customerName || p.contractor}</p>
-        )}
-        {p.address && (
-          <p className="flex items-center gap-1.5 truncate"><MapPin size={12} className="shrink-0 text-ink-faint" />{p.address}</p>
-        )}
-        {showBidDue && (
-          <p className={`flex items-center gap-1.5 ${overdue ? 'font-medium text-red-600 dark:text-red-400' : ''}`}>
-            <Calendar size={12} className="shrink-0 text-ink-faint" />
-            Due {fmtDate(p.bidDueDate!)}{overdue ? ' — overdue' : ''}
-          </p>
-        )}
-      </div>
-
-      <div className="mt-3 flex items-center justify-between border-t border-edge pt-2">
-        <div className="flex items-center gap-3 text-xs text-ink-faint">
-          <span className="flex items-center gap-1"><FileText size={12} />{p.pageCount}</span>
-          <span className="flex items-center gap-1"><Ruler size={12} />{p.takeoffCount}</span>
-        </div>
-        <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
-          <button onClick={() => setEditing(true)} title="Rename" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"><Edit2 size={13} /></button>
-          <button onClick={onArchiveToggle} title={p.archived ? 'Restore' : 'Archive'} className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0">
-            {p.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-          </button>
-          <button onClick={onDelete} title="Delete" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-red-50 hover:text-red-600 active:bg-red-100 dark:hover:bg-red-900/20 dark:hover:text-red-400 dark:active:bg-red-900/30 md:min-h-0 md:min-w-0"><Trash2 size={13} /></button>
+        <div className="mt-0.5 flex items-center gap-x-3 text-xs text-ink-soft">
+          {(customerName || p.contractor) && (
+            <span className="flex min-w-0 items-center gap-1">
+              <Building2 size={12} className="shrink-0 text-ink-faint" />
+              <span className="truncate">{customerName || p.contractor}</span>
+            </span>
+          )}
+          {p.address && (
+            <span className="hidden min-w-0 items-center gap-1 sm:flex">
+              <MapPin size={12} className="shrink-0 text-ink-faint" />
+              <span className="truncate">{p.address}</span>
+            </span>
+          )}
+          <span className="hidden shrink-0 items-center gap-1 text-ink-faint sm:flex">
+            <Clock size={12} />Updated {fmtDate(p.updatedAt ?? p.createdAt)}
+          </span>
         </div>
       </div>
-    </Card>
+
+      {/* Whatever the current tab is actually about. */}
+      {showBidDue && (
+        <StatusPill tone={overdue ? 'red' : 'slate'} className="shrink-0">
+          <Calendar size={11} />Due {fmtDate(p.bidDueDate!)}
+        </StatusPill>
+      )}
+      {outstanding !== undefined && outstanding > 0 && (
+        <span className="shrink-0 text-sm font-semibold text-ink" title="Outstanding balance">
+          {formatMoney(outstanding)}
+        </span>
+      )}
+
+      <div className="hidden shrink-0 items-center gap-3 text-xs text-ink-faint md:flex">
+        <span className="flex items-center gap-1"><FileText size={12} />{p.pageCount}</span>
+        <span className="flex items-center gap-1"><Ruler size={12} />{p.takeoffCount}</span>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-0.5" onClick={e => e.stopPropagation()}>
+        <button onClick={() => setEditing(true)} title="Rename" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0"><Edit2 size={13} /></button>
+        <button onClick={onArchiveToggle} title={p.archived ? 'Restore' : 'Archive'} className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink active:bg-hover md:min-h-0 md:min-w-0">
+          {p.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+        </button>
+        <button onClick={onDelete} title="Delete" className="flex min-h-10 min-w-10 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-red-50 hover:text-red-600 active:bg-red-100 dark:hover:bg-red-900/20 dark:hover:text-red-400 dark:active:bg-red-900/30 md:min-h-0 md:min-w-0"><Trash2 size={13} /></button>
+      </div>
+    </div>
   );
 };
 
@@ -175,7 +234,7 @@ export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  const setStage = (id: string) => {
+  const setStage = (id: TabId) => {
     const next = new URLSearchParams(searchParams);
     next.set('stage', id);
     setSearchParams(next, { replace: true });
@@ -183,16 +242,16 @@ export const ProjectsPage: React.FC = () => {
 
   const [summaries, setSummaries] = useState<ProjectSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [view, setView] = useState<'active' | 'archived'>('active');
   const [search, setSearch] = useState('');
   const [customerFilter, setCustomerFilter] = useState('all');
   const [customerMap, setCustomerMap] = useState<Map<string, string>>(new Map());
-  const [sort, setSort] = useState<ProjectSort>(() => {
+  // null = no explicit choice, so each tab uses its own default order.
+  const [sort, setSort] = useState<ProjectSort | null>(() => {
     const saved = localStorage.getItem('projectsSort');
-    return SORT_OPTIONS.some(o => o.id === saved) ? (saved as ProjectSort) : 'updated';
+    return SORT_OPTIONS.some(o => o.id === saved) ? (saved as ProjectSort) : null;
   });
-  const changeSort = (s: ProjectSort) => {
-    setSort(s);
+  const changeSort = (s: ProjectSort | 'auto') => {
+    setSort(s === 'auto' ? null : s);
     localStorage.setItem('projectsSort', s);
     // Cross-device: persist to the account, fire-and-forget.
     saveUserPreferences({ projectsSort: s }).catch(() => {});
@@ -221,9 +280,8 @@ export const ProjectsPage: React.FC = () => {
   useEffect(() => {
     getUserPreferences().then(prefs => {
       const saved = prefs['projectsSort'];
-      if (saved && SORT_OPTIONS.some(o => o.id === saved)) {
-        setSort(saved as ProjectSort);
-      }
+      if (saved === 'auto') setSort(null);
+      else if (saved && SORT_OPTIONS.some(o => o.id === saved)) setSort(saved as ProjectSort);
     }).catch(() => { /* offline / not present — keep localStorage default */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -246,14 +304,10 @@ export const ProjectsPage: React.FC = () => {
   }, [summaries, search, customerFilter, customerMap]);
 
   const groups = useMemo(() => groupSummaries(filtered, sort), [filtered, sort]);
-  const archivedProjects = useMemo(
-    () => sortProjects(filtered.filter(s => s.archived), sort),
-    [filtered, sort]
-  );
 
   // Recently opened (from localStorage, newest first). Resolved against the
   // loaded summaries so deleted/archived projects drop out; shown only on the
-  // unfiltered active board as a quick-access row.
+  // unfiltered live tabs as a quick-access row.
   const recents = useMemo(() => {
     const byId = new Map(summaries.map(s => [s.id, s] as const));
     return getRecentProjects()
@@ -261,7 +315,6 @@ export const ProjectsPage: React.FC = () => {
       .filter((s): s is ProjectSummary => !!s && !s.archived)
       .slice(0, 6);
   }, [summaries]);
-  const showRecents = view === 'active' && !search.trim() && customerFilter === 'all' && recents.length > 0;
 
   // Applies a granular patch and reconciles the local row. A 409 means our
   // summary is stale — refetch rather than reloading the page.
@@ -307,31 +360,34 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
-  const renderCards = (projects: ProjectSummary[]) => (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+  // `tab` fixes which signal each row shows; the Recently-opened row spans
+  // tabs, so its rows are typed by the project itself.
+  const renderRows = (projects: ProjectSummary[], tab?: TabId) => (
+    <Card className="overflow-hidden">
       {projects.map(p => (
-        <ProjectCard
+        <ProjectRow
           key={p.id}
           p={p}
+          tab={tab ?? tabForProject(p)}
           customerName={p.customerId ? customerMap.get(p.customerId) : undefined}
           onOpen={() => navigate(`/project/${p.id}`)}
           onRename={name => applyPatch(p, { name })}
-          onArchiveToggle={() => applyPatch(p, { archived: !p.archived })}
+          // Restoring undoes the lost-bid marker too, so a project that comes
+          // back and is later archived for another reason isn't still "Lost".
+          onArchiveToggle={() => applyPatch(p, p.archived ? { archived: false, lostBid: false } : { archived: true })}
           onDelete={() => handleDeleteClick(p)}
         />
       ))}
-    </div>
+    </Card>
   );
 
-  const totalVisible = groups.reduce((n, g) => n + g.projects.length, 0);
-
-  // Stage tabs: one per non-empty stage. The active stage is tracked in the URL
-  // (?stage=); fall back to the first non-empty stage when absent or emptied
-  // (e.g. by a search), so the board never lands on a blank tab.
-  const stageGroups = groups.filter(g => g.projects.length > 0);
-  const stageParam = searchParams.get('stage');
-  const activeStage = stageGroups.some(g => g.id === stageParam) ? stageParam! : (stageGroups[0]?.id ?? '');
-  const activeGroup = stageGroups.find(g => g.id === activeStage);
+  // The active tab lives in the URL (?stage=), so a deep link survives a
+  // reload. Unlike the old board it never moves on its own — an empty tab
+  // stays selected and says so.
+  const activeTab = resolveTab(searchParams.get('stage'));
+  const activeGroup = groups.find(g => g.id === activeTab)!;
+  const filtering = search.trim() !== '' || customerFilter !== 'all';
+  const showRecents = activeTab !== 'archive' && !filtering && recents.length > 0;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
@@ -353,46 +409,26 @@ export const ProjectsPage: React.FC = () => {
               {filterableCustomers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
             <Select
-              value={sort}
-              onChange={e => changeSort(e.target.value as ProjectSort)}
+              value={sort ?? 'auto'}
+              onChange={e => changeSort(e.target.value as ProjectSort | 'auto')}
               className="h-9 w-auto"
               aria-label="Sort projects"
             >
+              <option value="auto">Sort: Best for tab</option>
               {SORT_OPTIONS.map(o => <option key={o.id} value={o.id}>Sort: {o.label}</option>)}
             </Select>
-            <div className="ml-auto flex rounded-lg border border-edge p-0.5">
-              {(['active', 'archived'] as const).map(v => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                    view === v ? 'bg-sunken text-ink' : 'text-ink-soft hover:text-ink'
-                  }`}
-                >
-                  {v === 'active' ? 'Active' : 'Archived'}
-                </button>
-              ))}
-            </div>
           </div>
 
           {isLoading ? (
-            <div className="space-y-6">
-              <Skeleton className="h-5 w-32" />
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-36 rounded-xl" />)}
-              </div>
+            <div className="space-y-4">
+              <Skeleton className="h-8 w-64" />
+              <Skeleton className="h-64 rounded-xl" />
             </div>
-          ) : view === 'archived' ? (
-            archivedProjects.length === 0 ? (
-              <EmptyState icon={<Archive size={22} />} title="No archived projects" description="Archived projects appear here and can be restored anytime." />
-            ) : (
-              renderCards(archivedProjects)
-            )
-          ) : totalVisible === 0 ? (
+          ) : summaries.length === 0 ? (
             <EmptyState
               icon={<FolderOpen size={22} />}
               title="No projects yet"
-              description="Create your first project to start estimating."
+              description="Create your first project to start bidding."
               action={<Button onClick={() => navigate('/new')}><Plus size={16} />New Project</Button>}
             />
           ) : (
@@ -402,27 +438,40 @@ export const ProjectsPage: React.FC = () => {
                   <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
                     <Clock size={12} />Recently opened
                   </h2>
-                  {renderCards(recents)}
+                  {renderRows(recents)}
                 </section>
               )}
 
-              {/* Stage tabs — one per non-empty lifecycle stage */}
+              {/* Lifecycle tabs — the two live stages plus the archive */}
               <div className="-mx-4 flex items-center gap-1 overflow-x-auto border-b border-edge px-4 no-scrollbar md:mx-0 md:px-0">
-                {stageGroups.map(g => (
+                {groups.map(g => (
                   <button
                     key={g.id}
+                    data-testid={`stage-tab-${g.id}`}
                     onClick={() => setStage(g.id)}
                     className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                      activeStage === g.id ? 'border-accent-500 text-ink' : 'border-transparent text-ink-soft hover:text-ink'
+                      activeTab === g.id ? 'border-accent-500 text-ink' : 'border-transparent text-ink-soft hover:text-ink'
                     }`}
                   >
                     {g.label}
-                    <span className="rounded-full bg-sunken px-1.5 py-0.5 text-[11px] font-semibold text-ink-faint">{g.projects.length}</span>
+                    {/* The archive is a bucket, not a workload — a count there
+                        would only ever grow, so it isn't worth the ink. */}
+                    {g.id !== 'archive' && (
+                      <span className="rounded-full bg-sunken px-1.5 py-0.5 text-[11px] font-semibold text-ink-faint">{g.projects.length}</span>
+                    )}
                   </button>
                 ))}
               </div>
 
-              {activeGroup && renderCards(activeGroup.projects)}
+              {activeGroup.projects.length === 0 ? (
+                <EmptyState
+                  icon={activeTab === 'archive' ? <Archive size={22} /> : <FolderOpen size={22} />}
+                  title={filtering ? 'No matching projects' : TAB_EMPTY[activeTab].title}
+                  description={filtering ? 'Try a different search or customer filter.' : TAB_EMPTY[activeTab].description}
+                />
+              ) : (
+                renderRows(activeGroup.projects, activeTab)
+              )}
             </div>
           )}
 

@@ -2,7 +2,10 @@
 export { Button } from './Button';
 export type { ButtonProps } from './Button';
 export { Card, CardHeader, CardBody } from './Card';
-export { StatusPill, ProjectStatusPill, PROJECT_STATUS_META } from './StatusPill';
+export {
+  StatusPill, ProjectStatusPill, LostBadge,
+  PROJECT_STATUS_META, LEGACY_STATUS_MAP, normalizeProjectStatus,
+} from './StatusPill';
 export type { PillTone } from './StatusPill';
 export { Field, Input, Select, Textarea, Checkbox } from './Form';
 export { Modal } from './Modal';

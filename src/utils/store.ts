@@ -445,6 +445,9 @@ export interface ProjectSummary {
   createdAt: number;
   updatedAt: number | null;
   archived: boolean;
+  // Set only on archived projects whose bid was lost — drives the Archive
+  // tab's "Lost" badge.
+  lostBid?: boolean;
   pageCount: number;
   takeoffCount: number;
   pageIds: string[];
@@ -453,6 +456,8 @@ export interface ProjectSummary {
   punchTotal: number;
   contractValueCents?: number;
   invoiceCount?: number;
+  // Admin-only (billing is gated server-side) — absent for non-admins.
+  outstandingCents?: number;
 }
 
 export interface ProjectPatch {
@@ -460,6 +465,7 @@ export interface ProjectPatch {
   name?: string;
   status?: string;
   archived?: boolean;
+  lostBid?: boolean;
   contractor?: string | null;
   address?: string | null;
   bidDueDate?: number | null;

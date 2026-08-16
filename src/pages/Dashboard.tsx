@@ -8,6 +8,7 @@ import {
 } from '../utils/store';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, ProjectStatusPill, Skeleton,
+  normalizeProjectStatus,
 } from '../components/ui';
 import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { GROUP_DEFS } from './ProjectsPage';
@@ -42,8 +43,9 @@ export const hoursThisWeek = (entries: TimeEntryLite[], now: number = Date.now()
 };
 
 // Derived from the pipeline groups so the Dashboard and Projects board can
-// never drift on which statuses count as estimating/active.
-const ESTIMATING = GROUP_DEFS.find(g => g.id === 'estimating')!.statuses;
+// never drift on which statuses count as bidding/active. Statuses are
+// normalized first so a legacy id still lands in the right list.
+const BIDDING = GROUP_DEFS.find(g => g.id === 'bidding')!.statuses;
 const ACTIVE = GROUP_DEFS.find(g => g.id === 'active')!.statuses;
 
 export const Dashboard: React.FC = () => {
@@ -64,11 +66,11 @@ export const Dashboard: React.FC = () => {
 
   const visible = (summaries ?? []).filter(s => !s.archived);
   const upcoming = visible
-    .filter(s => ESTIMATING.includes(s.status) && s.bidDueDate !== null)
+    .filter(s => BIDDING.includes(normalizeProjectStatus(s.status)) && s.bidDueDate !== null)
     .sort((a, b) => (a.bidDueDate! - b.bidDueDate!))
     .slice(0, 5);
   const activeProjects = visible
-    .filter(s => ACTIVE.includes(s.status))
+    .filter(s => ACTIVE.includes(normalizeProjectStatus(s.status)))
     .sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt))
     .slice(0, 5);
 
@@ -96,7 +98,7 @@ export const Dashboard: React.FC = () => {
             {loading ? (
               <div className="space-y-2 p-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-9" />)}</div>
             ) : upcoming.length === 0 ? (
-              <EmptyState title="No upcoming deadlines" description="Estimating projects with bid due dates show up here." />
+              <EmptyState title="No upcoming deadlines" description="Bidding projects with bid due dates show up here." />
             ) : (
               <ul className="divide-y divide-edge">
                 {upcoming.map(p => {
@@ -148,7 +150,7 @@ export const Dashboard: React.FC = () => {
             {loading ? (
               <div className="space-y-2 p-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-9" />)}</div>
             ) : activeProjects.length === 0 ? (
-              <EmptyState icon={<FolderKanban size={20} />} title="Nothing in progress" description="Projects move here once they're awarded." />
+              <EmptyState icon={<FolderKanban size={20} />} title="Nothing in progress" description="Projects move here once a bid is won." />
             ) : (
               <ul className="divide-y divide-edge">
                 {activeProjects.map(p => (
