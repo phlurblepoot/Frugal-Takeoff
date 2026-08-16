@@ -9,7 +9,7 @@ import { ArrowLeft, Phone, Plus, User } from 'lucide-react';
 import { Customer } from '../../types';
 import { CustomerOverview, getCustomerOverview } from '../../utils/store';
 import { useToast } from '../../components/Toast';
-import { Card, CardBody, Skeleton } from '../../components/ui';
+import { Button, Card, CardBody, Skeleton } from '../../components/ui';
 import { CustomerProjectsTab } from './CustomerProjectsTab';
 import { CustomerSettingsTab } from './CustomerSettingsTab';
 
@@ -114,13 +114,10 @@ export const CustomerPane: React.FC<{
           <div className="flex shrink-0 items-center gap-2">
             {/* Admin outstanding-balance figure lands here in the next task. */}
             <div data-testid="customer-outstanding-slot" />
-            <button
-              onClick={() => navigate(`/new?customerId=${customer.id}`)}
-              className="flex items-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700"
-            >
+            <Button size="sm" onClick={() => navigate(`/new?customerId=${customer.id}`)}>
               <Plus size={15} />
               <span>Project</span>
-            </button>
+            </Button>
           </div>
         </div>
 
