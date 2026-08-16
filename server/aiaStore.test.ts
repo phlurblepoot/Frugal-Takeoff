@@ -11,7 +11,7 @@ import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
   seedSovLines, syncChangeOrders,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
-  computeG703, computeG702,
+  computeG703, computeG702, remainingReleasablePoints,
   ValidationError, ConflictError, NotFoundError,
 } from './aiaStore';
 
@@ -537,5 +537,293 @@ describe('computeG703 / computeG702 — exact cents', () => {
     // G702 internal consistency: L4 == sum of col G.
     const g702 = computeG702(db, a2.id);
     expect(g702.L4totalCompletedStoredCents).toBe(5200000); // matches col G sum
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retainage release (effective-rate model). Each app stores the percentage
+// POINTS it releases; the effective rate on app N is
+//   base − Σ releasedRetainagePoints over apps with number ≤ N   (floored at 0)
+// so released dollars fall out of L5, lift L6, and get paid via L8.
+// ---------------------------------------------------------------------------
+
+// Write aiaSettings into the project's meta column (the shape projectStore
+// round-trips: meta = { aiaSettings: {...} }).
+function setAiaSettings(projectId: string, settings: Record<string, unknown> | null) {
+  db.prepare('UPDATE projects SET meta = ? WHERE id = ?')
+    .run(settings ? JSON.stringify({ aiaSettings: settings }) : null, projectId);
+}
+
+// One $100,000 SOV line — keeps the release arithmetic readable.
+function setupOneLine(cents = 10000000): string {
+  return createSovLine(db, 'p1', { itemNo: '1', description: 'Line 1', scheduledValueCents: cents }).id;
+}
+
+describe('retainage release (effective-rate model)', () => {
+  it('release on app 2 reduces its retainage to the effective rate and pays out the delta via L8', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    const line = setupOneLine(); // $100,000
+
+    // App #1 — 50% complete, no release. Base 15%.
+    // completed = round(10000000 * 50/100) = 5000000
+    // L5a = round(5000000 * 15/100) = 750000 ; L6 = 5000000 − 750000 = 4250000
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+    expect(computeG702(db, a1.id).L5aRetainageWorkCents).toBe(750000);
+    expect(computeG702(db, a1.id).L6earnedLessRetainageCents).toBe(4250000);
+
+    // App #2 — SAME percentComplete, so with no release nothing is due.
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    const beforeRelease = computeG702(db, a2.id).L8currentPaymentDueCents;
+    expect(beforeRelease).toBe(0); // L6 == prior L6 → nothing earned this period
+
+    // Release 5 points on app 2 → cumulative(≤2) = 5 → effective 10%.
+    setPayApp(db, a2.id, { releasedRetainagePoints: 5 });
+
+    // L5a = round(5000000 * 10/100) = 500000
+    // L6  = 5000000 − 500000 = 4500000 ; L7 = app#1 L6 = 4250000
+    // L8  = 4500000 − 4250000 = 250000  == 5 points of the 5000000 earned base
+    const g703 = computeG703(db, a2.id);
+    expect(g703[0].retainageCents).toBe(500000);
+    const g702 = computeG702(db, a2.id);
+    expect(g702.L5aRetainageWorkCents).toBe(500000);
+    expect(g702.L5bRetainageStoredCents).toBe(0);
+    expect(g702.L6earnedLessRetainageCents).toBe(4500000);
+    expect(g702.L7lessPreviousCents).toBe(4250000);
+    expect(g702.L8currentPaymentDueCents).toBe(250000);
+    // The delta over the no-release run IS exactly the released dollars.
+    expect(g702.L8currentPaymentDueCents - beforeRelease).toBe(250000);
+    expect(g702.L8currentPaymentDueCents - beforeRelease).toBe(Math.round(5000000 * 5 / 100));
+
+    expect(g702.retainage).toEqual({
+      mode: 'uniform',
+      baseWorkPercent: 15,
+      cumulativeReleasedPoints: 5,
+      releasedThisApp: 5,
+      remainingPoints: 15, // budget BEFORE this app's own release
+      effectiveWorkPercent: 10,
+    });
+    // App #1 is untouched by a release recorded on a LATER app.
+    expect(computeG702(db, a1.id).retainage).toEqual({
+      mode: 'uniform',
+      baseWorkPercent: 15,
+      cumulativeReleasedPoints: 0,
+      releasedThisApp: 0,
+      remainingPoints: 15,
+      effectiveWorkPercent: 15,
+    });
+    expect(computeG702(db, a1.id).L5aRetainageWorkCents).toBe(750000); // unchanged
+  });
+
+  it('release-all drives retainage to zero and the chain pays out all held retainage', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    const line = setupOneLine(); // $100,000
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 }); // carries 50%
+    setPayApp(db, a2.id, { releasedRetainagePoints: 5 });
+
+    // Final app: 100% complete, release everything still held.
+    const a3 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a3.id, [{ sovLineId: line, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    expect(remainingReleasablePoints(db, a3.id)).toBe(10); // 15 − 5 already released
+    setPayApp(db, a3.id, { releasedRetainagePoints: remainingReleasablePoints(db, a3.id) });
+
+    // cumulative(≤3) = 15 → effective 0% → no retainage held at all.
+    const g3 = computeG702(db, a3.id);
+    expect(g3.L5aRetainageWorkCents).toBe(0);
+    expect(g3.L5bRetainageStoredCents).toBe(0);
+    expect(g3.L5retainageCents).toBe(0);
+    expect(g3.L4totalCompletedStoredCents).toBe(10000000);
+    expect(g3.L6earnedLessRetainageCents).toBe(10000000);
+    expect(g3.L7lessPreviousCents).toBe(4500000);   // app#2 L6
+    expect(g3.L8currentPaymentDueCents).toBe(5500000); // 10000000 − 4500000
+    expect(g3.retainage.effectiveWorkPercent).toBe(0);
+    expect(g3.retainage.cumulativeReleasedPoints).toBe(15);
+
+    // Σ L8 over the chain == total earned (nothing left held back).
+    // 4250000 + 250000 + 5500000 = 10000000
+    const sumL8 = [a1, a2, a3]
+      .map(a => computeG702(db, a.id).L8currentPaymentDueCents)
+      .reduce((s, n) => s + n, 0);
+    expect(sumL8).toBe(10000000);
+    expect(sumL8).toBe(g3.L4totalCompletedStoredCents);
+  });
+
+  it('remainingReleasablePoints subtracts prior releases and floors at 0', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    setupOneLine();
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    expect(remainingReleasablePoints(db, a1.id)).toBe(15);
+    expect(remainingReleasablePoints(db, a2.id)).toBe(15);
+
+    setPayApp(db, a1.id, { releasedRetainagePoints: 6 });
+    // STRICTLY PRIOR apps only: app 1's own release does not shrink its own budget.
+    expect(remainingReleasablePoints(db, a1.id)).toBe(15);
+    expect(remainingReleasablePoints(db, a2.id)).toBe(9); // 15 − 6
+
+    // A later app on a LOWER base is already over-released → floored at 0, never negative.
+    const a3 = createPayApp(db, 'p1', { retainagePercent: 4 });
+    expect(remainingReleasablePoints(db, a3.id)).toBe(0); // max(0, 4 − 6)
+
+    expect(() => remainingReleasablePoints(db, 'no-such-id')).toThrow(NotFoundError);
+  });
+
+  it('over-release is rejected with ValidationError', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    setupOneLine();
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    setPayApp(db, a1.id, { releasedRetainagePoints: 6 }); // remaining on a2 → 9
+
+    expect(() => setPayApp(db, a2.id, { releasedRetainagePoints: 9.5 })).toThrow(ValidationError);
+    expect(() => setPayApp(db, a2.id, { releasedRetainagePoints: -1 })).toThrow(ValidationError);
+    expect(() => setPayApp(db, a2.id, { releasedRetainagePoints: Infinity })).toThrow(ValidationError);
+    expect(() => setPayApp(db, a2.id, { releasedRetainagePoints: 'lots' as any })).toThrow(ValidationError);
+    // A rejected release writes nothing (and does not bump the version).
+    expect(getPayApp(db, a2.id)!.releasedRetainagePoints).toBe(0);
+    expect(getPayApp(db, a2.id)!.version).toBe(1);
+
+    // Exactly the remaining budget is allowed.
+    setPayApp(db, a2.id, { releasedRetainagePoints: 9 });
+    expect(getPayApp(db, a2.id)!.releasedRetainagePoints).toBe(9);
+    expect(getPayApp(db, a2.id)!.version).toBe(2);
+  });
+
+  it('perLine mode: effective per-line rate = (line ?? base) − cumulative, clamped at 0', () => {
+    setAiaSettings('p1', { retainageMode: 'perLine', retainagePercent: 15 });
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 15 });
+    const { id: line2 } = createSovLine(db, 'p1', { itemNo: '2', description: 'B', scheduledValueCents: 5000000, retainagePercent: 4 });
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 },
+      { sovLineId: line2, percentComplete: 100, storedMaterialsCents: 0 },
+    ], 1);
+
+    // Remaining = MAX line rate − cumulative(prior) = max(15, 4) − 0 = 15.
+    expect(remainingReleasablePoints(db, a1.id)).toBe(15);
+    setPayApp(db, a1.id, { releasedRetainagePoints: 5 });
+
+    const g703 = computeG703(db, a1.id);
+    // line1: 15 − 5 = 10% of round(10000000*50/100)=5000000 → 500000
+    expect(g703[0].retainageCents).toBe(500000);
+    // line2: max(0, 4 − 5) = 0% of 5000000 → 0 (clamped, never negative retainage)
+    expect(g703[1].retainageCents).toBe(0);
+
+    const g702 = computeG702(db, a1.id);
+    expect(g702.L5aRetainageWorkCents).toBe(500000);
+    expect(g702.L4totalCompletedStoredCents).toBe(10000000); // 5000000 + 5000000
+    expect(g702.L6earnedLessRetainageCents).toBe(9500000);
+    expect(g702.retainage).toEqual({
+      mode: 'perLine',
+      baseWorkPercent: 15,
+      cumulativeReleasedPoints: 5,
+      releasedThisApp: 5,
+      remainingPoints: 15,
+      effectiveWorkPercent: null, // mixed rates — no single number to report
+    });
+  });
+
+  it('uniform mode ignores stray per-line retainage values', () => {
+    // The SOV toggle is authoritative, not leftover data in the column.
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 10 });
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 20 });
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    // App base 10% on 5000000 → 500000. The stray 20% would give 1000000.
+    expect(computeG703(db, a1.id)[0].retainageCents).toBe(500000);
+    expect(computeG702(db, a1.id).L5aRetainageWorkCents).toBe(500000);
+    expect(computeG702(db, a1.id).retainage.mode).toBe('uniform');
+  });
+
+  it('a project with no retainageMode keeps the legacy per-line fallback and reports the mode its data implies', () => {
+    // Transitional rule: absent mode must NOT silently recompute historical
+    // apps for projects that used the (previously primary) per-line column.
+    setAiaSettings('p1', null); // no aiaSettings at all
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 20 });
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    // Legacy math: line rate wins → round(5000000 * 20/100) = 1000000.
+    expect(computeG703(db, a1.id)[0].retainageCents).toBe(1000000);
+    const r = computeG702(db, a1.id).retainage;
+    expect(r.mode).toBe('perLine');          // the data IS per-line
+    expect(r.effectiveWorkPercent).toBeNull();
+
+    // With no per-line values anywhere, the same absent mode reads as uniform.
+    saveSovLine(db, line1, { ...getSovLine(db, line1)!, retainagePercent: null });
+    expect(computeG702(db, a1.id).retainage.mode).toBe('uniform');
+    expect(computeG703(db, a1.id)[0].retainageCents).toBe(500000); // app base 10%
+  });
+
+  it('legacy two-rate app with zero releases computes exactly as before', () => {
+    const line = setupOneLine(); // $100,000, no aiaSettings, no per-line rate
+    // Distinct work/stored rates, the pre-rework shape.
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 5 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 200000 }], 1);
+
+    // completed = 5000000 ; L5a = round(5000000*10/100) = 500000
+    // stored    =  200000 ; L5b = round( 200000* 5/100) =  10000
+    const g703 = computeG703(db, a1.id);
+    expect(g703[0].retainageCents).toBe(510000);
+    const g702 = computeG702(db, a1.id);
+    expect(g702.L4totalCompletedStoredCents).toBe(5200000);
+    expect(g702.L5aRetainageWorkCents).toBe(500000);
+    expect(g702.L5bRetainageStoredCents).toBe(10000);
+    expect(g702.L5retainageCents).toBe(510000);
+    expect(g702.L6earnedLessRetainageCents).toBe(4690000);
+    expect(g702.L8currentPaymentDueCents).toBe(4690000);
+    expect(g702.retainage).toEqual({
+      mode: 'uniform',
+      baseWorkPercent: 10,
+      cumulativeReleasedPoints: 0,
+      releasedThisApp: 0,
+      remainingPoints: 10,
+      effectiveWorkPercent: 10,
+    });
+  });
+
+  it('releases apply to stored-materials retainage at the same single rate on new apps', () => {
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    const line = setupOneLine();
+    // Single-rate world: stored rate is written equal to the work rate.
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line, percentComplete: 50, storedMaterialsCents: 200000 }], 1);
+    setPayApp(db, a1.id, { releasedRetainagePoints: 5 });
+
+    // Both rates drop to 10%: L5a = round(5000000*10/100) = 500000,
+    //                        L5b = round( 200000*10/100) =  20000
+    const g702 = computeG702(db, a1.id);
+    expect(g702.L5aRetainageWorkCents).toBe(500000);
+    expect(g702.L5bRetainageStoredCents).toBe(20000);
+    expect(g702.L5retainageCents).toBe(520000);
+    expect(computeG703(db, a1.id)[0].retainageCents).toBe(520000);
+  });
+
+  it('createPayApp with single-rate settings writes storedRetainagePercent = retainagePercent', () => {
+    setupOneLine();
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 }); // no storedRetainagePercent sent
+    const app1 = getPayApp(db, a1.id)!;
+    expect(app1.retainagePercent).toBe(15);
+    expect(app1.storedRetainagePercent).toBe(15);
+    expect(app1.releasedRetainagePoints).toBe(0); // new apps hold nothing released
+
+    // An explicit distinct stored rate is still honoured (legacy callers).
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15, storedRetainagePercent: 5 });
+    expect(getPayApp(db, a2.id)!.storedRetainagePercent).toBe(5);
+
+    // Neither sent → both fall back to DEFAULT_RETAINAGE (10), as before.
+    const a3 = createPayApp(db, 'p1', {});
+    expect(getPayApp(db, a3.id)!.retainagePercent).toBe(10);
+    expect(getPayApp(db, a3.id)!.storedRetainagePercent).toBe(10);
   });
 });

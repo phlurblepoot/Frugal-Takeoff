@@ -423,3 +423,32 @@ describe('migration 21: two-stage project lifecycle', () => {
     db.close();
   });
 });
+
+describe('migration 22: payapp-released-retainage', () => {
+  it('adds releasedRetainagePoints defaulting to 0 on existing pay apps, and re-runs as a no-op', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 21));
+    expect(columnNames(db, 'aia_pay_apps')).not.toContain('releasedRetainagePoints');
+
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
+    db.prepare('INSERT INTO aia_pay_apps (id, projectId, number, createdAt) VALUES (?, ?, ?, ?)')
+      .run('app1', 'p1', 1, 1);
+
+    runMigrations(db, tmpDir(), migrations);
+
+    expect(columnNames(db, 'aia_pay_apps')).toContain('releasedRetainagePoints');
+    // ADDITIVE: every pre-existing app holds nothing released, so its numbers
+    // are byte-identical to what they computed before the migration.
+    const row = db.prepare('SELECT releasedRetainagePoints FROM aia_pay_apps WHERE id = ?').get('app1') as any;
+    expect(row.releasedRetainagePoints).toBe(0);
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE aia_pay_apps SET releasedRetainagePoints = ? WHERE id = ?').run(5, 'app1');
+    const mig22 = migrations.find(m => m.version === 22)!;
+    expect(() => mig22.up({ db, dataDir: tmpDir() })).not.toThrow();
+    const after = db.prepare('SELECT releasedRetainagePoints FROM aia_pay_apps WHERE id = ?').get('app1') as any;
+    expect(after.releasedRetainagePoints).toBe(5);
+
+    db.close();
+  });
+});

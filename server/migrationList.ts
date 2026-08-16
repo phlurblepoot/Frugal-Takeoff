@@ -963,4 +963,18 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 22,
+    name: 'payapp-released-retainage',
+    // ADDITIVE, IDEMPOTENT, no data transform. Retainage releases are recorded
+    // as percentage POINTS on the app that releases them; the effective rate on
+    // app N is base − Σ points over apps with number ≤ N. Existing apps default
+    // to 0, so every historical G702/G703 recomputes byte-identically.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(aia_pay_apps)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('releasedRetainagePoints')) {
+        db.exec(`ALTER TABLE aia_pay_apps ADD COLUMN releasedRetainagePoints REAL NOT NULL DEFAULT 0;`);
+      }
+    },
+  },
 ];

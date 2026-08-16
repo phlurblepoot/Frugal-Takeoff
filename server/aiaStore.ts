@@ -184,6 +184,7 @@ interface PayAppPatch {
   applicationDate?: string | null;
   retainagePercent?: number;
   storedRetainagePercent?: number;
+  releasedRetainagePoints?: number;
 }
 
 interface PayAppLineInput {
@@ -223,8 +224,12 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
   requireProject(db, projectId);
   const retainagePercent = requireRetainagePercent(
     input.retainagePercent ?? DEFAULT_RETAINAGE, 'retainagePercent');
+  // Single-rate world: one base rate covers work AND stored materials. The
+  // stored rate is still snapshotted per app so legacy readers (and the G702's
+  // separate 5a/5b lines) stay coherent, and so a caller that genuinely wants
+  // a distinct historical stored rate can still send one.
   const storedRetainagePercent = requireRetainagePercent(
-    input.storedRetainagePercent ?? DEFAULT_RETAINAGE, 'storedRetainagePercent');
+    input.storedRetainagePercent ?? retainagePercent, 'storedRetainagePercent');
   const id = crypto.randomUUID();
   let number = 0;
   const now = Date.now();
@@ -309,14 +314,28 @@ export function setPayApp(db: Database.Database, id: string, patch: PayAppPatch)
   const tx = db.transaction(() => {
     const app = db.prepare('SELECT * FROM aia_pay_apps WHERE id = ?').get(id) as any;
     if (!app) throw new NotFoundError('Pay application not found');
+    // Released points are bounded by what earlier apps have not already
+    // released — the check reads the current chain, so it runs in the tx.
+    if (patch.releasedRetainagePoints !== undefined) {
+      const pts = patch.releasedRetainagePoints as any;
+      if (!Number.isFinite(pts) || pts < 0) {
+        throw new ValidationError('releasedRetainagePoints must be a finite number of percentage points ≥ 0');
+      }
+      const remaining = remainingReleasablePoints(db, id);
+      if (pts > remaining) {
+        throw new ValidationError(`Cannot release ${pts} points — only ${remaining} remain on this application`);
+      }
+    }
     const status = patch.status !== undefined ? patch.status : app.status;
     const periodTo = patch.periodTo !== undefined ? patch.periodTo : app.periodTo;
     const applicationDate = patch.applicationDate !== undefined ? patch.applicationDate : app.applicationDate;
     const retainagePercent = patch.retainagePercent !== undefined ? patch.retainagePercent : app.retainagePercent;
     const storedRetainagePercent = patch.storedRetainagePercent !== undefined ? patch.storedRetainagePercent : app.storedRetainagePercent;
+    const releasedRetainagePoints = patch.releasedRetainagePoints !== undefined
+      ? patch.releasedRetainagePoints : app.releasedRetainagePoints;
     newVersion = app.version + 1;
-    db.prepare('UPDATE aia_pay_apps SET status = ?, periodTo = ?, applicationDate = ?, retainagePercent = ?, storedRetainagePercent = ?, version = ? WHERE id = ?')
-      .run(status, periodTo, applicationDate, retainagePercent, storedRetainagePercent, newVersion, id);
+    db.prepare('UPDATE aia_pay_apps SET status = ?, periodTo = ?, applicationDate = ?, retainagePercent = ?, storedRetainagePercent = ?, releasedRetainagePoints = ?, version = ? WHERE id = ?')
+      .run(status, periodTo, applicationDate, retainagePercent, storedRetainagePercent, releasedRetainagePoints, newVersion, id);
   });
   tx();
   return { version: newVersion };
@@ -352,6 +371,79 @@ export interface G703Row {
   retainageCents: number;
 }
 
+// ---------------------------------------------------------------------------
+// Retainage mode + releases.
+//
+// A release is recorded as percentage POINTS on the app that releases them.
+// The effective rate on app N is base − Σ points over apps with number ≤ N,
+// floored at 0, so released dollars fall out of L5, lift L6 and get paid via
+// L8 — the L6/L7 chaining itself never had to change.
+// ---------------------------------------------------------------------------
+
+export type RetainageMode = 'uniform' | 'perLine';
+
+// Read project.meta.aiaSettings.retainageMode.
+//   'perLine' → per-line rates, base as the fallback for blank lines
+//   'uniform' → base rate only; stray values left in the per-line column are
+//               ignored, because the toggle is authoritative, not the data
+//   absent    → LEGACY. Keeps today's `line ?? base` math so no historical pay
+//               app silently recomputes on projects that used the per-line
+//               column (it was the primary input before this rework). The
+//               reported mode then follows the data: 'perLine' if any line
+//               carries a rate, else 'uniform'. Saving AIA settings once
+//               writes an explicit mode and pins the behavior.
+function resolveRetainageMode(
+  db: Database.Database, projectId: string, sovLines: any[]
+): { mode: RetainageMode; legacyFallback: boolean } {
+  const row = db.prepare('SELECT meta FROM projects WHERE id = ?').get(projectId) as { meta: string | null } | undefined;
+  let stored: unknown;
+  try { stored = row?.meta ? JSON.parse(row.meta)?.aiaSettings?.retainageMode : undefined; }
+  catch { stored = undefined; } // unparseable meta must not break billing math
+  if (stored === 'perLine') return { mode: 'perLine', legacyFallback: false };
+  if (stored === 'uniform') return { mode: 'uniform', legacyFallback: false };
+  const hasLineRates = sovLines.some(l => l.retainagePercent !== null && l.retainagePercent !== undefined);
+  return { mode: hasLineRates ? 'perLine' : 'uniform', legacyFallback: true };
+}
+
+type ComputeContext = ReturnType<typeof loadComputeContext>;
+
+// Effective retainage rate for one SOV line after cumulative releases. Uniform
+// mode ignores any stray per-line value so the SOV toggle is authoritative.
+function effectiveWorkPct(ctx: ComputeContext, sovLine: any): number {
+  const usePerLine = ctx.mode === 'perLine' || ctx.legacyFallback;
+  const base = usePerLine ? (sovLine.retainagePercent ?? ctx.app.retainagePercent) : ctx.app.retainagePercent;
+  return Math.max(0, base - ctx.cumulativeReleasedPoints);
+}
+
+// New apps write storedRetainagePercent = retainagePercent, so this one rule
+// covers both worlds: legacy two-rate apps (cumulative 0) compute exactly as
+// before, and new apps release stored retainage at the same single rate.
+function effectiveStoredPct(ctx: ComputeContext): number {
+  return Math.max(0, ctx.app.storedRetainagePercent - ctx.cumulativeReleasedPoints);
+}
+
+// Points still releasable on this app BEFORE its own release — i.e. the base
+// (the largest relevant base in perLine mode) less everything released on
+// STRICTLY PRIOR apps. Floored at 0. "Release all remaining" sends this value.
+export function remainingReleasablePoints(db: Database.Database, payAppId: string): number {
+  const app = db.prepare('SELECT * FROM aia_pay_apps WHERE id = ?').get(payAppId) as any;
+  if (!app) throw new NotFoundError('Pay application not found');
+  const before = (db.prepare(
+    'SELECT COALESCE(SUM(releasedRetainagePoints), 0) s FROM aia_pay_apps WHERE projectId = ? AND number < ?'
+  ).get(app.projectId, app.number) as any).s as number;
+
+  const sovLines = db.prepare('SELECT * FROM aia_sov_lines WHERE projectId = ?').all(app.projectId) as any[];
+  const { mode, legacyFallback } = resolveRetainageMode(db, app.projectId, sovLines);
+  let base = app.retainagePercent;
+  if (mode === 'perLine' || legacyFallback) {
+    for (const l of sovLines) {
+      const rate = l.retainagePercent ?? app.retainagePercent;
+      if (rate > base) base = rate;
+    }
+  }
+  return Math.max(0, base - before);
+}
+
 // Internal: load an app + its SOV lines (in SOV sort order) joined to this app's
 // pay_app_lines and the prior app's pay_app_lines, ready for column math.
 function loadComputeContext(db: Database.Database, payAppId: string) {
@@ -374,11 +466,26 @@ function loadComputeContext(db: Database.Database, payAppId: string) {
     }
   }
 
-  return { app, sovLines, thisLines, priorLines, priorId: prior?.id ?? null };
+  // Retainage releases: everything released on apps up to AND INCLUDING this
+  // one is already off this app's rate (same number-chaining population the
+  // L6/L7 recursion walks; draft vs finalized does not affect the sum).
+  const cumulativeReleasedPoints = (db.prepare(
+    'SELECT COALESCE(SUM(releasedRetainagePoints), 0) s FROM aia_pay_apps WHERE projectId = ? AND number <= ?'
+  ).get(app.projectId, app.number) as any).s as number;
+  const { mode, legacyFallback } = resolveRetainageMode(db, app.projectId, sovLines);
+
+  return {
+    app, sovLines, thisLines, priorLines, priorId: prior?.id ?? null,
+    mode, legacyFallback,
+    cumulativeReleasedPoints,
+    releasedThisApp: app.releasedRetainagePoints ?? 0,
+  };
 }
 
 export function computeG703(db: Database.Database, payAppId: string): G703Row[] {
-  const { app, sovLines, thisLines, priorLines } = loadComputeContext(db, payAppId);
+  const ctx = loadComputeContext(db, payAppId);
+  const { sovLines, thisLines, priorLines } = ctx;
+  const storedPct = effectiveStoredPct(ctx);
   const rows: G703Row[] = [];
   for (const sov of sovLines) {
     const scheduledValueCents = sov.scheduledValueCents;
@@ -397,10 +504,9 @@ export function computeG703(db: Database.Database, payAppId: string): G703Row[] 
     const totalToDateCents = completedToDateCents + storedCents;
     const balanceToFinishCents = scheduledValueCents - totalToDateCents;
 
-    const lineRetainagePct = sov.retainagePercent ?? app.retainagePercent;
     const retainageCents =
-      Math.round(completedToDateCents * lineRetainagePct / 100) +
-      Math.round(storedCents * app.storedRetainagePercent / 100);
+      Math.round(completedToDateCents * effectiveWorkPct(ctx, sov) / 100) +
+      Math.round(storedCents * storedPct / 100);
 
     rows.push({
       sovLineId: sov.id,
@@ -433,6 +539,14 @@ export interface G702 {
   L8currentPaymentDueCents: number;
   L9balanceToFinishCents: number;
   changeOrders: { additionsCents: number; deductionsCents: number; netCents: number };
+  retainage: {
+    mode: RetainageMode;
+    baseWorkPercent: number;
+    cumulativeReleasedPoints: number;  // apps ≤ N, including this app
+    releasedThisApp: number;
+    remainingPoints: number;           // budget BEFORE this app's own release
+    effectiveWorkPercent: number | null; // null in perLine — rates differ per line
+  };
 }
 
 // Compute L6 (earned less retainage) for a given pay app — used for the recursive
@@ -445,7 +559,9 @@ function computeL6(db: Database.Database, payAppId: string | null): number {
 }
 
 export function computeG702(db: Database.Database, payAppId: string): G702 {
-  const { app, sovLines, thisLines, priorId } = loadComputeContext(db, payAppId);
+  const ctx = loadComputeContext(db, payAppId);
+  const { app, sovLines, thisLines, priorId } = ctx;
+  const storedPct = effectiveStoredPct(ctx);
 
   let L1 = 0, L2 = 0;
   let L4 = 0;
@@ -469,9 +585,8 @@ export function computeG702(db: Database.Database, payAppId: string): G702 {
     const totalToDateCents = completedToDateCents + storedCents;
     L4 += totalToDateCents;
 
-    const lineRetainagePct = sov.retainagePercent ?? app.retainagePercent;
-    L5a += Math.round(completedToDateCents * lineRetainagePct / 100);
-    L5b += Math.round(storedCents * app.storedRetainagePercent / 100);
+    L5a += Math.round(completedToDateCents * effectiveWorkPct(ctx, sov) / 100);
+    L5b += Math.round(storedCents * storedPct / 100);
   }
 
   const L3 = L1 + L2;
@@ -494,5 +609,17 @@ export function computeG702(db: Database.Database, payAppId: string): G702 {
     L8currentPaymentDueCents: L8,
     L9balanceToFinishCents: L9,
     changeOrders: { additionsCents: additions, deductionsCents: deductions, netCents: L2 },
+    retainage: {
+      // Report the mode the math actually used, so a legacy project holding
+      // per-line rates under an absent toggle still reveals its per-line column.
+      mode: ctx.mode,
+      baseWorkPercent: app.retainagePercent,
+      cumulativeReleasedPoints: ctx.cumulativeReleasedPoints,
+      releasedThisApp: ctx.releasedThisApp,
+      remainingPoints: remainingReleasablePoints(db, payAppId),
+      effectiveWorkPercent: ctx.mode === 'perLine'
+        ? null
+        : Math.max(0, app.retainagePercent - ctx.cumulativeReleasedPoints),
+    },
   };
 }
