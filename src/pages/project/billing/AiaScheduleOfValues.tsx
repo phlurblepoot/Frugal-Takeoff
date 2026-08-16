@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle, Download } from 'lucide-react';
 import {
   AiaSettings, AiaSovLine, getSov, createSovLine, saveSovLine, deleteSovLine,
-  seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate,
+  seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate, resolveRetainageMode,
 } from '../../../utils/store';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
@@ -21,9 +21,12 @@ const isCo = (l: AiaSovLine) => !!l.isChangeOrder;
 export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: AiaSettings | null }> = ({ projectId, aiaSettings }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
-  const perLine = aiaSettings?.retainageMode === 'perLine';
   const baseRetainagePercent = aiaSettings?.retainagePercent ?? 10;
   const [lines, setLines] = useState<AiaSovLine[] | null>(null);
+  // Resolved mode: absent aiaSettings.retainageMode falls back to inferring
+  // from the SOV lines themselves, so a legacy per-line project keeps
+  // showing its column before anyone visits AIA settings.
+  const perLine = resolveRetainageMode(aiaSettings?.retainageMode, lines ?? []) === 'perLine';
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);

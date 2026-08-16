@@ -1,7 +1,7 @@
 // src/pages/project/billing/AiaSettingsForm.tsx
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { AiaSettings, saveAiaSettings } from '../../../utils/store';
+import { AiaSettings, AiaSovLine, resolveRetainageMode, saveAiaSettings } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Card, CardBody, Field, Input, Textarea } from '../../../components/ui';
 
@@ -13,14 +13,18 @@ const numOrUndefined = (v: string): number | undefined => {
 export const AiaSettingsForm: React.FC<{
   projectId: string;
   settings: AiaSettings;
+  sovLines: AiaSovLine[];
   onSaved: (s: AiaSettings) => void;
   defaultOpen?: boolean;
-}> = ({ projectId, settings, onSaved, defaultOpen = false }) => {
+}> = ({ projectId, settings, sovLines, onSaved, defaultOpen = false }) => {
   const { toast } = useToast();
   const [retainagePercent, setRetainagePercent] = useState(
     settings.retainagePercent != null ? String(settings.retainagePercent) : '10');
+  // No stored mode yet (legacy project): infer from whether any SOV line
+  // already carries a per-line rate, so the toggle doesn't silently flip a
+  // per-line project to uniform the moment someone opens this form.
   const [retainageMode, setRetainageMode] = useState<'uniform' | 'perLine'>(
-    settings.retainageMode === 'perLine' ? 'perLine' : 'uniform');
+    resolveRetainageMode(settings.retainageMode, sovLines));
   const [ownerName, setOwnerName] = useState(settings.ownerName ?? '');
   const [ownerAddress, setOwnerAddress] = useState(settings.ownerAddress ?? '');
   const [architectName, setArchitectName] = useState(settings.architectName ?? '');

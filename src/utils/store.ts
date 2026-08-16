@@ -1184,6 +1184,16 @@ export interface AiaSettings {
   contractFor?: string;
 }
 
+// Legacy projects never wrote `retainageMode`. Mirrors the server-side
+// inference: an explicit mode always wins; when absent, a stored per-line
+// rate on any SOV line means the project was already using per-line
+// retainage, so keep showing it that way until someone touches settings.
+export const resolveRetainageMode = (
+  mode: AiaSettings['retainageMode'] | undefined,
+  lines: Pick<AiaSovLine, 'retainagePercent'>[],
+): 'uniform' | 'perLine' =>
+  mode ?? (lines.some(l => l.retainagePercent != null) ? 'perLine' : 'uniform');
+
 const aiaJson = (method: string, url: string, body?: unknown) =>
   fetchWithRetry(url, {
     method,
