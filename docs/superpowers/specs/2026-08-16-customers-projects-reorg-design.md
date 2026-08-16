@@ -58,9 +58,11 @@ Dashboard `GROUP_DEFS` semantics: bid deadlines ← `bidding` with a
   Requires extending `listProjectSummaries(includeBilling)` with an
   `outstandingCents` field (it already joins billing data for contract
   value/invoice count; add the invoice+payapp balance sum).
-- Per-tab default sort: Bidding → bid-due-date, In progress → updated;
-  user's explicit sort choice still persists (localStorage + user prefs) per
-  tab. Search, customer filter dropdown, and Recently-opened row stay.
+- Per-tab default sort: Bidding → bid-due-date, In progress → updated, via a
+  "Best for tab" sort option; an explicit sort choice persists globally
+  (one choice across tabs — amended 2026-08-16 with Nathan: simpler model
+  kept over the original per-tab-memory wording). Search, customer filter
+  dropdown, and Recently-opened row stay.
 - Archive tab: searchable, shows a **Lost** badge on `lostBid` projects,
   offers Unarchive (existing capability).
 
