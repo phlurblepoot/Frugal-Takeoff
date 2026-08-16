@@ -8,30 +8,30 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Phone, Plus, User } from 'lucide-react';
 import { Customer } from '../../types';
 import { CustomerOverview, getCustomerOverview } from '../../utils/store';
+import { formatMoney } from '../../utils/money';
 import { useToast } from '../../components/Toast';
-import { Button, Card, CardBody, Skeleton } from '../../components/ui';
+import { Button, Skeleton } from '../../components/ui';
+import { CustomerOverviewTab } from './CustomerOverviewTab';
 import { CustomerProjectsTab } from './CustomerProjectsTab';
+import { CustomerTasksTab } from './CustomerTasksTab';
+import { CustomerBillingTab } from './CustomerBillingTab';
 import { CustomerSettingsTab } from './CustomerSettingsTab';
 
-const CUSTOMER_TABS = [
+// Same localStorage-role check used app-wide for admin gating (Sidebar's
+// PROJECT_NAV filter, ProjectBilling's full-section gate).
+const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
+
+type CustomerTab = 'overview' | 'projects' | 'tasks' | 'billing' | 'settings';
+
+// Billing is hidden entirely for non-admins — both the tab bar entry and its
+// content — mirroring how Sidebar's PROJECT_NAV hides Billing/Settings.
+const ALL_CUSTOMER_TABS: { value: CustomerTab; label: string; adminOnly?: boolean }[] = [
   { value: 'overview', label: 'Overview' },
   { value: 'projects', label: 'Projects' },
   { value: 'tasks', label: 'Tasks' },
-  { value: 'billing', label: 'Billing' },
+  { value: 'billing', label: 'Billing', adminOnly: true },
   { value: 'settings', label: 'Settings' },
-] as const;
-
-type CustomerTab = (typeof CUSTOMER_TABS)[number]['value'];
-const CUSTOMER_TAB_VALUES = CUSTOMER_TABS.map(t => t.value) as readonly string[];
-
-// A tab whose content isn't built yet — replaced by Task 5.
-const ComingSoonCard: React.FC<{ label: string }> = ({ label }) => (
-  <Card>
-    <CardBody>
-      <p className="text-sm text-ink-faint">{label} — coming in the next task.</p>
-    </CardBody>
-  </Card>
-);
+];
 
 export const CustomerPane: React.FC<{
   customerId: string;
@@ -45,8 +45,12 @@ export const CustomerPane: React.FC<{
   const [overview, setOverview] = useState<CustomerOverview | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const admin = isAdmin();
+  const customerTabs = ALL_CUSTOMER_TABS.filter(t => !t.adminOnly || admin);
+  const customerTabValues = customerTabs.map(t => t.value) as readonly string[];
+
   const tabParam = searchParams.get('tab');
-  const activeTab: CustomerTab = CUSTOMER_TAB_VALUES.includes(tabParam ?? '')
+  const activeTab: CustomerTab = customerTabValues.includes(tabParam ?? '')
     ? (tabParam as CustomerTab)
     : 'overview';
   const setActiveTab = (tab: CustomerTab) => {
@@ -112,8 +116,13 @@ export const CustomerPane: React.FC<{
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {/* Admin outstanding-balance figure lands here in the next task. */}
-            <div data-testid="customer-outstanding-slot" />
+            <div data-testid="customer-outstanding-slot">
+              {overview.billing !== undefined && overview.billing.outstandingCents > 0 && (
+                <span className="text-sm font-semibold text-ink" title="Outstanding balance">
+                  {formatMoney(overview.billing.outstandingCents)} outstanding
+                </span>
+              )}
+            </div>
             <Button size="sm" onClick={() => navigate(`/new?customerId=${customer.id}`)}>
               <Plus size={15} />
               <span>Project</span>
@@ -123,7 +132,7 @@ export const CustomerPane: React.FC<{
 
         {/* Tabs */}
         <div className="-mx-4 mt-4 flex overflow-x-auto border-b border-edge px-4 no-scrollbar sm:-mx-6 sm:px-6">
-          {CUSTOMER_TABS.map(tab => (
+          {customerTabs.map(tab => (
             <button
               key={tab.value}
               data-testid={`customer-tab-${tab.value}`}
@@ -143,10 +152,10 @@ export const CustomerPane: React.FC<{
 
       {/* Active section */}
       <div className="flex-1 px-4 py-6 sm:px-6">
-        {activeTab === 'overview' && <ComingSoonCard label="Overview" />}
+        {activeTab === 'overview' && <CustomerOverviewTab overview={overview} />}
         {activeTab === 'projects' && <CustomerProjectsTab projects={overview.projects} />}
-        {activeTab === 'tasks' && <ComingSoonCard label="Tasks" />}
-        {activeTab === 'billing' && <ComingSoonCard label="Billing" />}
+        {activeTab === 'tasks' && <CustomerTasksTab customerId={customer.id} />}
+        {activeTab === 'billing' && admin && <CustomerBillingTab billing={overview.billing} />}
         {activeTab === 'settings' && (
           <CustomerSettingsTab
             customerId={customer.id}
