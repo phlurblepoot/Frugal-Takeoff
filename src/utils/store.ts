@@ -1146,6 +1146,7 @@ export interface AiaPayApp {
   id: string; projectId: string; number: number;
   periodTo: string | null; applicationDate: string | null;
   retainagePercent: number; storedRetainagePercent: number;
+  releasedRetainagePoints: number;
   status: string; version: number; createdAt: number;
 }
 export interface AiaPayAppLine {
@@ -1174,6 +1175,17 @@ export interface AiaG702 {
   L8currentPaymentDueCents: number;
   L9balanceToFinishCents: number;
   changeOrders: { additionsCents: number; deductionsCents: number; netCents: number };
+  // Mirrors server/aiaStore.ts G702['retainage'] — the effective-rate release
+  // summary (Task 1). effectiveWorkPercent is null in perLine mode because a
+  // single number can't represent per-line rates.
+  retainage: {
+    mode: 'uniform' | 'perLine';
+    baseWorkPercent: number;
+    cumulativeReleasedPoints: number;
+    releasedThisApp: number;
+    remainingPoints: number;
+    effectiveWorkPercent: number | null;
+  };
 }
 export interface AiaSettings {
   billingMode?: string; retainagePercent?: number; storedRetainagePercent?: number;
@@ -1249,7 +1261,7 @@ export const savePayAppLines = async (payAppId: string, lines: { sovLineId: stri
   if (res.status === 409) throw new ConflictError(payAppId);
   await handleResponse(res); return res.json();
 };
-export const setPayApp = async (id: string, patch: Partial<{ periodTo: string | null; applicationDate: string | null; status: string; retainagePercent: number; storedRetainagePercent: number }>): Promise<{ version: number }> => {
+export const setPayApp = async (id: string, patch: Partial<{ periodTo: string | null; applicationDate: string | null; status: string; retainagePercent: number; storedRetainagePercent: number; releasedRetainagePoints: number }>): Promise<{ version: number }> => {
   const res = await aiaJson('PATCH', `/api/aia/pay-apps/${id}`, patch);
   await handleResponse(res); return res.json();
 };

@@ -41,8 +41,7 @@ export const AiaPayAppEditor: React.FC<{
   // Editable app fields.
   const [periodTo, setPeriodTo] = useState('');
   const [applicationDate, setApplicationDate] = useState('');
-  const [retainagePercent, setRetainagePercent] = useState('');
-  const [storedRetainagePercent, setStoredRetainagePercent] = useState('');
+  const [releasedRetainagePoints, setReleasedRetainagePoints] = useState('');
   const [status, setStatus] = useState('draft');
 
   const seed = useCallback((d: { app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
@@ -59,8 +58,7 @@ export const AiaPayAppEditor: React.FC<{
     setEdits(next);
     setPeriodTo(d.app.periodTo ?? '');
     setApplicationDate(d.app.applicationDate ?? '');
-    setRetainagePercent(String(d.app.retainagePercent ?? 0));
-    setStoredRetainagePercent(String(d.app.storedRetainagePercent ?? 0));
+    setReleasedRetainagePoints(String(d.app.releasedRetainagePoints ?? 0));
     setStatus(d.app.status ?? 'draft');
   }, []);
 
@@ -79,18 +77,21 @@ export const AiaPayAppEditor: React.FC<{
     if (!data) return;
     setSaving(true);
     try {
-      // Persist app-level field changes first (date/retainage/status).
+      // Persist app-level field changes first (date/retainage-release/status).
       const app = data.app;
       const patch: Record<string, unknown> = {};
-      const retNum = parseFloat(retainagePercent);
-      const storedRetNum = parseFloat(storedRetainagePercent);
+      const releasedNum = parseFloat(releasedRetainagePoints);
       if ((periodTo || null) !== (app.periodTo ?? null)) patch.periodTo = periodTo || null;
       if ((applicationDate || null) !== (app.applicationDate ?? null)) patch.applicationDate = applicationDate || null;
-      if (Number.isFinite(retNum) && retNum !== app.retainagePercent) patch.retainagePercent = retNum;
-      if (Number.isFinite(storedRetNum) && storedRetNum !== app.storedRetainagePercent) patch.storedRetainagePercent = storedRetNum;
+      if (Number.isFinite(releasedNum) && releasedNum !== (app.releasedRetainagePoints ?? 0)) patch.releasedRetainagePoints = releasedNum;
       if (status !== app.status) patch.status = status;
+      // setPayApp bumps the pay app's version, so the version used for the
+      // line save below must be its returned version, not the stale one this
+      // component loaded with — otherwise the line save 409s against its own
+      // just-applied patch.
+      let version = app.version;
       if (Object.keys(patch).length > 0) {
-        await setPayApp(payAppId, patch);
+        ({ version } = await setPayApp(payAppId, patch));
       }
 
       // Persist line edits (version-checked).
@@ -103,7 +104,7 @@ export const AiaPayAppEditor: React.FC<{
           storedMaterialsCents: e ? dollarsToCents(e.storedMaterials) : row.storedCents,
         };
       });
-      await savePayAppLines(payAppId, lines, app.version);
+      await savePayAppLines(payAppId, lines, version);
 
       toast('Pay application saved', { type: 'success' });
       load(); // refetch + re-seed so G702/G703 + version reflect saved state
@@ -206,8 +207,40 @@ export const AiaPayAppEditor: React.FC<{
                 {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STATUS_META[s]?.label ?? s}</option>)}
               </Select>
             </Field>
-            <Field label="Retainage % (work)" htmlFor="pa-ret"><Input id="pa-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} disabled={isFinalized} /></Field>
-            <Field label="Retainage % (stored)" htmlFor="pa-sret"><Input id="pa-sret" type="number" value={storedRetainagePercent} onChange={e => setStoredRetainagePercent(e.target.value)} disabled={isFinalized} /></Field>
+          </div>
+
+          {/* Retainage panel — rates are read-only facts snapshotted from
+              settings/SOV at app creation; the only editable control here is
+              how many points to release on this application. */}
+          <div className="rounded-lg border border-edge p-4">
+            <h4 className="mb-2 text-sm font-semibold text-ink">Retainage</h4>
+            <p className="mb-3 text-sm text-ink-soft">
+              {data.g702.retainage.mode === 'perLine'
+                ? <>Per-line rates (see Schedule of Values) · Released {data.g702.retainage.cumulativeReleasedPoints}%</>
+                : <>Base {data.g702.retainage.baseWorkPercent}% · Released {data.g702.retainage.cumulativeReleasedPoints}% · Effective {data.g702.retainage.effectiveWorkPercent ?? 0}%</>}
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Release retainage on this application (% points)" htmlFor="pa-release">
+                <Input
+                  id="pa-release"
+                  type="number"
+                  value={releasedRetainagePoints}
+                  onChange={e => setReleasedRetainagePoints(e.target.value)}
+                  disabled={isFinalized}
+                  min={0}
+                  max={data.g702.retainage.remainingPoints}
+                  step="any"
+                />
+              </Field>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setReleasedRetainagePoints(String(data.g702.retainage.remainingPoints))}
+                disabled={isFinalized}
+              >
+                Release all remaining ({data.g702.retainage.remainingPoints}%)
+              </Button>
+            </div>
           </div>
 
           {/* G703 grid + G702 summary side-by-side on wide layouts */}

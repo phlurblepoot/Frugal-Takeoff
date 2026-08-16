@@ -752,6 +752,19 @@ describe('AIA billing routes (admin-gated)', () => {
     expect(stale.body.code).toBe('version_conflict');
   });
 
+  it('new pay app defaults storedRetainagePercent to retainagePercent, ignoring legacy stored settings', async () => {
+    // Legacy projects still carry a distinct storedRetainagePercent in
+    // aiaSettings from the two-rate era; the single-rate world must not let
+    // that leak into new apps — they should snapshot 15/15, not 15/10.
+    await request(app).put('/api/projects/p1/aia/settings')
+      .send({ retainagePercent: 15, storedRetainagePercent: 10 });
+    const create = await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    expect(create.status).toBe(200);
+    const get = await request(app).get(`/api/aia/pay-apps/${create.body.id}`);
+    expect(get.body.app.retainagePercent).toBe(15);
+    expect(get.body.app.storedRetainagePercent).toBe(15);
+  });
+
   it('aia/settings round-trips via project meta', async () => {
     const empty = await request(app).get('/api/projects/p1/aia/settings');
     expect(empty.status).toBe(200);

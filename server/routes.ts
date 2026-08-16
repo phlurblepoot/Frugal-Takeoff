@@ -339,9 +339,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       // A new pay app inherits the project's retainage defaults from aiaSettings.
       // Explicit values in the request body take precedence over the settings.
+      // storedRetainagePercent is dropped from the settings-derived defaults:
+      // legacy projects still carry a two-rate storedRetainagePercent, but the
+      // single-rate world wants new apps to default it to retainagePercent
+      // (createPayApp's own `?? retainagePercent` fallback) unless the caller
+      // explicitly requests a distinct value via the request body.
       const project = loadProject(db, req.params.id);
-      const settings = (project && project.aiaSettings) || {};
-      const input = { ...settings, ...req.body };
+      const { storedRetainagePercent: _legacyStoredRetainagePercent, ...settingsDefaults } = (project && project.aiaSettings) || {};
+      const input = { ...settingsDefaults, ...req.body };
       res.json(createPayApp(db, req.params.id, input));
     } catch (e) { aiaErr(e, res); }
   });
