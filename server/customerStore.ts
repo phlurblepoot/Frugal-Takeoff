@@ -1,7 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { Customer, CustomerRoleEmails } from '../src/types';
-import { billingSummary, listInvoices, paidCentsFor } from './billingStore';
-import { listPayApps, computeG702 } from './aiaStore';
+import { billingSummary, listBilledDocuments, projectOutstandingCents } from './billingStore';
 import { normalizeProjectStatus } from './projectStore';
 
 export function createCustomerTables(db: Database.Database): void {
@@ -105,8 +104,8 @@ function projectRowsForCustomer(db: Database.Database, customerId: string): Proj
 }
 
 // Rollup counts + open/overdue task counts for every customer. outstandingCents
-// (admin-only) sums billingSummary(...).outstandingCents over each customer's
-// NON-archived projects.
+// (admin-only) sums projectOutstandingCents(...) — invoices AND AIA pay
+// applications — over each customer's NON-archived projects.
 export function customerSummaries(db: Database.Database, includeBilling: boolean): any[] {
   const customers = listCustomers(db);
   const today = todayStr();
@@ -162,16 +161,16 @@ export function customerSummaries(db: Database.Database, includeBilling: boolean
     if (includeBilling) {
       row.outstandingCents = projects
         .filter(p => !Number(p.archived))
-        .reduce((sum, p) => sum + billingSummary(db, p.id).outstandingCents, 0);
+        .reduce((sum, p) => sum + projectOutstandingCents(db, p.id), 0);
     }
     return row;
   });
 }
 
 // Single-customer detail: project list (with per-project outstandingCents when
-// admin), a billing ledger (admin-only, invoices + finalized AIA pay apps with
-// balanceCents > 0), and an "attention" feed (overdue tasks always; upcoming
-// bid-due dates and outstanding invoices/pay-apps admin-only for the money bits).
+// admin), a billing ledger (admin-only, every billed invoice + AIA pay app),
+// and an "attention" feed (overdue tasks always; upcoming bid-due dates and
+// outstanding invoices/pay-apps admin-only for the money bits).
 export function customerOverview(db: Database.Database, customerId: string, includeBilling: boolean): any | null {
   const customer = getCustomer(db, customerId);
   if (!customer) return null;
@@ -187,7 +186,7 @@ export function customerOverview(db: Database.Database, customerId: string, incl
       archived: !!Number(p.archived), lostBid: !!Number(p.lostBid),
       bidDueDate: p.bidDueDate ?? null, updatedAt: p.updatedAt ?? null,
     };
-    if (includeBilling) out.outstandingCents = billingSummary(db, p.id).outstandingCents;
+    if (includeBilling) out.outstandingCents = projectOutstandingCents(db, p.id);
     return out;
   });
 
@@ -240,55 +239,35 @@ export function customerOverview(db: Database.Database, customerId: string, incl
     const activeProjects = projRows.filter(p => !Number(p.archived));
 
     for (const p of activeProjects) {
-      const bs = billingSummary(db, p.id);
-      contractTotalCents += bs.contractTotalCents;
-      invoicedCents += bs.invoicedCents;
-      paidCents += bs.paid.invoicesCents + bs.paid.payAppsCents;
-      outstandingCents += bs.outstandingCents;
+      contractTotalCents += billingSummary(db, p.id).contractTotalCents;
       const projectName = projNameById.get(p.id) ?? 'Untitled';
 
-      for (const inv of listInvoices(db, p.id)) {
-        if (inv.status !== 'sent') continue;
+      // ONE population drives both the ledger and the rollup above it: every
+      // billed document on the project, invoices and AIA pay applications
+      // alike (drafts excluded — not billed yet). Because the three rollup
+      // legs are summed from the same rows, Invoiced/Paid/Outstanding always
+      // reconcile with the ledger the client renders underneath them.
+      for (const doc of listBilledDocuments(db, p.id)) {
+        invoicedCents += doc.totalCents;
+        paidCents += doc.paidCents;
+        outstandingCents += doc.balanceCents;
         ledger.push({
-          projectId: p.id, projectName, kind: 'invoice',
-          number: inv.number, date: inv.date, status: inv.status,
-          totalCents: inv.totalCents, paidCents: inv.paidCents, balanceCents: inv.balanceCents,
+          projectId: p.id, projectName, kind: doc.kind,
+          number: doc.number, date: doc.date, status: doc.status,
+          totalCents: doc.totalCents, paidCents: doc.paidCents, balanceCents: doc.balanceCents,
         });
-        if (inv.balanceCents > 0) {
-          attention.push({
+        if (doc.balanceCents > 0) {
+          const item: any = {
             type: 'outstanding_invoice',
-            label: `Invoice #${inv.number ?? ''} — ${projectName}`,
+            label: doc.kind === 'invoice'
+              ? `Invoice #${doc.number ?? ''} — ${projectName}`
+              : `Application #${doc.number} — ${projectName}`,
             projectId: p.id,
-            date: inv.date ?? undefined,
-            ageDays: inv.date ? daysBetween(inv.date, now) : undefined,
-            balanceCents: inv.balanceCents,
-          });
-        }
-      }
-
-      // Pay apps: 'finalized' is the pay-app analog of an invoice's 'sent' —
-      // 'draft' apps aren't billed yet. Balance = this app's current-payment-due
-      // (G702 L8) minus payments recorded against it — both cheap, already-exported
-      // aiaStore/billingStore reads (no new aggregate needed).
-      for (const app of listPayApps(db, p.id)) {
-        if (app.status !== 'finalized') continue;
-        const g702 = computeG702(db, app.id);
-        const totalCents = g702.L8currentPaymentDueCents;
-        const appPaidCents = paidCentsFor(db, 'payapp', app.id);
-        const balanceCents = totalCents - appPaidCents;
-        ledger.push({
-          projectId: p.id, projectName, kind: 'payapp',
-          number: app.number, date: app.applicationDate, status: app.status,
-          totalCents, paidCents: appPaidCents, balanceCents,
-        });
-        if (balanceCents > 0) {
-          attention.push({
-            type: 'outstanding_invoice',
-            label: `Application #${app.number} — ${projectName}`,
-            projectId: p.id,
-            date: app.applicationDate ?? undefined,
-            balanceCents,
-          });
+            date: doc.date ?? undefined,
+            balanceCents: doc.balanceCents,
+          };
+          if (doc.kind === 'invoice' && typeof doc.date === 'number') item.ageDays = daysBetween(doc.date, now);
+          attention.push(item);
         }
       }
     }

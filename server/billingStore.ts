@@ -1,6 +1,7 @@
 // server/billingStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+import { listPayApps, computeG702 } from './aiaStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -397,4 +398,75 @@ export function billingSummary(db: Database.Database, projectId: string): {
     invoiceCount: invoices.length,
     changeOrderCount,
   };
+}
+
+// ── Billed documents (customer + project-list money figures) ─────────────────
+//
+// billingSummary's invoice aggregates are INVOICE-ONLY, so a project billed
+// through AIA progress billing reports nothing outstanding there. Every figure
+// that spans a whole project or customer — the customers sidebar, the customer
+// overview rollup and its per-project rows, the projects board — goes through
+// the helpers below instead, so Invoiced, Paid and Outstanding are always
+// computed over the same population: every BILLED document, invoice or pay
+// application alike.
+//
+// "Billed" means not a draft. A draft invoice or draft pay app has not been
+// sent to anyone, so it must not move any of the three figures.
+
+export interface BilledDocument {
+  kind: 'invoice' | 'payapp';
+  id: string;
+  number: string | number | null;
+  // Invoices carry an epoch number; a pay app's applicationDate is a
+  // 'YYYY-MM-DD' TEXT column. Both are passed through as stored.
+  date: string | number | null;
+  status: string;
+  totalCents: number;
+  paidCents: number;
+  balanceCents: number;
+}
+
+export function listBilledDocuments(db: Database.Database, projectId: string): BilledDocument[] {
+  const docs: BilledDocument[] = [];
+
+  for (const inv of listInvoices(db, projectId)) {
+    if (inv.status === 'draft') continue;
+    docs.push({
+      kind: 'invoice', id: inv.id, number: inv.number ?? null, date: inv.date ?? null,
+      status: inv.status, totalCents: inv.totalCents, paidCents: inv.paidCents,
+      balanceCents: inv.balanceCents,
+    });
+  }
+
+  // A pay application's billed amount is its G702 line 8 (current payment due):
+  // the amount that application actually asks for, which is what payments
+  // recorded against it settle. 'finalized' is the pay-app analog of a sent
+  // invoice; 'draft' apps are skipped by the same rule as draft invoices.
+  for (const app of listPayApps(db, projectId)) {
+    if (app.status === 'draft') continue;
+    const totalCents = computeG702(db, app.id).L8currentPaymentDueCents;
+    const paidCents = paidCentsFor(db, 'payapp', app.id);
+    docs.push({
+      kind: 'payapp', id: app.id, number: app.number, date: app.applicationDate ?? null,
+      status: app.status, totalCents, paidCents, balanceCents: totalCents - paidCents,
+    });
+  }
+
+  return docs;
+}
+
+export function projectBillingTotals(db: Database.Database, projectId: string): {
+  invoicedCents: number; paidCents: number; outstandingCents: number;
+} {
+  let invoicedCents = 0;
+  let paidCents = 0;
+  for (const doc of listBilledDocuments(db, projectId)) {
+    invoicedCents += doc.totalCents;
+    paidCents += doc.paidCents;
+  }
+  return { invoicedCents, paidCents, outstandingCents: invoicedCents - paidCents };
+}
+
+export function projectOutstandingCents(db: Database.Database, projectId: string): number {
+  return projectBillingTotals(db, projectId).outstandingCents;
 }

@@ -11,6 +11,8 @@ import {
   patchProject, normalizeProjectStatus, listProjectSummaries,
   ValidationError, ConflictError,
 } from './projectStore';
+import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 let db: Database.Database;
 let dir: string;
@@ -318,5 +320,23 @@ describe('two-stage lifecycle', () => {
     patchProject(db, 'proj1', { version: v, archived: true, lostBid: true });
     const row = listProjectSummaries(db, 'proj1')[0];
     expect([row.archived, row.lostBid]).toEqual([true, true]);
+  });
+
+  it('summary outstandingCents spans invoices AND finalized pay applications', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+
+    const inv = createInvoice(db, 'proj1', { number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
+    setInvoiceStatus(db, inv.id, 'sent');
+    expect(listProjectSummaries(db, 'proj1')[0].outstandingCents).toBe(10000);
+
+    // An AIA pay app the board used to be blind to: $1,000 billed, $250 paid.
+    createSovLine(db, 'proj1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'proj1', { retainagePercent: 0, storedRetainagePercent: 0 });
+    const sov = listSovLines(db, 'proj1');
+    savePayAppLines(db, app.id, [{ sovLineId: sov[0].id, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', app.id, { amount: 250 });
+
+    expect(listProjectSummaries(db, 'proj1')[0].outstandingCents).toBe(85000);
   });
 });

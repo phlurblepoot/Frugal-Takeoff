@@ -1506,6 +1506,33 @@ describe('customers routes', () => {
     expect((await request(app).get('/api/projects/pc-rn-2')).body.contractor).toBe('New Co Name');
   });
 
+  it('PUT without a name change leaves project.contractor alone', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Same Co' });
+    const cid = post.body.id;
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-nc-1', customerId: cid, contractor: 'Hand-typed GC',
+      pages: [{ id: 'pg-nc-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    // A phone edit is not a rename — contractor must survive it verbatim.
+    const put = await request(app).put(`/api/customers/${cid}`).send({ name: 'Same Co', phone: '555-0100', emails: {} });
+    expect(put.status).toBe(200);
+    expect((await request(app).get('/api/projects/pc-nc-1')).body.contractor).toBe('Hand-typed GC');
+  });
+
+  it('PUT on the Unassigned bucket never stamps its name onto project.contractor', async () => {
+    // The migration seeds customer-unassigned; its name is a placeholder, not a
+    // company, and it must never reach a project (contractor feeds document PDFs).
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-un-1', customerId: 'customer-unassigned', contractor: '',
+      pages: [{ id: 'pg-un-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    const put = await request(app).put('/api/customers/customer-unassigned').send({ name: 'Unassigned Renamed', emails: {} });
+    expect(put.status).toBe(200);
+    expect((await request(app).get('/api/projects/pc-un-1')).body.contractor).toBe('');
+  });
+
   describe('GET /api/customers/summary and /:id/overview', () => {
     let userApp: express.Express;
 

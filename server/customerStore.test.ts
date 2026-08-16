@@ -10,7 +10,8 @@ import {
   listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
   customerSummaries, customerOverview,
 } from './customerStore';
-import { createInvoice, setInvoiceStatus } from './billingStore';
+import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 function db(): Database.Database {
   const d = openDb(':memory:');
@@ -168,6 +169,65 @@ describe('customerSummaries / customerOverview', () => {
     const ovAfter = customerOverview(d, cid, false)!;
     expect(ovAfter.taskCounts).toEqual({ open: 2, overdue: 2 });
     expect(ovAfter.attention.some((a: any) => a.taskId === 't-arch-task')).toBe(true);
+  });
+
+  // An AIA-billed project has no invoices at all — its money lives in pay
+  // applications — so every figure below used to read $0 for it.
+  it('a finalized pay app counts toward outstanding in summaries, the rollup, the project row, and the ledger', () => {
+    d.prepare(`INSERT INTO projects (id, name, customerId, status, version, createdAt) VALUES (?, ?, ?, ?, 1, ?)`)
+      .run('p-aia', 'AIA Project', cid, 'in_progress', Date.now());
+    // $1,000 of scheduled value, billed 100% with retainage off so line 8
+    // (current payment due) is exactly the scheduled value — no rounding.
+    createSovLine(d, 'p-aia', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(d, 'p-aia', { applicationDate: '2026-08-01', retainagePercent: 0, storedRetainagePercent: 0 });
+    const sov = listSovLines(d, 'p-aia');
+    savePayAppLines(d, app.id, [{ sovLineId: sov[0].id, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+
+    // While it's still a draft it is not billed, so nothing moves.
+    expect(customerSummaries(d, true).find(r => r.id === cid)!.outstandingCents).toBe(10000);
+    expect(customerOverview(d, cid, true)!.billing.ledger.some((l: any) => l.kind === 'payapp')).toBe(false);
+
+    setPayApp(d, app.id, { status: 'finalized' });
+    recordPayment(d, 'payapp', app.id, { amount: 250 }); // $250 of the $1,000
+
+    // p-prog's unpaid $100 invoice + the pay app's $750 balance.
+    expect(customerSummaries(d, true).find(r => r.id === cid)!.outstandingCents).toBe(85000);
+
+    const ov = customerOverview(d, cid, true)!;
+    expect(ov.projects.find((p: any) => p.id === 'p-aia').outstandingCents).toBe(75000);
+    // All three legs cover the same documents: $100 invoice + $1,000 pay app.
+    expect(ov.billing.invoicedCents).toBe(110000);
+    expect(ov.billing.paidCents).toBe(25000);
+    expect(ov.billing.outstandingCents).toBe(85000);
+
+    const payAppRow = ov.billing.ledger.find((l: any) => l.kind === 'payapp');
+    expect(payAppRow).toMatchObject({
+      projectId: 'p-aia', number: 1, status: 'finalized',
+      totalCents: 100000, paidCents: 25000, balanceCents: 75000,
+    });
+    expect(ov.attention.filter((a: any) => a.type === 'outstanding_invoice').map((a: any) => a.label))
+      .toContain('Application #1 — AIA Project');
+  });
+
+  it('a fully paid invoice stays in the ledger with a zero balance; a draft never appears', () => {
+    const paid = createInvoice(d, 'p-prog', { number: 'INV-PAID', date: Date.now(), lines: [{ description: 'Done', qty: 1, unitPrice: 200 }] });
+    setInvoiceStatus(d, paid.id, 'paid');
+    recordPayment(d, 'invoice', paid.id, { amount: 200 });
+    createInvoice(d, 'p-prog', { number: 'INV-DRAFT', date: Date.now(), lines: [{ description: 'Not sent', qty: 1, unitPrice: 999 }] });
+
+    const ov = customerOverview(d, cid, true)!;
+    expect(ov.billing.ledger.find((l: any) => l.number === 'INV-PAID')).toMatchObject({
+      kind: 'invoice', status: 'paid', totalCents: 20000, paidCents: 20000, balanceCents: 0,
+    });
+    expect(ov.billing.ledger.some((l: any) => l.number === 'INV-DRAFT')).toBe(false);
+
+    // The paid invoice adds to Invoiced and Paid equally, so Outstanding is
+    // unchanged; the draft moves none of the three.
+    expect(ov.billing.invoicedCents).toBe(30000);
+    expect(ov.billing.paidCents).toBe(20000);
+    expect(ov.billing.outstandingCents).toBe(10000);
+    // A zero-balance document is not something to chase.
+    expect(ov.attention.filter((a: any) => a.type === 'outstanding_invoice')).toHaveLength(1);
   });
 
   it('a bidding project with a past-due bidDueDate still appears in attention, flagged overdue', () => {

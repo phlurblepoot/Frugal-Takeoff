@@ -1352,7 +1352,6 @@ export const getCustomerOverview = async (id: string): Promise<CustomerOverview>
 
 export const getCustomers = async (): Promise<Customer[]> => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
 export const getCustomer = async (id: string): Promise<Customer> => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
-export const getCustomerProjects = async (id: string) => (await fetch(`/api/customers/${id}/projects`, { headers: getAuthHeaders() })).json();
 export const saveCustomer = async (c: any) => {
   const res = await fetch(c.id ? '/api/customers/' + c.id : '/api/customers', {
     method: c.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(c),

@@ -403,4 +403,23 @@ describe('migration 21: two-stage project lifecycle', () => {
 
     db.close();
   });
+
+  it('a row with unparseable meta does not abort the migration: status is normalized, meta kept verbatim', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 20));
+
+    db.prepare('INSERT INTO projects (id, status, meta, createdAt) VALUES (?, ?, ?, ?)')
+      .run('p-corrupt', 'proposal_sent', '{not json', Date.now());
+    seedProject(db, 'p-after-corrupt', 'awarded');
+
+    runMigrations(db, tmpDir(), migrations);
+
+    const corrupt = db.prepare('SELECT status, meta FROM projects WHERE id = ?').get('p-corrupt') as any;
+    expect(corrupt.status).toBe('bidding');
+    expect(corrupt.meta).toBe('{not json'); // untouched — nothing is lost
+    // and the rest of the table still migrated
+    expect(readRow(db, 'p-after-corrupt')).toEqual({ status: 'in_progress', archived: undefined, lostBid: undefined });
+
+    db.close();
+  });
 });

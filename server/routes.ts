@@ -1070,11 +1070,17 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.put('/api/customers/:id', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const newName = String(req.body.name).trim();
+    const previousName = getCustomer(db, req.params.id)?.name;
     const saved = saveCustomer(db, { ...req.body, id: req.params.id });
     // Keep each project's legacy `contractor` string in sync with the customer
     // name it belongs to (contractor was the pre-customerId identity; several
-    // reads/exports still display it directly).
-    db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
+    // reads/exports still display it directly). Only an actual RENAME may write
+    // it — a phone/email edit must leave contractor alone — and never for the
+    // "Unassigned" bucket, whose name is a placeholder, not a company: its
+    // projects deliberately carry a blank or hand-typed contractor.
+    if (req.params.id !== 'customer-unassigned' && newName !== previousName) {
+      db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
+    }
     res.json(saved);
   });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {

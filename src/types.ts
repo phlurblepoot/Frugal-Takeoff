@@ -213,8 +213,10 @@ export interface Project {
   // Optimistic-concurrency version — echoed back on save; the server rejects
   // stale saves with 409. Assigned by the server (1 on create).
   version?: number;
-  // Lifecycle stage (estimating | proposal_sent | awarded | in_progress |
-  // punch_list | complete | archived | lost). Server-derived in Phase 1.
+  // Lifecycle stage — two stages only (bidding | in_progress). Archiving and
+  // lost-bid tracking are independent flags (`archived`, `lostBid`), not
+  // stages, so an archived project keeps the stage it was in. Server-derived;
+  // legacy 8-stage values are collapsed on read (normalizeProjectStatus).
   status?: string;
 }
 

@@ -944,7 +944,13 @@ export const migrations: Migration[] = [
       const upd = db.prepare('UPDATE projects SET status = ?, meta = ? WHERE id = ?');
       for (const r of rows) {
         const old = r.status ?? 'estimating';
-        const meta = r.meta ? JSON.parse(r.meta) : {};
+        // A row with unparseable meta must not abort the whole migration: keep
+        // its meta column verbatim (nothing is lost) and still normalize its
+        // status. Mirrors patchProject's guard in projectStore.
+        let meta: any = {};
+        let metaParsed = true;
+        try { meta = r.meta ? JSON.parse(r.meta) : {}; }
+        catch { metaParsed = false; }
         let status: string;
         if (old === 'bidding' || old === 'in_progress') status = old; // re-run safe
         else if (['estimating', 'proposal_sent'].includes(old)) status = 'bidding';
@@ -953,7 +959,7 @@ export const migrations: Migration[] = [
         else if (old === 'archived') { status = 'in_progress'; meta.archived = true; }
         else if (old === 'lost') { status = 'bidding'; meta.archived = true; meta.lostBid = true; }
         else status = 'bidding';
-        upd.run(status, JSON.stringify(meta), r.id);
+        upd.run(status, metaParsed ? JSON.stringify(meta) : r.meta, r.id);
       }
     },
   },

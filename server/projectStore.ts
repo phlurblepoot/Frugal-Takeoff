@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
-import { billingSummary } from './billingStore';
+import { billingSummary, projectOutstandingCents } from './billingStore';
 import { countOpenIssues } from './issueStore';
 import { punchProgress } from './punchStore';
 
@@ -39,7 +39,7 @@ export function loadProject(db: Database.Database, id: string): any | null {
   // Pre-normalization fallback (should not occur after migration 5, but a
   // legacy-dir import racing ahead of a re-run must not crash the API).
   if (row.data) {
-    try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'estimating' }; }
+    try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'bidding' }; }
     catch {
       console.warn(`[projectStore] project ${id} has an unparseable legacy blob`);
       return null;
@@ -281,7 +281,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
     const base = {
       id: r.id,
       name: r.name ?? 'Untitled',
-      status: r.status ?? 'estimating',
+      status: r.status ?? 'bidding',
       contractor: r.contractor ?? null,
       customerId: r.customerId ?? null,
       address: r.address ?? null,
@@ -300,7 +300,14 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
     };
     if (!includeBilling) return base;
     const bs = billingSummary(db, r.id);
-    return { ...base, contractValueCents: bs.contractValueCents, invoiceCount: bs.invoiceCount, outstandingCents: bs.outstandingCents };
+    // Outstanding spans invoices AND AIA pay applications — an AIA-billed
+    // project would otherwise read $0 on the board (see billingStore).
+    return {
+      ...base,
+      contractValueCents: bs.contractValueCents,
+      invoiceCount: bs.invoiceCount,
+      outstandingCents: projectOutstandingCents(db, r.id),
+    };
   });
 }
 
@@ -410,7 +417,7 @@ export function patchProject(
       vals.push(JSON.stringify(meta));
     }
     db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
-    out = { version: newVersion, status: patch.status ?? row.status ?? 'estimating' };
+    out = { version: newVersion, status: patch.status ?? row.status ?? 'bidding' };
   });
   tx();
   return out;
