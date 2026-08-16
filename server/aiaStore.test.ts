@@ -744,25 +744,53 @@ describe('retainage release (effective-rate model)', () => {
     expect(computeG702(db, a1.id).retainage.mode).toBe('uniform');
   });
 
-  it('a project with no retainageMode keeps the legacy per-line fallback and reports the mode its data implies', () => {
-    // Transitional rule: absent mode must NOT silently recompute historical
-    // apps for projects that used the (previously primary) per-line column.
+  // The 3-state rule for aiaSettings.retainageMode (spec addendum): explicit
+  // 'uniform' / explicit 'perLine' / ABSENT. Absent keeps today's math so no
+  // historical app silently recomputes, and reports the mode its data implies.
+  it('absent retainageMode + per-line data: legacy math, reported mode perLine', () => {
     setAiaSettings('p1', null); // no aiaSettings at all
     const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 20 });
 
     const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
     savePayAppLines(db, a1.id, [{ sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 }], 1);
 
-    // Legacy math: line rate wins → round(5000000 * 20/100) = 1000000.
+    // Legacy math: the line rate wins → round(5000000 * 20/100) = 1000000.
+    // Strict uniform would give 500000 and rewrite finalized history.
     expect(computeG703(db, a1.id)[0].retainageCents).toBe(1000000);
     const r = computeG702(db, a1.id).retainage;
     expect(r.mode).toBe('perLine');          // the data IS per-line
     expect(r.effectiveWorkPercent).toBeNull();
+  });
 
-    // With no per-line values anywhere, the same absent mode reads as uniform.
-    saveSovLine(db, line1, { ...getSovLine(db, line1)!, retainagePercent: null });
-    expect(computeG702(db, a1.id).retainage.mode).toBe('uniform');
+  it('absent retainageMode + no per-line data: reported mode uniform, base rate applies', () => {
+    setAiaSettings('p1', null);
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000 });
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
+    savePayAppLines(db, a1.id, [{ sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    const r = computeG702(db, a1.id).retainage;
+    expect(r.mode).toBe('uniform');
+    expect(r.effectiveWorkPercent).toBe(10);
     expect(computeG703(db, a1.id)[0].retainageCents).toBe(500000); // app base 10%
+  });
+
+  it('perLine mode: blank lines fall back to the base rate', () => {
+    setAiaSettings('p1', { retainageMode: 'perLine', retainagePercent: 10 });
+    const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 20 });
+    const { id: line2 } = createSovLine(db, 'p1', { itemNo: '2', description: 'B', scheduledValueCents: 10000000 }); // blank
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 10 });
+    savePayAppLines(db, a1.id, [
+      { sovLineId: line1, percentComplete: 50, storedMaterialsCents: 0 },
+      { sovLineId: line2, percentComplete: 50, storedMaterialsCents: 0 },
+    ], 1);
+
+    const g703 = computeG703(db, a1.id);
+    expect(g703[0].retainageCents).toBe(1000000); // 20% of 5000000 — its own rate
+    expect(g703[1].retainageCents).toBe(500000);  // 10% of 5000000 — base fallback
+    // Remaining is bounded by the LARGEST relevant rate, not the base.
+    expect(remainingReleasablePoints(db, a1.id)).toBe(20);
   });
 
   it('legacy two-rate app with zero releases computes exactly as before', () => {
