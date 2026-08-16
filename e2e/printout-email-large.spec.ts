@@ -87,7 +87,7 @@ test('email-mode printout of a 60MB plan set lands under the 18MB target', async
     ],
     pages,
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
 
   const projRes = await request.post('/api/projects', { headers: auth, data: project });

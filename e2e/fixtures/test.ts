@@ -5,6 +5,7 @@ import {
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
+  seedCustomerWithPortfolio,
   type LoginResult,
 } from './seed';
 
@@ -53,4 +54,5 @@ export {
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
+  seedCustomerWithPortfolio,
 };

@@ -86,7 +86,7 @@ export async function seedProjectWithPage(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -188,7 +188,7 @@ export async function seedProjectWithAreaTakeoffLength(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -319,7 +319,7 @@ export async function seedProjectWithSupersededRevision(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
 
   const projRes = await request.post('/api/projects', {
@@ -407,7 +407,7 @@ export async function seedProjectWithTakeoffMeasurement(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -418,4 +418,144 @@ export async function seedProjectWithTakeoffMeasurement(
   }
 
   return { projectId, pageId, imageId, name, takeoffId, takeoffName, measurementId };
+}
+
+export interface SeedCustomerPortfolioResult {
+  customerId: string;
+  customerName: string;
+  biddingProjectId: string;
+  biddingProjectName: string;
+  bidDueDate: number;
+  inProgressProjectId: string;
+  inProgressProjectName: string;
+  taskId: string;
+  taskTitle: string;
+  taskDueDate: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceAmountCents: number;
+}
+
+/**
+ * Seed a full customer "portfolio" via the REST API for the customers split
+ * view: one customer with (1) a bidding project carrying a bidDueDate inside
+ * the 14-day attention window, (2) an in_progress project carrying one SENT,
+ * UNPAID invoice (so it surfaces as `outstanding_invoice` attention + a
+ * Billing-tab ledger row), and (3) a customer-level (no projectId) task due
+ * YESTERDAY, so it's already overdue by construction and shows up in both
+ * taskCounts.overdue and the Needs-attention feed.
+ *
+ * This is the minimum shape customerOverview()/customerSummaries() need to
+ * exercise every tile, attention-row type, and ledger row on the customer
+ * pane in one seed — see server/customerStore.ts for the exact rollup rules
+ * this mirrors (archived-project exclusion doesn't apply here; nothing here
+ * is archived).
+ */
+export async function seedCustomerWithPortfolio(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedCustomerPortfolioResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const short = randomUUID().slice(0, 8);
+
+  const customerName = `E2E Portfolio Customer ${short}`;
+  const custRes = await request.post('/api/customers', { headers: auth, data: { name: customerName } });
+  if (!custRes.ok()) {
+    throw new Error(`customer create failed: ${custRes.status()} ${await custRes.text()}`);
+  }
+  const customer = await custRes.json();
+  const customerId = customer.id as string;
+
+  // Bidding project, due in 5 days — inside the 14-day attention window and
+  // not overdue.
+  const biddingProjectId = randomUUID();
+  const biddingProjectName = `E2E Portfolio Bidding ${short}`;
+  const bidDueDate = Date.now() + 5 * 86400000;
+  const p1Res = await request.post('/api/projects', {
+    headers: auth,
+    data: {
+      id: biddingProjectId,
+      name: biddingProjectName,
+      createdAt: Date.now(),
+      customerId,
+      status: 'bidding',
+      bidDueDate,
+      pages: [],
+      takeoffs: [],
+      version: 1,
+    },
+  });
+  if (!p1Res.ok()) {
+    throw new Error(`bidding project create failed: ${p1Res.status()} ${await p1Res.text()}`);
+  }
+
+  // In-progress project that will carry the sent/unpaid invoice.
+  const inProgressProjectId = randomUUID();
+  const inProgressProjectName = `E2E Portfolio Active ${short}`;
+  const p2Res = await request.post('/api/projects', {
+    headers: auth,
+    data: {
+      id: inProgressProjectId,
+      name: inProgressProjectName,
+      createdAt: Date.now(),
+      customerId,
+      status: 'in_progress',
+      pages: [],
+      takeoffs: [],
+      version: 1,
+    },
+  });
+  if (!p2Res.ok()) {
+    throw new Error(`in-progress project create failed: ${p2Res.status()} ${await p2Res.text()}`);
+  }
+
+  // A SENT invoice with one line and no payments recorded → balanceCents > 0,
+  // which is what makes it show up as `outstanding_invoice` attention and a
+  // Billing-tab ledger row (see server/customerStore.ts customerOverview()).
+  const invoiceNumber = `INV-${short}`;
+  const invoiceAmountCents = 75000; // $750.00
+  const invRes = await request.post(`/api/projects/${inProgressProjectId}/invoices`, {
+    headers: auth,
+    data: {
+      number: invoiceNumber,
+      date: Date.now(),
+      status: 'sent',
+      lines: [{ description: 'Work performed', qty: 1, unitPrice: invoiceAmountCents / 100 }],
+    },
+  });
+  if (!invRes.ok()) {
+    throw new Error(`invoice create failed: ${invRes.status()} ${await invRes.text()}`);
+  }
+  const invoice = await invRes.json();
+
+  // Customer-level task (no projectId) due yesterday — already overdue.
+  // customerOverview()/customerSummaries() compare dueDate against today's
+  // date string, so "yesterday" guarantees the overdue branch regardless of
+  // time-of-day flakiness.
+  const taskTitle = `E2E Portfolio Overdue Task ${short}`;
+  const taskDueDate = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const taskRes = await request.post('/api/tasks', {
+    headers: auth,
+    data: { title: taskTitle, customerId, dueDate: taskDueDate, category: 'Follow-up' },
+  });
+  if (!taskRes.ok()) {
+    throw new Error(`task create failed: ${taskRes.status()} ${await taskRes.text()}`);
+  }
+  const task = await taskRes.json();
+
+  return {
+    customerId,
+    customerName,
+    biddingProjectId,
+    biddingProjectName,
+    bidDueDate,
+    inProgressProjectId,
+    inProgressProjectName,
+    taskId: task.id,
+    taskTitle,
+    taskDueDate,
+    invoiceId: invoice.id,
+    invoiceNumber,
+    invoiceAmountCents,
+  };
 }
