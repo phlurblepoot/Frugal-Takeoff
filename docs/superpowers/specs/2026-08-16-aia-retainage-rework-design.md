@@ -35,7 +35,12 @@ Status: Approved by Nathan (conversation)
 ## Data model
 
 - `project.meta.aiaSettings` (JSON, no schema change): gains
-  `retainageMode: 'uniform' | 'perLine'` (absent = `uniform`);
+  `retainageMode: 'uniform' | 'perLine'`. **Absent = legacy behavior**
+  (per-line values win when present — amended during implementation so
+  historical finalized apps never recompute; the reported/resolved mode for
+  a legacy project is inferred as `perLine` iff any SOV line carries a
+  non-null rate, else `uniform`; the settings form writes the mode
+  explicitly on every save, after which the explicit rule governs);
   `retainagePercent` stays the base rate; `storedRetainagePercent` is no
   longer written by the UI (legacy values remain readable for old apps).
 - `aia_pay_apps`: **migration 22 (ADDITIVE)** — `releasedRetainagePoints REAL
