@@ -32,12 +32,20 @@ const g702: AiaG702 = {
   L8currentPaymentDueCents: 222500,
   L9balanceToFinishCents: 292500,
   changeOrders: { additionsCents: 50000, deductionsCents: 0, netCents: 50000 },
+  retainage: {
+    mode: 'uniform',
+    baseWorkPercent: 10,
+    cumulativeReleasedPoints: 0,
+    releasedThisApp: 0,
+    remainingPoints: 10,
+    effectiveWorkPercent: 10,
+  },
 };
 
 const app: AiaPayApp = {
   id: 'app1', projectId: 'p1', number: 3,
   periodTo: '2026-06-30', applicationDate: '2026-07-01',
-  retainagePercent: 10, storedRetainagePercent: 10,
+  retainagePercent: 10, storedRetainagePercent: 10, releasedRetainagePoints: 0,
   status: 'draft', version: 1, createdAt: 0,
 };
 
@@ -76,7 +84,7 @@ async function makeTemplateBuffer(): Promise<ArrayBuffer> {
 
 const mapping: AiaTemplateMapping = {
   g702Sheet: 'G702',
-  cells: { L8: 'F20', projectName: 'C3' },
+  cells: { L8: 'F20', projectName: 'C3', retainageWorkPct: 'D25', retainageStoredPct: 'D26' },
   g703Sheet: 'G703',
   g703StartRow: 5,
   g703Cols: {
@@ -93,6 +101,52 @@ describe('buildAiaWorkbookFromTemplate', () => {
     // L8 = 222500 cents -> 2225 dollars at F20.
     expect(ws.getCell('F20').value).toBe(2225);
     expect(ws.getCell('C3').value).toBe('Test Project');
+  });
+
+  it('maps retainageWorkPct/retainageStoredPct to EFFECTIVE (post-release) rates, not raw app rates', async () => {
+    const buf = await makeTemplateBuffer();
+    const releasedCtx: AiaExportCtx = {
+      ...ctx,
+      app: { ...app, retainagePercent: 10, storedRetainagePercent: 10 },
+      g702: {
+        ...g702,
+        retainage: {
+          mode: 'uniform',
+          baseWorkPercent: 10,
+          cumulativeReleasedPoints: 4,
+          releasedThisApp: 4,
+          remainingPoints: 10,
+          effectiveWorkPercent: 6, // 10 - 4
+        },
+      },
+    };
+    const wb = await buildAiaWorkbookFromTemplate(buf, mapping, releasedCtx);
+    const ws = wb.getWorksheet('G702')!;
+    expect(ws.getCell('D25').value).toBe(6); // effective work % (10 - 4 released)
+    expect(ws.getCell('D26').value).toBe(6); // effective stored % (10 - 4 released)
+  });
+
+  it('a legacy app with zero releases maps its own raw rates unchanged', async () => {
+    const buf = await makeTemplateBuffer();
+    const legacyCtx: AiaExportCtx = {
+      ...ctx,
+      app: { ...app, retainagePercent: 8, storedRetainagePercent: 5 },
+      g702: {
+        ...g702,
+        retainage: {
+          mode: 'uniform',
+          baseWorkPercent: 8,
+          cumulativeReleasedPoints: 0,
+          releasedThisApp: 0,
+          remainingPoints: 8,
+          effectiveWorkPercent: 8,
+        },
+      },
+    };
+    const wb = await buildAiaWorkbookFromTemplate(buf, mapping, legacyCtx);
+    const ws = wb.getWorksheet('G702')!;
+    expect(ws.getCell('D25').value).toBe(8);
+    expect(ws.getCell('D26').value).toBe(5); // distinct legacy stored rate preserved
   });
 
   it('writes G703 line rows at the mapped start row + columns', async () => {

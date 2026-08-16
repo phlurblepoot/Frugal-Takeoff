@@ -33,12 +33,20 @@ const g702: AiaG702 = {
   L8currentPaymentDueCents: 247500,
   L9balanceToFinishCents: 267500,
   changeOrders: { additionsCents: 50000, deductionsCents: 0, netCents: 50000 },
+  retainage: {
+    mode: 'uniform',
+    baseWorkPercent: 10,
+    cumulativeReleasedPoints: 0,
+    releasedThisApp: 0,
+    remainingPoints: 10,
+    effectiveWorkPercent: 10,
+  },
 };
 
 const app: AiaPayApp = {
   id: 'app1', projectId: 'p1', number: 3,
   periodTo: '2026-06-30', applicationDate: '2026-07-01',
-  retainagePercent: 10, storedRetainagePercent: 10,
+  retainagePercent: 10, storedRetainagePercent: 10, releasedRetainagePoints: 0,
   status: 'draft', version: 1, createdAt: 0,
 };
 
@@ -183,5 +191,68 @@ describe('buildAiaWorkbook', () => {
     // CO TOTALS-row H formula should also contain IFERROR (protects against C=0).
     const coTotalFormula = formulaOf(ws.getCell(`H${coZeroTotalRow}`).value);
     expect(coTotalFormula).toContain('IFERROR');
+  });
+
+  it('uniform mode writes the EFFECTIVE (post-release) rate to G22, not the raw app rate', async () => {
+    // Base rate is 10, but 4 points were already released before/at this app.
+    const releasedCtx: AiaExportCtx = {
+      ...ctx,
+      g702: {
+        ...ctx.g702,
+        retainage: {
+          mode: 'uniform',
+          baseWorkPercent: 10,
+          cumulativeReleasedPoints: 4,
+          releasedThisApp: 4,
+          remainingPoints: 10,
+          effectiveWorkPercent: 6, // 10 - 4
+        },
+      },
+    };
+
+    const wb = await buildAiaWorkbook(releasedCtx);
+    const ws = wb.getWorksheet('G702')!;
+
+    expect(ws.getCell('G22').value).toBeCloseTo(0.06, 4);
+    expect(ws.getCell('G22').value).not.toBeCloseTo(releasedCtx.app.retainagePercent / 100, 4);
+    // Formula structure is untouched in uniform mode.
+    expect(formulaOf(ws.getCell('H22').value))
+      .toBe(`'G703'!J${CONTRACT_TOTAL_ROW}+'G703'!J${CO_TOTAL_ROW}`);
+  });
+
+  it('perLine mode writes 5a/5b as numeric literals from ctx.g702 and per-row G703 retainage as literals', async () => {
+    const perLineCtx: AiaExportCtx = {
+      ...ctx,
+      g702: {
+        ...ctx.g702,
+        retainage: {
+          mode: 'perLine',
+          baseWorkPercent: 10,
+          cumulativeReleasedPoints: 0,
+          releasedThisApp: 0,
+          remainingPoints: 10,
+          effectiveWorkPercent: null,
+        },
+      },
+    };
+
+    const wb = await buildAiaWorkbook(perLineCtx);
+    const g702ws = wb.getWorksheet('G702')!;
+    const g703ws = wb.getWorksheet('G703')!;
+
+    // 5a/5b are numeric literals equal to ctx.g702.L5a/L5b (dollars).
+    expect(g702ws.getCell('F22').value).toBe(perLineCtx.g702.L5aRetainageWorkCents / 100);
+    expect(g702ws.getCell('G22').value).toBe(perLineCtx.g702.L5bRetainageStoredCents / 100);
+    // Line 5 total is a formula summing the two literals (no G703 cross-sheet SUM).
+    expect(formulaOf(g702ws.getCell('H22').value)).toBe('F22+G22');
+
+    // Line 7 (less previous certificates) no longer multiplies by G22 — it's
+    // a literal from ctx.g702 referenced by a trivial formula.
+    expect(g702ws.getCell('G26').value).toBe(perLineCtx.g702.L7lessPreviousCents / 100);
+    expect(formulaOf(g702ws.getCell('H26').value)).toBe('G26');
+
+    // G703 per-row J cells are literals equal to each row's retainageCents.
+    expect(g703ws.getCell(`J${CONTRACT_START}`).value).toBe(g703[0].retainageCents / 100);
+    expect(formulaOf(g703ws.getCell(`J${CONTRACT_START}`).value)).toBeUndefined();
   });
 });

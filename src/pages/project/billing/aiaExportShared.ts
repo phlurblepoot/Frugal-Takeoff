@@ -5,7 +5,7 @@
 // before any pay application exists.
 import {
   AiaG702, AiaG703Row, AiaPayApp, AiaSettings, AiaSovLine,
-  getAiaSettings, getFile, getProject, getSettings, getSov,
+  getAiaSettings, getFile, getProject, getSettings, getSov, resolveRetainageMode,
 } from '../../../utils/store';
 import type { Project } from '../../../types';
 import type { AiaTemplateMapping } from './aiaExcel';
@@ -113,8 +113,12 @@ export function buildBlankSovContext(
     id: 'sov-preview', projectId, number: 0, periodTo: null, applicationDate: null,
     retainagePercent,
     storedRetainagePercent: aiaSettings.storedRetainagePercent ?? retainagePercent,
+    releasedRetainagePoints: 0,
     status: 'draft', version: 1, createdAt: 0,
   };
+  // No pay app exists yet, so nothing has been released: base rate applies
+  // in full, mirroring the server's synthesized retainage block for a fresh app.
+  const mode = resolveRetainageMode(aiaSettings.retainageMode, sovLines);
   const g702: AiaG702 = {
     L1originalContractCents: L1,
     L2changeOrdersCents: L2,
@@ -128,6 +132,14 @@ export function buildBlankSovContext(
     L8currentPaymentDueCents: 0,
     L9balanceToFinishCents: L3,
     changeOrders: { additionsCents: additions, deductionsCents: deductions, netCents: L2 },
+    retainage: {
+      mode,
+      baseWorkPercent: retainagePercent,
+      cumulativeReleasedPoints: 0,
+      releasedThisApp: 0,
+      remainingPoints: retainagePercent,
+      effectiveWorkPercent: mode === 'perLine' ? null : retainagePercent,
+    },
   };
   return { app, g703, g702 };
 }
