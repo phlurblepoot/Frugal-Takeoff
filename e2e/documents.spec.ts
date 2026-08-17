@@ -158,6 +158,12 @@ test('upload popup: batch upload with per-file type override, change-type, delet
   await expect(invoiceRow.getByLabel('Delete', { exact: true })).toHaveCount(0);
   await expect(invoiceRow.getByTestId('doc-change-type')).toHaveCount(0);
   await expect(invoiceRow.getByTitle('Managed by its source — archive here')).toBeVisible();
+
+  // The affordance actually works, not just renders: archiving a sourced row
+  // completes (PATCH archived=true) and it leaves the default view, same as
+  // a direct upload's Archive — only the delete tier differs between them.
+  await invoiceRow.getByTitle('Managed by its source — archive here').click();
+  await expect(rowFor(authedPage, seeded.invoiceFileName)).toHaveCount(0);
 });
 
 test('bulk select: archive + delete a subset via the bulk bar', async ({ authedPage, request, apiToken }) => {
@@ -291,6 +297,15 @@ test('non-admin: billing kinds are absent, printout stays visible, page loads cl
 
   await page.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
   await expect(page.getByTestId('documents-upload')).toBeVisible(); // page loads clean, no crash/blank state
+
+  // Settle the fetch on a POSITIVE count first — `toHaveCount(0)` for the
+  // billing rows below would trivially pass against the still-loading
+  // skeleton (zero rows rendered yet either way), so a server-side gating
+  // regression that actually returned those rows could slip through.
+  // Waiting for the real settled count (printout + issue-photo, the two rows
+  // this non-admin session should see) forces the fetch to complete before
+  // the absence checks run.
+  await expect(tableRows(page)).toHaveCount(2);
 
   await expect(rowFor(page, seeded.invoiceFileName)).toHaveCount(0);
   await expect(rowFor(page, seeded.payAppFileName)).toHaveCount(0);
