@@ -11,6 +11,8 @@ import {
   patchProject, normalizeProjectStatus, listProjectSummaries,
   ValidationError, ConflictError,
 } from './projectStore';
+import { putBuffer } from './files';
+import { readFileContent } from './fileStore';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
@@ -261,6 +263,26 @@ describe('createProject / listProjects / deleteProject', () => {
       expect((db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
     }
     expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
+  });
+
+  it('delete spares task photos — a task outlives the project it merely refers to', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    db.prepare('INSERT INTO tasks (id, title, projectId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('task1', 'Order material', 'proj1', 1);
+    // migration 23 attributes task photos to their task's project, which put
+    // them in reach of the project-owned file sweep for the first time
+    putBuffer(db, dir, 'tphoto1', Buffer.from('photobytes'), 'image/jpeg', { projectId: 'proj1', kind: 'task-photo' });
+    db.prepare('INSERT INTO task_photos (id, taskId, fileId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('tp1', 'task1', 'tphoto1', 1);
+
+    deleteProject(db, dir, 'proj1');
+
+    expect(db.prepare(`SELECT COUNT(*) as c FROM tasks WHERE id = 'task1'`).get()).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) as c FROM task_photos WHERE id = 'tp1'`).get()).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) as c FROM files WHERE id = 'tphoto1'`).get()).toEqual({ c: 1 });
+    expect(readFileContent(dir, 'tphoto1')!.toString()).toBe('photobytes'); // bytes survive too
+    // every other project-owned file still went
+    expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1' AND kind != 'task-photo'`).get() as any).c).toBe(0);
   });
 
   it('delete cascades AIA billing rows', () => {

@@ -316,7 +316,12 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
 
 // Explicit user action — the one place project-owned files are deleted.
 export function deleteProject(db: Database.Database, dataDir: string, id: string): void {
-  const fileIds = (db.prepare('SELECT id FROM files WHERE projectId = ?').all(id) as { id: string }[]).map(r => r.id);
+  // Task photos are the one exception to the project-owned sweep: tasks (and
+  // their photos) outlive the project they merely REFER to, and they always
+  // have — before migration 23 gave them a projectId they were invisible to
+  // this query. Keeping them excluded preserves that behavior exactly.
+  const OWNED = `projectId = ? AND kind != 'task-photo'`;
+  const fileIds = (db.prepare(`SELECT id FROM files WHERE ${OWNED}`).all(id) as { id: string }[]).map(r => r.id);
   const tx = db.transaction(() => {
     for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
@@ -342,8 +347,8 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     db.prepare('DELETE FROM aia_sov_lines WHERE projectId = ?').run(id);
     // Drop editor drafts for this project's files before the files vanish, so
     // the subquery can still resolve their ids (prevents a slow drafts leak).
-    db.prepare('DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE projectId = ?)').run(id);
-    db.prepare('DELETE FROM files WHERE projectId = ?').run(id);
+    db.prepare(`DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
+    db.prepare(`DELETE FROM files WHERE ${OWNED}`).run(id);
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   });
   tx();

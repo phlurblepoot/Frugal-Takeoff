@@ -525,7 +525,7 @@ describe('migration 23: document source attribution', () => {
     file('f-upload', 'document', 'p1');
     file('f-loose-photo', 'photo', 'p1');   // in no join table — stays a plain photo
     file('f-invoice', 'invoice', 'p1');
-    file('f-issue-pdf', 'issue', 'p1');
+    file('f-issue-pdf', 'issue', 'p1');   // legacy kind — renamed to issue-report
     file('f-email-att', 'email-attachment', 'p1');
   };
 
@@ -604,8 +604,16 @@ describe('migration 23: document source attribution', () => {
     expect(rowOf(db, 'f-upload')).toEqual({ kind: 'document', sourceType: null, sourceId: null, projectId: 'p1' });
     expect(rowOf(db, 'f-loose-photo')).toEqual({ kind: 'photo', sourceType: null, sourceId: null, projectId: 'p1' });
     expect(rowOf(db, 'f-invoice')).toMatchObject({ kind: 'invoice', sourceType: null });
-    expect(rowOf(db, 'f-issue-pdf')).toMatchObject({ kind: 'issue', sourceType: null });
     expect(rowOf(db, 'f-email-att')).toMatchObject({ kind: 'email-attachment', sourceType: null });
+    db.close();
+  });
+
+  it('renames the legacy issue kind to issue-report without touching issue photos', () => {
+    const { db } = migrated();
+    expect(rowOf(db, 'f-issue-pdf')).toMatchObject({ kind: 'issue-report', sourceType: null });
+    // the photo pass ran first, so no issue photo is left carrying `issue`
+    expect(rowOf(db, 'f-issue-photo')).toMatchObject({ kind: 'issue-photo' });
+    expect((db.prepare(`SELECT COUNT(*) c FROM files WHERE kind = 'issue'`).get() as any).c).toBe(0);
     db.close();
   });
 

@@ -8,7 +8,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions,
-  setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS,
+  setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS, MULTI_INSTANCE_KINDS,
 } from './files';
 import { readFileContent } from './fileStore';
 
@@ -150,7 +150,7 @@ describe('upload metadata', () => {
   });
 
   it('carries the new columns across a plain overwrite', () => {
-    putBuffer(db, dir, 'f1', Buffer.from('a'), 'application/pdf', { customerId: 'c1', sourceType: 'issue', sourceId: 'i1', kind: 'issue' });
+    putBuffer(db, dir, 'f1', Buffer.from('a'), 'application/pdf', { customerId: 'c1', sourceType: 'issue', sourceId: 'i1', kind: 'issue-report' });
     db.prepare('UPDATE files SET archived = 1 WHERE id = ?').run('f1');
     putBuffer(db, dir, 'f1', Buffer.from('b'), 'application/pdf');
     expect(getMeta(db, 'f1')).toMatchObject({ customerId: 'c1', sourceType: 'issue', sourceId: 'i1', archived: 1 });
@@ -213,10 +213,41 @@ describe('upsert-by-source uploads', () => {
   });
 
   it('does not collide across kinds on the same entity', () => {
-    putBuffer(db, dir, 'co-pdf', Buffer.from('pdf'), 'application/pdf', { kind: 'change-order', sourceType: 'change-order', sourceId: 'co-1' });
-    const photo = putBuffer(db, dir, 'co-photo', Buffer.from('jpg'), 'image/jpeg', { kind: 'change-order-photo', sourceType: 'change-order', sourceId: 'co-1' });
-    expect(photo).toMatchObject({ id: 'co-photo', versioned: false });
-    expect(getMeta(db, 'co-pdf')!.versionNumber).toBe(1);
+    // two single-instance documents hanging off one RFI
+    putBuffer(db, dir, 'rfi-pdf', Buffer.from('pdf'), 'application/pdf', { kind: 'rfi', sourceType: 'rfi', sourceId: 'rfi-1' });
+    const response = putBuffer(db, dir, 'rfi-resp', Buffer.from('resp'), 'application/pdf', { kind: 'rfi-response', sourceType: 'rfi', sourceId: 'rfi-1' });
+    expect(response).toMatchObject({ id: 'rfi-resp', versioned: false });
+    expect(getMeta(db, 'rfi-pdf')!.versionNumber).toBe(1);
+  });
+
+  it('never versions a multi-instance kind — an entity has many photos', () => {
+    const first = putBuffer(db, dir, 'ph1', Buffer.from('photo-a'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });
+    const second = putBuffer(db, dir, 'ph2', Buffer.from('photo-b'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });
+    expect(first).toMatchObject({ id: 'ph1', versioned: false, versionNumber: 1 });
+    expect(second).toMatchObject({ id: 'ph2', versioned: false, versionNumber: 1 });
+
+    // both survive as live rows with their own bytes — neither became history
+    const live = db.prepare(
+      'SELECT id FROM files WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? ORDER BY id'
+    ).all('issue', 'issue-1') as { id: string }[];
+    expect(live.map(r => r.id)).toEqual(['ph1', 'ph2']);
+    expect(readFileContent(dir, 'ph1')!.toString()).toBe('photo-a');
+    expect(readFileContent(dir, 'ph2')!.toString()).toBe('photo-b');
+  });
+
+  it('excludes every multi-instance kind, on any entity', () => {
+    for (const kind of MULTI_INSTANCE_KINDS) {
+      putBuffer(db, dir, `${kind}-1`, Buffer.from('a'), 'image/jpeg', { kind, sourceType: 'e', sourceId: 'e-1' });
+      const second = putBuffer(db, dir, `${kind}-2`, Buffer.from('b'), 'image/jpeg', { kind, sourceType: 'e', sourceId: 'e-1' });
+      expect(second, `${kind} must not upsert`).toMatchObject({ id: `${kind}-2`, versioned: false });
+    }
+  });
+
+  it('un-archives the document it versions', () => {
+    putBuffer(db, dir, 'gen1', Buffer.from('v1'), 'application/pdf', SOURCE);
+    setFileFlags(db, 'gen1', { archived: true });
+    const regenerated = putBuffer(db, dir, 'gen2', Buffer.from('v2'), 'application/pdf', SOURCE);
+    expect(regenerated).toMatchObject({ id: 'gen1', versioned: true, archived: 0 });
   });
 
   it('does not collide across entities of the same kind', () => {
@@ -233,11 +264,30 @@ describe('upsert-by-source uploads', () => {
   });
 
   it('applies to putDataUrl too, preserving the stored string format', () => {
-    const first = putDataUrl(db, dir, 'img1', PNG_DATAURL, { kind: 'issue-photo', sourceType: 'issue', sourceId: 'i1' });
+    const RESPONSE = { kind: 'rfi-response', sourceType: 'rfi', sourceId: 'rfi-1' };
+    const first = putDataUrl(db, dir, 'doc1', PNG_DATAURL, RESPONSE);
     expect(first.versioned).toBe(false);
     const next = 'data:image/png;base64,' + Buffer.from('secondpng').toString('base64');
-    const second = putDataUrl(db, dir, 'img2', next, { kind: 'issue-photo', sourceType: 'issue', sourceId: 'i1' });
-    expect(second).toMatchObject({ id: 'img1', versioned: true, versionNumber: 2 });
-    expect(getDataUrlString(db, dir, 'img1')).toBe(next);
+    const second = putDataUrl(db, dir, 'doc2', next, RESPONSE);
+    expect(second).toMatchObject({ id: 'doc1', versioned: true, versionNumber: 2 });
+    expect(getDataUrlString(db, dir, 'doc1')).toBe(next);
+  });
+
+  it('replays a non-canonical stored format through a version', () => {
+    // saveNewVersion stamps 'dataurl' on the way through, so the formats that
+    // are NOT a canonical dataURL are the ones the replay exists to protect.
+    const RESPONSE = { kind: 'rfi-response', sourceType: 'rfi', sourceId: 'rfi-1' };
+    const bare = Buffer.from('bare-base64-payload').toString('base64');
+    putDataUrl(db, dir, 'doc1', bare, RESPONSE);
+    expect(getMeta(db, 'doc1')!.legacyFormat).toBe('base64');
+
+    const nextBare = Buffer.from('second-bare-payload').toString('base64');
+    expect(putDataUrl(db, dir, 'doc2', nextBare, RESPONSE)).toMatchObject({ id: 'doc1', versioned: true });
+    expect(getDataUrlString(db, dir, 'doc1')).toBe(nextBare); // no data: prefix bolted on
+
+    // and a dataURL carrying extra parameters replays verbatim too
+    const verbatim = 'data:text/plain;charset=utf-8;base64,' + Buffer.from('hello').toString('base64');
+    expect(putDataUrl(db, dir, 'doc3', verbatim, RESPONSE)).toMatchObject({ id: 'doc1', versioned: true });
+    expect(getDataUrlString(db, dir, 'doc1')).toBe(verbatim);
   });
 });

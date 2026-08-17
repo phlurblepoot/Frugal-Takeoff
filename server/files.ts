@@ -43,13 +43,21 @@ export interface FileMeta {
 
 // Canonical document kinds (spec 2026-08-17 §Data model). System kinds are
 // written by the program; users can never re-type a file into or out of one.
-// `issue` is the historical label migration 23 leaves on generated issue PDFs.
 export const SYSTEM_KINDS = [
   'plan-source', 'plan', 'proposal', 'proposal-photo', 'printout',
-  'invoice', 'change-order', 'change-order-photo', 'issue-report', 'issue',
+  'invoice', 'change-order', 'change-order-photo', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
   'settings-asset',
+] as const;
+
+// Kinds an entity legitimately holds MANY of: one issue has a dozen photos,
+// all sharing the same (sourceType, sourceId, kind) triple. They are excluded
+// from upsert-by-source — otherwise the second photo would silently overwrite
+// the first as a "new version" of it (spec 2026-08-17, second amendment).
+export const MULTI_INSTANCE_KINDS = [
+  'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
+  'rfi-photo', 'proposal-photo',
 ] as const;
 
 // Kinds a person can pick in the upload popup — the only ones a file may be
@@ -129,9 +137,11 @@ function upsertRow(
 
 // The live document standing for (sourceType, sourceId, kind), if any. Only
 // live rows qualify: version history hangs off a parentFileId and must never
-// be picked up as an upsert target.
+// be picked up as an upsert target. Multi-instance kinds never match — an
+// entity's second photo is another photo, not a new version of the first.
 function findLiveBySource(db: Database.Database, opts: PutOpts): string | null {
   if (!opts.sourceType || !opts.sourceId || !opts.kind) return null;
+  if ((MULTI_INSTANCE_KINDS as readonly string[]).includes(opts.kind)) return null;
   const row = db.prepare(`
     SELECT id FROM files
     WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? AND kind = ?
@@ -163,7 +173,8 @@ function store(
     // format (so getDataUrlString still round-trips) and take whichever
     // descriptive fields this regenerate carried — kind and source are equal
     // by construction, so nothing about the document's identity moves.
-    const sets = ['legacyFormat = ?'];
+    // Regenerating a document is also an act of using it: un-archive.
+    const sets = ['legacyFormat = ?', 'archived = 0'];
     const vals: unknown[] = [legacyFormat];
     if (opts.name) { sets.push('name = ?'); vals.push(opts.name); }
     if (opts.projectId) { sets.push('projectId = ?'); vals.push(opts.projectId); }

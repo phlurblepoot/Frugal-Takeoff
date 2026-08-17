@@ -1131,9 +1131,18 @@ export const migrations: Migration[] = [
         label(row?.value, 'settings-asset', null, null);
       });
 
-      // ---- 6. Everything else keeps its kind --------------------------------
+      // ---- 6. Legacy kind rename -------------------------------------------
+      // Generated issue PDFs were written as `issue`; the canonical vocabulary
+      // calls them `issue-report`. Safe after pass 1: issue PHOTOS were kind
+      // `photo` and have already become `issue-photo`, so nothing else can
+      // still be carrying `issue`. Idempotent — a replay matches no rows.
+      pass('issue kind rename', () => {
+        db.prepare(`UPDATE files SET kind = 'issue-report' WHERE kind = 'issue'`).run();
+      });
+
+      // ---- 7. Everything else keeps its kind --------------------------------
       // Direct uploads (document/spreadsheet/photo/other) and already-canonical
-      // generated documents (invoice/issue/rfi/punch-report/change-order/
+      // generated documents (invoice/rfi/punch-report/change-order/
       // email-attachment) are left alone. Their sourceId is not derivable for
       // historical rows — project attribution stays the link (spec §Data model).
     },
