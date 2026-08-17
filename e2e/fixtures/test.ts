@@ -6,6 +6,7 @@ import {
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
+  seedDocumentsPortfolio,
   type LoginResult,
 } from './seed';
 
@@ -55,4 +56,5 @@ export {
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
+  seedDocumentsPortfolio,
 };

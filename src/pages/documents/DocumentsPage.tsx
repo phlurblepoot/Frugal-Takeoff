@@ -112,10 +112,18 @@ export const DocumentsPage: React.FC = () => {
   // Bumped every time the filters change (or a refresh is kicked off), so a
   // Load More / refresh that's still in-flight when something else changes
   // can tell its response is stale and drop it instead of clobbering newer
-  // state. mountedRef guards the same races past unmount.
+  // state. mountedRef guards the same races past unmount — it must be reset
+  // to true on every (re)mount, not just seeded once via useRef(true): React
+  // 18 StrictMode double-invokes effects in dev (mount -> cleanup -> mount)
+  // on the SAME ref, so a cleanup-only effect leaves mountedRef stuck false
+  // after the simulated unmount and every future refresh()'s response is
+  // silently dropped forever — the page never leaves its loading skeleton.
   const requestIdRef = useRef(0);
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Re-fetches page one of the current filters. Selection is cleared — every
   // caller (filter change, bulk/row mutation) invalidates whatever was

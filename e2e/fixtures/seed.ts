@@ -673,3 +673,141 @@ export async function seedCustomerWithPortfolio(
     payApp,
   };
 }
+
+export interface SeedDocumentsPortfolioResult extends SeedCustomerPortfolioResult {
+  issueId: string;
+  issueTitle: string;
+  issuePhotoFileId: string;
+  invoiceFileId: string;
+  invoiceFileName: string;
+  payAppFileId: string;
+  payAppFileName: string;
+  printoutId: string;
+  printoutFileId: string;
+  printoutFileName: string;
+}
+
+/**
+ * Extends seedCustomerWithPortfolio (with a pay app) with real DOCUMENT rows
+ * for the global Documents page (unified-documents spec), via the same
+ * two calls the real client flows make — no direct DB writes:
+ *
+ *  - an issue (any-user, field-created) with a photo uploaded + linked the
+ *    way IssueEditor.tsx does it: `POST /api/files/:id?kind=issue-photo&
+ *    sourceType=issue&sourceId=<issueId>` then `POST /api/issues/:id/photos`;
+ *  - an invoice PDF and a pay-app export "persisted on generate" by POSTing
+ *    straight to the raw file endpoint with sourceType/sourceId set, the way
+ *    persistGeneratedDocument()/saveBinaryFile() do after a real client-side
+ *    PDF/XLSX render — the bytes themselves don't matter here, only that the
+ *    row lands with a resolvable source (real invoice/pay-app ids from the
+ *    base portfolio seed) so GET /api/documents can label + link it;
+ *  - a printout, mirroring ProjectProposal.tsx's real save sequence (mint id
+ *    -> upload file against it -> append to project.printouts[] -> PUT the
+ *    project). Unlike invoice/change-order/proposal, printout carries no
+ *    dollar figure so it stays visible to non-admins (spec §Decisions "Role
+ *    visibility").
+ *
+ * All four resolve to real navigable `source.href` values (billing tabs /
+ * issues page / proposal page) since they reference the base seed's real
+ * invoice/pay-app/issue/printout entries — this is what makes the Documents
+ * page's Source column non-trivial to assert against instead of a
+ * dangling-reference fallback.
+ */
+export async function seedDocumentsPortfolio(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedDocumentsPortfolioResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const portfolio = await seedCustomerWithPortfolio(request, token, { withPayApp: true });
+  if (!portfolio.payApp) throw new Error('seedCustomerWithPortfolio did not return a payApp (withPayApp set)');
+  // NOT portfolio.customerId.slice(0, 8) — customer ids are minted server-side
+  // as `customer-${Date.now()}-${random}` (see POST /api/customers), so their
+  // first 8 characters are always the literal string "customer", identical
+  // across every seed call. A fresh randomUUID() is what every other seed
+  // helper in this file uses for its "short" disambiguator.
+  const short = randomUUID().slice(0, 8);
+
+  // Issue + linked photo, on the same in-progress project as the invoice/pay
+  // app so a single project filter picks up every seeded doc.
+  const issueTitle = `E2E Doc Issue ${short}`;
+  const issueRes = await request.post(`/api/projects/${portfolio.inProgressProjectId}/issues`, {
+    headers: auth,
+    data: { title: issueTitle, description: 'Seeded for documents e2e coverage' },
+  });
+  if (!issueRes.ok()) throw new Error(`issue create failed: ${issueRes.status()} ${await issueRes.text()}`);
+  const issue = await issueRes.json();
+
+  const png = readFileSync(TEST_PAGE_PNG);
+  const issuePhotoFileId = randomUUID();
+  const photoUploadRes = await request.post(
+    `/api/files/${issuePhotoFileId}?projectId=${portfolio.inProgressProjectId}&kind=issue-photo&sourceType=issue&sourceId=${issue.id}&name=site-photo-${short}.png`,
+    { headers: { ...auth, 'Content-Type': 'image/png' }, data: png },
+  );
+  if (!photoUploadRes.ok()) throw new Error(`issue photo upload failed: ${photoUploadRes.status()} ${await photoUploadRes.text()}`);
+  const linkPhotoRes = await request.post(`/api/issues/${issue.id}/photos`, {
+    headers: auth,
+    data: { fileId: issuePhotoFileId },
+  });
+  if (!linkPhotoRes.ok()) throw new Error(`issue photo link failed: ${linkPhotoRes.status()} ${await linkPhotoRes.text()}`);
+
+  const invoiceFileName = `Invoice-${short}.pdf`;
+  const invoiceFileId = randomUUID();
+  const invoiceFileRes = await request.post(
+    `/api/files/${invoiceFileId}?projectId=${portfolio.inProgressProjectId}&customerId=${portfolio.customerId}` +
+    `&kind=invoice&sourceType=invoice&sourceId=${portfolio.invoiceId}&name=${encodeURIComponent(invoiceFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from('%PDF-1.4 e2e fixture invoice bytes') },
+  );
+  if (!invoiceFileRes.ok()) throw new Error(`invoice file upload failed: ${invoiceFileRes.status()} ${await invoiceFileRes.text()}`);
+
+  const payAppFileName = `Pay-App-${portfolio.payApp.payAppNumber}-${short}.xlsx`;
+  const payAppFileId = randomUUID();
+  const payAppFileRes = await request.post(
+    `/api/files/${payAppFileId}?projectId=${portfolio.inProgressProjectId}&customerId=${portfolio.customerId}` +
+    `&kind=payapp-export&sourceType=payapp&sourceId=${portfolio.payApp.payAppId}&name=${encodeURIComponent(payAppFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, data: Buffer.from('e2e fixture xlsx bytes') },
+  );
+  if (!payAppFileRes.ok()) throw new Error(`pay app file upload failed: ${payAppFileRes.status()} ${await payAppFileRes.text()}`);
+
+  // Printout — a non-billing generated kind (visible to non-admins), whose
+  // source lives in project.printouts[] JSON rather than a table row (spec
+  // §Data model). Mirrors ProjectProposal.tsx's real save sequence: mint the
+  // printout id first, upload the file against it, then append the printout
+  // entry to the project and PUT the whole project back (optimistic version).
+  const printoutId = randomUUID();
+  const printoutFileName = `Printout-${short}.pdf`;
+  const printoutFileId = randomUUID();
+  const printoutFileRes = await request.post(
+    `/api/files/${printoutFileId}?projectId=${portfolio.inProgressProjectId}&kind=printout&sourceType=printout&sourceId=${printoutId}&name=${encodeURIComponent(printoutFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from('%PDF-1.4 e2e fixture printout bytes') },
+  );
+  if (!printoutFileRes.ok()) throw new Error(`printout file upload failed: ${printoutFileRes.status()} ${await printoutFileRes.text()}`);
+
+  const projectRes = await request.get(`/api/projects/${portfolio.inProgressProjectId}`, { headers: auth });
+  if (!projectRes.ok()) throw new Error(`project fetch (for printout) failed: ${projectRes.status()} ${await projectRes.text()}`);
+  const project = await projectRes.json();
+  const putRes = await request.put(`/api/projects/${portfolio.inProgressProjectId}`, {
+    headers: auth,
+    data: {
+      ...project,
+      printouts: [
+        ...(project.printouts ?? []),
+        { id: printoutId, name: printoutFileName, fileId: printoutFileId, createdAt: Date.now(), type: 'pdf' },
+      ],
+    },
+  });
+  if (!putRes.ok()) throw new Error(`project save (printout) failed: ${putRes.status()} ${await putRes.text()}`);
+
+  return {
+    ...portfolio,
+    issueId: issue.id,
+    issueTitle,
+    issuePhotoFileId,
+    invoiceFileId,
+    invoiceFileName,
+    payAppFileId,
+    payAppFileName,
+    printoutId,
+    printoutFileId,
+    printoutFileName,
+  };
+}
