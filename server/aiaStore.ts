@@ -6,10 +6,6 @@
 // because Phase 4a had float-corruption bugs from missing guards.
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
-// billingStore imports computeG702 + listPayAppRows from here — this import
-// back is safe because both sides only touch it inside function bodies
-// (never at module-init time), so the ESM circular reference resolves fine.
-import { listBilledDocuments, paidCentsFor } from './billingStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -262,29 +258,31 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
   return { id, number };
 }
 
-// Raw pay-app rows for a project, no derived money fields. Used internally by
-// billingStore.listBilledDocuments — the public listPayApps below calls
-// listBilledDocuments for those fields, so it must not call itself through it.
+// Raw pay-app rows for a project, no derived money fields.
 export function listPayAppRows(db: Database.Database, projectId: string): any[] {
   return db.prepare('SELECT * FROM aia_pay_apps WHERE projectId = ? ORDER BY number ASC').all(projectId) as any[];
 }
 
+// Sum of payments recorded against a pay app, in cents. Mirrors
+// billingStore.paidCentsFor(db, 'payapp', id) — duplicated locally (not
+// imported) so aiaStore never depends on billingStore, which itself depends
+// on aiaStore; keep the rounding in sync if it ever changes there.
+function paidPayAppCents(db: Database.Database, payAppId: string): number {
+  const rows = db.prepare('SELECT amount FROM payments WHERE targetType = ? AND targetId = ?').all('payapp', payAppId) as { amount: number }[];
+  return rows.reduce((acc, p) => acc + Math.round((Number(p.amount) || 0) * 100), 0);
+}
+
 export function listPayApps(db: Database.Database, projectId: string): any[] {
   const rows = listPayAppRows(db, projectId);
-  // One listBilledDocuments call covers every finalized app's totalCents/
-  // paidCents/balanceCents (net of retainage, same figures the summaries and
-  // customer ledger use). Draft apps aren't in that list — they're billed
-  // for their LIVE computed amount instead, with balanceCents null (not yet
-  // billed, so "balance" doesn't apply).
-  const billed = new Map(
-    listBilledDocuments(db, projectId).filter(d => d.kind === 'payapp').map(d => [d.id, d])
-  );
   return rows.map(r => {
-    const doc = billed.get(r.id);
-    if (doc) return { ...r, totalCents: doc.totalCents, paidCents: doc.paidCents, balanceCents: doc.balanceCents };
+    // Mirrors billingStore.listBilledDocuments' payapp computation: total is
+    // G702 L8 (current payment due), paid is the payments sum, and a draft
+    // app (not yet billed) reports balanceCents null instead of a number —
+    // total/paid stay live so drafts are still useful to read while editing.
     const totalCents = computeG702(db, r.id).L8currentPaymentDueCents;
-    const paidCents = paidCentsFor(db, 'payapp', r.id);
-    return { ...r, totalCents, paidCents, balanceCents: null };
+    const paidCents = paidPayAppCents(db, r.id);
+    const balanceCents = r.status === 'draft' ? null : totalCents - paidCents;
+    return { ...r, totalCents, paidCents, balanceCents };
   });
 }
 
