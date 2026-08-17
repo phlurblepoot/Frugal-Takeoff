@@ -13,6 +13,7 @@ import {
   LetterheadContext,
   drawLetterheadHeader,
   drawLetterheadFooter,
+  hexToRgb as letterheadHexToRgb,
 } from '../../../utils/documentLetterhead';
 import {
   calculatePolylineLength,
@@ -567,7 +568,7 @@ export function computeTakeoffTotals(
 
 export interface ProposalOptions {
   includeCostDetail: boolean; includeHighlights: boolean;
-  headerColor: string; coverNotes: string;
+  coverNotes: string;
   fontFamily: 'helvetica' | 'times' | 'courier';
   validUntil: string; terms: string;
   includeSignature: boolean; includeTakeoffList: boolean;
@@ -579,9 +580,8 @@ export interface ProposalOptions {
   fixedPriceTotal?: number;
   // JPEG data URLs appended as photo pages after the Terms page.
   photoDataUrls?: string[];
-  // Branded letterhead (header + footer on every page). When provided, the
-  // brand colour also drives the proposal's accents (replacing the user-picked
-  // headerColor) so client PDFs reflect the company brand, not a UI preference.
+  // Branded letterhead (header + footer on every page). The brand colour also
+  // drives the proposal's accents, so client PDFs reflect the company brand.
   letterhead?: LetterheadContext;
   // When provided and non-empty, overrides the company email shown in the document header.
   headerEmail?: string;
@@ -613,7 +613,6 @@ export async function generateProposalPdf(
   const {
     includeCostDetail,
     includeHighlights,
-    headerColor,
     coverNotes,
     fontFamily,
     validUntil,
@@ -631,15 +630,13 @@ export async function generateProposalPdf(
   const W = pdf.internal.pageSize.getWidth();
   const H = pdf.internal.pageSize.getHeight();
 
-  // Branded letterhead. When a letterhead context is supplied the brand colour
-  // drives the proposal accents (the user-picked headerColor no longer leaks
-  // into client PDFs). Falls back to the legacy headerColor when absent.
+  // Branded letterhead. The brand colour drives the proposal's accents on
+  // every generated PDF. `letterhead` is only absent in unit tests that call
+  // this function directly — production callers always pass it (see
+  // ProjectProposal.tsx), so the fallback below only needs a sane default
+  // brand colour, not a user preference.
   const baseLc: LetterheadContext = options.letterhead ?? {
-    brandRgb: ((): [number, number, number] => {
-      const c = (headerColor || '#1e293b').replace('#', '');
-      const full = c.length === 3 ? c.split('').map(x => x + x).join('') : c;
-      return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)];
-    })(),
+    brandRgb: letterheadHexToRgb(''),
     company: {
       name: settings.companyName || settings.appName,
       phone: settings.companyPhone,

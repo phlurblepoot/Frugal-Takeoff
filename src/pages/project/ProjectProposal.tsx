@@ -61,7 +61,6 @@ export const ProjectProposal: React.FC = () => {
 
   // Proposal options (ported from ProjectView's proposal state).
   const [customTitle, setCustomTitle] = useState('');
-  const [headerColor, setHeaderColor] = useState('#1e293b');
   const [fontFamily, setFontFamily] = useState<'helvetica' | 'times' | 'courier'>('helvetica');
   const [validUntil, setValidUntil] = useState('');
   const [coverNotes, setCoverNotes] = useState('');
@@ -145,7 +144,6 @@ export const ProjectProposal: React.FC = () => {
       const raw = localStorage.getItem(getProposalPrefsKey());
       if (raw) {
         const p = JSON.parse(raw);
-        if (p.headerColor)                setHeaderColor(p.headerColor);
         if (p.fontFamily)                 setFontFamily(p.fontFamily);
         if (p.includeCostDetail != null)  setIncludeCostDetail(p.includeCostDetail);
         if (p.includeHighlights != null)  setIncludeHighlights(p.includeHighlights);
@@ -158,7 +156,6 @@ export const ProjectProposal: React.FC = () => {
     } catch { /* ignore corrupt data */ }
 
     getUserPreferences().then(prefs => {
-      if (prefs['proposal-headerColor'])                setHeaderColor(prefs['proposal-headerColor']);
       if (prefs['proposal-fontFamily'])                 setFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
       if (prefs['proposal-includeCostDetail'] != null)  setIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
       if (prefs['proposal-includeHighlights'] != null)  setIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
@@ -174,7 +171,6 @@ export const ProjectProposal: React.FC = () => {
   useEffect(() => {
     try {
       localStorage.setItem(getProposalPrefsKey(), JSON.stringify({
-        headerColor,
         fontFamily,
         includeCostDetail,
         includeHighlights,
@@ -186,7 +182,6 @@ export const ProjectProposal: React.FC = () => {
       }));
     } catch { /* ignore quota errors */ }
     saveUserPreferences({
-      'proposal-headerColor':       headerColor,
       'proposal-fontFamily':        fontFamily,
       'proposal-includeCostDetail': String(includeCostDetail),
       'proposal-includeHighlights': String(includeHighlights),
@@ -196,7 +191,7 @@ export const ProjectProposal: React.FC = () => {
       'proposal-priceMode':         priceMode,
       'proposal-fixedPrice':        fixedPrice,
     }).catch(() => {});
-  }, [headerColor, fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality, priceMode, fixedPrice]);
+  }, [fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality, priceMode, fixedPrice]);
 
   const toggleTakeoff = (id: string) => {
     setSelectedTakeoffIds(prev => {
@@ -248,7 +243,6 @@ export const ProjectProposal: React.FC = () => {
       const options: ProposalOptions = {
         includeCostDetail,
         includeHighlights,
-        headerColor,
         coverNotes,
         fontFamily,
         validUntil,
@@ -517,10 +511,6 @@ export const ProjectProposal: React.FC = () => {
               <Input id="prop-title" value={customTitle} onChange={e => setCustomTitle(e.target.value)}
                 placeholder={project.name} />
             </Field>
-            <Field label="Header color" htmlFor="prop-color">
-              <Input id="prop-color" type="color" value={headerColor} onChange={e => setHeaderColor(e.target.value)}
-                className="h-10 w-20 p-1" />
-            </Field>
             <Field label="Font" htmlFor="prop-font">
               <Select id="prop-font" value={fontFamily} onChange={e => setFontFamily(e.target.value as 'helvetica' | 'times' | 'courier')}>
                 <option value="helvetica">Helvetica</option>
@@ -705,7 +695,6 @@ export const ProjectProposal: React.FC = () => {
               const options: ProposalOptions = {
                 includeCostDetail,
                 includeHighlights,
-                headerColor,
                 coverNotes,
                 fontFamily,
                 validUntil,
