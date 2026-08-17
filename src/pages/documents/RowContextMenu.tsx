@@ -13,6 +13,7 @@ import {
 import { DocumentRow } from '../../utils/store';
 import { CustomDocType, DIRECT_UPLOAD_KINDS, isDirectUploadKind, kindLabel } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
+import { clampToViewport } from './previewPosition';
 
 export interface RowContextMenuState {
   x: number;
@@ -45,14 +46,18 @@ export const RowContextMenu: React.FC<{
   // Clamp to the viewport once the menu's real size is known — re-measured
   // whenever the nested change-type list opens/closes since that changes the
   // menu's height. Runs before paint (useLayoutEffect) so there's no flash at
-  // the unclamped position.
+  // the unclamped position. The clamp itself is shared with the hover preview
+  // card (previewPosition.ts).
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const left = Math.max(8, Math.min(state.x, window.innerWidth - rect.width - 8));
-    const top = Math.max(8, Math.min(state.y, window.innerHeight - rect.height - 8));
-    setPos({ left, top });
+    setPos(clampToViewport(
+      state.x,
+      state.y,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    ));
   }, [state.x, state.y, changeTypeOpen]);
 
   // Outside-click/Escape/scroll all close the menu. The menu's own root stops
@@ -88,7 +93,7 @@ export const RowContextMenu: React.FC<{
       onContextMenu={e => e.preventDefault()}
     >
       <button role="menuitem" className={itemCls} onClick={() => { onClose(); onOpen(row); }}>
-        <ExternalLink size={14} /> Open
+        <ExternalLink size={14} /> Open in editor
       </button>
       <button role="menuitem" className={itemCls} onClick={() => { onClose(); onDownload(row); }}>
         <Download size={14} /> Download

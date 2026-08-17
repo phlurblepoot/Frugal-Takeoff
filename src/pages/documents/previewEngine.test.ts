@@ -20,20 +20,27 @@ vi.mock('../../utils/store', () => ({
   fetchFileBlob: (...args: unknown[]) => fetchFileBlob(...args),
 }));
 
-import { previewKindFor, getPreviewThumb, makeGenerationGuard, HOVER_PDF_SIZE_CAP, _cache } from './previewEngine';
+import {
+  previewKindFor, getPreviewThumb, makeGenerationGuard, loadPdfDoc, renderPdfPage,
+  MODAL_PDF_SCALE, HOVER_PDF_SIZE_CAP, _cache,
+} from './previewEngine';
 
 const realCreateElement = document.createElement.bind(document);
 
 // Fake page: a fixed viewport and a no-op render, matching the brief's
 // guidance (getViewport -> {width:100,height:50}; render fills nothing).
-function makeFakePdf() {
+// `cancel` mirrors pdf.js's RenderTask so the modal's page-flip cancellation
+// path can be exercised.
+const renderCancel = vi.fn();
+function makeFakePdf(numPages = 3) {
   const page = {
     getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 50 * scale }),
-    render: () => ({ promise: Promise.resolve() }),
+    render: () => ({ promise: Promise.resolve(), cancel: renderCancel }),
   };
   return {
-    getPage: async () => page,
-    destroy: async () => {},
+    numPages,
+    getPage: vi.fn(async () => page),
+    destroy: vi.fn(async () => {}),
   };
 }
 
@@ -147,6 +154,41 @@ describe('getPreviewThumb', () => {
       await getPreviewThumb({ id: `img${i}`, versionNumber: 1, mime: 'image/png', size: 10 });
     }
     expect(_cache.size).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('loadPdfDoc / renderPdfPage (viewer modal path)', () => {
+  it('loadPdfDoc fetches once and exposes the page count', async () => {
+    const doc = await loadPdfDoc('f8');
+    expect(fetchFileBlob).toHaveBeenCalledWith('f8');
+    expect(doc.numPages).toBe(3);
+  });
+
+  it('renderPdfPage sizes the canvas to the scaled viewport and renders the asked-for page', async () => {
+    const doc = await loadPdfDoc('f9');
+    const canvas = { width: 0, height: 0, getContext: () => ({}) } as unknown as HTMLCanvasElement;
+    await renderPdfPage(doc, 2, canvas).promise;
+    expect(doc.getPage).toHaveBeenCalledWith(2);
+    expect(canvas.width).toBe(Math.round(100 * MODAL_PDF_SCALE));
+    expect(canvas.height).toBe(Math.round(50 * MODAL_PDF_SCALE));
+  });
+
+  it('cancel() before the page resolves skips the render entirely', async () => {
+    const doc = await loadPdfDoc('f10');
+    const canvas = { width: 0, height: 0, getContext: () => ({}) } as unknown as HTMLCanvasElement;
+    const task = renderPdfPage(doc, 1, canvas);
+    task.cancel();
+    await task.promise;
+    // getPage() was already in flight; the canvas must be left untouched.
+    expect(canvas.width).toBe(0);
+  });
+
+  it('page flips reuse the same doc handle — no extra fetch', async () => {
+    const doc = await loadPdfDoc('f11');
+    const canvas = { width: 0, height: 0, getContext: () => ({}) } as unknown as HTMLCanvasElement;
+    await renderPdfPage(doc, 1, canvas).promise;
+    await renderPdfPage(doc, 2, canvas).promise;
+    expect(fetchFileBlob).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -61,10 +61,62 @@ function cacheSet(key: string, thumb: Thumb): void {
   _cache.set(key, thumb);
 }
 
-async function renderPdfThumb(id: string): Promise<Thumb> {
+// Scale the viewer modal renders a page at — readable on screen without
+// producing a canvas so large that flipping pages feels sluggish.
+export const MODAL_PDF_SCALE = 1.5;
+
+// A loaded pdf.js document. The viewer modal holds one of these for as long as
+// it's open so page flips don't refetch or re-parse the bytes; it MUST call
+// destroy() when it closes (pdf.js keeps a worker-side document alive
+// otherwise). The hover/thumb path below loads and destroys its own within a
+// single call.
+export interface PdfDocHandle {
+  numPages: number;
+  getPage(pageNumber: number): Promise<any>;
+  destroy(): Promise<void>;
+}
+
+export async function loadPdfDoc(id: string): Promise<PdfDocHandle> {
   const blob = await fetchFileBlob(id);
   const bytes = await blob.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+  return await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+}
+
+// Renders one page into a caller-owned canvas. Returns a cancel handle because
+// pdf.js refuses two concurrent render() calls on the same canvas — flipping
+// pages faster than a render completes must cancel the outgoing one first. A
+// cancelled render rejects (RenderingCancelledException); callers that
+// cancelled are expected to swallow it.
+export function renderPdfPage(
+  doc: PdfDocHandle,
+  pageNumber: number,
+  canvas: HTMLCanvasElement,
+  scale: number = MODAL_PDF_SCALE,
+): { promise: Promise<void>; cancel: () => void } {
+  let cancelled = false;
+  let task: { cancel?: () => void } | null = null;
+  const promise = (async () => {
+    const page = await doc.getPage(pageNumber);
+    if (cancelled) return;
+    const vp = page.getViewport({ scale });
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    task = page.render({ canvasContext: ctx, viewport: vp } as any);
+    await (task as any).promise;
+  })();
+  return {
+    promise,
+    cancel: () => {
+      cancelled = true;
+      task?.cancel?.();
+    },
+  };
+}
+
+async function renderPdfThumb(id: string): Promise<Thumb> {
+  const pdf = await loadPdfDoc(id);
   try {
     const page = await pdf.getPage(1);
     const vp1 = page.getViewport({ scale: 1 });
