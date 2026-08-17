@@ -123,6 +123,25 @@ describe('getPreviewThumb', () => {
     expect(fetchFileBlob).toHaveBeenCalledTimes(1);
   });
 
+  it('concurrent calls for the same id:version share one fetch+render', async () => {
+    const row = { id: 'f6', versionNumber: 1, mime: 'application/pdf', size: 16 * 1024 * 1024 };
+    const [a, b] = await Promise.all([getPreviewThumb(row), getPreviewThumb(row)]);
+    expect(a).toBe(b);
+    expect(fetchFileBlob).toHaveBeenCalledTimes(1);
+    expect(getDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected in-flight render clears the memo so a later call retries', async () => {
+    const row = { id: 'f7', versionNumber: 1, mime: 'application/pdf', size: 16 * 1024 * 1024 };
+    fetchFileBlob.mockRejectedValueOnce(new Error('network'));
+    await expect(getPreviewThumb(row)).rejects.toThrow('network');
+    expect(fetchFileBlob).toHaveBeenCalledTimes(1);
+
+    const thumb = await getPreviewThumb(row);
+    expect(thumb.kind).toBe('canvas');
+    expect(fetchFileBlob).toHaveBeenCalledTimes(2);
+  });
+
   it('eviction keeps the map at <=100', async () => {
     for (let i = 0; i < 101; i++) {
       await getPreviewThumb({ id: `img${i}`, versionNumber: 1, mime: 'image/png', size: 10 });

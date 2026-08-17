@@ -41,6 +41,14 @@ const CACHE_MAX_ENTRIES = 100;
 // newer upload sharing the same file id. Exported for tests only.
 export const _cache: Map<string, Thumb> = new Map();
 
+// In-flight render memo, same key shape as _cache. Covers the hover-then-
+// click case: a hover render can still be pending pdfjs work when the user
+// clicks to open the modal, and rapid re-hovers can overlap too — without
+// this, each concurrent caller would kick off its own fetchFileBlob + pdfjs
+// render for the identical bytes. Entries are removed on settle (success OR
+// failure) so a failed render doesn't wedge — the next call retries.
+const _pending: Map<string, Promise<Thumb>> = new Map();
+
 const cacheKey = (id: string, versionNumber: number): string => `${id}:${versionNumber}`;
 
 function cacheSet(key: string, thumb: Thumb): void {
@@ -82,10 +90,10 @@ export async function getPreviewThumb(
   const key = cacheKey(row.id, row.versionNumber);
 
   if (kind === 'image') {
-    // No fetch: the <img> element loads the raw stream itself.
-    const thumb: Thumb = { kind: 'image', url: `/api/images/${row.id}/raw` };
-    cacheSet(key, thumb);
-    return thumb;
+    // No fetch: the <img> element loads the raw stream itself. Trivial to
+    // recompute (it's just a URL string), so not worth spending eviction
+    // budget on.
+    return { kind: 'image', url: `/api/images/${row.id}/raw` };
   }
 
   if (kind !== 'pdf') return { kind: 'icon' };
@@ -94,15 +102,21 @@ export async function getPreviewThumb(
   if (cached) return cached;
 
   if (opts?.forHover && row.size > HOVER_PDF_SIZE_CAP) {
-    // Deliberately not cached under the file's key: caching this icon would
-    // poison the modal path, which must still render the real thumb for the
-    // same file/version once opened.
+    // Deliberately not cached (nor memoized) under the file's key: caching
+    // this icon would poison the modal path, which must still render the
+    // real thumb for the same file/version once opened. Hover-capped
+    // requests never reach the fetch below, so there's nothing to dedup.
     return { kind: 'icon' };
   }
 
-  const thumb = await renderPdfThumb(row.id);
-  cacheSet(key, thumb);
-  return thumb;
+  const pending = _pending.get(key);
+  if (pending) return pending;
+
+  const promise = renderPdfThumb(row.id)
+    .then(thumb => { cacheSet(key, thumb); return thumb; })
+    .finally(() => { _pending.delete(key); });
+  _pending.set(key, promise);
+  return promise;
 }
 
 // Pure generation-counter guard: a hover session (or any in-flight async
