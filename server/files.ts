@@ -55,9 +55,13 @@ export const SYSTEM_KINDS = [
 // all sharing the same (sourceType, sourceId, kind) triple. They are excluded
 // from upsert-by-source — otherwise the second photo would silently overwrite
 // the first as a "new version" of it (spec 2026-08-17, second amendment).
+// `plan-source` belongs here for the same reason and with sharper teeth: a
+// plan set is routinely built from several uploaded PDFs, and versioning one
+// onto another would keep the live id — so the pages split out of the FIRST
+// pdf would start rendering the second.
 export const MULTI_INSTANCE_KINDS = [
   'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
-  'rfi-photo', 'proposal-photo',
+  'rfi-photo', 'proposal-photo', 'plan-source',
 ] as const;
 
 // Kinds a person can pick in the upload popup — the only ones a file may be

@@ -235,6 +235,23 @@ describe('upsert-by-source uploads', () => {
     expect(readFileContent(dir, 'ph2')!.toString()).toBe('photo-b');
   });
 
+  it('never versions one plan-set PDF onto another', () => {
+    const SET = { kind: 'plan-source', sourceType: 'plan-set', sourceId: 'ps1', projectId: 'p1' };
+    const first = putBuffer(db, dir, 'pdf-a', Buffer.from('arch-set'), 'application/pdf', { ...SET, name: 'Architectural.pdf' });
+    const second = putBuffer(db, dir, 'pdf-b', Buffer.from('struct-set'), 'application/pdf', { ...SET, name: 'Structural.pdf' });
+    expect(first).toMatchObject({ id: 'pdf-a', versioned: false });
+    expect(second).toMatchObject({ id: 'pdf-b', versioned: false });
+
+    // both keep their own id and bytes — the pages split out of each PDF go on
+    // rendering the PDF they came from
+    expect(readFileContent(dir, 'pdf-a')!.toString()).toBe('arch-set');
+    expect(readFileContent(dir, 'pdf-b')!.toString()).toBe('struct-set');
+    const live = db.prepare(
+      'SELECT id FROM files WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? ORDER BY id'
+    ).all('plan-set', 'ps1') as { id: string }[];
+    expect(live.map(r => r.id)).toEqual(['pdf-a', 'pdf-b']);
+  });
+
   it('excludes every multi-instance kind, on any entity', () => {
     for (const kind of MULTI_INSTANCE_KINDS) {
       putBuffer(db, dir, `${kind}-1`, Buffer.from('a'), 'image/jpeg', { kind, sourceType: 'e', sourceId: 'e-1' });
