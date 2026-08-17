@@ -11,7 +11,7 @@ import {
   patchProject, normalizeProjectStatus, listProjectSummaries,
   ValidationError, ConflictError,
 } from './projectStore';
-import { putBuffer } from './files';
+import { putBuffer, saveNewVersion } from './files';
 import { readFileContent } from './fileStore';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
@@ -230,6 +230,108 @@ describe('saveProject', () => {
     expect(meta.customerId).toBeUndefined(); // must NOT be leaked into meta
     const reloaded = loadProject(db, 'proj1')!;
     expect(reloaded.customerId).toBe('c1');
+  });
+});
+
+// Printout files and proposal photos carry a sourceType, so DELETE
+// /api/files/:id refuses them and orphan cleanup exempts anything attributed to
+// a live project — dropping the entry here is the only moment their bytes can
+// be reclaimed.
+describe('saveProject source-side file cascade', () => {
+  beforeEach(() => seedLegacyAndNormalize(LEGACY_PROJECT));
+
+  // A live file with real bytes plus one archived version row, i.e. everything
+  // a printout that has been regenerated once would have.
+  const seedFile = (id: string, kind: string) => {
+    putBuffer(db, dir, id, Buffer.from(`${id}-v1`), 'application/pdf', { projectId: 'proj1', kind });
+    const { archivedVersionId } = saveNewVersion(db, dir, id, Buffer.from(`${id}-v2`), 'application/pdf');
+    return archivedVersionId;
+  };
+  const fileRowCount = (id: string) =>
+    (db.prepare('SELECT COUNT(*) as c FROM files WHERE id = ? OR parentFileId = ?').get(id, id) as any).c;
+
+  it('removing a printout entry deletes its file row, bytes and version rows', () => {
+    const archivedId = seedFile('pofile1', 'printout');
+    expect(fileRowCount('pofile1')).toBe(2);
+
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(0);
+    expect(readFileContent(dir, 'pofile1')).toBeNull();
+    expect(readFileContent(dir, archivedId)).toBeNull();
+  });
+
+  it('a payload that omits printouts entirely deletes nothing', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    delete p.printouts; // partial/legacy payload — NOT "all printouts removed"
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+    expect(readFileContent(dir, 'pofile1')).not.toBeNull();
+  });
+
+  it('keeps a file that a surviving entry still references', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    // Two entries, one file (a renamed duplicate of the same generated PDF).
+    p.printouts = [...p.printouts, { id: 'po2', name: 'Bid set copy', fileId: 'pofile1', createdAt: 1705000000001 }];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    p2.printouts = p2.printouts.filter((pr: any) => pr.id !== 'po1');
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+    expect(readFileContent(dir, 'pofile1')).not.toBeNull();
+  });
+
+  it('leaves a dropped id alone when another project field still mentions it', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    p.proposalPhotoIds = ['pofile1']; // same file, now referenced elsewhere
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+  });
+
+  it('removing a proposal photo deletes its file row, bytes and version rows', () => {
+    const archivedId = seedFile('photo1', 'proposal-photo');
+    const p = loadProject(db, 'proj1')!;
+    p.proposalPhotoIds = ['photo1'];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    p2.proposalPhotoIds = [];
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('photo1')).toBe(0);
+    expect(readFileContent(dir, 'photo1')).toBeNull();
+    expect(readFileContent(dir, archivedId)).toBeNull();
+  });
+
+  it('a payload that omits proposalPhotoIds entirely deletes nothing', () => {
+    seedFile('photo1', 'proposal-photo');
+    const p = loadProject(db, 'proj1')!;
+    p.proposalPhotoIds = ['photo1'];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    delete p2.proposalPhotoIds;
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('photo1')).toBe(2);
+  });
+
+  it('cascades nothing when the caller passes no dataDir', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    saveProject(db, 'proj1', p); // e.g. migration-time / test callers
+    expect(fileRowCount('pofile1')).toBe(2);
   });
 });
 

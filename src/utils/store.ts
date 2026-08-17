@@ -618,14 +618,6 @@ export const getProjectSummary = async (id: string): Promise<ProjectSummary | nu
   return await res.json();
 };
 
-export const getProjectFiles = async (projectId: string): Promise<ProjectFile[]> => {
-  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(projectId)}/files`, {
-    headers: { ...getAuthHeaders() },
-  });
-  await handleResponse(res);
-  return await res.json();
-};
-
 export const getFileMeta = async (id: string): Promise<ProjectFile | null> => {
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/meta`, {
     headers: { ...getAuthHeaders() },

@@ -1006,6 +1006,11 @@ export const migrations: Migration[] = [
       // Upload-time upsert-by-source looks a document up by this triple on
       // every generate, so it gets an index.
       db.exec(`CREATE INDEX IF NOT EXISTS idx_files_source ON files (sourceType, sourceId);`);
+      // The Documents listing always filters on archived and orders by
+      // createdAt. Added after the first dev DBs had already reached v23, so a
+      // database stamped 23 before this line existed needs it run by hand:
+      //   CREATE INDEX IF NOT EXISTS idx_files_archived_createdAt ON files (archived, createdAt);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_files_archived_createdAt ON files (archived, createdAt);`);
 
       // Writes only when something actually changes (NULL-safe via IS NOT).
       const relabel = db.prepare(`

@@ -135,8 +135,13 @@ export function listDocuments(
     db.prepare(`SELECT COUNT(*) as c ${fromSql} WHERE ${whereSql}`).get(...params) as { c: number }
   ).c;
 
-  const limit = filters.limit ?? 100;
-  const offset = filters.offset ?? 0;
+  // Clamped rather than trusted: the page size comes straight off the query
+  // string, where a huge (or negative, which SQLite reads as "no limit") value
+  // would turn one request into a full-table scan.
+  const clamp = (n: number | undefined, min: number, max: number, dflt: number) =>
+    (typeof n === 'number' && Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : dflt);
+  const limit = clamp(filters.limit, 1, 500, 100);
+  const offset = clamp(filters.offset, 0, Number.MAX_SAFE_INTEGER, 0);
   const rawRows = db.prepare(`
     SELECT f.id, f.name, f.mime, f.size, f.kind, f.createdAt, f.versionNumber, f.archived,
            f.projectId, p.name as projectName,

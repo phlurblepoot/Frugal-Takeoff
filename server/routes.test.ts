@@ -175,6 +175,20 @@ describe('storage + search + orphans', () => {
     expect((await request(app).get('/api/files/doc1/meta')).status).toBe(200); // survived
   });
 
+  it('orphan cleanup spares a project-less task photo', async () => {
+    // Task photos are deliberately project-less (a task outlives the project it
+    // merely refers to), so files.projectId cannot vouch for them — only the
+    // join table can.
+    await request(app).post('/api/files/tphoto1?kind=task-photo&name=Photo.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('photo'));
+    db.prepare('INSERT INTO task_photos (id, taskId, fileId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('tp1', 'task1', 'tphoto1', 1);
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(0);
+    await request(app).post('/api/storage/orphans/cleanup');
+    expect((await request(app).get('/api/files/tphoto1/meta')).status).toBe(200);
+  });
+
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
     await request(app).post('/api/projects').send({
       ...PROJECT,
@@ -410,18 +424,6 @@ describe('project files', () => {
     expect(meta.body).toMatchObject({ versionNumber: 2, sourceType: 'invoice', sourceId: 'inv-1', customerId: 'c1' });
     const versions = await request(app).get('/api/files/gen1/versions');
     expect(versions.body.map((v: any) => v.versionNumber)).toEqual([2, 1]);
-  });
-
-  it('GET /api/projects/:id/files lists live files newest-first, no version rows', async () => {
-    await request(app).post('/api/files/doc1?projectId=p1&kind=document&name=A.pdf')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('a'));
-    await request(app).post('/api/files/doc2?projectId=p1&kind=spreadsheet&name=B.xlsx')
-      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      .send(Buffer.from('b'));
-    const res = await request(app).get('/api/projects/p1/files');
-    expect(res.status).toBe(200);
-    expect(res.body.map((f: any) => f.id).sort()).toEqual(['doc1', 'doc2']);
-    expect(res.body[0].sha256).toBeUndefined(); // slim listing
   });
 
   it('GET /api/files/:id/meta 404s for unknown files', async () => {

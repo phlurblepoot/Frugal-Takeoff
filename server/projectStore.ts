@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
+import { removeFile, listVersions } from './files';
 import { billingSummary, listBilledDocuments } from './billingStore';
 import { countOpenIssues } from './issueStore';
 import { punchProgress } from './punchStore';
@@ -229,22 +230,102 @@ export function createProject(db: Database.Database, payload: any): { version: n
   return { version: 1 };
 }
 
-export function saveProject(db: Database.Database, id: string, payload: any): { version: number } {
+// Every file id the payload still mentions — the array entries themselves plus
+// any id embedded in an /api/files/<id> or /api/images/<id> URL anywhere in the
+// document (same walk shape as routes.ts's orphan sweep). A dropped id that
+// still turns up here is kept.
+function referencedFileIds(payload: any): Set<string> {
+  const refs = new Set<string>();
+  const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
+  const walk = (v: any) => {
+    if (v == null) return;
+    if (typeof v === 'string') {
+      refs.add(v);
+      urlRe.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = urlRe.exec(v)) !== null) {
+        try { refs.add(decodeURIComponent(m[1])); } catch { refs.add(m[1]); }
+      }
+      return;
+    }
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (typeof v === 'object') { for (const k in v) walk(v[k]); }
+  };
+  walk(payload);
+  return refs;
+}
+
+// Source-side deletions: the project document OWNS its printout files and
+// proposal photos, and those rows carry a sourceType, so DELETE /api/files/:id
+// refuses them (spec's deletion tiers) and orphan cleanup structurally exempts
+// anything attributed to a live project. Dropping the entry here is therefore
+// the only moment their bytes can be reclaimed.
+//
+// A missing key is NOT an empty list: partial or legacy payloads omit
+// printouts/proposalPhotoIds entirely, and reading that as "all removed" would
+// delete every printout in the project. Only an actual array opts its own
+// field into the diff.
+function droppedSourceFileIds(oldMetaJson: string | null, payload: any): string[] {
+  let oldMeta: any;
+  try { oldMeta = oldMetaJson ? JSON.parse(oldMetaJson) : {}; } catch { return []; }
+  if (!oldMeta || typeof oldMeta !== 'object') return [];
+
+  const candidates = new Set<string>();
+  if (Array.isArray(payload.printouts) && Array.isArray(oldMeta.printouts)) {
+    for (const p of oldMeta.printouts) {
+      if (p && typeof p.fileId === 'string' && p.fileId) candidates.add(p.fileId);
+    }
+  }
+  if (Array.isArray(payload.proposalPhotoIds) && Array.isArray(oldMeta.proposalPhotoIds)) {
+    for (const fid of oldMeta.proposalPhotoIds) {
+      if (typeof fid === 'string' && fid) candidates.add(fid);
+    }
+  }
+  if (candidates.size === 0) return [];
+
+  const surviving = referencedFileIds(payload);
+  return [...candidates].filter(fid => !surviving.has(fid));
+}
+
+export function saveProject(
+  db: Database.Database,
+  id: string,
+  payload: any,
+  dataDir?: string
+): { version: number } {
   validate(payload, id);
   if (!Number.isInteger(payload.version) || payload.version < 1) {
     throw new ValidationError('Missing or invalid version — reload the project and try again');
   }
   let newVersion = 0;
+  let dropped: string[] = [];
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM projects WHERE id = ?').get(id) as { version: number } | undefined;
+    // meta is read here because it is the last moment the OLD printouts /
+    // proposalPhotoIds exist — decomposeProject overwrites the column.
+    const row = db.prepare('SELECT version, meta FROM projects WHERE id = ?').get(id) as
+      | { version: number; meta: string | null }
+      | undefined;
     if (!row) throw new ValidationError('Project not found');
     if (row.version !== payload.version) {
       throw new ConflictError(`Project changed since it was loaded (server v${row.version}, payload v${payload.version})`);
     }
     newVersion = row.version + 1;
+    if (dataDir) dropped = droppedSourceFileIds(row.meta, payload);
     decomposeProject(db, payload, newVersion);
   });
   tx();
+
+  // After the commit, and never fatal: the save itself already succeeded, so a
+  // failed cascade is a storage leak to report, not a lost edit.
+  if (dataDir) {
+    for (const fid of dropped) {
+      try {
+        for (const v of listVersions(db, fid)) removeFile(db, dataDir, v.id);
+      } catch (e) {
+        console.warn(`[projectStore] could not remove dropped source file ${fid}:`, e);
+      }
+    }
+  }
   return { version: newVersion };
 }
 

@@ -17,7 +17,7 @@ app-wide.
 
 - New top-level **Documents** tab (sidebar, next to Tasks). The per-project
   Documents nav entry remains but navigates to
-  `/documents?projectId=<id>` (global page pre-filtered).
+  `/documents?projectIds=<id>` (global page pre-filtered).
 - **Every document appears** — original plan-set PDFs, proposals, printouts,
   invoice/CO/issue/punch/RFI PDFs, pay-app spreadsheets, photos, uploads —
   EXCEPT per-page plan assets (page rasters/thumbnails stay hidden).
@@ -141,7 +141,7 @@ save path as other settings).
   `openTargetFor` semantics from ProjectDocuments. Version history stays
   (expandable row). Drag-drop + picker both open the labeling popup.
 - Sidebar: Documents entry in WORKSPACE_NAV; command palette global entry.
-- `/project/:id/documents` route → `<Navigate to="/documents?projectId=…">`;
+- `/project/:id/documents` route → `<Navigate to="/documents?projectIds=…">`;
   old ProjectDocuments.tsx retired (its upload/version/open logic moves to
   the global page's components).
 - Settings: "Document types" admin card (list, add, rename inline, delete

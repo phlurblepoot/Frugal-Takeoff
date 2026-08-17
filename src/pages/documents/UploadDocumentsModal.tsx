@@ -22,7 +22,12 @@ interface Entry {
   kind: string;
 }
 
-const toEntry = (file: File): Entry => ({ id: crypto.randomUUID(), file, kind: kindFromMime(file.type) });
+// The Type select opens on this, so a fresh batch must be seeded with it —
+// guessing from the MIME type instead would make the visible Type lie about
+// what gets uploaded.
+const DEFAULT_KIND = 'document';
+
+const toEntry = (file: File, kind: string): Entry => ({ id: crypto.randomUUID(), file, kind });
 
 export const UploadDocumentsModal: React.FC<{
   open: boolean;
@@ -35,7 +40,7 @@ export const UploadDocumentsModal: React.FC<{
 }> = ({ open, onClose, onUploaded, projects, customers, customTypes, initialFiles }) => {
   const { toast } = useToast();
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [sharedKind, setSharedKind] = useState('document');
+  const [sharedKind, setSharedKind] = useState(DEFAULT_KIND);
   const [perFileType, setPerFileType] = useState(false);
   const [projectId, setProjectId] = useState('');
   const [customerId, setCustomerId] = useState('');
@@ -48,8 +53,8 @@ export const UploadDocumentsModal: React.FC<{
   // modal is already open just falls through to the dropzone's own onDrop).
   useEffect(() => {
     if (!open) return;
-    setEntries((initialFiles ?? []).map(toEntry));
-    setSharedKind('document');
+    setEntries((initialFiles ?? []).map(f => toEntry(f, DEFAULT_KIND)));
+    setSharedKind(DEFAULT_KIND);
     setPerFileType(false);
     setProjectId('');
     setCustomerId('');
@@ -65,7 +70,9 @@ export const UploadDocumentsModal: React.FC<{
   const addFiles = (list: FileList | File[]) => {
     const arr = Array.from(list);
     if (!arr.length) return;
-    setEntries(prev => [...prev, ...arr.map(f => ({ ...toEntry(f), kind: perFileType ? kindFromMime(f.type) : sharedKind }))]);
+    // Only the per-file disclosure guesses from the MIME type — with one shared
+    // Type, every chip must carry what that select shows.
+    setEntries(prev => [...prev, ...arr.map(f => toEntry(f, perFileType ? kindFromMime(f.type) : sharedKind))]);
   };
 
   const removeEntry = (id: string) => setEntries(prev => prev.filter(e => e.id !== id));
@@ -95,7 +102,7 @@ export const UploadDocumentsModal: React.FC<{
   const handleUpload = async () => {
     if (entries.length === 0) return;
     setUploading(true);
-    let ok = 0;
+    const uploaded = new Set<string>();
     for (const e of entries) {
       try {
         await saveBinaryFile(crypto.randomUUID(), e.file, {
@@ -104,10 +111,15 @@ export const UploadDocumentsModal: React.FC<{
           ...(projectId ? { projectId } : {}),
           ...(customerId ? { customerId } : {}),
         });
-        ok++;
+        uploaded.add(e.id);
       } catch { /* keep going, report the count below */ }
     }
     setUploading(false);
+    // The chips that made it are dropped so the modal stays open on exactly the
+    // failures — pressing Upload again retries those instead of uploading the
+    // successes a second time under new ids.
+    if (uploaded.size) setEntries(prev => prev.filter(e => !uploaded.has(e.id)));
+    const ok = uploaded.size;
     if (ok < entries.length) toast(`Uploaded ${ok} of ${entries.length} files`, { type: ok ? 'warning' : 'error' });
     else toast(`Uploaded ${ok} file${ok === 1 ? '' : 's'}`, { type: 'success' });
     if (ok > 0) onUploaded();

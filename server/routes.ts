@@ -132,7 +132,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.put('/api/projects/:id', authenticateToken, (req, res) => {
     try {
-      const result = saveProject(db, req.params.id, req.body);
+      const result = saveProject(db, req.params.id, req.body, dataDir);
       res.json({ success: true, version: result.version });
     } catch (e) {
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
@@ -388,7 +388,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const project = loadProject(db, req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
       project.aiaSettings = { ...(project.aiaSettings ?? {}), ...req.body };
-      saveProject(db, req.params.id, project);
+      saveProject(db, req.params.id, project, dataDir);
       res.json(project.aiaSettings);
     } catch (e) {
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
@@ -780,20 +780,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  app.get('/api/projects/:id/files', authenticateToken, (req, res) => {
-    try {
-      res.json(db.prepare(`
-        SELECT id, projectId, name, mime, size, kind, parentFileId, versionNumber, createdAt
-        FROM files WHERE projectId = ? AND parentFileId IS NULL
-        ORDER BY createdAt DESC
-      `).all(req.params.id));
-    } catch (e) {
-      console.error('Error listing project files:', e);
-      res.status(500).json({ error: 'Failed to list project files' });
-    }
-  });
-
   // ── Global Documents page ─────────────────────────────────────────────────
+  // GET /api/projects/:id/files is gone with ProjectDocuments: it had no role
+  // gate, so it leaked billing-kind rows (invoice/pay-app/CO/proposal) to
+  // non-admins. /api/documents below is the one listing endpoint, and it
+  // applies that exclusion.
   // spec docs/superpowers/specs/2026-08-17-unified-documents-design.md §Server
 
   app.get('/api/documents', authenticateToken, (req, res) => {
@@ -895,6 +886,15 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     for (const r of shareRows) {
       addString(r.resourceId);
       try { walk(JSON.parse(r.resourceId)); } catch { /* plain id */ }
+    }
+    // Photo join tables hold their file ids in a column, not in any JSON the
+    // walk above reaches. Project-attributed rows are covered by the clause
+    // below, but task photos are deliberately project-less (a task outlives the
+    // project it merely refers to), so without this pass they read as orphans.
+    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos']) {
+      let rows: { fileId: string | null }[] = [];
+      try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
+      for (const r of rows) if (r.fileId) referenced.add(r.fileId);
     }
     // Files attributed to a live project are referenced by definition (e.g.
     // standalone Documents uploads whose id never appears in project JSON).
@@ -1344,7 +1344,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       // await between this load and the save, nothing can interleave.
       const fresh = loadProject(db, req.params.id) ?? project;
       const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
-      saveProject(db, req.params.id, updatedProject);
+      saveProject(db, req.params.id, updatedProject, dataDir);
       res.json(loadProject(db, req.params.id));
     } catch (error: any) {
       console.error('Error sending project proposal:', error);

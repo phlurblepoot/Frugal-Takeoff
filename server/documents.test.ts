@@ -140,6 +140,22 @@ describe('GET /api/documents — filters', () => {
     expect(res.body.rows.map((r: any) => r.id)).toEqual(['p3', 'p2']);
   });
 
+  it('clamps paging: limit to [1,500] and a negative offset to 0', async () => {
+    for (let i = 0; i < 3; i++) {
+      const id = await upload(`p${i}`, { projectId: 'p1', kind: 'document', name: `Doc${i}.pdf` });
+      setCreatedAt(id, 1000 + i);
+    }
+    // SQLite reads a negative LIMIT as "no limit" — clamped to 1 instead.
+    const tooSmall = await request(app).get('/api/documents?limit=-1');
+    expect(tooSmall.body.rows).toHaveLength(1);
+    // Over the cap the request still answers, just capped (3 rows exist).
+    const tooBig = await request(app).get('/api/documents?limit=999999');
+    expect(tooBig.body.rows).toHaveLength(3);
+    // A negative offset would otherwise be a SQL error / silent skip.
+    const negOffset = await request(app).get('/api/documents?offset=-5');
+    expect(negOffset.body.rows.map((r: any) => r.id)).toEqual(['p2', 'p1', 'p0']);
+  });
+
   it('always excludes plan and settings-asset kinds, and version rows', async () => {
     await upload('plan1', { projectId: 'p1', kind: 'plan', name: 'raster.png' });
     await upload('sa1', { kind: 'settings-asset', name: 'template.xlsx' });

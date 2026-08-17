@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
 import { Project, Printout, Customer } from '../../types';
 import {
-  getProject, saveProject, saveBinaryFile, getFile, deleteFile, getSettings,
+  getProject, saveProject, saveBinaryFile, getFile, getSettings,
   getSmtpSettings, getAlwaysCc, getCustomer,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
   uploadProjectFile, getImageUrl,
@@ -360,13 +360,10 @@ export const ProjectProposal: React.FC = () => {
     })) return;
     const updated = { ...project, printouts: (project.printouts || []).filter(p => p.id !== printout.id) };
     try {
+      // The file row + bytes go with it: printout files carry sourceType
+      // 'printout' (line ~291), so DELETE /api/files/:id refuses them and the
+      // save itself cascades the drop server-side (projectStore.saveProject).
       await saveProject(updated);
-      // Printout files carry sourceType 'printout' (line ~291) — deleteFile
-      // now does a real DELETE, and the server 409s any sourced/generated row
-      // (spec's deletion tiers: archive-only, not really deletable). Best
-      // effort only, so an expected 409 doesn't surface as "failed to delete"
-      // once the printout entry itself is already gone from the project.
-      try { await deleteFile(printout.fileId); } catch { /* best effort */ }
       reload();
     } catch {
       toast('Failed to delete printout', { type: 'error' });
@@ -408,8 +405,8 @@ export const ProjectProposal: React.FC = () => {
     if (!project) return;
     const updated = { ...project, proposalPhotoIds: (project.proposalPhotoIds || []).filter(id => id !== fileId) };
     try {
+      // Same source-side cascade as printouts — the save removes the file.
       await saveProject(updated);
-      try { await deleteFile(fileId); } catch { /* best effort */ }
       reload();
     } catch {
       toast('Failed to remove photo', { type: 'error' });

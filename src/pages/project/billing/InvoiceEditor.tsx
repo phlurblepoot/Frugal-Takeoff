@@ -73,6 +73,12 @@ export const InvoiceEditor: React.FC<{
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // One name for download, upload and the composer attachment: all three upsert
+  // onto the same document row, so a differing name would flip the stored name
+  // depending on which ran last. The id fallback keeps unnumbered drafts from
+  // all landing on the same "invoice.pdf".
+  const pdfFileName = `Invoice-${invoice.number || invoice.id}.pdf`;
+
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
   const balance = total - paid;
@@ -147,9 +153,7 @@ export const InvoiceEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      // Same name the send flow uses: both upsert onto one document row, so a
-      // differing name here would flip the stored name depending on which ran last.
-      const fileName = `${invoice.number || 'invoice'}.pdf`;
+      const fileName = pdfFileName;
       // Keep a copy in Documents, but never let that failure block the download.
       try {
         await persistGeneratedDocument(blob, { projectId, kind: 'invoice', name: fileName, sourceType: 'invoice', sourceId: invoice.id });
@@ -248,7 +252,7 @@ export const InvoiceEditor: React.FC<{
         onClose={() => setComposing(false)}
         projectId={projectId}
         title="Send invoice"
-        primaryAttachmentName={`${invoice.number || 'invoice'}.pdf`}
+        primaryAttachmentName={pdfFileName}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
         defaultBcc={emailDefaults.defaultBcc || undefined}
@@ -260,7 +264,7 @@ export const InvoiceEditor: React.FC<{
           // Always regenerate with the chosen header email so the PDF contact matches.
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildBytes(effectiveHeaderEmail);
-          const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
+          const file = new File([bytes], pdfFileName, { type: 'application/pdf' });
           // The PDF is uploaded as a project document before sending; the source
           // triple makes the server version this invoice's one document rather than
           // pile up copies, so a failed send + retry (and Download) converge.
