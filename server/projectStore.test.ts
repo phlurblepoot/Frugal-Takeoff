@@ -110,7 +110,11 @@ describe('migration 5 + loadProject round-trip', () => {
   it('labels referenced files with projectId and kind', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
     const kind = (id: string) => (db.prepare('SELECT projectId, kind FROM files WHERE id = ?').get(id) as any);
-    expect(kind('pdf1')).toEqual({ projectId: 'proj1', kind: 'plan' });
+    // Migration 23 requalifies the uploaded PDF behind a page as `plan-source`
+    // (the page raster + thumbnail stay `plan`) and gives it a plan-set source.
+    expect(kind('pdf1')).toEqual({ projectId: 'proj1', kind: 'plan-source' });
+    expect(db.prepare('SELECT sourceType, sourceId FROM files WHERE id = ?').get('pdf1'))
+      .toEqual({ sourceType: 'plan-set', sourceId: 'ps1' });
     expect(kind('thumb1')).toEqual({ projectId: 'proj1', kind: 'plan' });
     expect(kind('raster1')).toEqual({ projectId: 'proj1', kind: 'plan' });
     expect(kind('pofile1')).toEqual({ projectId: 'proj1', kind: 'printout' });

@@ -977,4 +977,165 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 23,
+    name: 'document-source-attribution',
+    // Unified Documents (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md).
+    //
+    // ⚠️ DATA-TRANSFORMING but purely DERIVED and NON-DESTRUCTIVE: it adds four
+    // nullable columns and rewrites `kind` labels / fills sourceType+sourceId
+    // (and a missing projectId) from references that already exist elsewhere in
+    // the database. No file row and no byte on disk is ever removed. Flag to
+    // Nathan on pull per the migration protocol.
+    //
+    // IDEMPOTENT BY CONSTRUCTION: every write is guarded by a WHERE clause that
+    // matches only rows whose value actually differs, so a replay touches zero
+    // rows (proven by the double-run diff in migrationList.test.ts).
+    //
+    // PASS ORDER MATTERS: the join-table pass runs FIRST because the legacy
+    // `change-order` kind is ambiguous — it was written for both CO photos and
+    // generated CO PDFs. Rows found in change_order_photos become
+    // `change-order-photo`; whatever still carries `change-order` afterwards is
+    // a PDF and keeps its kind.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('customerId')) db.exec(`ALTER TABLE files ADD COLUMN customerId TEXT;`);
+      if (!cols.includes('sourceType')) db.exec(`ALTER TABLE files ADD COLUMN sourceType TEXT;`);
+      if (!cols.includes('sourceId')) db.exec(`ALTER TABLE files ADD COLUMN sourceId TEXT;`);
+      if (!cols.includes('archived')) db.exec(`ALTER TABLE files ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`);
+      // Upload-time upsert-by-source looks a document up by this triple on
+      // every generate, so it gets an index.
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_files_source ON files (sourceType, sourceId);`);
+
+      // Writes only when something actually changes (NULL-safe via IS NOT).
+      const relabel = db.prepare(`
+        UPDATE files SET kind = ?, sourceType = ?, sourceId = ?
+        WHERE id = ? AND (kind IS NOT ? OR sourceType IS NOT ? OR sourceId IS NOT ?)
+      `);
+      const label = (fileId: unknown, kind: string, sourceType: string | null, sourceId: string | null) => {
+        if (typeof fileId !== 'string' || !fileId) return;
+        relabel.run(kind, sourceType, sourceId, fileId, kind, sourceType, sourceId);
+      };
+      // Files uploaded outside a project context (task photos via POST
+      // /api/images, plan-set PDFs via saveBinaryFile) never got a projectId.
+      // Their owner knows it, so the Documents page can attribute them.
+      const attribute = db.prepare('UPDATE files SET projectId = ? WHERE id = ? AND projectId IS NULL');
+      const attributeTo = (fileId: unknown, projectId: unknown) => {
+        if (typeof fileId !== 'string' || !fileId) return;
+        if (typeof projectId !== 'string' || !projectId) return;
+        attribute.run(projectId, fileId);
+      };
+      // Nothing here may abort the migration: each pass is isolated, and the
+      // helpers above ignore any row that lacks a usable id (mirrors 21's
+      // per-row meta guard, which the project pass repeats for its JSON).
+      const pass = (name: string, fn: () => void) => {
+        try { fn(); } catch (e) { console.warn(`[migrations] 23: ${name} pass skipped:`, e); }
+      };
+
+      // ---- 1. Join-table photos (FIRST — see the ambiguity note above) ------
+      const photoTables: { table: string; entityCol: string; kind: string; sourceType: string }[] = [
+        { table: 'issue_photos', entityCol: 'issueId', kind: 'issue-photo', sourceType: 'issue' },
+        { table: 'punch_photos', entityCol: 'punchItemId', kind: 'punch-photo', sourceType: 'punch' },
+        { table: 'task_photos', entityCol: 'taskId', kind: 'task-photo', sourceType: 'task' },
+        { table: 'change_order_photos', entityCol: 'changeOrderId', kind: 'change-order-photo', sourceType: 'change-order' },
+        { table: 'rfi_photos', entityCol: 'rfiId', kind: 'rfi-photo', sourceType: 'rfi' },
+      ];
+      for (const p of photoTables) {
+        pass(p.table, () => {
+          // ORDER BY keeps the outcome identical on a replay in the (unusual)
+          // case of one file being linked from two rows — last write wins, and
+          // "last" must not depend on scan order.
+          const rows = db.prepare(`SELECT ${p.entityCol} AS entityId, fileId FROM ${p.table} ORDER BY id`)
+            .all() as { entityId: string | null; fileId: string | null }[];
+          for (const r of rows) {
+            if (!r.entityId) continue;
+            label(r.fileId, p.kind, p.sourceType, r.entityId);
+          }
+        });
+      }
+      // Task photos are the one class uploaded with no project context.
+      pass('task-photo projectId', () => {
+        const rows = db.prepare(`
+          SELECT tp.fileId AS fileId, t.projectId AS projectId
+          FROM task_photos tp JOIN tasks t ON t.id = tp.taskId
+          WHERE t.projectId IS NOT NULL
+        `).all() as { fileId: string | null; projectId: string | null }[];
+        for (const r of rows) attributeTo(r.fileId, r.projectId);
+      });
+
+      // ---- 2. Page / plan assets -------------------------------------------
+      // The uploaded PDF behind a page is the document users care about; the
+      // page raster + thumbnail are `plan` assets the Documents page hides.
+      pass('pages', () => {
+        // One uploaded PDF backs every page it was split into, so the same
+        // sourcePdfFileId recurs; ORDER BY makes the winning row stable.
+        const rows = db.prepare('SELECT projectId, planSetId, imageId, thumbnailId, sourcePdfFileId FROM pages ORDER BY id')
+          .all() as { projectId: string | null; planSetId: string | null; imageId: string | null; thumbnailId: string | null; sourcePdfFileId: string | null }[];
+        for (const r of rows) {
+          if (r.sourcePdfFileId) {
+            // Pre-plan-set pages have no set; the project stands in as the source.
+            label(r.sourcePdfFileId, 'plan-source', 'plan-set', r.planSetId ?? r.projectId ?? null);
+            attributeTo(r.sourcePdfFileId, r.projectId);
+          }
+          label(r.imageId, 'plan', null, null);
+          label(r.thumbnailId, 'plan', null, null);
+          attributeTo(r.imageId, r.projectId);
+          attributeTo(r.thumbnailId, r.projectId);
+        }
+      });
+
+      // ---- 3. Project JSON fields (printouts / proposal) --------------------
+      // These live in projects.meta since migration 5 (data is NULL from then
+      // on); the legacy blob is read as a fallback so a half-imported database
+      // still migrates.
+      pass('project documents', () => {
+        const rows = db.prepare('SELECT id, meta, data FROM projects ORDER BY id').all() as { id: string; meta: string | null; data: string | null }[];
+        for (const row of rows) {
+          let p: any = null;
+          try { p = row.meta ? JSON.parse(row.meta) : null; }
+          catch { console.warn(`[migrations] 23: project ${row.id} has unparseable meta (left verbatim)`); }
+          if (!p && row.data) {
+            try { p = JSON.parse(row.data); } catch { /* legacy blob unreadable — nothing to derive */ }
+          }
+          if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
+
+          for (const po of Array.isArray(p.printouts) ? p.printouts : []) {
+            if (!po || typeof po !== 'object') continue;
+            const poId = typeof po.id === 'string' && po.id ? po.id : null;
+            label(po.fileId, 'printout', poId ? 'printout' : null, poId);
+            attributeTo(po.fileId, row.id);
+          }
+          // One proposal per project, so the project id is its source id.
+          label(p.proposalFileId, 'proposal', 'proposal', row.id);
+          attributeTo(p.proposalFileId, row.id);
+          for (const photoId of Array.isArray(p.proposalPhotoIds) ? p.proposalPhotoIds : []) {
+            label(photoId, 'proposal-photo', 'proposal', row.id);
+            attributeTo(photoId, row.id);
+          }
+        }
+      });
+
+      // ---- 4. RFI responses -------------------------------------------------
+      pass('rfi responses', () => {
+        const rows = db.prepare('SELECT id, projectId, responseFileId FROM rfis WHERE responseFileId IS NOT NULL ORDER BY id')
+          .all() as { id: string; projectId: string | null; responseFileId: string | null }[];
+        for (const r of rows) {
+          label(r.responseFileId, 'rfi-response', 'rfi', r.id);
+          attributeTo(r.responseFileId, r.projectId);
+        }
+      });
+
+      // ---- 5. Settings assets (AIA template — hidden from the page) ---------
+      pass('settings assets', () => {
+        const row = db.prepare(`SELECT value FROM settings WHERE key = 'aiaTemplateFileId'`).get() as { value: string | null } | undefined;
+        label(row?.value, 'settings-asset', null, null);
+      });
+
+      // ---- 6. Everything else keeps its kind --------------------------------
+      // Direct uploads (document/spreadsheet/photo/other) and already-canonical
+      // generated documents (invoice/issue/rfi/punch-report/change-order/
+      // email-attachment) are left alone. Their sourceId is not derivable for
+      // historical rows — project attribution stays the link (spec §Data model).
+    },
+  },
 ];

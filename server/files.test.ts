@@ -6,7 +6,10 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
-import { putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions } from './files';
+import {
+  putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions,
+  setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS,
+} from './files';
 import { readFileContent } from './fileStore';
 
 let db: Database.Database;
@@ -15,7 +18,9 @@ let dir: string;
 beforeEach(() => {
   dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-files-'));
   db = openDb(':memory:');
-  runMigrations(db, dir, migrations.filter(m => m.version <= 3));
+  // Full schema: the files layer reads the source-attribution columns added in
+  // migration 23, which the app always has by the time it serves a request.
+  runMigrations(db, dir, migrations);
 });
 
 const PNG_DATAURL = 'data:image/png;base64,' + Buffer.from('fakepng').toString('base64');
@@ -130,5 +135,109 @@ describe('file versioning', () => {
     const nums = listVersions(db, 'f1').map(v => v.versionNumber).sort((a, b) => a - b);
     expect(nums).toEqual([1, 2, 3]);
     expect(new Set(nums).size).toBe(nums.length);
+  });
+});
+
+describe('upload metadata', () => {
+  it('persists customerId/sourceType/sourceId and defaults archived to 0', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('a'), 'application/pdf', {
+      projectId: 'p1', customerId: 'c1', kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-1', name: 'Invoice 12.pdf',
+    });
+    const meta = getMeta(db, 'f1')!;
+    expect(meta).toMatchObject({
+      projectId: 'p1', customerId: 'c1', kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-1', archived: 0,
+    });
+  });
+
+  it('carries the new columns across a plain overwrite', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('a'), 'application/pdf', { customerId: 'c1', sourceType: 'issue', sourceId: 'i1', kind: 'issue' });
+    db.prepare('UPDATE files SET archived = 1 WHERE id = ?').run('f1');
+    putBuffer(db, dir, 'f1', Buffer.from('b'), 'application/pdf');
+    expect(getMeta(db, 'f1')).toMatchObject({ customerId: 'c1', sourceType: 'issue', sourceId: 'i1', archived: 1 });
+  });
+
+  it('setFileFlags archives and re-types a file, and ignores unknown ids', () => {
+    putBuffer(db, dir, 'f1', Buffer.from('a'), 'application/pdf', { kind: 'document' });
+    expect(setFileFlags(db, 'f1', { archived: true })!.archived).toBe(1);
+    expect(setFileFlags(db, 'f1', { kind: 'custom:permits' })!.kind).toBe('custom:permits');
+    expect(setFileFlags(db, 'f1', { archived: false })!.archived).toBe(0);
+    expect(setFileFlags(db, 'nope', { archived: true })).toBeNull();
+  });
+
+  it('classifies direct-upload kinds (custom types included) apart from system kinds', () => {
+    for (const k of DIRECT_UPLOAD_KINDS) expect(isDirectUploadKind(k)).toBe(true);
+    expect(isDirectUploadKind('custom:permits')).toBe(true);
+    for (const k of SYSTEM_KINDS) expect(isDirectUploadKind(k)).toBe(false);
+  });
+});
+
+describe('upsert-by-source uploads', () => {
+  const SOURCE = { kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-1', projectId: 'p1' };
+
+  it('versions the existing live row instead of creating a second document', () => {
+    const first = putBuffer(db, dir, 'gen1', Buffer.from('v1-bytes'), 'application/pdf', { ...SOURCE, name: 'Invoice 12.pdf' });
+    expect(first).toMatchObject({ id: 'gen1', versioned: false, versionNumber: 1 });
+
+    // a regenerate mints a fresh id client-side — it must land on the same document
+    const second = putBuffer(db, dir, 'gen2', Buffer.from('v2-bytes'), 'application/pdf', { ...SOURCE, name: 'Invoice 12.pdf' });
+    expect(second.id).toBe('gen1');
+    expect(second.versioned).toBe(true);
+    expect(second.versionNumber).toBe(2);
+
+    expect(getMeta(db, 'gen2')).toBeNull(); // no stray row for the requested id
+    expect(readFileContent(dir, 'gen1')!.toString()).toBe('v2-bytes');
+
+    const versions = listVersions(db, 'gen1');
+    expect(versions.map(v => v.versionNumber)).toEqual([2, 1]);
+    expect(readFileContent(dir, versions[1].id)!.toString()).toBe('v1-bytes');
+  });
+
+  it('keeps versioning the live row, never an archived version row', () => {
+    putBuffer(db, dir, 'gen1', Buffer.from('v1'), 'application/pdf', SOURCE);
+    putBuffer(db, dir, 'gen2', Buffer.from('v2'), 'application/pdf', SOURCE);
+    const third = putBuffer(db, dir, 'gen3', Buffer.from('v3'), 'application/pdf', SOURCE);
+    expect(third.id).toBe('gen1');
+    expect(third.versionNumber).toBe(3);
+    // one live row for the source, the rest are history hanging off it
+    const live = db.prepare(
+      'SELECT id FROM files WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ?'
+    ).all('invoice', 'inv-1') as { id: string }[];
+    expect(live.map(r => r.id)).toEqual(['gen1']);
+    expect(listVersions(db, 'gen1').map(v => v.versionNumber)).toEqual([3, 2, 1]);
+  });
+
+  it('refreshes the live row labels a regenerate carries', () => {
+    putBuffer(db, dir, 'gen1', Buffer.from('v1'), 'application/pdf', { ...SOURCE, name: 'Invoice 12.pdf' });
+    putBuffer(db, dir, 'gen2', Buffer.from('v2'), 'application/pdf', { ...SOURCE, name: 'Invoice 12 (revised).pdf', customerId: 'c1' });
+    expect(getMeta(db, 'gen1')).toMatchObject({ name: 'Invoice 12 (revised).pdf', customerId: 'c1', projectId: 'p1' });
+  });
+
+  it('does not collide across kinds on the same entity', () => {
+    putBuffer(db, dir, 'co-pdf', Buffer.from('pdf'), 'application/pdf', { kind: 'change-order', sourceType: 'change-order', sourceId: 'co-1' });
+    const photo = putBuffer(db, dir, 'co-photo', Buffer.from('jpg'), 'image/jpeg', { kind: 'change-order-photo', sourceType: 'change-order', sourceId: 'co-1' });
+    expect(photo).toMatchObject({ id: 'co-photo', versioned: false });
+    expect(getMeta(db, 'co-pdf')!.versionNumber).toBe(1);
+  });
+
+  it('does not collide across entities of the same kind', () => {
+    putBuffer(db, dir, 'p-a', Buffer.from('a'), 'application/pdf', { kind: 'printout', sourceType: 'printout', sourceId: 'po1' });
+    const b = putBuffer(db, dir, 'p-b', Buffer.from('b'), 'application/pdf', { kind: 'printout', sourceType: 'printout', sourceId: 'po2' });
+    expect(b).toMatchObject({ id: 'p-b', versioned: false });
+  });
+
+  it('creates normally when the source triple is incomplete', () => {
+    putBuffer(db, dir, 'u1', Buffer.from('a'), 'application/pdf', { kind: 'document', sourceType: 'invoice' });
+    const second = putBuffer(db, dir, 'u2', Buffer.from('b'), 'application/pdf', { kind: 'document', sourceType: 'invoice' });
+    expect(second).toMatchObject({ id: 'u2', versioned: false });
+    expect(getMeta(db, 'u1')!.versionNumber).toBe(1);
+  });
+
+  it('applies to putDataUrl too, preserving the stored string format', () => {
+    const first = putDataUrl(db, dir, 'img1', PNG_DATAURL, { kind: 'issue-photo', sourceType: 'issue', sourceId: 'i1' });
+    expect(first.versioned).toBe(false);
+    const next = 'data:image/png;base64,' + Buffer.from('secondpng').toString('base64');
+    const second = putDataUrl(db, dir, 'img2', next, { kind: 'issue-photo', sourceType: 'issue', sourceId: 'i1' });
+    expect(second).toMatchObject({ id: 'img1', versioned: true, versionNumber: 2 });
+    expect(getDataUrlString(db, dir, 'img1')).toBe(next);
   });
 });

@@ -672,12 +672,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         // file id with a different ?projectId relabels it. Real uploads use
         // fresh UUIDs so this only triggers on deliberate re-posts.
         const q = req.query;
-        putBuffer(db, dataDir, req.params.id, body, mime, {
-          projectId: typeof q.projectId === 'string' && q.projectId ? q.projectId : undefined,
-          kind: typeof q.kind === 'string' && q.kind ? q.kind : undefined,
-          name: typeof q.name === 'string' && q.name ? q.name : undefined,
+        const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+        // With a full sourceType+sourceId+kind triple this versions the
+        // document that source already owns, so fileId can differ from the id
+        // in the URL — callers must store the returned fileId.
+        const result = putBuffer(db, dataDir, req.params.id, body, mime, {
+          projectId: str(q.projectId),
+          kind: str(q.kind),
+          name: str(q.name),
+          customerId: str(q.customerId),
+          sourceType: str(q.sourceType),
+          sourceId: str(q.sourceId),
         });
-        res.json({ success: true });
+        res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
         console.error('Error saving file:', e);
         res.status(500).json({ error: 'Failed to save file' });

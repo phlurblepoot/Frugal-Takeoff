@@ -391,6 +391,25 @@ describe('project files', () => {
       id: 'doc1', projectId: 'p1', kind: 'document', name: 'Contract.pdf',
       mime: 'application/pdf', versionNumber: 1, parentFileId: null,
     });
+    expect(res.body).toMatchObject({ success: true, fileId: 'doc1', versioned: false });
+  });
+
+  it('POST /api/files/:id versions the source document instead of adding a second row', async () => {
+    const qs = 'projectId=p1&kind=invoice&sourceType=invoice&sourceId=inv-1&customerId=c1&name=Invoice%2012.pdf';
+    const first = await request(app).post(`/api/files/gen1?${qs}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
+    expect(first.body).toMatchObject({ fileId: 'gen1', versioned: false });
+
+    // a regenerate mints a new id client-side; it must land on the same document
+    const second = await request(app).post(`/api/files/gen2?${qs}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(second.body).toMatchObject({ fileId: 'gen1', versioned: true });
+    expect((await request(app).get('/api/files/gen2/meta')).status).toBe(404);
+
+    const meta = await request(app).get('/api/files/gen1/meta');
+    expect(meta.body).toMatchObject({ versionNumber: 2, sourceType: 'invoice', sourceId: 'inv-1', customerId: 'c1' });
+    const versions = await request(app).get('/api/files/gen1/versions');
+    expect(versions.body.map((v: any) => v.versionNumber)).toEqual([2, 1]);
   });
 
   it('GET /api/projects/:id/files lists live files newest-first, no version rows', async () => {
