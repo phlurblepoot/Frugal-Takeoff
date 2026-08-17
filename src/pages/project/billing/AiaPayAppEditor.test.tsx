@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AiaPayAppEditor } from './AiaPayAppEditor';
 import { ToastProvider } from '../../../components/Toast';
-import type { AiaG702, AiaPayApp } from '../../../utils/store';
+import type { AiaG702, AiaPayAppDetail } from '../../../utils/store';
 
 const getPayApp = vi.hoisted(() => vi.fn());
 const setPayApp = vi.hoisted(() => vi.fn());
@@ -16,10 +16,10 @@ vi.mock('../../../utils/store', async (importOriginal) => {
   return { ...actual, getPayApp, setPayApp, savePayAppLines };
 });
 
-const app: AiaPayApp = {
+const app: AiaPayAppDetail = {
   id: 'app2', projectId: 'p1', number: 2, periodTo: null, applicationDate: null,
   retainagePercent: 15, storedRetainagePercent: 15, releasedRetainagePoints: 5,
-  status: 'draft', version: 4, createdAt: 0,
+  status: 'draft', version: 4, createdAt: 0, payments: [],
 };
 
 const g702 = (over: Partial<AiaG702['retainage']> = {}): AiaG702 => ({

@@ -103,6 +103,18 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(payAppLedgerRow).toContainText('Finalized');
   await expect(payAppLedgerRow).toContainText(fmtCents(payApp.billedCents));
 
+  // Pay Applications tab (on the project itself): Amount/Balance columns for
+  // the finalized app. No payment was recorded against it in this seed, so
+  // Amount === Balance === billedCents ($900.00 at 10% retainage on the
+  // $1,000.00 SOV line).
+  await authedPage.goto(`/project/${seeded.inProgressProjectId}/billing?tab=pay-apps`);
+  const payAppTableRow = authedPage.getByRole('row').filter({ hasText: `#${payApp.payAppNumber}` });
+  await expect(payAppTableRow).toBeVisible();
+  const payAppCells = payAppTableRow.locator('td');
+  await expect(payAppCells.nth(4)).toHaveText(fmtCents(payApp.billedCents)); // Amount
+  await expect(payAppCells.nth(5)).toHaveText(fmtCents(payApp.billedCents)); // Balance
+  await authedPage.goto(`/customers/${seeded.customerId}?tab=billing`);
+
   // Settings tab: edit a field and save.
   await authedPage.getByTestId('customer-tab-settings').click();
   await expect(authedPage).toHaveURL(/tab=settings/);

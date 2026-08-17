@@ -206,6 +206,33 @@ export const InvoiceEditor: React.FC<{
         <Button onClick={() => setComposing(true)}>Send invoice</Button>
       </div>
 
+      {/* Payments — read-only; recording/deleting happens in the project's
+          Payments tab. */}
+      <div className="mt-4 border-t border-edge pt-3">
+        <h4 className="mb-2 text-sm font-semibold text-ink">Payments</h4>
+        {invoice.payments.length === 0 ? (
+          <p className="text-sm text-ink-faint">No payments recorded</p>
+        ) : (
+          <Table>
+            <THead><TR><TH>Date</TH><TH>Note</TH><TH className="text-right">Amount</TH></TR></THead>
+            <TBody>
+              {invoice.payments.map(p => (
+                <TR key={p.id}>
+                  <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                  <TD className="text-ink-faint">{p.note || '—'}</TD>
+                  <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+        <p className="mt-2 text-sm text-ink-soft">
+          Paid <span className="font-semibold text-ink">{formatMoney(invoice.paidCents)}</span>
+          {' · '}
+          Balance <span className="font-semibold text-ink">{formatMoney(invoice.balanceCents)}</span>
+        </p>
+      </div>
+
       <p className="mt-4 border-t border-edge pt-3 text-sm text-ink-faint">
         Record payments in the Payments section below.
       </p>

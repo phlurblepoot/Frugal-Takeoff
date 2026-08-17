@@ -1,7 +1,8 @@
 // src/pages/project/billing/AiaPayApplications.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { AiaPayApp, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
+import { AiaPayAppListItem, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
+import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
@@ -21,7 +22,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
-  const [apps, setApps] = useState<AiaPayApp[] | null>(null);
+  const [apps, setApps] = useState<AiaPayAppListItem[] | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
 
   // New-application form modal.
@@ -58,7 +59,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
     }
   };
 
-  const removeApp = async (app: AiaPayApp) => {
+  const removeApp = async (app: AiaPayAppListItem) => {
     const ok = await confirm({
       title: 'Delete pay application?',
       message: `This permanently removes application #${app.number}.`,
@@ -83,7 +84,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
             description="Create an application to bill against the schedule of values (G702/G703)." />
         ) : (
           <Table>
-            <THead><TR><TH>App #</TH><TH>Period to</TH><TH>Application date</TH><TH>Status</TH><TH></TH></TR></THead>
+            <THead><TR><TH>App #</TH><TH>Period to</TH><TH>Application date</TH><TH>Status</TH><TH className="text-right">Amount</TH><TH className="text-right">Balance</TH><TH></TH></TR></THead>
             <TBody>
               {apps.map(app => {
                 const meta = STATUS_META[app.status] ?? { label: app.status, tone: 'slate' as PillTone };
@@ -93,6 +94,8 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
                     <TD className="text-ink-soft">{fmtDate(app.periodTo)}</TD>
                     <TD className="text-ink-soft">{fmtDate(app.applicationDate)}</TD>
                     <TD><StatusPill tone={meta.tone}>{meta.label}</StatusPill></TD>
+                    <TD className="text-right tabular-nums text-ink-soft">{formatMoney(app.totalCents)}</TD>
+                    <TD className="text-right tabular-nums text-ink-soft">{app.balanceCents == null ? '—' : formatMoney(app.balanceCents)}</TD>
                     <TD onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setOpenId(app.id)}>Open</Button>

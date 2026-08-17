@@ -1155,6 +1155,15 @@ export interface AiaPayApp {
   releasedRetainagePoints: number;
   status: string; version: number; createdAt: number;
 }
+// getPayApps list row: adds Amount = G702 L8 (live for drafts, as-billed for
+// finalized apps); Balance = Amount − payments, null for drafts (not yet
+// billed — the UI renders "—"). Mirrors the Invoice/InvoiceListItem split.
+export interface AiaPayAppListItem extends AiaPayApp {
+  totalCents: number; paidCents: number; balanceCents: number | null;
+}
+// getPayApp's `app` — carries the payments recorded against this app. Same
+// row shape as Invoice['payments'] (id/date/amount/method/note).
+export type AiaPayAppDetail = AiaPayApp & { payments: Payment[] };
 export interface AiaPayAppLine {
   id: string; payAppId: string; sovLineId: string;
   percentComplete: number; storedMaterialsCents: number; createdAt: number;
@@ -1250,7 +1259,7 @@ export const syncChangeOrders = async (projectId: string): Promise<{ added: numb
 };
 
 // Pay applications
-export const getPayApps = async (projectId: string): Promise<AiaPayApp[]> => {
+export const getPayApps = async (projectId: string): Promise<AiaPayAppListItem[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/aia/pay-apps`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
@@ -1258,7 +1267,7 @@ export const createPayApp = async (projectId: string, input: { periodTo?: string
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/pay-apps`, input);
   await handleResponse(res); return res.json();
 };
-export const getPayApp = async (id: string): Promise<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }> => {
+export const getPayApp = async (id: string): Promise<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }> => {
   const res = await fetchWithRetry(`/api/aia/pay-apps/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };

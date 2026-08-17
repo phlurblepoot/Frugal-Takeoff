@@ -1,7 +1,7 @@
 // src/pages/project/billing/AiaPayAppEditor.tsx
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AiaPayApp, AiaPayAppLine, AiaG703Row, AiaG702,
+  AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
   getPayApp, savePayAppLines, setPayApp,
 } from '../../../utils/store';
 import { exportAiaXlsx } from './aiaExcel';
@@ -36,7 +36,7 @@ export const AiaPayAppEditor: React.FC<{
 }> = ({ payAppId, onClose, onSaved }) => {
   const { toast } = useToast();
 
-  const [data, setData] = useState<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
+  const [data, setData] = useState<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -49,7 +49,7 @@ export const AiaPayAppEditor: React.FC<{
   const [releasedRetainagePoints, setReleasedRetainagePoints] = useState('');
   const [status, setStatus] = useState('draft');
 
-  const seed = useCallback((d: { app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
+  const seed = useCallback((d: { app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
     const byLine: Record<string, AiaPayAppLine> = {};
     for (const l of d.lines) byLine[l.sovLineId] = l;
     const next: Record<string, EditLine> = {};
@@ -185,6 +185,16 @@ export const AiaPayAppEditor: React.FC<{
   }, [data, edits]);
 
   const g702 = data?.g702;
+
+  // Paid/balance for the read-only Payments section below. Derived from the
+  // GET payload (data.app.payments + g702.L8) rather than a server-provided
+  // field — matches the list's balance rule: drafts aren't billed yet, so
+  // balance is null ("—") even though payments could technically exist.
+  const paymentsPaidCents = useMemo(
+    () => (data?.app.payments ?? []).reduce((a, p) => a + Math.round((Number(p.amount) || 0) * 100), 0),
+    [data],
+  );
+  const paymentsBalanceCents = isFinalized && g702 ? g702.L8currentPaymentDueCents - paymentsPaidCents : null;
 
   return (
     <Modal
@@ -428,6 +438,33 @@ export const AiaPayAppEditor: React.FC<{
               </div>
             </div>
           )}
+          </div>
+
+          {/* Payments — read-only; recording/deleting happens in the
+              project's Payments tab. */}
+          <div className="rounded-lg border border-edge p-4">
+            <h4 className="mb-3 text-sm font-semibold text-ink">Payments</h4>
+            {data.app.payments.length === 0 ? (
+              <p className="text-sm text-ink-faint">No payments recorded</p>
+            ) : (
+              <Table>
+                <THead><TR><TH>Date</TH><TH>Note</TH><TH className="text-right">Amount</TH></TR></THead>
+                <TBody>
+                  {data.app.payments.map(p => (
+                    <TR key={p.id}>
+                      <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                      <TD className="text-ink-faint">{p.note || '—'}</TD>
+                      <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            )}
+            <p className="mt-3 text-sm text-ink-soft">
+              Paid <span className="font-semibold text-ink">{formatMoney(paymentsPaidCents)}</span>
+              {' · '}
+              Balance <span className="font-semibold text-ink">{paymentsBalanceCents == null ? '—' : formatMoney(paymentsBalanceCents)}</span>
+            </p>
           </div>
         </div>
       )}
