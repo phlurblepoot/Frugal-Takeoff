@@ -609,6 +609,9 @@ export async function exportAiaXlsx(
   ctx: AiaExportCtx,
   template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
   filename?: string,
+  // Handed the finished workbook before the download starts, so a caller can keep
+  // a copy in Documents. It owns its own failures — the download always proceeds.
+  persist?: (blob: Blob) => Promise<void>,
 ): Promise<void> {
   const wb = template
     ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
@@ -617,6 +620,7 @@ export async function exportAiaXlsx(
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
+  if (persist) await persist(blob);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

@@ -241,9 +241,13 @@ export const NewProject: React.FC = () => {
         if (isPdf) {
           try {
             setProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            // plan-source is multi-instance (a set is often several PDFs), so this
+            // never versions a sibling — each upload keeps its own row.
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId: newProjectId, kind: 'plan-source', name: file.name,
+              sourceType: 'plan-set', sourceId: newPlanSetId,
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
             sourcePdfFileId = undefined;
@@ -460,9 +464,11 @@ export const NewProject: React.FC = () => {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId, kind: 'plan-source', name: file.name,
+              sourceType: 'plan-set', sourceId: planSetId,
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
             sourcePdfFileId = undefined;

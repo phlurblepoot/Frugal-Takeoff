@@ -1,7 +1,7 @@
 // src/pages/project/issues/IssueEditor.tsx
 import React, { useEffect, useState, useRef } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
-import { Issue, saveIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
+import { Issue, saveIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, uploadProjectFile, persistGeneratedDocument, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -72,7 +72,7 @@ export const IssueEditor: React.FC<{
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(projectId, f, 'photo');
+        const { fileId } = await uploadProjectFile(projectId, f, 'issue-photo', { sourceType: 'issue', sourceId: issue.id });
         await addIssuePhoto(issue.id, fileId);
         ok++;
       } catch { /* keep going */ }
@@ -127,8 +127,14 @@ export const IssueEditor: React.FC<{
   const handleDownload = async () => {
     try {
       const bytes = await buildIssueBytes();
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      const a = document.createElement('a'); a.href = url; a.download = `ISS-${String(issue.number).padStart(3, '0')}.pdf`;
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = `ISS-${String(issue.number).padStart(3, '0')}.pdf`;
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'issue-report', name: fileName, sourceType: 'issue', sourceId: issue.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = fileName;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { toast('Failed to generate report', { type: 'error' }); }
@@ -230,9 +236,10 @@ export const IssueEditor: React.FC<{
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildIssueBytes(effectiveHeaderEmail);
           const file = new File([bytes], `ISS-${padded}.pdf`, { type: 'application/pdf' });
-          // Uploaded as a project document before sending; a failed send leaves it in
-          // Documents (project-attributed), and a retry uploads another — fine for v1.
-          const fileId = await uploadProjectFile(projectId, file, 'issue');
+          // Uploaded as a project document before sending; the source triple makes the
+          // server version this issue's one report rather than pile up copies, so a
+          // failed send + retry (and plain Download) all land on the same document.
+          const { fileId } = await uploadProjectFile(projectId, file, 'issue-report', { sourceType: 'issue', sourceId: issue.id });
           await sendIssue(issue.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('Issue report sent', { type: 'success' });
           onSaved();

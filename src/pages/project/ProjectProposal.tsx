@@ -283,12 +283,15 @@ export const ProjectProposal: React.FC = () => {
       );
 
       setProgress('Saving…');
-      const fileId = uuidv4();
-      await saveBinaryFile(fileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
+      // The printout id is minted first so it can attribute its own file; each
+      // printout entry therefore keeps a distinct document.
+      const printoutId = uuidv4();
+      const { fileId } = await saveBinaryFile(uuidv4(), new Blob([pdfBytes], { type: 'application/pdf' }), {
         projectId: project.id, kind: 'printout', name: suggestedName,
+        sourceType: 'printout', sourceId: printoutId,
       });
       const newPrintout: Printout = {
-        id: uuidv4(),
+        id: printoutId,
         name: suggestedName,
         fileId,
         createdAt: Date.now(),
@@ -376,7 +379,7 @@ export const ProjectProposal: React.FC = () => {
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(project.id, f, 'proposal-photo');
+        const { fileId } = await uploadProjectFile(project.id, f, 'proposal-photo', { sourceType: 'proposal', sourceId: project.id });
         newIds.push(fileId);
         ok++;
       } catch { /* keep going */ }

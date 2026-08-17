@@ -206,6 +206,46 @@ export const getImage = async (id: string): Promise<string | null> => {
 export const saveFile = saveImage;
 export const getFile = getImage;
 
+// Attribution carried on every upload. sourceType/sourceId name the owning
+// entity; with a kind that is single-instance the server versions that
+// entity's existing document instead of creating a new row, so the returned
+// fileId can differ from the id that was posted.
+export interface FileUploadOpts {
+  projectId?: string;
+  kind?: string;
+  name?: string;
+  customerId?: string;
+  sourceType?: string;
+  sourceId?: string;
+}
+
+export interface UploadResult {
+  fileId: string;
+  versioned: boolean;
+}
+
+const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
+  const q = new URLSearchParams();
+  if (opts?.projectId) q.set('projectId', opts.projectId);
+  if (opts?.kind) q.set('kind', opts.kind);
+  if (opts?.name) q.set('name', opts.name);
+  if (opts?.customerId) q.set('customerId', opts.customerId);
+  if (opts?.sourceType) q.set('sourceType', opts.sourceType);
+  if (opts?.sourceId) q.set('sourceId', opts.sourceId);
+  return q;
+};
+
+// Older servers answered these uploads with a bare { success: true }; fall
+// back to the posted id so a stale deployment keeps working.
+const readUploadResult = async (res: Response, postedId: string): Promise<UploadResult> => {
+  try {
+    const body = await res.json() as { fileId?: string; versioned?: boolean };
+    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned };
+  } catch {
+    return { fileId: postedId, versioned: false };
+  }
+};
+
 // Streams a Blob/File to the server without going through a base64 dataUrl,
 // avoiding the ~4× in-browser memory blowup that base64 + JSON.stringify
 // produce for large PDFs (which can OOM Chrome on plan-set uploads). The
@@ -214,23 +254,20 @@ export const getFile = getImage;
 export const saveBinaryFile = async (
   id: string,
   blob: Blob,
-  opts?: { projectId?: string; kind?: string; name?: string },
-): Promise<void> => {
+  opts?: FileUploadOpts,
+): Promise<UploadResult> => {
   const headers: Record<string, string> = {
     'Content-Type': blob.type || 'application/octet-stream',
     ...getAuthHeaders(),
   };
-  const q = new URLSearchParams();
-  if (opts?.projectId) q.set('projectId', opts.projectId);
-  if (opts?.kind) q.set('kind', opts.kind);
-  if (opts?.name) q.set('name', opts.name);
-  const qs = q.toString();
+  const qs = uploadQuery(opts).toString();
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`, {
     method: 'POST',
     headers,
     body: blob,
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
+  return await readUploadResult(res, id);
 };
 export const deleteFile = async (id: string): Promise<void> => {
   // Image deletion is handled by project deletion in this simple version
@@ -599,22 +636,33 @@ export const listFileVersions = async (id: string): Promise<ProjectFile[]> => {
   return await res.json();
 };
 
-// Upload a new project document. Returns the generated file id.
+// Upload a project document. Callers must record the RETURNED fileId, not the
+// id this mints: for single-instance kinds the server may version the document
+// the given source already owns and return that row's id instead.
 export const uploadProjectFile = async (
   projectId: string,
   file: File,
-  kind: string
-): Promise<string> => {
+  kind: string,
+  opts?: Omit<FileUploadOpts, 'projectId' | 'kind' | 'name'>,
+): Promise<UploadResult> => {
   const id = crypto.randomUUID();
-  const qs = `projectId=${encodeURIComponent(projectId)}&kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(file.name)}`;
+  const qs = uploadQuery({ ...opts, projectId, kind, name: file.name }).toString();
   const res = await fetchWithRetry(`/api/files/${id}?${qs}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream', ...getAuthHeaders() },
     body: file,
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
-  return id;
+  return await readUploadResult(res, id);
 };
+
+// Store a freshly generated document (PDF/XLSX) so Generate, Download and Send
+// of the same entity converge on ONE living document: the source triple makes
+// the server version the existing row rather than pile up duplicates.
+export const persistGeneratedDocument = async (
+  blob: Blob,
+  opts: FileUploadOpts & { kind: string; name: string },
+): Promise<UploadResult> => saveBinaryFile(crypto.randomUUID(), blob, opts);
 
 // Save-as-version: live content keeps its id; old bytes become history.
 export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {

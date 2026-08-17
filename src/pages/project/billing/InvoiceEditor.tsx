@@ -1,7 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile, persistGeneratedDocument } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
@@ -147,10 +147,15 @@ export const InvoiceEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = `invoice-${invoice.number ?? invoice.id}.pdf`;
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'invoice', name: fileName, sourceType: 'invoice', sourceId: invoice.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `invoice-${invoice.number ?? invoice.id}.pdf`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -254,10 +259,10 @@ export const InvoiceEditor: React.FC<{
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildBytes(effectiveHeaderEmail);
           const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
-          // The PDF is uploaded as a project document before sending; if the send
-          // fails the file remains in Documents (project-attributed), and a retry
-          // uploads another — acceptable for v1.
-          const fileId = await uploadProjectFile(projectId, file, 'invoice');
+          // The PDF is uploaded as a project document before sending; the source
+          // triple makes the server version this invoice's one document rather than
+          // pile up copies, so a failed send + retry (and Download) converge.
+          const { fileId } = await uploadProjectFile(projectId, file, 'invoice', { sourceType: 'invoice', sourceId: invoice.id });
           await sendInvoice(invoice.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('Invoice sent', { type: 'success' });
           onSaved();

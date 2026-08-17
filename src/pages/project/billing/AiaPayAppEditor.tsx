@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
-  getPayApp, savePayAppLines, setPayApp,
+  getPayApp, savePayAppLines, setPayApp, persistGeneratedDocument,
 } from '../../../utils/store';
 import { exportAiaXlsx } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
@@ -162,7 +162,15 @@ export const AiaPayAppEditor: React.FC<{
         sovLines: env.sovLines,
         g702: data.g702,
         g703: data.g703,
-      }, env.template);
+      }, env.template, undefined, async (blob) => {
+        // Keep a copy in Documents, but never let that failure block the export.
+        try {
+          await persistGeneratedDocument(blob, {
+            projectId, kind: 'payapp-export', name: `Pay App #${data.app.number} — G702.xlsx`,
+            sourceType: 'payapp', sourceId: data.app.id,
+          });
+        } catch { toast('Exported, but saving to Documents failed', { type: 'warning' }); }
+      });
     } catch {
       toast('Excel export failed', { type: 'error' });
     } finally {
