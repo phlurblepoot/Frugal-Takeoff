@@ -33,6 +33,8 @@ const CHANGELOG: ChangelogEntry[] = [
       'Balances on every invoice and pay application: the Invoices and Pay Applications tabs gained Amount and Balance columns, and opening an invoice or pay app now lists the payments recorded against it.',
       'Change orders now have a title: shown as a new column in the Change Orders tab and used as the line description when approved change orders sync to the schedule of values.',
       'Fix: uploading documents from another device on the local network no longer fails immediately with an error.',
+      'Proposal Cover notes and Terms & Conditions are now remembered: each project keeps what you last generated or sent, new projects prefill with your most recent text, and a history button beside each box offers your last 5 entries to fill with one click (per account, so it follows you across devices).',
+      'The proposal page\'s redundant "Header color" picker is gone — proposals follow the Document brand color from Settings, the same as every other generated document.',
     ],
   },
   {
