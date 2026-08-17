@@ -34,6 +34,7 @@ const KIND_META: Record<string, KindMeta> = {
   'rfi-photo':           { label: 'RFI Photo',          tone: 'violet' },
   'rfi-response':        { label: 'RFI Response',       tone: 'violet' },
   'task-photo':          { label: 'Task Photo',         tone: 'blue' },
+  'email-attachment':    { label: 'Email Attachment',   tone: 'slate' },
 };
 
 // Display order for the Type filter dropdown. 'plan' and 'settings-asset' are

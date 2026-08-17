@@ -13,6 +13,10 @@ describe('kindLabel', () => {
     expect(kindLabel('plan')).toBe('plan');
   });
 
+  it('resolves the email-attachment kind (EmailComposer writes it; it is not hidden)', () => {
+    expect(kindLabel('email-attachment')).toBe('Email Attachment');
+  });
+
   it('resolves a custom:<id> kind against the supplied custom types list', () => {
     expect(kindLabel('custom:warranty', [{ id: 'warranty', label: 'Warranty' }])).toBe('Warranty');
   });
@@ -42,6 +46,10 @@ describe('KIND_OPTIONS', () => {
     const ids = KIND_OPTIONS.map(o => o.id);
     expect(ids).not.toContain('plan');
     expect(ids).not.toContain('settings-asset');
+  });
+
+  it('includes email-attachment — a live, filterable, non-hidden kind', () => {
+    expect(KIND_OPTIONS.map(o => o.id)).toContain('email-attachment');
   });
 
   it('has a unique id per option', () => {

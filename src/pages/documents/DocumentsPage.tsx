@@ -5,7 +5,7 @@
 // writes them on every filter change, and any other page (e.g. the retired
 // per-project Documents nav entry) can land here pre-filtered by composing
 // the same query string — see ProjectDocumentsRedirect below.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { FolderOpen, Upload } from 'lucide-react';
 import { DocumentRow, getCustomers, getDocuments, getProjectsSummary, getSettings } from '../../utils/store';
@@ -18,18 +18,35 @@ import { CustomDocType, KIND_OPTIONS } from './docTypes';
 
 const PAGE_SIZE = 100;
 
-const csvParam = (sp: URLSearchParams, key: string): string[] => {
+// Reads a comma-list URL param back into an array — the inverse of the
+// `.join(',')` calls in applyFilterPatch below. Exported for the round-trip
+// unit tests (DocumentsPage.test.ts).
+export const csvParam = (sp: URLSearchParams, key: string): string[] => {
   const v = sp.get(key);
   return v ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
 };
 
-type FilterPatch = Partial<{
+export type FilterPatch = Partial<{
   projectIds: string[];
   customerIds: string[];
   kinds: string[];
   q: string;
   archived: boolean;
 }>;
+
+// Pure: applies a filter patch onto a URLSearchParams, returning a new one.
+// Empty arrays/strings/false delete the key rather than writing an empty
+// value, so `csvParam` always round-trips to `[]`/''/false on read. Exported
+// for the round-trip unit tests.
+export const applyFilterPatch = (prev: URLSearchParams, patch: FilterPatch): URLSearchParams => {
+  const p = new URLSearchParams(prev);
+  if ('projectIds' in patch) { patch.projectIds!.length ? p.set('projectIds', patch.projectIds!.join(',')) : p.delete('projectIds'); }
+  if ('customerIds' in patch) { patch.customerIds!.length ? p.set('customerIds', patch.customerIds!.join(',')) : p.delete('customerIds'); }
+  if ('kinds' in patch) { patch.kinds!.length ? p.set('kinds', patch.kinds!.join(',')) : p.delete('kinds'); }
+  if ('q' in patch) { patch.q ? p.set('q', patch.q) : p.delete('q'); }
+  if ('archived' in patch) { patch.archived ? p.set('archived', '1') : p.delete('archived'); }
+  return p;
+};
 
 export const DocumentsPage: React.FC = () => {
   const { toast } = useToast();
@@ -42,15 +59,7 @@ export const DocumentsPage: React.FC = () => {
   const archived = searchParams.get('archived') === '1';
 
   const setFilter = (patch: FilterPatch) => {
-    setSearchParams(prev => {
-      const p = new URLSearchParams(prev);
-      if ('projectIds' in patch) { patch.projectIds!.length ? p.set('projectIds', patch.projectIds!.join(',')) : p.delete('projectIds'); }
-      if ('customerIds' in patch) { patch.customerIds!.length ? p.set('customerIds', patch.customerIds!.join(',')) : p.delete('customerIds'); }
-      if ('kinds' in patch) { patch.kinds!.length ? p.set('kinds', patch.kinds!.join(',')) : p.delete('kinds'); }
-      if ('q' in patch) { patch.q ? p.set('q', patch.q) : p.delete('q'); }
-      if ('archived' in patch) { patch.archived ? p.set('archived', '1') : p.delete('archived'); }
-      return p;
-    }, { replace: true });
+    setSearchParams(prev => applyFilterPatch(prev, patch), { replace: true });
   };
 
   const [rows, setRows] = useState<DocumentRow[]>([]);
@@ -92,34 +101,47 @@ export const DocumentsPage: React.FC = () => {
   // every render).
   const filterKey = `${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${q}|${archived}`;
 
+  // Bumped every time the filters change, so a Load More that's still
+  // in-flight when the user changes a filter can tell its response is stale
+  // (belongs to the old filterKey) and drop it instead of appending old-filter
+  // rows onto the new list.
+  const requestIdRef = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
+    const myId = ++requestIdRef.current;
     setLoading(true);
     getDocuments({ projectIds, customerIds, kinds, q: q || undefined, archived, limit: PAGE_SIZE, offset: 0 })
-      .then(res => { if (!cancelled) { setRows(res.rows); setTotal(res.total); } })
+      .then(res => {
+        if (!cancelled && myId === requestIdRef.current) { setRows(res.rows); setTotal(res.total); }
+      })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && myId === requestIdRef.current) {
           setRows([]);
           setTotal(0);
           toast('Failed to load documents', { type: 'error' });
         }
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => { if (!cancelled && myId === requestIdRef.current) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey]);
 
   const loadMore = async () => {
+    const myId = requestIdRef.current;
     setLoadingMore(true);
     try {
       const res = await getDocuments({
         projectIds, customerIds, kinds, q: q || undefined, archived,
         limit: PAGE_SIZE, offset: rows.length,
       });
+      // The filters moved on while this page was in flight — its rows belong
+      // to a query that's no longer showing, so drop them rather than append.
+      if (myId !== requestIdRef.current) return;
       setRows(prev => [...prev, ...res.rows]);
       setTotal(res.total);
     } catch {
-      toast('Failed to load more documents', { type: 'error' });
+      if (myId === requestIdRef.current) toast('Failed to load more documents', { type: 'error' });
     } finally {
       setLoadingMore(false);
     }

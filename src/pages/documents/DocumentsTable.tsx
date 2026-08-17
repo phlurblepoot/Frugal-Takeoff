@@ -31,7 +31,7 @@ const MimeIcon: React.FC<{ mime: string }> = ({ mime }) => {
   return <File {...props} />;
 };
 
-const VersionHistory: React.FC<{ fileId: string; fileName: string | null; versions: ProjectFile[] | null }> = ({
+const VersionHistory: React.FC<{ fileName: string | null; versions: ProjectFile[] | null }> = ({
   fileName, versions,
 }) => {
   const { toast } = useToast();
@@ -145,7 +145,7 @@ export const DocumentsTable: React.FC<{
                 {historyFor === row.id && (
                   <TR>
                     <TD colSpan={7} className="bg-sunken/50">
-                      <VersionHistory fileId={row.id} fileName={row.name} versions={versions} />
+                      <VersionHistory fileName={row.name} versions={versions} />
                     </TD>
                   </TR>
                 )}
@@ -187,7 +187,7 @@ export const DocumentsTable: React.FC<{
             </div>
             {historyFor === row.id && (
               <div className="mt-2 rounded-lg bg-sunken/50 p-2">
-                <VersionHistory fileId={row.id} fileName={row.name} versions={versions} />
+                <VersionHistory fileName={row.name} versions={versions} />
               </div>
             )}
           </li>
