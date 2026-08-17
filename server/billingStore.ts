@@ -1,7 +1,7 @@
 // server/billingStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
-import { listPayApps, computeG702 } from './aiaStore';
+import { listPayAppRows, computeG702 } from './aiaStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -474,7 +474,7 @@ export function listBilledDocuments(db: Database.Database, projectId: string): B
   // the amount that application actually asks for, which is what payments
   // recorded against it settle. 'finalized' is the pay-app analog of a sent
   // invoice; 'draft' apps are skipped by the same rule as draft invoices.
-  for (const app of listPayApps(db, projectId)) {
+  for (const app of listPayAppRows(db, projectId)) {
     if (app.status === 'draft') continue;
     const totalCents = computeG702(db, app.id).L8currentPaymentDueCents;
     const paidCents = paidCentsFor(db, 'payapp', app.id);

@@ -6,6 +6,10 @@
 // because Phase 4a had float-corruption bugs from missing guards.
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+// billingStore imports computeG702 + listPayAppRows from here — this import
+// back is safe because both sides only touch it inside function bodies
+// (never at module-init time), so the ESM circular reference resolves fine.
+import { listBilledDocuments, paidCentsFor } from './billingStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -258,15 +262,42 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
   return { id, number };
 }
 
-export function listPayApps(db: Database.Database, projectId: string): any[] {
+// Raw pay-app rows for a project, no derived money fields. Used internally by
+// billingStore.listBilledDocuments — the public listPayApps below calls
+// listBilledDocuments for those fields, so it must not call itself through it.
+export function listPayAppRows(db: Database.Database, projectId: string): any[] {
   return db.prepare('SELECT * FROM aia_pay_apps WHERE projectId = ? ORDER BY number ASC').all(projectId) as any[];
+}
+
+export function listPayApps(db: Database.Database, projectId: string): any[] {
+  const rows = listPayAppRows(db, projectId);
+  // One listBilledDocuments call covers every finalized app's totalCents/
+  // paidCents/balanceCents (net of retainage, same figures the summaries and
+  // customer ledger use). Draft apps aren't in that list — they're billed
+  // for their LIVE computed amount instead, with balanceCents null (not yet
+  // billed, so "balance" doesn't apply).
+  const billed = new Map(
+    listBilledDocuments(db, projectId).filter(d => d.kind === 'payapp').map(d => [d.id, d])
+  );
+  return rows.map(r => {
+    const doc = billed.get(r.id);
+    if (doc) return { ...r, totalCents: doc.totalCents, paidCents: doc.paidCents, balanceCents: doc.balanceCents };
+    const totalCents = computeG702(db, r.id).L8currentPaymentDueCents;
+    const paidCents = paidCentsFor(db, 'payapp', r.id);
+    return { ...r, totalCents, paidCents, balanceCents: null };
+  });
 }
 
 export function getPayApp(db: Database.Database, id: string): any | null {
   const app = db.prepare('SELECT * FROM aia_pay_apps WHERE id = ?').get(id) as any;
   if (!app) return null;
   const lines = db.prepare('SELECT * FROM aia_pay_app_lines WHERE payAppId = ?').all(id) as any[];
-  return { ...app, lines };
+  // Same shape getInvoice embeds (server/billingStore.ts) — same field names,
+  // just the payapp target type.
+  const payments = db.prepare(
+    "SELECT id, date, amount, method, note FROM payments WHERE targetType = 'payapp' AND targetId = ? ORDER BY date"
+  ).all(id);
+  return { ...app, lines, payments };
 }
 
 // Version-checked (on the pay app) upsert of pay_app_lines. Validates each line,

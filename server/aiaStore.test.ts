@@ -14,6 +14,7 @@ import {
   computeG703, computeG702, remainingReleasablePoints,
   ValidationError, ConflictError, NotFoundError,
 } from './aiaStore';
+import { recordPayment } from './billingStore';
 
 let db: Database.Database;
 
@@ -288,6 +289,51 @@ describe('listPayApps / getPayApp', () => {
 
   it('getPayApp returns null for unknown id', () => {
     expect(getPayApp(db, 'no-such-id')).toBeNull();
+  });
+
+  it('list figures: finalized app totalCents/paidCents/balanceCents from listBilledDocuments; draft app gets live total + null balance', () => {
+    // p1 — finalized app: $1,000 SOV line, 100% complete, 10% retainage, no prior app.
+    //   completedToDateCents = 100000; retainage = round(100000*10%) = 10000
+    //   L8 = (100000 - 10000) - previous(0) = 90000c; a 25000c payment is recorded against it.
+    const { id: sov1 } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const finalized = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, finalized.id, [{ sovLineId: sov1, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, finalized.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', finalized.id, { amount: 250 }); // 25000c of the 90000c billed
+
+    // p2 — draft app (first/only app in its project, so L7's "previous" is 0):
+    // $1,000 SOV line, 50% complete, default 10% retainage.
+    //   completedToDateCents = round(100000*50%) = 50000; retainage = round(50000*10%) = 5000
+    //   L8 = (50000 - 5000) - previous(0) = 45000c; no payment recorded.
+    const { id: sov2 } = createSovLine(db, 'p2', { description: 'Framing', scheduledValueCents: 100000 });
+    const draft = createPayApp(db, 'p2', {});
+    savePayAppLines(db, draft.id, [{ sovLineId: sov2, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    const finalizedRow = listPayApps(db, 'p1').find(r => r.id === finalized.id);
+    expect(finalizedRow).toMatchObject({ totalCents: 90000, paidCents: 25000, balanceCents: 65000 });
+
+    const draftRow = listPayApps(db, 'p2').find(r => r.id === draft.id);
+    expect(draftRow).toMatchObject({ totalCents: 45000, paidCents: 0, balanceCents: null });
+  });
+
+  it('getPayApp embeds payments in the same row shape getInvoice embeds', () => {
+    const { id: sov1 } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, app.id, [{ sovLineId: sov1, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    const { id: paymentId } = recordPayment(db, 'payapp', app.id, { date: 5, amount: 250, method: 'wire', note: 'partial' });
+
+    const result = getPayApp(db, app.id)!;
+    // Field set matches getInvoice's payments rows exactly: id, date, amount, method, note.
+    expect(result.payments).toEqual([
+      { id: paymentId, date: 5, amount: 250, method: 'wire', note: 'partial' },
+    ]);
+  });
+
+  it('getPayApp payments is an empty array when no payments are recorded', () => {
+    setupTwoLines();
+    const app = createPayApp(db, 'p1', {});
+    expect(getPayApp(db, app.id)!.payments).toEqual([]);
   });
 });
 
