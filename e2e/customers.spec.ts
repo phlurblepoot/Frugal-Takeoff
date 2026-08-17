@@ -20,9 +20,12 @@ const fmtCents = (cents: number): string =>
 test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab, settings edit', async ({ authedPage, request, apiToken }) => {
   const seeded = await seedCustomerWithPortfolio(request, apiToken.token, { withPayApp: true });
   const payApp = seeded.payApp!;
-  // Both legs are unpaid, so the combined Outstanding figure and the
-  // Overview tile's "contract $X · invoices $Y" sub-line both apply.
-  const combinedOutstandingCents = seeded.invoiceAmountCents + payApp.billedCents;
+  // The invoice leg is unpaid; the pay-app leg has a partial payment
+  // recorded, so its Outstanding contribution is the balance (billed less
+  // paid), not the gross billed amount. The combined Outstanding figure and
+  // the Overview tile's "contract $X · invoices $Y" sub-line both apply
+  // since both legs' outstandingCents are still > 0.
+  const combinedOutstandingCents = seeded.invoiceAmountCents + payApp.balanceCents;
 
   await authedPage.goto('/customers');
   const sidebarRow = authedPage.getByTestId('customer-sidebar-row').filter({ hasText: seeded.customerName });
@@ -35,10 +38,11 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   // Overview is the default tab (no ?tab= yet).
   await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
 
-  // Stat tiles: Bidding=1, In progress=1, Outstanding=$1,650.00 (combined
-  // invoice + pay-app legs, both unpaid), Open tasks=1 (1 overdue). The
-  // combined tile also carries a muted "contract $X · invoices $Y" sub-line
-  // since both legs' outstandingCents are > 0 (CustomerOverviewTab.tsx).
+  // Stat tiles: Bidding=1, In progress=1, Outstanding=$1,400.00 (invoice leg
+  // unpaid + pay-app leg's remaining balance after its partial payment),
+  // Open tasks=1 (1 overdue). The combined tile also carries a muted
+  // "contract $X · invoices $Y" sub-line since both legs' outstandingCents
+  // are > 0 (CustomerOverviewTab.tsx).
   const tileValue = async (label: string) => {
     const tile = authedPage.getByText(label, { exact: true }).locator('..');
     return tile;
@@ -47,7 +51,7 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(await tileValue('In progress')).toContainText('1');
   const outstandingTile = await tileValue('Outstanding');
   await expect(outstandingTile).toContainText(fmtCents(combinedOutstandingCents));
-  await expect(outstandingTile).toContainText(`contract ${fmtCents(payApp.billedCents)}`);
+  await expect(outstandingTile).toContainText(`contract ${fmtCents(payApp.balanceCents)}`);
   await expect(outstandingTile).toContainText(`invoices ${fmtCents(seeded.invoiceAmountCents)}`);
   const openTasksTile = await tileValue('Open tasks');
   await expect(openTasksTile).toContainText('1');
@@ -81,8 +85,8 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(contractSection).toBeVisible();
   await expect(rowValue(contractSection, 'Contract total')).toContainText(fmtCents(payApp.sovAmountCents));
   await expect(rowValue(contractSection, 'Billed')).toContainText(fmtCents(payApp.billedCents));
-  await expect(rowValue(contractSection, 'Outstanding')).toContainText(fmtCents(payApp.billedCents));
-  await expect(rowValue(contractSection, 'Paid')).toContainText('$0.00');
+  await expect(rowValue(contractSection, 'Outstanding')).toContainText(fmtCents(payApp.balanceCents));
+  await expect(rowValue(contractSection, 'Paid')).toContainText(fmtCents(payApp.paidCents));
 
   // "Invoices" row (invoice leg).
   const invoicesSection = authedPage.getByTestId('billing-summary-invoices');
@@ -104,15 +108,15 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(payAppLedgerRow).toContainText(fmtCents(payApp.billedCents));
 
   // Pay Applications tab (on the project itself): Amount/Balance columns for
-  // the finalized app. No payment was recorded against it in this seed, so
-  // Amount === Balance === billedCents ($900.00 at 10% retainage on the
-  // $1,000.00 SOV line).
+  // the finalized app. A $250.00 payment was recorded against it in this
+  // seed, so Amount (billed, gross — $900.00 at 10% retainage on the
+  // $1,000.00 SOV line) and Balance (billed less paid — $650.00) differ.
   await authedPage.goto(`/project/${seeded.inProgressProjectId}/billing?tab=pay-apps`);
   const payAppTableRow = authedPage.getByRole('row').filter({ hasText: `#${payApp.payAppNumber}` });
   await expect(payAppTableRow).toBeVisible();
   const payAppCells = payAppTableRow.locator('td');
   await expect(payAppCells.nth(4)).toHaveText(fmtCents(payApp.billedCents)); // Amount
-  await expect(payAppCells.nth(5)).toHaveText(fmtCents(payApp.billedCents)); // Balance
+  await expect(payAppCells.nth(5)).toHaveText(fmtCents(payApp.balanceCents)); // Balance
   await authedPage.goto(`/customers/${seeded.customerId}?tab=billing`);
 
   // Settings tab: edit a field and save.

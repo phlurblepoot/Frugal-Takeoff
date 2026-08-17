@@ -190,8 +190,9 @@ export const AiaPayAppEditor: React.FC<{
   // GET payload (data.app.payments + g702.L8) rather than a server-provided
   // field — matches the list's balance rule: drafts aren't billed yet, so
   // balance is null ("—") even though payments could technically exist.
+  const payments = data?.app.payments ?? [];
   const paymentsPaidCents = useMemo(
-    () => (data?.app.payments ?? []).reduce((a, p) => a + Math.round((Number(p.amount) || 0) * 100), 0),
+    () => payments.reduce((a, p) => a + Math.round((Number(p.amount) || 0) * 100), 0),
     [data],
   );
   const paymentsBalanceCents = isFinalized && g702 ? g702.L8currentPaymentDueCents - paymentsPaidCents : null;
@@ -444,13 +445,13 @@ export const AiaPayAppEditor: React.FC<{
               project's Payments tab. */}
           <div className="rounded-lg border border-edge p-4">
             <h4 className="mb-3 text-sm font-semibold text-ink">Payments</h4>
-            {data.app.payments.length === 0 ? (
-              <p className="text-sm text-ink-faint">No payments recorded</p>
+            {payments.length === 0 ? (
+              <p className="text-sm text-ink-faint">No payments recorded. Record payments in the Billing → Payments tab.</p>
             ) : (
               <Table>
                 <THead><TR><TH>Date</TH><TH>Note</TH><TH className="text-right">Amount</TH></TR></THead>
                 <TBody>
-                  {data.app.payments.map(p => (
+                  {payments.map(p => (
                     <TR key={p.id}>
                       <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
                       <TD className="text-ink-faint">{p.note || '—'}</TD>

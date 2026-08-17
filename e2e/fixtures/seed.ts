@@ -455,6 +455,10 @@ export interface SeedCustomerPortfolioResult {
     /** G702 L8 (current payment due) for the finalized app, net of retainage. */
     billedCents: number;
     retainagePercent: number;
+    /** Sum of payments recorded against the finalized app. */
+    paidCents: number;
+    /** billedCents - paidCents. */
+    balanceCents: number;
   };
 }
 
@@ -475,11 +479,12 @@ export interface SeedCustomerPortfolioResult {
  *
  * `opts.withPayApp` additionally gives the SAME in_progress project a
  * one-line Schedule of Values and a FINALIZED pay app against it (100%
- * complete, default 10% retainage), via the same API routes the AIA editor
- * uses. This is opt-in because it changes the combined Outstanding figures
- * (customer overview tile, attention rows) that other assertions of this
- * seed's return value depend on — callers that only care about the invoice
- * leg should omit it and keep their existing numbers.
+ * complete, default 10% retainage) with a partial payment recorded against
+ * it, via the same API routes the AIA editor uses. This is opt-in because it
+ * changes the combined Outstanding figures (customer overview tile,
+ * attention rows) that other assertions of this seed's return value depend
+ * on — callers that only care about the invoice leg should omit it and keep
+ * their existing numbers.
  */
 export async function seedCustomerWithPortfolio(
   request: APIRequestContext,
@@ -626,6 +631,19 @@ export async function seedCustomerWithPortfolio(
     // no prior app to subtract: sovAmountCents * (1 - retainagePercent/100).
     const billedCents = Math.round(sovAmountCents * (1 - retainagePercent / 100));
 
+    // A partial payment against the finalized app — makes Amount (billed,
+    // gross) and Balance (billed less paid) differ downstream, exercising
+    // both columns instead of a degenerate equal-values case.
+    const paidCents = 25000; // $250.00
+    const balanceCents = billedCents - paidCents;
+    const paymentRes = await request.post(`/api/projects/${inProgressProjectId}/payments`, {
+      headers: auth,
+      data: { targetType: 'payapp', targetId: payAppCreated.id, amount: paidCents / 100 },
+    });
+    if (!paymentRes.ok()) {
+      throw new Error(`pay app payment create failed: ${paymentRes.status()} ${await paymentRes.text()}`);
+    }
+
     payApp = {
       payAppId: payAppCreated.id,
       payAppNumber: payAppCreated.number,
@@ -633,6 +651,8 @@ export async function seedCustomerWithPortfolio(
       sovAmountCents,
       billedCents,
       retainagePercent,
+      paidCents,
+      balanceCents,
     };
   }
 

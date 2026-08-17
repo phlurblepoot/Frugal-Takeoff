@@ -14,7 +14,7 @@ import {
   computeG703, computeG702, remainingReleasablePoints,
   ValidationError, ConflictError, NotFoundError,
 } from './aiaStore';
-import { recordPayment } from './billingStore';
+import { recordPayment, listBilledDocuments } from './billingStore';
 
 let db: Database.Database;
 
@@ -291,7 +291,7 @@ describe('listPayApps / getPayApp', () => {
     expect(getPayApp(db, 'no-such-id')).toBeNull();
   });
 
-  it('list figures: finalized app totalCents/paidCents/balanceCents from listBilledDocuments; draft app gets live total + null balance', () => {
+  it('list figures: finalized app totalCents/paidCents/balanceCents computed from computeG702 L8 + payments sum; draft app gets live total + null balance', () => {
     // p1 — finalized app: $1,000 SOV line, 100% complete, 10% retainage, no prior app.
     //   completedToDateCents = 100000; retainage = round(100000*10%) = 10000
     //   L8 = (100000 - 10000) - previous(0) = 90000c; a 25000c payment is recorded against it.
@@ -314,6 +314,23 @@ describe('listPayApps / getPayApp', () => {
 
     const draftRow = listPayApps(db, 'p2').find(r => r.id === draft.id);
     expect(draftRow).toMatchObject({ totalCents: 45000, paidCents: 0, balanceCents: null });
+  });
+
+  // Tripwire: listPayApps computes totalCents/paidCents/balanceCents locally
+  // (computeG702 L8 + payments sum) while listBilledDocuments computes the
+  // same figures independently for the customer/billing ledger. Pins them
+  // together so the two formulas can't silently drift apart.
+  it('listPayApps figures equal listBilledDocuments figures for the same finalized app', () => {
+    const { id: sov1 } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    savePayAppLines(db, app.id, [{ sovLineId: sov1, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', app.id, { amount: 250 });
+
+    const row = listPayApps(db, 'p1').find(r => r.id === app.id)!;
+    const doc = listBilledDocuments(db, 'p1').find(d => d.kind === 'payapp' && d.id === app.id)!;
+    expect({ totalCents: row.totalCents, paidCents: row.paidCents, balanceCents: row.balanceCents })
+      .toEqual({ totalCents: doc.totalCents, paidCents: doc.paidCents, balanceCents: doc.balanceCents });
   });
 
   it('getPayApp embeds payments in the same row shape getInvoice embeds', () => {
