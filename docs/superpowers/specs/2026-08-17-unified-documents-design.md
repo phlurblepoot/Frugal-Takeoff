@@ -99,7 +99,8 @@ sourceId). **Multi-instance kinds are excluded from the upsert** (second
 amendment, from Task-1 review): an entity legitimately has MANY photos
 sharing one (sourceType, sourceId, kind) triple — `issue-photo`,
 `punch-photo`, `task-photo`, `change-order-photo`, `rfi-photo`,
-`proposal-photo` always create new rows; only single-instance document
+`proposal-photo`, and `plan-source` (a plan set is often several PDFs)
+always create new rows; only single-instance document
 kinds (invoice, change-order PDF, issue-report, punch-report, rfi,
 rfi-response, proposal, payapp-export) participate in upsert-by-source.
 Also: `issue-report` replaces the legacy `issue` kind (renamed in the
