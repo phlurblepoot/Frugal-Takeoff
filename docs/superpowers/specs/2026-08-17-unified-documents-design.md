@@ -86,14 +86,16 @@ references; ⚠️ flag to Nathan on pull per protocol):
   specific sourceId stays unknown for historical rows (acceptable — project
   attribution remains).
 
-Entities gain stable document ids (additive columns, same migration):
-`invoices.pdfFileId`, `change_orders.pdfFileId`, `issues.pdfFileId`,
-`rfis.pdfFileId`, `aia_pay_apps.exportFileId`; the punch report is
-project-level, so its stable id lives in project meta as
-`punchReportFileId`.
-Generate/Download/Send flows: first generation creates the file (attributed
-+ source-linked) and stores the id; later generations call
-`saveFileVersion` on the same id. Send flows reuse the same stable file.
+Stable documents per entity — **upsert-by-source** (amended during planning;
+replaces the earlier per-entity `pdfFileId` columns, same behavior with no
+entity schema changes): when an upload arrives with `sourceType`+`sourceId`+
+`kind` matching an existing live file row, the server stores it as a new
+VERSION of that row (returning the existing id) instead of creating a new
+file. Generate/Download/Send flows therefore just upload with source
+metadata every time; regeneration versions, never duplicates. Photo kinds
+never collide with document kinds on the same entity (distinct `kind`
+values), and printouts keep one file per printout entry (each has its own
+sourceId).
 
 Custom types: `settings.documentTypes` JSON `[{ id, label }]` (admin-gated
 save path as other settings).
