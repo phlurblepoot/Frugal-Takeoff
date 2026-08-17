@@ -1,4 +1,5 @@
 import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '../types';
+import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
 
@@ -644,7 +645,7 @@ export const uploadProjectFile = async (
   kind: string,
   opts?: Omit<FileUploadOpts, 'projectId' | 'kind' | 'name'>,
 ): Promise<UploadResult> => {
-  const id = crypto.randomUUID();
+  const id = uuidv4();
   const qs = uploadQuery({ ...opts, projectId, kind, name: file.name }).toString();
   const res = await fetchWithRetry(`/api/files/${id}?${qs}`, {
     method: 'POST',
@@ -661,7 +662,7 @@ export const uploadProjectFile = async (
 export const persistGeneratedDocument = async (
   blob: Blob,
   opts: FileUploadOpts & { kind: string; name: string },
-): Promise<UploadResult> => saveBinaryFile(crypto.randomUUID(), blob, opts);
+): Promise<UploadResult> => saveBinaryFile(uuidv4(), blob, opts);
 
 // Save-as-version: live content keeps its id; old bytes become history.
 export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {

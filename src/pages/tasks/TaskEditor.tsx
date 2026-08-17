@@ -1,4 +1,5 @@
 // src/pages/tasks/TaskEditor.tsx
+import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useRef } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
 import {
@@ -90,7 +91,7 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
         // (getImageUrl → /api/images/:id/raw) already reads from. A task carries a
         // customer of its own only when it has no project, matching how the
         // server derives customer from the project when one is set.
-        const { fileId } = await saveBinaryFile(crypto.randomUUID(), f, {
+        const { fileId } = await saveBinaryFile(uuidv4(), f, {
           kind: 'task-photo', name: f.name,
           sourceType: 'task', sourceId: task.id,
           ...(task.projectId ? { projectId: task.projectId } : task.customerId ? { customerId: task.customerId } : {}),

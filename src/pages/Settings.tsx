@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
@@ -1331,7 +1332,7 @@ const AiaTemplateTab: React.FC = () => {
       // settings-asset keeps the template out of the Documents page; it belongs to
       // no project or entity, so it carries no projectId/source. The read path
       // (getFile → dataUrl) is unchanged — the server still reconstructs a dataURL.
-      const { fileId } = await saveBinaryFile(crypto.randomUUID(), file, {
+      const { fileId } = await saveBinaryFile(uuidv4(), file, {
         kind: 'settings-asset', name: file.name,
       });
       await saveSettings({ aiaTemplateFileId: fileId, aiaTemplateName: file.name });
@@ -1491,7 +1492,7 @@ const DocumentTypesCard: React.FC = () => {
   const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
   const uniqueId = (label: string, existing: CustomDocType[]): string => {
     const base = slugify(label) || 'type';
-    return existing.some(t => t.id === base) ? `${base}-${crypto.randomUUID().slice(0, 6)}` : base;
+    return existing.some(t => t.id === base) ? `${base}-${uuidv4().slice(0, 6)}` : base;
   };
 
   const handleAdd = async () => {

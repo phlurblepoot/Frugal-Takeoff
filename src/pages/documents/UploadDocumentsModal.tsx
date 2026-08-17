@@ -1,4 +1,5 @@
 // src/pages/documents/UploadDocumentsModal.tsx
+import { v4 as uuidv4 } from 'uuid';
 // Upload labeling popup (spec §Decisions "Direct uploads open a labeling
 // popup"): multi-file batch with removable chips, a shared Type/Customer/
 // Project picker (selecting a project locks the customer to the project's
@@ -27,7 +28,7 @@ interface Entry {
 // what gets uploaded.
 const DEFAULT_KIND = 'document';
 
-const toEntry = (file: File, kind: string): Entry => ({ id: crypto.randomUUID(), file, kind });
+const toEntry = (file: File, kind: string): Entry => ({ id: uuidv4(), file, kind });
 
 export const UploadDocumentsModal: React.FC<{
   open: boolean;
@@ -105,7 +106,7 @@ export const UploadDocumentsModal: React.FC<{
     const uploaded = new Set<string>();
     for (const e of entries) {
       try {
-        await saveBinaryFile(crypto.randomUUID(), e.file, {
+        await saveBinaryFile(uuidv4(), e.file, {
           kind: e.kind,
           name: e.file.name,
           ...(projectId ? { projectId } : {}),
