@@ -26,7 +26,7 @@ import {
   normalizeHighlightQuality,
   ProposalOptions,
 } from './proposal/proposalGenerator';
-import { pushHistory, parseHistory } from './proposal/proposalTextHistory';
+import { pushHistory, parseHistory, resolveInitialProposalText } from './proposal/proposalTextHistory';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -206,11 +206,20 @@ export const ProjectProposal: React.FC = () => {
   // The project's own saved value always wins; otherwise fall back to this
   // user's most-recent entry across projects. getProject and getUserPreferences
   // are resolved together so a slow prefs fetch can't decide "no stored value"
-  // before the project has actually arrived. The functional setState below
-  // only fills an still-empty field, so if the user starts typing while this
-  // is in flight, the prefill never clobbers it.
+  // before the project has actually arrived.
+  //
+  // ProjectLayout renders its Outlet WITHOUT `key={projectId}`, so navigating
+  // from project A's /proposal straight to B's /proposal re-renders this SAME
+  // component instance — A's coverNotes/terms would otherwise still be
+  // sitting in state when B's fetch starts. Reset both fields synchronously,
+  // before any async work, so B never inherits A's text (and can't leak it
+  // into a Generate/Send PDF). resolveInitialProposalText's `current` check
+  // then only sees text typed AFTER this reset — either the user typing into
+  // B, or a same-project reload landing — never A's leftovers.
   useEffect(() => {
     if (!projectId) return;
+    setCoverNotes('');
+    setTerms('');
     let cancelled = false;
     (async () => {
       try {
@@ -223,16 +232,8 @@ export const ProjectProposal: React.FC = () => {
         const termsHist = parseHistory(prefs['proposal-terms-history']);
         setNotesHistory(notesHist);
         setTermsHistory(termsHist);
-        if (proj.proposalCoverNotes !== undefined) {
-          setCoverNotes(proj.proposalCoverNotes);
-        } else if (notesHist[0]) {
-          setCoverNotes(prev => prev || notesHist[0]);
-        }
-        if (proj.proposalTerms !== undefined) {
-          setTerms(proj.proposalTerms);
-        } else if (termsHist[0]) {
-          setTerms(prev => prev || termsHist[0]);
-        }
+        setCoverNotes(prev => resolveInitialProposalText(proj.proposalCoverNotes, notesHist[0], prev));
+        setTerms(prev => resolveInitialProposalText(proj.proposalTerms, termsHist[0], prev));
       } catch { /* non-fatal — fields stay whatever they already were */ }
     })();
     return () => { cancelled = true; };
@@ -445,7 +446,7 @@ export const ProjectProposal: React.FC = () => {
       }
       toast('Proposal generated', { type: 'success' });
       reload();
-      recordProposalTextHistory();
+      await recordProposalTextHistory();
     } catch (error) {
       console.error('Error generating proposal:', error);
       toast('Failed to generate proposal PDF.', { type: 'error' });

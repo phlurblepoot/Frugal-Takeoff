@@ -31,3 +31,22 @@ export function parseHistory(raw: string | undefined): string[] {
     return [];
   }
 }
+
+// Decides what a cover-notes/terms field should show once a project's data
+// and this user's history have both resolved. Precedence: an explicitly
+// stored project value (checked with !== undefined, so an intentional empty
+// string still wins) beats everything; otherwise `current` wins if the field
+// is no longer empty (the caller reset it to '' on project switch, so a
+// non-empty `current` here means the user typed something — or a same-project
+// reload just landed with what they typed — while this was in flight); only
+// then does the history fallback apply. Pure — safe to call from a functional
+// setState updater.
+export function resolveInitialProposalText(
+  stored: string | undefined,
+  historyFirst: string | undefined,
+  current: string,
+): string {
+  if (stored !== undefined) return stored;
+  if (current) return current;
+  return historyFirst ?? '';
+}
