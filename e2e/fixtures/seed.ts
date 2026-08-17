@@ -445,6 +445,17 @@ export interface SeedCustomerPortfolioResult {
   invoiceId: string;
   invoiceNumber: string;
   invoiceAmountCents: number;
+  /** Present only when `opts.withPayApp` was set. */
+  payApp?: {
+    payAppId: string;
+    payAppNumber: number;
+    sovLineId: string;
+    /** Schedule-of-values line amount — becomes `billing.contractTotalCents`. */
+    sovAmountCents: number;
+    /** G702 L8 (current payment due) for the finalized app, net of retainage. */
+    billedCents: number;
+    retainagePercent: number;
+  };
 }
 
 /**
@@ -461,10 +472,19 @@ export interface SeedCustomerPortfolioResult {
  * pane in one seed — see server/customerStore.ts for the exact rollup rules
  * this mirrors (archived-project exclusion doesn't apply here; nothing here
  * is archived).
+ *
+ * `opts.withPayApp` additionally gives the SAME in_progress project a
+ * one-line Schedule of Values and a FINALIZED pay app against it (100%
+ * complete, default 10% retainage), via the same API routes the AIA editor
+ * uses. This is opt-in because it changes the combined Outstanding figures
+ * (customer overview tile, attention rows) that other assertions of this
+ * seed's return value depend on — callers that only care about the invoice
+ * leg should omit it and keep their existing numbers.
  */
 export async function seedCustomerWithPortfolio(
   request: APIRequestContext,
   token: string,
+  opts: { withPayApp?: boolean } = {},
 ): Promise<SeedCustomerPortfolioResult> {
   const auth = { Authorization: `Bearer ${token}` };
   const short = randomUUID().slice(0, 8);
@@ -554,6 +574,68 @@ export async function seedCustomerWithPortfolio(
   }
   const task = await taskRes.json();
 
+  let payApp: SeedCustomerPortfolioResult['payApp'];
+  if (opts.withPayApp) {
+    // One SOV line on the same in-progress project — becomes
+    // billing.contractTotalCents for this project (hasSov=true path).
+    const sovAmountCents = 100000; // $1,000.00
+    const sovRes = await request.post(`/api/projects/${inProgressProjectId}/aia/sov`, {
+      headers: auth,
+      data: { description: 'Contract scope', scheduledValueCents: sovAmountCents },
+    });
+    if (!sovRes.ok()) {
+      throw new Error(`sov line create failed: ${sovRes.status()} ${await sovRes.text()}`);
+    }
+    const sovLine = await sovRes.json();
+
+    // Pay app #1 with no explicit retainage override → DEFAULT_RETAINAGE (10%).
+    const payAppRes = await request.post(`/api/projects/${inProgressProjectId}/aia/pay-apps`, {
+      headers: auth,
+      data: { applicationDate: daysFromToday(0) },
+    });
+    if (!payAppRes.ok()) {
+      throw new Error(`pay app create failed: ${payAppRes.status()} ${await payAppRes.text()}`);
+    }
+    const payAppCreated = await payAppRes.json();
+    const retainagePercent = 10;
+
+    // 100% complete, nothing stored — createPayApp already seeded a line for
+    // the SOV line at 0%/0, this bumps it to 100% (version 1 → 2).
+    const linesRes = await request.put(`/api/aia/pay-apps/${payAppCreated.id}/lines`, {
+      headers: auth,
+      data: {
+        lines: [{ sovLineId: sovLine.id, percentComplete: 100, storedMaterialsCents: 0 }],
+        version: 1,
+      },
+    });
+    if (!linesRes.ok()) {
+      throw new Error(`pay app lines save failed: ${linesRes.status()} ${await linesRes.text()}`);
+    }
+
+    // Finalize — the AIA analog of "sent", and what makes listBilledDocuments
+    // (and therefore the customer/project Contract rollup + ledger) count it.
+    const finalizeRes = await request.patch(`/api/aia/pay-apps/${payAppCreated.id}`, {
+      headers: auth,
+      data: { status: 'finalized' },
+    });
+    if (!finalizeRes.ok()) {
+      throw new Error(`pay app finalize failed: ${finalizeRes.status()} ${await finalizeRes.text()}`);
+    }
+
+    // G702 L8 (current payment due) = completed-to-date less retainage, with
+    // no prior app to subtract: sovAmountCents * (1 - retainagePercent/100).
+    const billedCents = Math.round(sovAmountCents * (1 - retainagePercent / 100));
+
+    payApp = {
+      payAppId: payAppCreated.id,
+      payAppNumber: payAppCreated.number,
+      sovLineId: sovLine.id,
+      sovAmountCents,
+      billedCents,
+      retainagePercent,
+    };
+  }
+
   return {
     customerId,
     customerName,
@@ -568,5 +650,6 @@ export async function seedCustomerWithPortfolio(
     invoiceId: invoice.id,
     invoiceNumber,
     invoiceAmountCents,
+    payApp,
   };
 }

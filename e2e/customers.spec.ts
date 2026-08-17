@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import type { Locator } from '@playwright/test';
 import { test, expect, login, seedCustomerWithPortfolio } from './fixtures/test';
+
+// Mirrors src/utils/money.ts's formatMoney — used to derive assertion
+// strings from seeded cents amounts instead of hand-computing literals.
+const fmtCents = (cents: number): string =>
+  (cents / 100).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 
 // Characterization spec for the customers split view (src/pages/customers/*)
 // introduced by the customers/projects reorg: persistent sidebar + a tabbed
@@ -12,7 +18,11 @@ import { test, expect, login, seedCustomerWithPortfolio } from './fixtures/test'
 // all assertions to that customer's own rows/text.
 
 test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab, settings edit', async ({ authedPage, request, apiToken }) => {
-  const seeded = await seedCustomerWithPortfolio(request, apiToken.token);
+  const seeded = await seedCustomerWithPortfolio(request, apiToken.token, { withPayApp: true });
+  const payApp = seeded.payApp!;
+  // Both legs are unpaid, so the combined Outstanding figure and the
+  // Overview tile's "contract $X · invoices $Y" sub-line both apply.
+  const combinedOutstandingCents = seeded.invoiceAmountCents + payApp.billedCents;
 
   await authedPage.goto('/customers');
   const sidebarRow = authedPage.getByTestId('customer-sidebar-row').filter({ hasText: seeded.customerName });
@@ -25,41 +35,73 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   // Overview is the default tab (no ?tab= yet).
   await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
 
-  // Stat tiles: Bidding=1, In progress=1, Outstanding=$750.00, Open tasks=1 (1 overdue).
+  // Stat tiles: Bidding=1, In progress=1, Outstanding=$1,650.00 (combined
+  // invoice + pay-app legs, both unpaid), Open tasks=1 (1 overdue). The
+  // combined tile also carries a muted "contract $X · invoices $Y" sub-line
+  // since both legs' outstandingCents are > 0 (CustomerOverviewTab.tsx).
   const tileValue = async (label: string) => {
     const tile = authedPage.getByText(label, { exact: true }).locator('..');
     return tile;
   };
   await expect(await tileValue('Bidding')).toContainText('1');
   await expect(await tileValue('In progress')).toContainText('1');
-  await expect(await tileValue('Outstanding')).toContainText('$750.00');
+  const outstandingTile = await tileValue('Outstanding');
+  await expect(outstandingTile).toContainText(fmtCents(combinedOutstandingCents));
+  await expect(outstandingTile).toContainText(`contract ${fmtCents(payApp.billedCents)}`);
+  await expect(outstandingTile).toContainText(`invoices ${fmtCents(seeded.invoiceAmountCents)}`);
   const openTasksTile = await tileValue('Open tasks');
   await expect(openTasksTile).toContainText('1');
   await expect(openTasksTile).toContainText('1 overdue');
 
-  // Needs-attention: the overdue task, the upcoming bid, and the outstanding invoice.
+  // Needs-attention: the overdue task, the upcoming bid, the outstanding
+  // invoice, and the outstanding (finalized, unpaid) pay application.
   const attentionRows = authedPage.getByTestId('customer-attention-row');
-  await expect(attentionRows).toHaveCount(3);
+  await expect(attentionRows).toHaveCount(4);
   await expect(attentionRows.filter({ hasText: seeded.taskTitle })).toHaveCount(1);
   await expect(attentionRows.filter({ hasText: seeded.biddingProjectName })).toHaveCount(1);
   await expect(attentionRows.filter({ hasText: `Invoice #${seeded.invoiceNumber}` })).toHaveCount(1);
+  await expect(attentionRows.filter({ hasText: `Application #${payApp.payAppNumber}` })).toHaveCount(1);
 
   // Tasks tab shows the seeded task.
   await authedPage.getByTestId('customer-tab-tasks').click();
   await expect(authedPage).toHaveURL(/tab=tasks/);
   await expect(authedPage.getByText(seeded.taskTitle)).toBeVisible();
 
-  // Billing tab: rollup + ledger row for the sent/unpaid invoice.
+  // Billing tab: two-row Contract/Invoices summary split + ledger rows for
+  // both the sent/unpaid invoice and the finalized/unpaid pay application.
   await authedPage.getByTestId('customer-tab-billing').click();
   await expect(authedPage).toHaveURL(/tab=billing/);
-  await expect(authedPage.getByText('Contract total')).toBeVisible();
-  await expect(authedPage.getByText('Invoiced')).toBeVisible();
-  const ledgerRow = authedPage.getByRole('row', { name: new RegExp(seeded.invoiceNumber) });
-  await expect(ledgerRow).toBeVisible();
-  await expect(ledgerRow).toContainText(seeded.inProgressProjectName);
-  await expect(ledgerRow).toContainText('Invoice');
-  await expect(ledgerRow).toContainText('Sent');
-  await expect(ledgerRow).toContainText('$750.00');
+
+  // "Contract" row (SOV/pay-app leg) — scope label→value lookups to this
+  // row's own section so "Paid" (which also appears in the Invoices row and
+  // the ledger's column header) resolves to the right element.
+  const rowValue = (container: Locator, label: string) =>
+    container.getByText(label, { exact: true }).locator('..');
+  const contractSection = authedPage.getByText('Contract', { exact: true }).locator('..');
+  await expect(contractSection).toBeVisible();
+  await expect(rowValue(contractSection, 'Contract total')).toContainText(fmtCents(payApp.sovAmountCents));
+  await expect(rowValue(contractSection, 'Billed')).toContainText(fmtCents(payApp.billedCents));
+  await expect(rowValue(contractSection, 'Outstanding')).toContainText(fmtCents(payApp.billedCents));
+  await expect(rowValue(contractSection, 'Paid')).toContainText('$0.00');
+
+  // "Invoices" row (invoice leg).
+  const invoicesSection = authedPage.getByText('Invoices', { exact: true }).locator('..');
+  await expect(invoicesSection).toBeVisible();
+  await expect(rowValue(invoicesSection, 'Invoiced')).toContainText(fmtCents(seeded.invoiceAmountCents));
+  await expect(rowValue(invoicesSection, 'Paid')).toContainText('$0.00');
+
+  const invoiceLedgerRow = authedPage.getByRole('row', { name: new RegExp(seeded.invoiceNumber) });
+  await expect(invoiceLedgerRow).toBeVisible();
+  await expect(invoiceLedgerRow).toContainText(seeded.inProgressProjectName);
+  await expect(invoiceLedgerRow).toContainText('Invoice');
+  await expect(invoiceLedgerRow).toContainText('Sent');
+  await expect(invoiceLedgerRow).toContainText('$750.00');
+
+  const payAppLedgerRow = authedPage.getByRole('row').filter({ hasText: 'Pay Application' });
+  await expect(payAppLedgerRow).toBeVisible();
+  await expect(payAppLedgerRow).toContainText(seeded.inProgressProjectName);
+  await expect(payAppLedgerRow).toContainText('Finalized');
+  await expect(payAppLedgerRow).toContainText(fmtCents(payApp.billedCents));
 
   // Settings tab: edit a field and save.
   await authedPage.getByTestId('customer-tab-settings').click();
