@@ -835,10 +835,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (kind !== undefined && typeof kind !== 'string') {
         return res.status(400).json({ error: 'kind must be a string' });
       }
-      const result = patchDocument(db, req.params.id, { archived, kind });
+      const isAdmin = (req as any).user?.role === 'admin';
+      const result = patchDocument(db, req.params.id, { archived, kind }, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
       const { sha256, legacyFormat, ...slim } = result.value as any;
-      res.json({ success: true, ...slim });
+      res.json({ success: true, ...slim, archived: !!slim.archived });
     } catch (e) {
       console.error('Error updating file:', e);
       res.status(500).json({ error: 'Failed to update file' });
@@ -847,7 +848,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.delete('/api/files/:id', authenticateToken, (req, res) => {
     try {
-      const result = deleteDocument(db, dataDir, req.params.id);
+      const isAdmin = (req as any).user?.role === 'admin';
+      const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
       res.json({ success: true });
     } catch (e) {

@@ -232,9 +232,26 @@ describe('PATCH /api/files/:id', () => {
     const fid = await upload('gen', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-x', name: 'Inv.pdf' });
     const on = await request(app).patch(`/api/files/${fid}`).send({ archived: true });
     expect(on.status).toBe(200);
-    expect(on.body.archived).toBe(1);
+    expect(on.body.archived).toBe(true); // normalized to boolean, matching GET /api/documents
     const off = await request(app).patch(`/api/files/${fid}`).send({ archived: false });
-    expect(off.body.archived).toBe(0);
+    expect(off.body.archived).toBe(false);
+  });
+
+  it('404s a billing-kind row for a non-admin (not 409 — must not confirm existence)', async () => {
+    const fid = await upload('gen-billing', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-role', name: 'Inv.pdf' });
+    const userApp = buildApp('user', 'u2');
+    const res = await request(userApp).patch(`/api/files/${fid}`).send({ archived: true });
+    expect(res.status).toBe(404);
+    // untouched — the admin app still sees it un-archived
+    expect((await request(app).get(`/api/files/${fid}/meta`)).body.archived).toBe(0);
+  });
+
+  it('a non-admin can still archive a visible (non-billing) row', async () => {
+    const fid = await upload('up-visible', { projectId: 'p1', kind: 'document', name: 'X.pdf' });
+    const userApp = buildApp('user', 'u2');
+    const res = await request(userApp).patch(`/api/files/${fid}`).send({ archived: true });
+    expect(res.status).toBe(200);
+    expect(res.body.archived).toBe(true);
   });
 
   it('409s a kind change on a system-generated row', async () => {
@@ -285,6 +302,14 @@ describe('DELETE /api/files/:id', () => {
     const fid = await upload('plan-src', { projectId: 'p1', kind: 'plan-source', name: 'raw.pdf' });
     const res = await request(app).delete(`/api/files/${fid}`);
     expect(res.status).toBe(409);
+  });
+
+  it('404s a billing-kind row for a non-admin (uniform with PATCH; the row would 409 for admin)', async () => {
+    const fid = await upload('gen-del', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'inv-del', name: 'Inv.pdf' });
+    const userApp = buildApp('user', 'u2');
+    const res = await request(userApp).delete(`/api/files/${fid}`);
+    expect(res.status).toBe(404);
+    expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(200); // untouched
   });
 
   it('deletes a loose direct upload and wipes its version rows + bytes', async () => {

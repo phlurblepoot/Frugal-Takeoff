@@ -301,13 +301,20 @@ function isValidCustomKind(db: Database.Database, kind: string): boolean {
 // archived may be toggled on any row; kind may only move between
 // direct-upload kinds (never onto/off a system-generated kind), and a
 // custom:<id> target must be a live entry in settings.documentTypes.
+// A non-admin gets 404 (not 409) for a billing-kind row — same set the
+// listing hides for them — so a PATCH can't be used to confirm a row
+// exists, or read back its metadata, when they couldn't see it via GET.
 export function patchDocument(
   db: Database.Database,
   id: string,
-  patch: { archived?: boolean; kind?: string }
+  patch: { archived?: boolean; kind?: string },
+  isAdmin: boolean
 ): GuardResult<FileMeta> {
   const current = getMeta(db, id);
   if (!current) return { ok: false, status: 404, error: 'File not found' };
+  if (!isAdmin && (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(current.kind)) {
+    return { ok: false, status: 404, error: 'File not found' };
+  }
   if (patch.kind !== undefined && patch.kind !== current.kind) {
     if (!isDirectUploadKind(current.kind) || !isDirectUploadKind(patch.kind)) {
       return { ok: false, status: 409, error: 'kind can only be changed between direct-upload types' };
@@ -325,14 +332,21 @@ export function patchDocument(
 // Only loose, never-sourced direct uploads are really deletable (spec §Safe
 // deletion tiers): generated/attached files are archived here and deleted at
 // their source entity instead. Wipes the live row AND every version row's
-// bytes (listVersions returns [live, ...history]).
+// bytes (listVersions returns [live, ...history]). Deletable rows are always
+// direct-upload kinds (never a billing kind), so the role gate below is
+// vacuously true today — kept for uniformity with patchDocument and as a
+// guard against a future kind ever landing in both sets.
 export function deleteDocument(
   db: Database.Database,
   dataDir: string,
-  id: string
+  id: string,
+  isAdmin: boolean
 ): GuardResult<null> {
   const current = getMeta(db, id);
   if (!current) return { ok: false, status: 404, error: 'File not found' };
+  if (!isAdmin && (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(current.kind)) {
+    return { ok: false, status: 404, error: 'File not found' };
+  }
   if (current.parentFileId) return { ok: false, status: 409, error: 'Cannot delete a historical file version directly' };
   if (current.sourceType) {
     return { ok: false, status: 409, error: 'This file is generated from another record — archive it here, or delete it at the source' };
