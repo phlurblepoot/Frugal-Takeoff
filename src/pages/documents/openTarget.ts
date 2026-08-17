@@ -3,7 +3,7 @@
 // logic for turning a stored file into either an in-app editor route, a raw
 // image view, or a plain download, based on its mime type.
 
-const SHEET_MIMES = [
+export const SHEET_MIMES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
 ];
