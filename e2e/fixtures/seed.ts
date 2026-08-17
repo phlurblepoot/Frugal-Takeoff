@@ -7,6 +7,17 @@ import type { APIRequestContext } from '@playwright/test';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
 
+// Local YYYY-MM-DD offset from today — mirrors server/customerStore.ts's
+// todayStr() comparison base. Using toISOString() (UTC) here would drift a
+// day off local "today" depending on timezone and time of day, so a fixture
+// meant to be "yesterday" could equal today's local date and never trip the
+// overdue branch.
+function daysFromToday(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export interface LoginResult {
   token: string;
   user: { id: string; username: string; role: string };
@@ -530,10 +541,10 @@ export async function seedCustomerWithPortfolio(
 
   // Customer-level task (no projectId) due yesterday — already overdue.
   // customerOverview()/customerSummaries() compare dueDate against today's
-  // date string, so "yesterday" guarantees the overdue branch regardless of
-  // time-of-day flakiness.
+  // LOCAL date string, so this must be computed in local time (not UTC) to
+  // guarantee the overdue branch regardless of time-of-day/timezone.
   const taskTitle = `E2E Portfolio Overdue Task ${short}`;
-  const taskDueDate = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const taskDueDate = daysFromToday(-1);
   const taskRes = await request.post('/api/tasks', {
     headers: auth,
     data: { title: taskTitle, customerId, dueDate: taskDueDate, category: 'Follow-up' },
