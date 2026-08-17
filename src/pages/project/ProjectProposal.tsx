@@ -361,7 +361,12 @@ export const ProjectProposal: React.FC = () => {
     const updated = { ...project, printouts: (project.printouts || []).filter(p => p.id !== printout.id) };
     try {
       await saveProject(updated);
-      await deleteFile(printout.fileId);
+      // Printout files carry sourceType 'printout' (line ~291) — deleteFile
+      // now does a real DELETE, and the server 409s any sourced/generated row
+      // (spec's deletion tiers: archive-only, not really deletable). Best
+      // effort only, so an expected 409 doesn't surface as "failed to delete"
+      // once the printout entry itself is already gone from the project.
+      try { await deleteFile(printout.fileId); } catch { /* best effort */ }
       reload();
     } catch {
       toast('Failed to delete printout', { type: 'error' });

@@ -5,11 +5,13 @@
 // has no UI concerns. Custom admin-defined kinds are `custom:<id>` — their
 // label lives in settings.documentTypes, not here.
 import type { PillTone } from '../../components/ui';
+import type { CustomDocType } from '../../utils/store';
 
-export interface CustomDocType {
-  id: string;
-  label: string;
-}
+// Re-exported so existing `from './docTypes'` imports (DocumentsPage,
+// DocumentsTable, UploadDocumentsModal, Settings) keep working — store.ts
+// owns the canonical shape since it's also where getDocumentTypes/
+// saveDocumentTypes live.
+export type { CustomDocType };
 
 interface KindMeta { label: string; tone: PillTone; }
 
@@ -54,3 +56,13 @@ export const kindLabel = (kind: string, customTypes: CustomDocType[] = []): stri
 
 export const kindTone = (kind: string): PillTone =>
   kind.startsWith('custom:') ? 'violet' : (KIND_META[kind]?.tone ?? 'slate');
+
+// Client-side mirror of server/files.ts's DIRECT_UPLOAD_KINDS/isDirectUploadKind
+// (kept in sync by hand — the server module can't be imported into the client
+// bundle). These are the only kinds a person can pick in the upload popup or
+// re-type a file into via "Change type", and the only ones a file may ever be
+// deleted outright (see documentsPolicy.ts).
+export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other'] as const;
+
+export const isDirectUploadKind = (kind: string): boolean =>
+  (DIRECT_UPLOAD_KINDS as readonly string[]).includes(kind) || kind.startsWith('custom:');

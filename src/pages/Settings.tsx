@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
@@ -1467,6 +1467,177 @@ const AiaTemplateTab: React.FC = () => {
   );
 };
 
+// Admin "Document types" card (spec §Decisions "Custom types"): custom kinds
+// available in the upload popup, type filters, and a direct upload's "Change
+// type" action — system types are locked and never appear here. Ids are
+// slugged from the label at add time (falling back to a short random suffix
+// on collision/empty), and every file stores the id, not the label — a
+// rename just edits settings.documentTypes, no file rows change.
+const DocumentTypesCard: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [loading, setLoading] = useState(true);
+  const [types, setTypes] = useState<CustomDocType[]>([]);
+  const [newLabel, setNewLabel] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    getDocumentTypes().then(setTypes).catch(() => setTypes([])).finally(() => setLoading(false));
+  }, []);
+
+  const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
+  const uniqueId = (label: string, existing: CustomDocType[]): string => {
+    const base = slugify(label) || 'type';
+    return existing.some(t => t.id === base) ? `${base}-${crypto.randomUUID().slice(0, 6)}` : base;
+  };
+
+  const handleAdd = async () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    setAdding(true);
+    try {
+      const next = [...types, { id: uniqueId(label, types), label }];
+      await saveDocumentTypes(next);
+      setTypes(next);
+      setNewLabel('');
+      toast('Document type added', { type: 'success' });
+    } catch {
+      toast('Failed to add type', { type: 'error' });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const startRename = (t: CustomDocType) => { setEditingId(t.id); setEditLabel(t.label); };
+  const cancelRename = () => { setEditingId(null); setEditLabel(''); };
+
+  const saveRename = async (id: string) => {
+    const label = editLabel.trim();
+    if (!label) return;
+    setBusyId(id);
+    try {
+      const next = types.map(t => t.id === id ? { ...t, label } : t);
+      await saveDocumentTypes(next);
+      setTypes(next);
+      cancelRename();
+      toast('Renamed', { type: 'success' });
+    } catch {
+      toast('Failed to rename', { type: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (t: CustomDocType) => {
+    setBusyId(t.id);
+    try {
+      // GET /api/documents can only ask for "archived" or "not archived" in
+      // one call (no "either" mode) — sum both so a type still referenced by
+      // an archived-only row still blocks deletion (its files would be left
+      // with an unresolvable kind id otherwise).
+      const [active, archived] = await Promise.all([
+        getDocuments({ kinds: [`custom:${t.id}`], limit: 1 }),
+        getDocuments({ kinds: [`custom:${t.id}`], limit: 1, archived: true }),
+      ]);
+      const inUse = active.total + archived.total;
+      if (inUse > 0) {
+        toast(`In use by ${inUse} document${inUse === 1 ? '' : 's'} — can't delete`, { type: 'error' });
+        return;
+      }
+      const ok = await confirm({
+        title: 'Delete document type',
+        message: `Delete "${t.label}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      const next = types.filter(x => x.id !== t.id);
+      await saveDocumentTypes(next);
+      setTypes(next);
+      toast('Document type deleted', { type: 'success' });
+    } catch {
+      toast('Failed to delete type', { type: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+      <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <Tag size={20} className="text-accent-600" /> Document Types
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          Custom types available in the upload popup, the Documents page type filter, and a direct upload's "Change type" action. Built-in types (Invoice, RFI, Punch Report, etc.) are fixed and don't appear here.
+        </p>
+      </div>
+      <div className="p-6 space-y-4">
+        {loading ? (
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-600" />
+        ) : types.length === 0 ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400">No custom types yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {types.map(t => (
+              <li key={t.id} className="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5">
+                {editingId === t.id ? (
+                  <>
+                    <input
+                      className={inputCls}
+                      value={editLabel}
+                      onChange={e => setEditLabel(e.target.value)}
+                      autoFocus
+                      onKeyDown={e => { if (e.key === 'Enter') saveRename(t.id); if (e.key === 'Escape') cancelRename(); }}
+                    />
+                    <button onClick={() => saveRename(t.id)} disabled={busyId === t.id || !editLabel.trim()}
+                      className="shrink-0 text-sm font-medium text-accent-600 hover:text-accent-700 disabled:opacity-50">
+                      {busyId === t.id ? 'Saving…' : 'Save'}
+                    </button>
+                    <button onClick={cancelRename} title="Cancel"
+                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900 dark:text-white">{t.label}</span>
+                    <span className="shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500">custom:{t.id}</span>
+                    <button onClick={() => startRename(t)} title="Rename"
+                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => handleDelete(t)} disabled={busyId === t.id} title="Delete"
+                      className="shrink-0 p-1.5 rounded-md text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50">
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center gap-2 border-t border-slate-100 dark:border-slate-700 pt-4">
+          <input
+            className={inputCls}
+            placeholder="e.g. Warranty"
+            value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+          />
+          <button onClick={handleAdd} disabled={adding || !newLabel.trim()}
+            className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">
+            <Plus size={15} /> Add
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 type TabId = 'preferences' | 'takeoff-templates' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
@@ -1727,6 +1898,8 @@ export const Settings: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                <DocumentTypesCard />
 
                 <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                   <div className="p-6 border-b border-slate-100 dark:border-slate-700">

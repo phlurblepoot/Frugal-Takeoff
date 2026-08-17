@@ -269,8 +269,15 @@ export const saveBinaryFile = async (
   await handleResponse(res);
   return await readUploadResult(res, id);
 };
+// Real delete (server/documents.ts's deleteDocument guard: 409s unless the
+// row is an unsourced direct upload — see documentsPolicy.ts). Superseded the
+// old no-op stub once the Documents page needed an actual delete affordance.
 export const deleteFile = async (id: string): Promise<void> => {
-  // Image deletion is handled by project deletion in this simple version
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
 };
 
 // Template functions
@@ -759,6 +766,44 @@ export const getDocuments = async (
   const res = await fetchWithRetry(`/api/documents?${p.toString()}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return await res.json();
+};
+
+// Archive/restore or re-type a file (server/documents.ts's patchDocument
+// guard: kind may only move between direct-upload kinds; archived toggles
+// freely). Returns the updated row's slim metadata.
+export const patchFile = async (
+  id: string,
+  patch: { archived?: boolean; kind?: string },
+): Promise<{ id: string; kind: string; archived: boolean }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(patch),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Admin-managed custom document types (spec §Data model: settings.documentTypes
+// JSON [{id,label}], files store the id). Saved through the general settings
+// PUT path like every other admin setting — see Settings.tsx's other cards.
+export interface CustomDocType {
+  id: string;
+  label: string;
+}
+
+export const getDocumentTypes = async (): Promise<CustomDocType[]> => {
+  const s = await getSettings();
+  try {
+    const parsed = s.documentTypes ? JSON.parse(s.documentTypes) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveDocumentTypes = async (types: CustomDocType[]): Promise<void> => {
+  await saveSettings({ documentTypes: JSON.stringify(types) });
 };
 
 // ── Phase 4a: billing ────────────────────────────────────────────────────────
