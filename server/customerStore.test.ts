@@ -210,6 +210,14 @@ describe('customerSummaries / customerOverview', () => {
     expect(ov.billing.paidCents).toBe(25000);
     expect(ov.billing.outstandingCents).toBe(85000);
 
+    // Split: contract (payapp) leg is the $1,000 pay app; invoices leg is the
+    // $100 sent invoice. Each combined figure above equals the two legs summed.
+    expect(ov.billing.contract).toEqual({ billedCents: 100000, paidCents: 25000, outstandingCents: 75000 });
+    expect(ov.billing.invoices).toEqual({ invoicedCents: 10000, paidCents: 0, outstandingCents: 10000 });
+    expect(ov.billing.contract.billedCents + ov.billing.invoices.invoicedCents).toBe(ov.billing.invoicedCents);
+    expect(ov.billing.contract.paidCents + ov.billing.invoices.paidCents).toBe(ov.billing.paidCents);
+    expect(ov.billing.contract.outstandingCents + ov.billing.invoices.outstandingCents).toBe(ov.billing.outstandingCents);
+
     const payAppRow = ov.billing.ledger.find((l: any) => l.kind === 'payapp');
     expect(payAppRow).toMatchObject({
       projectId: 'p-aia', number: 1, status: 'finalized',

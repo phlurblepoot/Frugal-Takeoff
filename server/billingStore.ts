@@ -348,6 +348,7 @@ export function billingSummary(db: Database.Database, projectId: string): {
   paidCents: number;
   invoiceOutstandingCents: number; outstandingCents: number;
   invoiceCount: number; changeOrderCount: number;
+  payAppBilledCents: number; payAppOutstandingCents: number;
 } {
   const proj = db.prepare('SELECT contractValue FROM projects WHERE id = ?').get(projectId) as { contractValue: number | null } | undefined;
 
@@ -382,6 +383,13 @@ export function billingSummary(db: Database.Database, projectId: string): {
 
   const invoiceOutstandingCents = invoiceTotalCents - paid.invoicesCents;
 
+  // Contract (pay-app) billed/outstanding — derived from listBilledDocuments
+  // (finalized apps' G702 L8, net of retainage) so this is the same
+  // population/figures the customer ledger uses. One source of truth.
+  const payAppDocs = listBilledDocuments(db, projectId).filter(d => d.kind === 'payapp');
+  const payAppBilledCents = payAppDocs.reduce((a, d) => a + d.totalCents, 0);
+  const payAppOutstandingCents = payAppDocs.reduce((a, d) => a + d.balanceCents, 0);
+
   return {
     sovOriginalCents,
     hasSov,
@@ -397,6 +405,8 @@ export function billingSummary(db: Database.Database, projectId: string): {
     outstandingCents: invoiceOutstandingCents, // back-compat
     invoiceCount: invoices.length,
     changeOrderCount,
+    payAppBilledCents,
+    payAppOutstandingCents,
   };
 }
 

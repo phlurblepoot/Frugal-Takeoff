@@ -235,6 +235,10 @@ export function customerOverview(db: Database.Database, customerId: string, incl
   let billing: any = undefined;
   if (includeBilling) {
     let contractTotalCents = 0, invoicedCents = 0, paidCents = 0, outstandingCents = 0;
+    // Split legs — contract (payapp docs) vs invoices — summed in the SAME
+    // loop below so they can never drift from the combined figures above.
+    let contractBilledCents = 0, contractPaidCents = 0, contractOutstandingCents = 0;
+    let invoicesInvoicedCents = 0, invoicesPaidCents = 0, invoicesOutstandingCents = 0;
     const ledger: any[] = [];
     const activeProjects = projRows.filter(p => !Number(p.archived));
 
@@ -251,6 +255,15 @@ export function customerOverview(db: Database.Database, customerId: string, incl
         invoicedCents += doc.totalCents;
         paidCents += doc.paidCents;
         outstandingCents += doc.balanceCents;
+        if (doc.kind === 'payapp') {
+          contractBilledCents += doc.totalCents;
+          contractPaidCents += doc.paidCents;
+          contractOutstandingCents += doc.balanceCents;
+        } else {
+          invoicesInvoicedCents += doc.totalCents;
+          invoicesPaidCents += doc.paidCents;
+          invoicesOutstandingCents += doc.balanceCents;
+        }
         ledger.push({
           projectId: p.id, projectName, kind: doc.kind,
           number: doc.number, date: doc.date, status: doc.status,
@@ -272,7 +285,17 @@ export function customerOverview(db: Database.Database, customerId: string, incl
       }
     }
 
-    billing = { contractTotalCents, invoicedCents, paidCents, outstandingCents, ledger };
+    billing = {
+      contractTotalCents, invoicedCents, paidCents, outstandingCents, ledger,
+      contract: {
+        billedCents: contractBilledCents, paidCents: contractPaidCents,
+        outstandingCents: contractOutstandingCents,
+      },
+      invoices: {
+        invoicedCents: invoicesInvoicedCents, paidCents: invoicesPaidCents,
+        outstandingCents: invoicesOutstandingCents,
+      },
+    };
   }
 
   return {

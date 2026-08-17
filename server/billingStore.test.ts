@@ -14,6 +14,7 @@ import {
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
 } from './billingStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 let db: Database.Database;
 
@@ -411,5 +412,46 @@ describe('billingSummary — SOV-derived contract total', () => {
     expect(s.invoiceTotalCents).toBe(500000);
     expect(s.invoiceOutstandingCents).toBe(300000); // 500000 - 200000
     expect(s.outstandingCents).toBe(300000);
+  });
+});
+
+describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contract split)', () => {
+  it('mixed project: finalized pay app (net of retainage) + sent invoice + draft invoice excluded', () => {
+    // Pay app: $1,000 SOV line, 100% complete, 10% retainage, no prior app.
+    //   completedToDateCents = 100000; retainage = round(100000*10%) = 10000
+    //   L8 = (100000 - 10000) - previous(0) = 90000c
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    const sov = listSovLines(db, 'p1');
+    savePayAppLines(db, app.id, [{ sovLineId: sov[0].id, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', app.id, { amount: 250 }); // 25000c of the 90000c billed
+
+    // Sent invoice: $200 (20000c), $50 (5000c) paid.
+    const inv = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice: 200 }] });
+    recordPayment(db, 'invoice', inv.id, { amount: 50 });
+
+    // Draft invoice — not billed (excluded from listBilledDocuments/payApp
+    // figures), but billingSummary's legacy invoiceTotalCents pre-existingly
+    // sums ALL invoices including drafts, so it DOES land here — that's
+    // existing behavior, unrelated to this change.
+    createInvoice(db, 'p1', { number: 'INV-DRAFT', lines: [{ description: 'B', qty: 1, unitPrice: 999 }] });
+
+    const s = billingSummary(db, 'p1');
+    expect(s.payAppBilledCents).toBe(90000);
+    expect(s.payAppOutstandingCents).toBe(65000); // 90000 - 25000
+
+    // Legacy invoice-only fields are unchanged by the new pay-app fields.
+    expect(s.invoiceTotalCents).toBe(119900); // 20000 sent + 99900 draft (pre-existing behavior)
+    expect(s.invoiceOutstandingCents).toBe(114900); // 119900 - 5000 paid
+    expect(s.paid.payAppsCents).toBe(25000);
+  });
+
+  it('is zero when the project has no finalized pay apps (draft apps excluded)', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    createPayApp(db, 'p1', {}); // stays draft
+    const s = billingSummary(db, 'p1');
+    expect(s.payAppBilledCents).toBe(0);
+    expect(s.payAppOutstandingCents).toBe(0);
   });
 });
