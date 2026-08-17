@@ -19,11 +19,13 @@ const fmtDate = (v: number | string | null | undefined): string | null => {
   return isNaN(d.getTime()) ? null : d.toLocaleDateString();
 };
 
-const StatTile: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactNode }> = ({ label, value, sub }) => (
+const StatTile: React.FC<{ label: string; value: React.ReactNode; sub?: React.ReactNode; subTone?: 'warn' | 'muted' }> = ({ label, value, sub, subTone = 'warn' }) => (
   <div>
     <div className="text-ink-faint">{label}</div>
     <div className="text-lg font-bold text-ink">{value}</div>
-    {sub && <div className="text-xs text-red-600 dark:text-red-400">{sub}</div>}
+    {sub && (
+      <div className={`text-xs ${subTone === 'warn' ? 'text-red-600 dark:text-red-400' : 'text-ink-faint'}`}>{sub}</div>
+    )}
   </div>
 );
 
@@ -83,7 +85,18 @@ export const CustomerOverviewTab: React.FC<{ overview: CustomerOverview }> = ({ 
           <div className={`grid grid-cols-2 gap-4 text-sm ${billing ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
             <StatTile label="Bidding" value={biddingCount} />
             <StatTile label="In progress" value={inProgressCount} />
-            {billing && <StatTile label="Outstanding" value={formatMoney(billing.outstandingCents)} />}
+            {billing && (
+              <StatTile
+                label="Outstanding"
+                value={formatMoney(billing.outstandingCents)}
+                subTone="muted"
+                sub={
+                  billing.contract.outstandingCents > 0 && billing.invoices.outstandingCents > 0
+                    ? `contract ${formatMoney(billing.contract.outstandingCents)} · invoices ${formatMoney(billing.invoices.outstandingCents)}`
+                    : undefined
+                }
+              />
+            )}
             <StatTile
               label="Open tasks"
               value={taskCounts.open}

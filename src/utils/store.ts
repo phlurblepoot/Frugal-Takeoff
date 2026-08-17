@@ -766,6 +766,8 @@ export interface BillingSummary {
   outstandingCents: number;
   invoiceCount: number;
   changeOrderCount: number;
+  payAppBilledCents: number;
+  payAppOutstandingCents: number;
 }
 export interface InvoiceInput {
   number?: string; date?: number | null; terms?: string; status?: string;
@@ -1345,6 +1347,8 @@ export interface CustomerBilling {
   paidCents: number;
   outstandingCents: number;
   ledger: CustomerBillingLedgerEntry[];
+  contract: { billedCents: number; paidCents: number; outstandingCents: number };
+  invoices: { invoicedCents: number; paidCents: number; outstandingCents: number };
 }
 
 export type CustomerAttentionItem =

@@ -54,18 +54,37 @@ export const CustomerBillingTab: React.FC<{ billing?: CustomerBilling }> = ({ bi
       <Card>
         <CardHeader title="Summary" actions={<DollarSign size={15} className="text-ink-faint" />} />
         <CardBody>
-          <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-            {([
-              ['Contract total', billing.contractTotalCents],
-              ['Invoiced', billing.invoicedCents],
-              ['Paid', billing.paidCents],
-              ['Outstanding', billing.outstandingCents],
-            ] as const).map(([label, cents]) => (
-              <div key={label}>
-                <div className="text-ink-faint">{label}</div>
-                <div className="text-lg font-bold text-ink">{formatMoney(cents)}</div>
+          <div className="space-y-4">
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Contract</div>
+              <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                {([
+                  ['Contract total', billing.contractTotalCents],
+                  ['Billed', billing.contract.billedCents],
+                  ['Outstanding', billing.contract.outstandingCents],
+                  ['Paid', billing.contract.paidCents],
+                ] as const).map(([label, cents]) => (
+                  <div key={label}>
+                    <div className="text-ink-faint">{label}</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(cents)}</div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Invoices</div>
+              <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                {([
+                  ['Invoiced', billing.invoices.invoicedCents],
+                  ['Paid', billing.invoices.paidCents],
+                ] as const).map(([label, cents]) => (
+                  <div key={label}>
+                    <div className="text-ink-faint">{label}</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(cents)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </CardBody>
       </Card>

@@ -101,19 +101,37 @@ export const ProjectBilling: React.FC = () => {
           {summary === null ? (
             <Skeleton className="h-10 w-full" />
           ) : (
-            <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-5">
-              {[
-                ['Contract total', summary.contractTotalCents],
-                ['Invoiced', summary.invoiceTotalCents],
-                ['Paid (contract)', summary.paid.payAppsCents],
-                ['Paid (invoices)', summary.paid.invoicesCents],
-                ['Invoice outstanding', summary.invoiceOutstandingCents],
-              ].map(([label, cents]) => (
-                <div key={label as string}>
-                  <div className="text-ink-faint">{label}</div>
-                  <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
+            <div className="space-y-4">
+              <div>
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Contract</div>
+                <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                  {[
+                    ['Contract total', summary.contractTotalCents],
+                    ['Billed', summary.payAppBilledCents],
+                    ['Outstanding', summary.payAppOutstandingCents],
+                    ['Paid', summary.paid.payAppsCents],
+                  ].map(([label, cents]) => (
+                    <div key={label as string}>
+                      <div className="text-ink-faint">{label}</div>
+                      <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div>
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Invoices</div>
+                <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                  {[
+                    ['Invoiced', summary.invoiceTotalCents],
+                    ['Paid', summary.paid.invoicesCents],
+                  ].map(([label, cents]) => (
+                    <div key={label as string}>
+                      <div className="text-ink-faint">{label}</div>
+                      <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </CardBody>
