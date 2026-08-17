@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, Download, ImageIcon, Send } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport, uploadProjectFile,
+  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport, uploadProjectFile, persistGeneratedDocument,
 } from '../../utils/store';
 import { Customer } from '../../types';
 import { resolveRecipient } from '../../utils/recipients';
@@ -173,7 +173,15 @@ export const ProjectPunch: React.FC = () => {
     try {
       const projectName = summary?.name || 'project';
       const doc = await buildPunchDoc();
-      doc.save(`${projectName}-punch-list.pdf`);
+      const fileName = `${projectName}-punch-list.pdf`;
+      // Keep a copy in Documents, but never let that failure block the download.
+      if (projectId) {
+        try {
+          const pdfBlob = new Blob([new Uint8Array(doc.output('arraybuffer'))], { type: 'application/pdf' });
+          await persistGeneratedDocument(pdfBlob, { projectId, kind: 'punch-report', name: fileName, sourceType: 'punch', sourceId: projectId });
+        } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
+      }
+      doc.save(fileName);
     } catch { toast('Failed to generate report', { type: 'error' }); }
   };
 
@@ -291,7 +299,9 @@ export const ProjectPunch: React.FC = () => {
           const pdfBlob = new Blob([new Uint8Array(arrayBuf)], { type: 'application/pdf' });
           const projectName = summary?.name || 'project';
           const file = new File([pdfBlob], `${projectName}-punch-list.pdf`, { type: 'application/pdf' });
-          const fileId = await uploadProjectFile(projectId, file, 'punch-report');
+          // Source triple = the project's one punch report, so Send and Download
+          // version a single document instead of piling up copies.
+          const { fileId } = await uploadProjectFile(projectId, file, 'punch-report', { sourceType: 'punch', sourceId: projectId });
           await sendPunchReport(projectId, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('Punch list report sent', { type: 'success' });
         }}

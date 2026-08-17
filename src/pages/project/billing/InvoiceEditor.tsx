@@ -1,7 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile, persistGeneratedDocument } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
@@ -72,6 +72,12 @@ export const InvoiceEditor: React.FC<{
     })();
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // One name for download, upload and the composer attachment: all three upsert
+  // onto the same document row, so a differing name would flip the stored name
+  // depending on which ran last. The id fallback keeps unnumbered drafts from
+  // all landing on the same "invoice.pdf".
+  const pdfFileName = `Invoice-${invoice.number || invoice.id}.pdf`;
 
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
@@ -147,10 +153,15 @@ export const InvoiceEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = pdfFileName;
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'invoice', name: fileName, sourceType: 'invoice', sourceId: invoice.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `invoice-${invoice.number ?? invoice.id}.pdf`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -206,16 +217,42 @@ export const InvoiceEditor: React.FC<{
         <Button onClick={() => setComposing(true)}>Send invoice</Button>
       </div>
 
-      <p className="mt-4 border-t border-edge pt-3 text-sm text-ink-faint">
-        Record payments in the Payments section below.
-      </p>
+      {/* Payments — read-only; recording/deleting happens in the project's
+          Billing → Payments tab. */}
+      <div className="mt-4 border-t border-edge pt-3">
+        <h4 className="mb-2 text-sm font-semibold text-ink">Payments</h4>
+        {invoice.payments.length === 0 ? (
+          <p className="text-sm text-ink-faint">No payments recorded. Record payments in the Billing → Payments tab.</p>
+        ) : (
+          <Table>
+            <THead><TR><TH>Date</TH><TH>Note</TH><TH className="text-right">Amount</TH></TR></THead>
+            <TBody>
+              {invoice.payments.map(p => (
+                <TR key={p.id}>
+                  <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                  <TD className="text-ink-faint">{p.note || '—'}</TD>
+                  <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+        <p className="mt-2 text-sm text-ink-soft">
+          Paid <span className="font-semibold text-ink">{formatMoney(paid)}</span>
+          {' · '}
+          Balance <span className="font-semibold text-ink">{formatMoney(balance)}</span>
+        </p>
+        {invoice.payments.length > 0 && (
+          <p className="mt-1 text-xs text-ink-faint">Record payments in the Billing → Payments tab.</p>
+        )}
+      </div>
 
       <EmailComposer
         open={composing}
         onClose={() => setComposing(false)}
         projectId={projectId}
         title="Send invoice"
-        primaryAttachmentName={`${invoice.number || 'invoice'}.pdf`}
+        primaryAttachmentName={pdfFileName}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
         defaultBcc={emailDefaults.defaultBcc || undefined}
@@ -227,11 +264,11 @@ export const InvoiceEditor: React.FC<{
           // Always regenerate with the chosen header email so the PDF contact matches.
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildBytes(effectiveHeaderEmail);
-          const file = new File([bytes], `${invoice.number || 'invoice'}.pdf`, { type: 'application/pdf' });
-          // The PDF is uploaded as a project document before sending; if the send
-          // fails the file remains in Documents (project-attributed), and a retry
-          // uploads another — acceptable for v1.
-          const fileId = await uploadProjectFile(projectId, file, 'invoice');
+          const file = new File([bytes], pdfFileName, { type: 'application/pdf' });
+          // The PDF is uploaded as a project document before sending; the source
+          // triple makes the server version this invoice's one document rather than
+          // pile up copies, so a failed send + retry (and Download) converge.
+          const { fileId } = await uploadProjectFile(projectId, file, 'invoice', { sourceType: 'invoice', sourceId: invoice.id });
           await sendInvoice(invoice.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('Invoice sent', { type: 'success' });
           onSaved();

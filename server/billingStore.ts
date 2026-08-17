@@ -1,6 +1,7 @@
 // server/billingStore.ts
 import type Database from 'better-sqlite3';
 import crypto from 'crypto';
+import { listPayAppRows, computeG702 } from './aiaStore';
 
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
@@ -192,6 +193,7 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
 interface ChangeOrderInput {
   number?: string;
   date?: number | null;
+  title?: string | null;
   description?: string;
   lumpSumAmount?: number;
   scheduleImpactDays?: number | null;
@@ -199,6 +201,18 @@ interface ChangeOrderInput {
   amount?: number;
   status?: string;
   lines?: LineInput[];
+}
+
+// title is free-text; blank/whitespace-only is stored as NULL so display and
+// syncChangeOrders' fallback-to-description both see "no title" the same way.
+// A non-string value (a raw JSON body can send anything) is treated the same
+// as absent rather than thrown — title is optional/display-only, like
+// `description`, not a field with money-math correctness implications
+// (compare `lumpSumAmount`, which does throw ValidationError on bad input).
+function normalizeTitle(title: unknown): string | null {
+  if (typeof title !== 'string') return null;
+  const trimmed = title.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 function coLineTotalsCents(db: Database.Database, changeOrderId: string): number {
@@ -254,8 +268,8 @@ export function createChangeOrder(db: Database.Database, projectId: string, inpu
     const number = input.number ?? nextChangeOrderNumber(db, projectId);
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
-      .run(id, projectId, number, input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
+    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
+      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -279,8 +293,8 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
     newVersion = row.version + 1;
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('UPDATE change_orders SET number = ?, date = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
+    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -338,7 +352,7 @@ export function deleteChangeOrder(db: Database.Database, id: string): void {
 // exists, else the legacy projects.contractValue. Approved change orders are
 // added ONCE via change_orders — the CO SOV lines (isChangeOrder=1) are NOT
 // summed into the base, so there is no double-count.
-export function billingSummary(db: Database.Database, projectId: string): {
+export function billingSummary(db: Database.Database, projectId: string, billedDocs?: BilledDocument[]): {
   sovOriginalCents: number; hasSov: boolean;
   baseContractCents: number; approvedChangeCents: number;
   contractTotalCents: number; contractValueCents: number;
@@ -347,6 +361,8 @@ export function billingSummary(db: Database.Database, projectId: string): {
   paidCents: number;
   invoiceOutstandingCents: number; outstandingCents: number;
   invoiceCount: number; changeOrderCount: number;
+  payAppBilledCents: number; payAppOutstandingCents: number; payAppPaidCents: number;
+  invoiceBilledCents: number; invoicePaidCents: number; invoiceOutstandingBilledCents: number;
 } {
   const proj = db.prepare('SELECT contractValue FROM projects WHERE id = ?').get(projectId) as { contractValue: number | null } | undefined;
 
@@ -381,6 +397,30 @@ export function billingSummary(db: Database.Database, projectId: string): {
 
   const invoiceOutstandingCents = invoiceTotalCents - paid.invoicesCents;
 
+  // Contract (pay-app) and invoice-leg billed/paid/outstanding — both derived
+  // from the SAME listBilledDocuments() list (finalized pay apps' G702 L8 net
+  // of retainage, and non-draft invoices), the same population the customer
+  // ledger and project-list figures use. `billedDocs` lets hot callers that
+  // already fetched this list once (customerOverview, listProjectSummaries)
+  // pass it in instead of triggering a second DB pass — one source of truth,
+  // one ledger read.
+  //
+  // These are net-of-drafts: a draft invoice/pay app is not yet billed, so it
+  // is excluded here. The legacy invoiceTotalCents/invoiceOutstandingCents
+  // fields above stay draft-inclusive (pre-existing behavior, unchanged) —
+  // callers wanting the customer-ledger-consistent figures should use these
+  // new fields instead.
+  const docs = billedDocs ?? listBilledDocuments(db, projectId);
+  const payAppDocs = docs.filter(d => d.kind === 'payapp');
+  const payAppBilledCents = payAppDocs.reduce((a, d) => a + d.totalCents, 0);
+  const payAppPaidCents = payAppDocs.reduce((a, d) => a + d.paidCents, 0);
+  const payAppOutstandingCents = payAppDocs.reduce((a, d) => a + d.balanceCents, 0);
+
+  const invoiceDocs = docs.filter(d => d.kind === 'invoice');
+  const invoiceBilledCents = invoiceDocs.reduce((a, d) => a + d.totalCents, 0);
+  const invoicePaidCents = invoiceDocs.reduce((a, d) => a + d.paidCents, 0);
+  const invoiceOutstandingBilledCents = invoiceDocs.reduce((a, d) => a + d.balanceCents, 0);
+
   return {
     sovOriginalCents,
     hasSov,
@@ -396,5 +436,82 @@ export function billingSummary(db: Database.Database, projectId: string): {
     outstandingCents: invoiceOutstandingCents, // back-compat
     invoiceCount: invoices.length,
     changeOrderCount,
+    payAppBilledCents,
+    payAppOutstandingCents,
+    payAppPaidCents,
+    invoiceBilledCents,
+    invoicePaidCents,
+    invoiceOutstandingBilledCents,
   };
+}
+
+// ── Billed documents (customer + project-list money figures) ─────────────────
+//
+// billingSummary's invoice aggregates are INVOICE-ONLY, so a project billed
+// through AIA progress billing reports nothing outstanding there. Every figure
+// that spans a whole project or customer — the customers sidebar, the customer
+// overview rollup and its per-project rows, the projects board — goes through
+// the helpers below instead, so Invoiced, Paid and Outstanding are always
+// computed over the same population: every BILLED document, invoice or pay
+// application alike.
+//
+// "Billed" means not a draft. A draft invoice or draft pay app has not been
+// sent to anyone, so it must not move any of the three figures.
+
+export interface BilledDocument {
+  kind: 'invoice' | 'payapp';
+  id: string;
+  number: string | number | null;
+  // Invoices carry an epoch number; a pay app's applicationDate is a
+  // 'YYYY-MM-DD' TEXT column. Both are passed through as stored.
+  date: string | number | null;
+  status: string;
+  totalCents: number;
+  paidCents: number;
+  balanceCents: number;
+}
+
+export function listBilledDocuments(db: Database.Database, projectId: string): BilledDocument[] {
+  const docs: BilledDocument[] = [];
+
+  for (const inv of listInvoices(db, projectId)) {
+    if (inv.status === 'draft') continue;
+    docs.push({
+      kind: 'invoice', id: inv.id, number: inv.number ?? null, date: inv.date ?? null,
+      status: inv.status, totalCents: inv.totalCents, paidCents: inv.paidCents,
+      balanceCents: inv.balanceCents,
+    });
+  }
+
+  // A pay application's billed amount is its G702 line 8 (current payment due):
+  // the amount that application actually asks for, which is what payments
+  // recorded against it settle. 'finalized' is the pay-app analog of a sent
+  // invoice; 'draft' apps are skipped by the same rule as draft invoices.
+  for (const app of listPayAppRows(db, projectId)) {
+    if (app.status === 'draft') continue;
+    const totalCents = computeG702(db, app.id).L8currentPaymentDueCents;
+    const paidCents = paidCentsFor(db, 'payapp', app.id);
+    docs.push({
+      kind: 'payapp', id: app.id, number: app.number, date: app.applicationDate ?? null,
+      status: app.status, totalCents, paidCents, balanceCents: totalCents - paidCents,
+    });
+  }
+
+  return docs;
+}
+
+export function projectBillingTotals(db: Database.Database, projectId: string): {
+  invoicedCents: number; paidCents: number; outstandingCents: number;
+} {
+  let invoicedCents = 0;
+  let paidCents = 0;
+  for (const doc of listBilledDocuments(db, projectId)) {
+    invoicedCents += doc.totalCents;
+    paidCents += doc.paidCents;
+  }
+  return { invoicedCents, paidCents, outstandingCents: invoicedCents - paidCents };
+}
+
+export function projectOutstandingCents(db: Database.Database, projectId: string): number {
+  return projectBillingTotals(db, projectId).outstandingCents;
 }

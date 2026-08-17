@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
 import { Project, Printout, Customer } from '../../types';
 import {
-  getProject, saveProject, saveBinaryFile, getFile, deleteFile, getSettings,
+  getProject, saveProject, saveBinaryFile, getFile, getSettings,
   getSmtpSettings, getAlwaysCc, getCustomer,
   getUserPreferences, saveUserPreferences, createShare, sendProjectProposal,
   uploadProjectFile, getImageUrl,
@@ -283,12 +283,15 @@ export const ProjectProposal: React.FC = () => {
       );
 
       setProgress('Saving…');
-      const fileId = uuidv4();
-      await saveBinaryFile(fileId, new Blob([pdfBytes], { type: 'application/pdf' }), {
+      // The printout id is minted first so it can attribute its own file; each
+      // printout entry therefore keeps a distinct document.
+      const printoutId = uuidv4();
+      const { fileId } = await saveBinaryFile(uuidv4(), new Blob([pdfBytes], { type: 'application/pdf' }), {
         projectId: project.id, kind: 'printout', name: suggestedName,
+        sourceType: 'printout', sourceId: printoutId,
       });
       const newPrintout: Printout = {
-        id: uuidv4(),
+        id: printoutId,
         name: suggestedName,
         fileId,
         createdAt: Date.now(),
@@ -357,8 +360,10 @@ export const ProjectProposal: React.FC = () => {
     })) return;
     const updated = { ...project, printouts: (project.printouts || []).filter(p => p.id !== printout.id) };
     try {
+      // The file row + bytes go with it: printout files carry sourceType
+      // 'printout' (line ~291), so DELETE /api/files/:id refuses them and the
+      // save itself cascades the drop server-side (projectStore.saveProject).
       await saveProject(updated);
-      await deleteFile(printout.fileId);
       reload();
     } catch {
       toast('Failed to delete printout', { type: 'error' });
@@ -376,7 +381,7 @@ export const ProjectProposal: React.FC = () => {
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(project.id, f, 'proposal-photo');
+        const { fileId } = await uploadProjectFile(project.id, f, 'proposal-photo', { sourceType: 'proposal', sourceId: project.id });
         newIds.push(fileId);
         ok++;
       } catch { /* keep going */ }
@@ -400,8 +405,8 @@ export const ProjectProposal: React.FC = () => {
     if (!project) return;
     const updated = { ...project, proposalPhotoIds: (project.proposalPhotoIds || []).filter(id => id !== fileId) };
     try {
+      // Same source-side cascade as printouts — the save removes the file.
       await saveProject(updated);
-      try { await deleteFile(fileId); } catch { /* best effort */ }
       reload();
     } catch {
       toast('Failed to remove photo', { type: 'error' });
@@ -725,14 +730,18 @@ export const ProjectProposal: React.FC = () => {
                 },
               };
               const totals = computeTakeoffTotals(project, currentPageIds);
-              const { pdfBytes, overBudget } = await generateProposalPdf(
+              const { pdfBytes, suggestedName, overBudget } = await generateProposalPdf(
                 project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
               );
-              const tempFileId = uuidv4();
-              // Throwaway attachment for this one send — no projectId/kind/name
-              // so it never shows up in project Documents.
-              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }));
-              fileIdToSend = tempFileId;
+              // Not throwaway: the send records this id as project.proposalFileId, so
+              // it must be attributed like any proposal — kind 'proposal' keeps it
+              // admin-only and guarded, and the source triple versions the one
+              // proposal document instead of adding a row per send.
+              const { fileId } = await saveBinaryFile(uuidv4(), new Blob([pdfBytes], { type: 'application/pdf' }), {
+                projectId: project.id, kind: 'proposal', name: suggestedName,
+                sourceType: 'proposal', sourceId: project.id,
+              });
+              fileIdToSend = fileId;
               if (overBudget) {
                 toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
               }

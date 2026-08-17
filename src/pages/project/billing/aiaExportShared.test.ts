@@ -59,4 +59,22 @@ describe('buildBlankSovContext', () => {
     expect(a.retainagePercent).toBe(5);
     expect(buildBlankSovContext([line({})], {}, 'p1').app.retainagePercent).toBe(10);
   });
+
+  it('synthetic g702.retainage reports the base rate with nothing released yet', () => {
+    const { g702 } = buildBlankSovContext([line({})], { retainagePercent: 5 }, 'p1');
+    expect(g702.retainage).toEqual({
+      mode: 'uniform',
+      baseWorkPercent: 5,
+      cumulativeReleasedPoints: 0,
+      releasedThisApp: 0,
+      remainingPoints: 5,
+      effectiveWorkPercent: 5,
+    });
+  });
+
+  it('resolves perLine mode (and a null effectiveWorkPercent) when a SOV line carries its own rate', () => {
+    const { g702 } = buildBlankSovContext([line({ retainagePercent: 12 })], {}, 'p1');
+    expect(g702.retainage.mode).toBe('perLine');
+    expect(g702.retainage.effectiveWorkPercent).toBeNull();
+  });
 });

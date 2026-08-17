@@ -123,15 +123,34 @@ function applyPageSetup(ws: ExcelJS.Worksheet, landscape = false): void {
 // to the actual number of lines: every TOTALS/GRAND-TOTAL SUM range and every
 // G702→G703 cross-reference is computed from the list lengths, never hardcoded.
 //
-// RETAINAGE — single-rate decision: the template uses ONE retainage rate at
-// `G702!G22` (referenced by every J formula and G702 lines 5 & 7). The app's
-// data model supports a per-line / separate stored-materials retainage nuance
-// (AiaSettings.retainagePercent vs storedRetainagePercent, per-row retainage),
-// but to faithfully match this template that nuance is COLLAPSED to one rate:
-//   R = (app.retainagePercent ?? aiaSettings.retainagePercent ?? 10) / 100
-// Because the J formulas resolve `SUM(D:E)*R` (not the stored model), the
-// exported retainage figures follow the single rate, which can differ from
-// ctx.g702.L5/J-per-row when stored-material retainage differs from R.
+// RETAINAGE — effective rates, per ctx.g702.retainage (server-computed,
+// post-release):
+//
+// - uniform mode: the template's ONE retainage rate cell `G702!G22` is
+//   faithfully preserved, but it now holds the app's EFFECTIVE rate (base
+//   minus cumulative released points), not the raw stored rate — every J
+//   formula and G702 line 5/7 formula that reads G22 therefore already
+//   reflects any releases with zero formula changes.
+// - perLine mode: a single rate cell genuinely cannot represent per-line
+//   rates, so G22 is repurposed to hold the (now-literal, dollar) 5b figure
+//   and F22 the 5a figure — both taken straight from ctx.g702, which the
+//   server already computed at each line's own effective rate. Line 5's
+//   total (H22) becomes a formula summing those two literals instead of the
+//   G703 cross-sheet SUM. G703's per-row J column stops referencing G22 (it
+//   would no longer be a rate) and instead writes each row's already-correct
+//   ctx.g703[].retainageCents as a literal — this is what closes the
+//   single-rate-collapse gap for perLine projects. Line 7 (LESS PREVIOUS
+//   CERTIFICATES) also can't use its old "prior cumulative x G22" trick once
+//   G22 isn't a rate, so it's rewritten the same way: the server's already-
+//   correct L7 value lands as a literal in an aux cell, referenced by a
+//   trivial formula, so the sheet still "recalculates" from a literal input
+//   rather than silently going wrong. Lines 6 and 8 need no changes — they
+//   never depended on G22 directly.
+// - The same literal L7 is used in UNIFORM mode whenever any retainage has
+//   been released (cumulativeReleasedPoints > 0): the old formula assumes the
+//   prior application billed at the rate G22 now holds, which is false the
+//   moment G22 drops to the post-release effective rate. Uniform projects with
+//   no releases keep the legacy formula byte-for-byte.
 // ---------------------------------------------------------------------------
 
 // Split a multi-line / comma-joined address into up to two display lines.
@@ -180,6 +199,7 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
 
   const contract = ctx.g703.filter((row) => !row.isChangeOrder);
   const cos = ctx.g703.filter((row) => row.isChangeOrder);
+  const perLine = ctx.g702.retainage.mode === 'perLine';
 
   // ── Header rows 1-5: company block + cross-refs back to G702 ──────────────
   const [coAddr1, coAddr2] = splitAddress(ctx.company.address);
@@ -250,7 +270,14 @@ function buildG703(wb: ExcelJS.Workbook, ctx: AiaExportCtx): G703Anchors {
     setCell(ws, `G${rowNum}`, { formula: `D${rowNum}+E${rowNum}+F${rowNum}` }, { money: true, border: true });
     setCell(ws, `H${rowNum}`, { formula: `IFERROR(G${rowNum}/C${rowNum},0)` }, { border: true, align: 'center' }).numFmt = '0.00%';
     setCell(ws, `I${rowNum}`, { formula: `C${rowNum}-G${rowNum}` }, { money: true, border: true });
-    setCell(ws, `J${rowNum}`, { formula: `SUM(D${rowNum}:E${rowNum})*'G702'!$G$22` }, { money: true, border: true });
+    if (perLine) {
+      // A single rate cell can't represent per-line rates — write the row's
+      // already-correct effective retainage (computed server-side) as a
+      // literal instead of deriving it from 'G702'!$G$22.
+      setCell(ws, `J${rowNum}`, dollars(row.retainageCents), { money: true, border: true });
+    } else {
+      setCell(ws, `J${rowNum}`, { formula: `SUM(D${rowNum}:E${rowNum})*'G702'!$G$22` }, { money: true, border: true });
+    }
   };
 
   // ── Totals-row writer for a section (sum over [first..last]) ───────────────
@@ -314,9 +341,12 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
   const a = ctx.aiaSettings;
   const app = ctx.app;
   const [coAddr1, coAddr2] = splitAddress(ctx.company.address);
+  const retainage = ctx.g702.retainage;
+  const perLine = retainage.mode === 'perLine';
 
-  // Single retainage rate (see file-top note): app overrides settings → 10%.
-  const R = (app.retainagePercent ?? a.retainagePercent ?? 10) / 100;
+  // Effective single rate (see file-top note): the server already folded any
+  // releases into this; null only in perLine mode, where it isn't used.
+  const R = (retainage.effectiveWorkPercent ?? app.retainagePercent ?? a.retainagePercent ?? 10) / 100;
 
   // ── Title + header inputs ─────────────────────────────────────────────────
   ws.mergeCells('A1:H1');
@@ -384,6 +414,7 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
   const lineRows = [14, 16, 18, 20, 22, 24, 26, 28, 43];
   const L1row = lineRows[0];
   const L2row = lineRows[1];
+  const L5row = lineRows[4];
   const L6row = lineRows[5];
   const L7row = lineRows[6];
 
@@ -398,12 +429,47 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
   line(1, 'Net Change by Change Orders & Extras', `C${coNetRow}`);
   line(2, 'CONTRACT SUM TO DATE:', `H${L1row}+H${L2row}`);
   line(3, 'TOTAL COMPLETED & STORED TO DATE:', `'G703'!G${ct}+'G703'!G${cot}`);
-  // Line 5 — retainage; G22 holds the rate beside it.
-  line(4, 'RETAINAGE FROM CURRENT BILLING', `'G703'!J${ct}+'G703'!J${cot}`);
-  setCell(ws, `G22`, R, {}).numFmt = '0%';
+
+  if (perLine) {
+    // No single rate to show — write the 5a (work) / 5b (stored) dollar
+    // splits ctx.g702 already computed at each line's own effective rate,
+    // and total them with a formula so the sheet still recalculates.
+    setCell(ws, `D${L5row}`, '5.', { bold: true });
+    setCell(ws, `E${L5row}`, 'RETAINAGE FROM CURRENT BILLING', {});
+    setCell(ws, `F${L5row}`, dollars(ctx.g702.L5aRetainageWorkCents), { money: true });
+    setCell(ws, `G${L5row}`, dollars(ctx.g702.L5bRetainageStoredCents), { money: true });
+    setCell(ws, `H${L5row}`, { formula: `F${L5row}+G${L5row}` }, { money: true, border: true });
+    setCell(ws, `E${L5row + 1}`, '(5a Work / 5b Stored, left to right in F / G)', { size: 9 });
+  } else {
+    // Line 5 — retainage; G22 holds the effective rate beside it.
+    line(4, 'RETAINAGE FROM CURRENT BILLING', `'G703'!J${ct}+'G703'!J${cot}`);
+    setCell(ws, `G22`, R, {}).numFmt = '0%';
+  }
+
   line(5, 'TOTAL EARNED LESS RETAINAGE:', `'G703'!G${grand}-'G703'!J${grand}`);
-  line(6, 'LESS PREVIOUS CERTIFICATES FOR PAYMENT:', `'G703'!D${grand}-('G703'!D${grand}*'G702'!G22)`);
+
+  // The legacy L7 formula backs into "previous certificates" as
+  // prior-cumulative x G22 — it assumes the PRIOR application was billed at
+  // the same rate G22 now holds. That assumption breaks two ways: in perLine
+  // mode G22 isn't a rate at all, and on any release application G22 holds the
+  // NEW (lower) effective rate, so the back-derived L7 overstates and L8
+  // (current payment due) collapses toward zero on exactly the application
+  // that pays the retainage out. The server already computed L7 correctly (it
+  // walks the prior app's own math), so in both cases write it as a literal in
+  // an aux cell with H26 a trivial formula over it — same pattern as the
+  // 5a/5b literals above. Zero-release uniform exports keep the old formula.
+  const literalL7 = perLine || retainage.cumulativeReleasedPoints > 0;
+
+  if (literalL7) {
+    setCell(ws, `D${L7row}`, '7.', { bold: true });
+    setCell(ws, `E${L7row}`, 'LESS PREVIOUS CERTIFICATES FOR PAYMENT:', {});
+    setCell(ws, `G${L7row}`, dollars(ctx.g702.L7lessPreviousCents), { money: true });
+    setCell(ws, `H${L7row}`, { formula: `G${L7row}` }, { money: true, border: true });
+  } else {
+    line(6, 'LESS PREVIOUS CERTIFICATES FOR PAYMENT:', `'G703'!D${grand}-('G703'!D${grand}*'G702'!G22)`);
+  }
   setCell(ws, `E${L7row + 1}`, '(Line 6 from previous application)', { size: 9 });
+
   line(7, 'CURRENT PAYMENT DUE:', `H${L6row}-H${L7row}`);
   line(8, 'BALANCE TO FINISH PLUS RETAINAGE', `'G703'!I${ct}+'G703'!J${ct}+'G703'!I${cot}+'G703'!J${cot}`);
   setCell(ws, `E${lineRows[8] + 1}`, '(Line 3 minus Line 6)', { size: 9 });
@@ -479,8 +545,14 @@ export async function buildAiaWorkbookFromTemplate(
   setMapped(g702ws, c.contractDate, a.contractDate ?? '');
   setMapped(g702ws, c.ownerProjectNumber, a.ownerProjectNumber ?? '');
   setMapped(g702ws, c.architectProjectNumber, a.architectProjectNumber ?? '');
-  setMapped(g702ws, c.retainageWorkPct, app.retainagePercent);
-  setMapped(g702ws, c.retainageStoredPct, app.storedRetainagePercent);
+  // Effective (post-release) rates: base minus cumulative released points,
+  // clamped at 0. Legacy apps with zero releases reduce to their own raw
+  // rates unchanged. perLine has no single work rate — fall back to the raw
+  // app rate as a best-effort single number for the template's one cell.
+  const effectiveWorkPct = g.retainage.effectiveWorkPercent ?? app.retainagePercent;
+  const effectiveStoredPct = Math.max(0, app.storedRetainagePercent - g.retainage.cumulativeReleasedPoints);
+  setMapped(g702ws, c.retainageWorkPct, effectiveWorkPct);
+  setMapped(g702ws, c.retainageStoredPct, effectiveStoredPct);
 
   setMapped(g702ws, c.L1, money(g.L1originalContractCents));
   setMapped(g702ws, c.L2, money(g.L2changeOrdersCents));
@@ -537,6 +609,9 @@ export async function exportAiaXlsx(
   ctx: AiaExportCtx,
   template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
   filename?: string,
+  // Handed the finished workbook before the download starts, so a caller can keep
+  // a copy in Documents. It owns its own failures — the download always proceeds.
+  persist?: (blob: Blob) => Promise<void>,
 ): Promise<void> {
   const wb = template
     ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
@@ -545,6 +620,7 @@ export async function exportAiaXlsx(
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
+  if (persist) await persist(blob);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

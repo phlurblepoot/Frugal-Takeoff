@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders, getUserPreferences, saveUserPreferences } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
@@ -19,6 +20,21 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '2.6',
+    date: 'August 17, 2026',
+    changes: [
+      'Customers are now the front door: the Customers section is a split view — customer list on the left, and a full landing page per customer on the right with Overview, Projects, Tasks, Billing, and Settings tabs. The Overview surfaces things needing attention (past-due bids, overdue tasks, outstanding money) and Billing rolls up every project\'s contract and payment picture in one place.',
+      'Simpler project stages: the Projects board is now two working stages — Bidding and In Progress — plus Archived. Finishing (or losing) a job archives it, and lost bids carry a marker so win/loss history is preserved. Existing projects were moved to the matching stage automatically.',
+      'New unified Documents page: a global Documents section lists every file across all projects — uploads, generated invoices, pay apps, change orders, proposals, reports, and photos — each labeled with its type and a link to where it came from. Filter by multiple types/projects/customers at once, multi-select to download or archive, and re-generated documents version instead of duplicating. Admins can define custom document types in Settings, and uploads get a labeling popup (type, customer, project, multiple files at once). Row actions moved to a right-click menu.',
+      'Live document previews: hovering a row on the Documents page pops a small preview beside the cursor — photos show the image, PDFs show their first page, all after a short delay so scanning the list stays fast. Clicking a row opens a full preview window with page-by-page PDF navigation, spreadsheet preview, and Download / Open in editor / Source / Archive buttons. (Opening the underlying editor moved to the "Open in editor" button.)',
+      'AIA retainage, reworked: set one base retainage rate in Billing → Settings, or switch to per-line rates on the schedule of values. Pay applications can now release retainage in percentage points — release part of it on one application (the remainder carries forward automatically) or hit "Release all" on the final application. Excel exports reflect the effective rates either way.',
+      'Clearer billing totals: project cards and customer billing now show two separate rows — Contract (contract total, billed via pay applications, outstanding, paid) and Invoices (invoiced, paid) — instead of one blended number. Figures no longer include drafts.',
+      'Balances on every invoice and pay application: the Invoices and Pay Applications tabs gained Amount and Balance columns, and opening an invoice or pay app now lists the payments recorded against it.',
+      'Change orders now have a title: shown as a new column in the Change Orders tab and used as the line description when approved change orders sync to the schedule of values.',
+      'Fix: uploading documents from another device on the local network no longer fails immediately with an error.',
+    ],
+  },
   {
     version: '2.5',
     date: 'August 15, 2026',
@@ -1325,22 +1341,22 @@ const AiaTemplateTab: React.FC = () => {
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const id = `aia-template-${crypto.randomUUID()}`;
-        await saveFile(id, reader.result as string);
-        await saveSettings({ aiaTemplateFileId: id, aiaTemplateName: file.name });
-        setTemplateFileId(id);
-        setTemplateName(file.name);
-        toast('Template uploaded', { type: 'success' });
-      } catch {
-        toast('Failed to upload template', { type: 'error' });
-      }
-    };
-    reader.readAsDataURL(file);
     e.target.value = ''; // allow re-uploading the same filename
+    if (!file) return;
+    try {
+      // settings-asset keeps the template out of the Documents page; it belongs to
+      // no project or entity, so it carries no projectId/source. The read path
+      // (getFile → dataUrl) is unchanged — the server still reconstructs a dataURL.
+      const { fileId } = await saveBinaryFile(uuidv4(), file, {
+        kind: 'settings-asset', name: file.name,
+      });
+      await saveSettings({ aiaTemplateFileId: fileId, aiaTemplateName: file.name });
+      setTemplateFileId(fileId);
+      setTemplateName(file.name);
+      toast('Template uploaded', { type: 'success' });
+    } catch {
+      toast('Failed to upload template', { type: 'error' });
+    }
   };
 
   const handleRemove = async () => {
@@ -1462,6 +1478,177 @@ const AiaTemplateTab: React.FC = () => {
           className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
           <Save size={16} /> {saving ? 'Saving…' : 'Save Mapping'}
         </button>
+      </div>
+    </div>
+  );
+};
+
+// Admin "Document types" card (spec §Decisions "Custom types"): custom kinds
+// available in the upload popup, type filters, and a direct upload's "Change
+// type" action — system types are locked and never appear here. Ids are
+// slugged from the label at add time (falling back to a short random suffix
+// on collision/empty), and every file stores the id, not the label — a
+// rename just edits settings.documentTypes, no file rows change.
+const DocumentTypesCard: React.FC = () => {
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [loading, setLoading] = useState(true);
+  const [types, setTypes] = useState<CustomDocType[]>([]);
+  const [newLabel, setNewLabel] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    getDocumentTypes().then(setTypes).catch(() => setTypes([])).finally(() => setLoading(false));
+  }, []);
+
+  const slugify = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
+  const uniqueId = (label: string, existing: CustomDocType[]): string => {
+    const base = slugify(label) || 'type';
+    return existing.some(t => t.id === base) ? `${base}-${uuidv4().slice(0, 6)}` : base;
+  };
+
+  const handleAdd = async () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    setAdding(true);
+    try {
+      const next = [...types, { id: uniqueId(label, types), label }];
+      await saveDocumentTypes(next);
+      setTypes(next);
+      setNewLabel('');
+      toast('Document type added', { type: 'success' });
+    } catch {
+      toast('Failed to add type', { type: 'error' });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const startRename = (t: CustomDocType) => { setEditingId(t.id); setEditLabel(t.label); };
+  const cancelRename = () => { setEditingId(null); setEditLabel(''); };
+
+  const saveRename = async (id: string) => {
+    const label = editLabel.trim();
+    if (!label) return;
+    setBusyId(id);
+    try {
+      const next = types.map(t => t.id === id ? { ...t, label } : t);
+      await saveDocumentTypes(next);
+      setTypes(next);
+      cancelRename();
+      toast('Renamed', { type: 'success' });
+    } catch {
+      toast('Failed to rename', { type: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (t: CustomDocType) => {
+    setBusyId(t.id);
+    try {
+      // GET /api/documents can only ask for "archived" or "not archived" in
+      // one call (no "either" mode) — sum both so a type still referenced by
+      // an archived-only row still blocks deletion (its files would be left
+      // with an unresolvable kind id otherwise).
+      const [active, archived] = await Promise.all([
+        getDocuments({ kinds: [`custom:${t.id}`], limit: 1 }),
+        getDocuments({ kinds: [`custom:${t.id}`], limit: 1, archived: true }),
+      ]);
+      const inUse = active.total + archived.total;
+      if (inUse > 0) {
+        toast(`In use by ${inUse} document${inUse === 1 ? '' : 's'} — can't delete`, { type: 'error' });
+        return;
+      }
+      const ok = await confirm({
+        title: 'Delete document type',
+        message: `Delete "${t.label}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      });
+      if (!ok) return;
+      const next = types.filter(x => x.id !== t.id);
+      await saveDocumentTypes(next);
+      setTypes(next);
+      toast('Document type deleted', { type: 'success' });
+    } catch {
+      toast('Failed to delete type', { type: 'error' });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+      <div className="p-6 border-b border-slate-100 dark:border-slate-700">
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <Tag size={20} className="text-accent-600" /> Document Types
+        </h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          Custom types available in the upload popup, the Documents page type filter, and a direct upload's "Change type" action. Built-in types (Invoice, RFI, Punch Report, etc.) are fixed and don't appear here.
+        </p>
+      </div>
+      <div className="p-6 space-y-4">
+        {loading ? (
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-600" />
+        ) : types.length === 0 ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400">No custom types yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {types.map(t => (
+              <li key={t.id} className="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5">
+                {editingId === t.id ? (
+                  <>
+                    <input
+                      className={inputCls}
+                      value={editLabel}
+                      onChange={e => setEditLabel(e.target.value)}
+                      autoFocus
+                      onKeyDown={e => { if (e.key === 'Enter') saveRename(t.id); if (e.key === 'Escape') cancelRename(); }}
+                    />
+                    <button onClick={() => saveRename(t.id)} disabled={busyId === t.id || !editLabel.trim()}
+                      className="shrink-0 text-sm font-medium text-accent-600 hover:text-accent-700 disabled:opacity-50">
+                      {busyId === t.id ? 'Saving…' : 'Save'}
+                    </button>
+                    <button onClick={cancelRename} title="Cancel"
+                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900 dark:text-white">{t.label}</span>
+                    <span className="shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500">custom:{t.id}</span>
+                    <button onClick={() => startRename(t)} title="Rename"
+                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => handleDelete(t)} disabled={busyId === t.id} title="Delete"
+                      className="shrink-0 p-1.5 rounded-md text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50">
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center gap-2 border-t border-slate-100 dark:border-slate-700 pt-4">
+          <input
+            className={inputCls}
+            placeholder="e.g. Warranty"
+            value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+          />
+          <button onClick={handleAdd} disabled={adding || !newLabel.trim()}
+            className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-accent-600 text-white rounded-lg text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50">
+            <Plus size={15} /> Add
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1727,6 +1914,8 @@ export const Settings: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                <DocumentTypesCard />
 
                 <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                   <div className="p-6 border-b border-slate-100 dark:border-slate-700">

@@ -8,8 +8,13 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
+  patchProject, normalizeProjectStatus, listProjectSummaries,
   ValidationError, ConflictError,
 } from './projectStore';
+import { putBuffer, saveNewVersion } from './files';
+import { readFileContent } from './fileStore';
+import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 let db: Database.Database;
 let dir: string;
@@ -92,7 +97,10 @@ describe('migration 5 + loadProject round-trip', () => {
     expect(typeof loaded.customerId).toBe('string');
     expect(loaded.customerId).toBeTruthy();
     delete loaded.customerId;
-    expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'proposal_sent' });
+    // Two-stage lifecycle (spec 2026-08-16): full-document saves normalize to
+    // bidding|in_progress; meta.accepted drives in_progress, everything else
+    // (including this fixture's submitted:true) is a bid.
+    expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'bidding' });
   });
 
   it('nulls out the legacy data blob', () => {
@@ -104,7 +112,11 @@ describe('migration 5 + loadProject round-trip', () => {
   it('labels referenced files with projectId and kind', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
     const kind = (id: string) => (db.prepare('SELECT projectId, kind FROM files WHERE id = ?').get(id) as any);
-    expect(kind('pdf1')).toEqual({ projectId: 'proj1', kind: 'plan' });
+    // Migration 23 requalifies the uploaded PDF behind a page as `plan-source`
+    // (the page raster + thumbnail stay `plan`) and gives it a plan-set source.
+    expect(kind('pdf1')).toEqual({ projectId: 'proj1', kind: 'plan-source' });
+    expect(db.prepare('SELECT sourceType, sourceId FROM files WHERE id = ?').get('pdf1'))
+      .toEqual({ sourceType: 'plan-set', sourceId: 'ps1' });
     expect(kind('thumb1')).toEqual({ projectId: 'proj1', kind: 'plan' });
     expect(kind('raster1')).toEqual({ projectId: 'proj1', kind: 'plan' });
     expect(kind('pofile1')).toEqual({ projectId: 'proj1', kind: 'printout' });
@@ -112,9 +124,16 @@ describe('migration 5 + loadProject round-trip', () => {
     expect(kind('att1')).toEqual({ projectId: 'proj1', kind: 'document' });
   });
 
-  it('derives status from legacy flags', () => {
+  it('derives status from legacy flags (archived no longer drives status — it is orthogonal)', () => {
     seedLegacyAndNormalize({ ...LEGACY_PROJECT, id: 'p2', submitted: false, archived: true });
-    expect(loadProject(db, 'p2')!.status).toBe('archived');
+    const loaded = loadProject(db, 'p2')!;
+    expect(loaded.status).toBe('bidding');
+    expect(loaded.archived).toBe(true);
+  });
+
+  it('derives in_progress status from meta.accepted', () => {
+    seedLegacyAndNormalize({ ...LEGACY_PROJECT, id: 'p3', submitted: false, accepted: true });
+    expect(loadProject(db, 'p3')!.status).toBe('in_progress');
   });
 
   it('skips non-object blobs without failing the migration (data preserved)', () => {
@@ -214,6 +233,108 @@ describe('saveProject', () => {
   });
 });
 
+// Printout files and proposal photos carry a sourceType, so DELETE
+// /api/files/:id refuses them and orphan cleanup exempts anything attributed to
+// a live project — dropping the entry here is the only moment their bytes can
+// be reclaimed.
+describe('saveProject source-side file cascade', () => {
+  beforeEach(() => seedLegacyAndNormalize(LEGACY_PROJECT));
+
+  // A live file with real bytes plus one archived version row, i.e. everything
+  // a printout that has been regenerated once would have.
+  const seedFile = (id: string, kind: string) => {
+    putBuffer(db, dir, id, Buffer.from(`${id}-v1`), 'application/pdf', { projectId: 'proj1', kind });
+    const { archivedVersionId } = saveNewVersion(db, dir, id, Buffer.from(`${id}-v2`), 'application/pdf');
+    return archivedVersionId;
+  };
+  const fileRowCount = (id: string) =>
+    (db.prepare('SELECT COUNT(*) as c FROM files WHERE id = ? OR parentFileId = ?').get(id, id) as any).c;
+
+  it('removing a printout entry deletes its file row, bytes and version rows', () => {
+    const archivedId = seedFile('pofile1', 'printout');
+    expect(fileRowCount('pofile1')).toBe(2);
+
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(0);
+    expect(readFileContent(dir, 'pofile1')).toBeNull();
+    expect(readFileContent(dir, archivedId)).toBeNull();
+  });
+
+  it('a payload that omits printouts entirely deletes nothing', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    delete p.printouts; // partial/legacy payload — NOT "all printouts removed"
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+    expect(readFileContent(dir, 'pofile1')).not.toBeNull();
+  });
+
+  it('keeps a file that a surviving entry still references', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    // Two entries, one file (a renamed duplicate of the same generated PDF).
+    p.printouts = [...p.printouts, { id: 'po2', name: 'Bid set copy', fileId: 'pofile1', createdAt: 1705000000001 }];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    p2.printouts = p2.printouts.filter((pr: any) => pr.id !== 'po1');
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+    expect(readFileContent(dir, 'pofile1')).not.toBeNull();
+  });
+
+  it('leaves a dropped id alone when another project field still mentions it', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    p.proposalPhotoIds = ['pofile1']; // same file, now referenced elsewhere
+    saveProject(db, 'proj1', p, dir);
+
+    expect(fileRowCount('pofile1')).toBe(2);
+  });
+
+  it('removing a proposal photo deletes its file row, bytes and version rows', () => {
+    const archivedId = seedFile('photo1', 'proposal-photo');
+    const p = loadProject(db, 'proj1')!;
+    p.proposalPhotoIds = ['photo1'];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    p2.proposalPhotoIds = [];
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('photo1')).toBe(0);
+    expect(readFileContent(dir, 'photo1')).toBeNull();
+    expect(readFileContent(dir, archivedId)).toBeNull();
+  });
+
+  it('a payload that omits proposalPhotoIds entirely deletes nothing', () => {
+    seedFile('photo1', 'proposal-photo');
+    const p = loadProject(db, 'proj1')!;
+    p.proposalPhotoIds = ['photo1'];
+    saveProject(db, 'proj1', p, dir);
+
+    const p2 = loadProject(db, 'proj1')!;
+    delete p2.proposalPhotoIds;
+    saveProject(db, 'proj1', p2, dir);
+
+    expect(fileRowCount('photo1')).toBe(2);
+  });
+
+  it('cascades nothing when the caller passes no dataDir', () => {
+    seedFile('pofile1', 'printout');
+    const p = loadProject(db, 'proj1')!;
+    p.printouts = [];
+    saveProject(db, 'proj1', p); // e.g. migration-time / test callers
+    expect(fileRowCount('pofile1')).toBe(2);
+  });
+});
+
 describe('createProject / listProjects / deleteProject', () => {
   it('creates with version 1 and round-trips', () => {
     const result = createProject(db, { ...LEGACY_PROJECT, id: 'new1' });
@@ -246,6 +367,26 @@ describe('createProject / listProjects / deleteProject', () => {
     expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1'`).get() as any).c).toBe(0);
   });
 
+  it('delete spares task photos — a task outlives the project it merely refers to', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    db.prepare('INSERT INTO tasks (id, title, projectId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('task1', 'Order material', 'proj1', 1);
+    // migration 23 attributes task photos to their task's project, which put
+    // them in reach of the project-owned file sweep for the first time
+    putBuffer(db, dir, 'tphoto1', Buffer.from('photobytes'), 'image/jpeg', { projectId: 'proj1', kind: 'task-photo' });
+    db.prepare('INSERT INTO task_photos (id, taskId, fileId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('tp1', 'task1', 'tphoto1', 1);
+
+    deleteProject(db, dir, 'proj1');
+
+    expect(db.prepare(`SELECT COUNT(*) as c FROM tasks WHERE id = 'task1'`).get()).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) as c FROM task_photos WHERE id = 'tp1'`).get()).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) as c FROM files WHERE id = 'tphoto1'`).get()).toEqual({ c: 1 });
+    expect(readFileContent(dir, 'tphoto1')!.toString()).toBe('photobytes'); // bytes survive too
+    // every other project-owned file still went
+    expect((db.prepare(`SELECT COUNT(*) as c FROM files WHERE projectId = 'proj1' AND kind != 'task-photo'`).get() as any).c).toBe(0);
+  });
+
   it('delete cascades AIA billing rows', () => {
     seedLegacyAndNormalize(LEGACY_PROJECT);
     db.prepare(`INSERT INTO aia_sov_lines (id, projectId, description, scheduledValueCents, sortOrder, version, createdAt) VALUES ('sov1', 'proj1', 'Line', 100000, 0, 1, 1)`).run();
@@ -265,5 +406,65 @@ describe('createProject / listProjects / deleteProject', () => {
     db.prepare(`INSERT INTO payments (id, targetType, targetId, amount, createdAt) VALUES ('paya', 'payapp', 'app1', 20, 1)`).run();
     deleteProject(db, dir, 'proj1');
     expect((db.prepare(`SELECT COUNT(*) as c FROM payments`).get() as any).c).toBe(0);
+  });
+});
+
+describe('two-stage lifecycle', () => {
+  it('normalizes every legacy status per the collapse table', () => {
+    const cases: [string, string][] = [
+      ['estimating', 'bidding'], ['proposal_sent', 'bidding'],
+      ['awarded', 'in_progress'], ['in_progress', 'in_progress'],
+      ['punch_list', 'in_progress'], ['complete', 'in_progress'],
+      ['lost', 'bidding'], ['archived', 'in_progress'],
+      ['garbage', 'bidding'],
+    ];
+    for (const [oldS, newS] of cases) expect(normalizeProjectStatus(oldS)).toBe(newS);
+  });
+
+  it('patchProject rejects legacy statuses and accepts the two live ones', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    const v1 = loadProject(db, 'proj1')!.version;
+    const result = patchProject(db, 'proj1', { version: v1, status: 'bidding' });
+    expect(result.status).toBe('bidding');
+    expect(loadProject(db, 'proj1')!.status).toBe('bidding');
+    const v2 = result.version;
+    expect(() => patchProject(db, 'proj1', { version: v2, status: 'estimating' })).toThrow(ValidationError);
+  });
+
+  it('patchProject accepts lostBid boolean and stores it in meta', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    const v1 = loadProject(db, 'proj1')!.version;
+    patchProject(db, 'proj1', { version: v1, lostBid: true });
+    expect(loadProject(db, 'proj1')!.lostBid).toBe(true);
+    const v2 = loadProject(db, 'proj1')!.version;
+    expect(() => patchProject(db, 'proj1', { version: v2, lostBid: 'yes' })).toThrow(ValidationError);
+  });
+
+  it('surfaces lostBid on summary rows so the Archive tab can badge it', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+    expect(listProjectSummaries(db, 'proj1')[0].lostBid).toBe(false);
+
+    const v = loadProject(db, 'proj1')!.version;
+    patchProject(db, 'proj1', { version: v, archived: true, lostBid: true });
+    const row = listProjectSummaries(db, 'proj1')[0];
+    expect([row.archived, row.lostBid]).toEqual([true, true]);
+  });
+
+  it('summary outstandingCents spans invoices AND finalized pay applications', () => {
+    seedLegacyAndNormalize(LEGACY_PROJECT);
+
+    const inv = createInvoice(db, 'proj1', { number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] });
+    setInvoiceStatus(db, inv.id, 'sent');
+    expect(listProjectSummaries(db, 'proj1')[0].outstandingCents).toBe(10000);
+
+    // An AIA pay app the board used to be blind to: $1,000 billed, $250 paid.
+    createSovLine(db, 'proj1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'proj1', { retainagePercent: 0, storedRetainagePercent: 0 });
+    const sov = listSovLines(db, 'proj1');
+    savePayAppLines(db, app.id, [{ sovLineId: sov[0].id, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', app.id, { amount: 250 });
+
+    expect(listProjectSummaries(db, 'proj1')[0].outstandingCents).toBe(85000);
   });
 });

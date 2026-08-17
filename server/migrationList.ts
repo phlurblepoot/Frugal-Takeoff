@@ -933,4 +933,237 @@ export const migrations: Migration[] = [
         (SELECT MAX(number) FROM rfis WHERE rfis.projectId = projects.id), 0)`);
     },
   },
+  {
+    version: 21,
+    name: 'two-stage-lifecycle',
+    // Collapses the 8 legacy stages to bidding|in_progress. complete/lost
+    // auto-archive (lost also gets meta.lostBid for the Archive view's badge).
+    // Only projects.status + meta.archived/meta.lostBid change — idempotent.
+    up({ db }) {
+      const rows = db.prepare('SELECT id, status, meta FROM projects').all() as any[];
+      const upd = db.prepare('UPDATE projects SET status = ?, meta = ? WHERE id = ?');
+      for (const r of rows) {
+        const old = r.status ?? 'estimating';
+        // A row with unparseable meta must not abort the whole migration: keep
+        // its meta column verbatim (nothing is lost) and still normalize its
+        // status. Mirrors patchProject's guard in projectStore.
+        let meta: any = {};
+        let metaParsed = true;
+        try { meta = r.meta ? JSON.parse(r.meta) : {}; }
+        catch { metaParsed = false; }
+        let status: string;
+        if (old === 'bidding' || old === 'in_progress') status = old; // re-run safe
+        else if (['estimating', 'proposal_sent'].includes(old)) status = 'bidding';
+        else if (['awarded', 'punch_list'].includes(old)) status = 'in_progress';
+        else if (old === 'complete') { status = 'in_progress'; meta.archived = true; }
+        else if (old === 'archived') { status = 'in_progress'; meta.archived = true; }
+        else if (old === 'lost') { status = 'bidding'; meta.archived = true; meta.lostBid = true; }
+        else status = 'bidding';
+        upd.run(status, metaParsed ? JSON.stringify(meta) : r.meta, r.id);
+      }
+    },
+  },
+  {
+    version: 22,
+    name: 'payapp-released-retainage',
+    // ADDITIVE, IDEMPOTENT, no data transform. Retainage releases are recorded
+    // as percentage POINTS on the app that releases them; the effective rate on
+    // app N is base − Σ points over apps with number ≤ N. Existing apps default
+    // to 0, so every historical G702/G703 recomputes byte-identically.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(aia_pay_apps)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('releasedRetainagePoints')) {
+        db.exec(`ALTER TABLE aia_pay_apps ADD COLUMN releasedRetainagePoints REAL NOT NULL DEFAULT 0;`);
+      }
+    },
+  },
+  {
+    version: 23,
+    name: 'document-source-attribution',
+    // Unified Documents (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md).
+    //
+    // ⚠️ DATA-TRANSFORMING but purely DERIVED and NON-DESTRUCTIVE: it adds four
+    // nullable columns and rewrites `kind` labels / fills sourceType+sourceId
+    // (and a missing projectId) from references that already exist elsewhere in
+    // the database. No file row and no byte on disk is ever removed. Flag to
+    // Nathan on pull per the migration protocol.
+    //
+    // IDEMPOTENT BY CONSTRUCTION: every write is guarded by a WHERE clause that
+    // matches only rows whose value actually differs, so a replay touches zero
+    // rows (proven by the double-run diff in migrationList.test.ts).
+    //
+    // PASS ORDER MATTERS: the join-table pass runs FIRST because the legacy
+    // `change-order` kind is ambiguous — it was written for both CO photos and
+    // generated CO PDFs. Rows found in change_order_photos become
+    // `change-order-photo`; whatever still carries `change-order` afterwards is
+    // a PDF and keeps its kind.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(files)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('customerId')) db.exec(`ALTER TABLE files ADD COLUMN customerId TEXT;`);
+      if (!cols.includes('sourceType')) db.exec(`ALTER TABLE files ADD COLUMN sourceType TEXT;`);
+      if (!cols.includes('sourceId')) db.exec(`ALTER TABLE files ADD COLUMN sourceId TEXT;`);
+      if (!cols.includes('archived')) db.exec(`ALTER TABLE files ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;`);
+      // Upload-time upsert-by-source looks a document up by this triple on
+      // every generate, so it gets an index.
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_files_source ON files (sourceType, sourceId);`);
+      // The Documents listing always filters on archived and orders by
+      // createdAt. Added after the first dev DBs had already reached v23, so a
+      // database stamped 23 before this line existed needs it run by hand:
+      //   CREATE INDEX IF NOT EXISTS idx_files_archived_createdAt ON files (archived, createdAt);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_files_archived_createdAt ON files (archived, createdAt);`);
+
+      // Writes only when something actually changes (NULL-safe via IS NOT).
+      const relabel = db.prepare(`
+        UPDATE files SET kind = ?, sourceType = ?, sourceId = ?
+        WHERE id = ? AND (kind IS NOT ? OR sourceType IS NOT ? OR sourceId IS NOT ?)
+      `);
+      const label = (fileId: unknown, kind: string, sourceType: string | null, sourceId: string | null) => {
+        if (typeof fileId !== 'string' || !fileId) return;
+        relabel.run(kind, sourceType, sourceId, fileId, kind, sourceType, sourceId);
+      };
+      // Files uploaded outside a project context (task photos via POST
+      // /api/images, plan-set PDFs via saveBinaryFile) never got a projectId.
+      // Their owner knows it, so the Documents page can attribute them.
+      const attribute = db.prepare('UPDATE files SET projectId = ? WHERE id = ? AND projectId IS NULL');
+      const attributeTo = (fileId: unknown, projectId: unknown) => {
+        if (typeof fileId !== 'string' || !fileId) return;
+        if (typeof projectId !== 'string' || !projectId) return;
+        attribute.run(projectId, fileId);
+      };
+      // Nothing here may abort the migration: each pass is isolated, and the
+      // helpers above ignore any row that lacks a usable id (mirrors 21's
+      // per-row meta guard, which the project pass repeats for its JSON).
+      const pass = (name: string, fn: () => void) => {
+        try { fn(); } catch (e) { console.warn(`[migrations] 23: ${name} pass skipped:`, e); }
+      };
+
+      // ---- 1. Join-table photos (FIRST — see the ambiguity note above) ------
+      const photoTables: { table: string; entityCol: string; kind: string; sourceType: string }[] = [
+        { table: 'issue_photos', entityCol: 'issueId', kind: 'issue-photo', sourceType: 'issue' },
+        { table: 'punch_photos', entityCol: 'punchItemId', kind: 'punch-photo', sourceType: 'punch' },
+        { table: 'task_photos', entityCol: 'taskId', kind: 'task-photo', sourceType: 'task' },
+        { table: 'change_order_photos', entityCol: 'changeOrderId', kind: 'change-order-photo', sourceType: 'change-order' },
+        { table: 'rfi_photos', entityCol: 'rfiId', kind: 'rfi-photo', sourceType: 'rfi' },
+      ];
+      for (const p of photoTables) {
+        pass(p.table, () => {
+          // ORDER BY keeps the outcome identical on a replay in the (unusual)
+          // case of one file being linked from two rows — last write wins, and
+          // "last" must not depend on scan order.
+          const rows = db.prepare(`SELECT ${p.entityCol} AS entityId, fileId FROM ${p.table} ORDER BY id`)
+            .all() as { entityId: string | null; fileId: string | null }[];
+          for (const r of rows) {
+            if (!r.entityId) continue;
+            label(r.fileId, p.kind, p.sourceType, r.entityId);
+          }
+        });
+      }
+      // Task photos are the one class uploaded with no project context.
+      pass('task-photo projectId', () => {
+        const rows = db.prepare(`
+          SELECT tp.fileId AS fileId, t.projectId AS projectId
+          FROM task_photos tp JOIN tasks t ON t.id = tp.taskId
+          WHERE t.projectId IS NOT NULL
+        `).all() as { fileId: string | null; projectId: string | null }[];
+        for (const r of rows) attributeTo(r.fileId, r.projectId);
+      });
+
+      // ---- 2. Page / plan assets -------------------------------------------
+      // The uploaded PDF behind a page is the document users care about; the
+      // page raster + thumbnail are `plan` assets the Documents page hides.
+      pass('pages', () => {
+        // One uploaded PDF backs every page it was split into, so the same
+        // sourcePdfFileId recurs; ORDER BY makes the winning row stable.
+        const rows = db.prepare('SELECT projectId, planSetId, imageId, thumbnailId, sourcePdfFileId FROM pages ORDER BY id')
+          .all() as { projectId: string | null; planSetId: string | null; imageId: string | null; thumbnailId: string | null; sourcePdfFileId: string | null }[];
+        for (const r of rows) {
+          if (r.sourcePdfFileId) {
+            // Pre-plan-set pages have no set; the project stands in as the source.
+            label(r.sourcePdfFileId, 'plan-source', 'plan-set', r.planSetId ?? r.projectId ?? null);
+            attributeTo(r.sourcePdfFileId, r.projectId);
+          }
+          label(r.imageId, 'plan', null, null);
+          label(r.thumbnailId, 'plan', null, null);
+          attributeTo(r.imageId, r.projectId);
+          attributeTo(r.thumbnailId, r.projectId);
+        }
+      });
+
+      // ---- 3. Project JSON fields (printouts / proposal) --------------------
+      // These live in projects.meta since migration 5 (data is NULL from then
+      // on); the legacy blob is read as a fallback so a half-imported database
+      // still migrates.
+      pass('project documents', () => {
+        const rows = db.prepare('SELECT id, meta, data FROM projects ORDER BY id').all() as { id: string; meta: string | null; data: string | null }[];
+        for (const row of rows) {
+          let p: any = null;
+          try { p = row.meta ? JSON.parse(row.meta) : null; }
+          catch { console.warn(`[migrations] 23: project ${row.id} has unparseable meta (left verbatim)`); }
+          if (!p && row.data) {
+            try { p = JSON.parse(row.data); } catch { /* legacy blob unreadable — nothing to derive */ }
+          }
+          if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
+
+          for (const po of Array.isArray(p.printouts) ? p.printouts : []) {
+            if (!po || typeof po !== 'object') continue;
+            const poId = typeof po.id === 'string' && po.id ? po.id : null;
+            label(po.fileId, 'printout', poId ? 'printout' : null, poId);
+            attributeTo(po.fileId, row.id);
+          }
+          // One proposal per project, so the project id is its source id.
+          label(p.proposalFileId, 'proposal', 'proposal', row.id);
+          attributeTo(p.proposalFileId, row.id);
+          for (const photoId of Array.isArray(p.proposalPhotoIds) ? p.proposalPhotoIds : []) {
+            label(photoId, 'proposal-photo', 'proposal', row.id);
+            attributeTo(photoId, row.id);
+          }
+        }
+      });
+
+      // ---- 4. RFI responses -------------------------------------------------
+      pass('rfi responses', () => {
+        const rows = db.prepare('SELECT id, projectId, responseFileId FROM rfis WHERE responseFileId IS NOT NULL ORDER BY id')
+          .all() as { id: string; projectId: string | null; responseFileId: string | null }[];
+        for (const r of rows) {
+          label(r.responseFileId, 'rfi-response', 'rfi', r.id);
+          attributeTo(r.responseFileId, r.projectId);
+        }
+      });
+
+      // ---- 5. Settings assets (AIA template — hidden from the page) ---------
+      pass('settings assets', () => {
+        const row = db.prepare(`SELECT value FROM settings WHERE key = 'aiaTemplateFileId'`).get() as { value: string | null } | undefined;
+        label(row?.value, 'settings-asset', null, null);
+      });
+
+      // ---- 6. Legacy kind rename -------------------------------------------
+      // Generated issue PDFs were written as `issue`; the canonical vocabulary
+      // calls them `issue-report`. Safe after pass 1: issue PHOTOS were kind
+      // `photo` and have already become `issue-photo`, so nothing else can
+      // still be carrying `issue`. Idempotent — a replay matches no rows.
+      pass('issue kind rename', () => {
+        db.prepare(`UPDATE files SET kind = 'issue-report' WHERE kind = 'issue'`).run();
+      });
+
+      // ---- 7. Everything else keeps its kind --------------------------------
+      // Direct uploads (document/spreadsheet/photo/other) and already-canonical
+      // generated documents (invoice/rfi/punch-report/change-order/
+      // email-attachment) are left alone. Their sourceId is not derivable for
+      // historical rows — project attribution stays the link (spec §Data model).
+    },
+  },
+  {
+    version: 24,
+    name: 'change-order-title',
+    // Change Order Title (spec docs/superpowers/specs/2026-08-17-change-order-title-design.md).
+    // ADDITIVE, IDEMPOTENT: one nullable column. Existing rows get NULL, so
+    // every legacy CO display/PDF/SOV-sync path falls back to `description`
+    // exactly as it did before this migration.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(change_orders)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('title')) {
+        db.exec(`ALTER TABLE change_orders ADD COLUMN title TEXT;`);
+      }
+    },
+  },
 ];

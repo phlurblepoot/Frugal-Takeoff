@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage, Customer } from '../types';
@@ -34,6 +34,7 @@ interface PendingPage {
 export const NewProject: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const [step, setStep] = useState<'details' | 'name_pages'>('details');
   const [name, setName] = useState(location.state?.initialName || '');
@@ -104,9 +105,21 @@ export const NewProject: React.FC = () => {
 
   useEffect(() => {
     getCustomers()
-      .then(setCustomers)
+      .then((list: Customer[]) => {
+        setCustomers(list);
+        // Coming from a customer's pane ([+ Project]) — preselect it once the
+        // dropdown has something to match against.
+        const preselectId = searchParams.get('customerId');
+        if (preselectId) {
+          const found = list.find(c => c.id === preselectId);
+          if (found) {
+            setCustomerId(found.id);
+            setContractor(found.name);
+          }
+        }
+      })
       .catch(err => console.error('Failed to fetch customers:', err));
-  }, []);
+  }, [searchParams]);
 
   const handleAddNewCustomer = async () => {
     const trimmed = newCustomerName.trim();
@@ -228,9 +241,13 @@ export const NewProject: React.FC = () => {
         if (isPdf) {
           try {
             setProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            // plan-source is multi-instance (a set is often several PDFs), so this
+            // never versions a sibling — each upload keeps its own row.
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId: newProjectId, kind: 'plan-source', name: file.name,
+              sourceType: 'plan-set', sourceId: newPlanSetId,
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
             sourcePdfFileId = undefined;
@@ -261,13 +278,13 @@ export const NewProject: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: newProjectId });
 
               // Legacy raster path: only used when we couldn't store the source PDF.
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: newProjectId });
               }
               // Thumbnails are keyed by `thumbnailId` (always set) so the naming
               // UI can look them up uniformly for vector and legacy pages.
@@ -447,9 +464,11 @@ export const NewProject: React.FC = () => {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId, kind: 'plan-source', name: file.name,
+              sourceType: 'plan-set', sourceId: planSetId,
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
             sourcePdfFileId = undefined;
@@ -483,12 +502,12 @@ export const NewProject: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: projectId ?? undefined });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: projectId ?? undefined });
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 

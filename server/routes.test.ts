@@ -175,6 +175,20 @@ describe('storage + search + orphans', () => {
     expect((await request(app).get('/api/files/doc1/meta')).status).toBe(200); // survived
   });
 
+  it('orphan cleanup spares a project-less task photo', async () => {
+    // Task photos are deliberately project-less (a task outlives the project it
+    // merely refers to), so files.projectId cannot vouch for them — only the
+    // join table can.
+    await request(app).post('/api/files/tphoto1?kind=task-photo&name=Photo.jpg')
+      .set('Content-Type', 'image/jpeg').send(Buffer.from('photo'));
+    db.prepare('INSERT INTO task_photos (id, taskId, fileId, createdAt) VALUES (?, ?, ?, ?)')
+      .run('tp1', 'task1', 'tphoto1', 1);
+
+    expect((await request(app).get('/api/storage/orphans')).body.count).toBe(0);
+    await request(app).post('/api/storage/orphans/cleanup');
+    expect((await request(app).get('/api/files/tphoto1/meta')).status).toBe(200);
+  });
+
   it('search finds projects, pages, and takeoffs from normalized tables', async () => {
     await request(app).post('/api/projects').send({
       ...PROJECT,
@@ -213,7 +227,7 @@ describe('GET /api/projects/summary', () => {
     expect(res.status).toBe(200);
     const row = res.body.find((r: any) => r.id === 'p1');
     expect(row).toMatchObject({
-      name: 'Test Project', status: 'estimating', version: 1, archived: false,
+      name: 'Test Project', status: 'bidding', version: 1, archived: false,
       pageCount: 2, takeoffCount: 1, contractor: 'GC Co',
     });
     expect(row.pageIds.sort()).toEqual(['pg1', 'pg2']);
@@ -233,11 +247,11 @@ describe('PATCH /api/projects/:id', () => {
   });
 
   it('updates status and bumps version', async () => {
-    const res = await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    const res = await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, version: 2, status: 'awarded' });
+    expect(res.body).toMatchObject({ success: true, version: 2, status: 'in_progress' });
     const get = await request(app).get('/api/projects/p1');
-    expect(get.body.status).toBe('awarded');
+    expect(get.body.status).toBe('in_progress');
     expect(get.body.version).toBe(2);
   });
 
@@ -267,7 +281,7 @@ describe('PATCH /api/projects/:id', () => {
   it('rejects invalid payloads with 400', async () => {
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, status: 'galactic' })).status).toBe(400);
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, nonsense: true })).status).toBe(400);
-    expect((await request(app).patch('/api/projects/p1').send({ status: 'awarded' })).status).toBe(400); // no version
+    expect((await request(app).patch('/api/projects/p1').send({ status: 'in_progress' })).status).toBe(400); // no version
     expect((await request(app).patch('/api/projects/p1').send({ version: 1, name: '' })).status).toBe(400);
   });
 
@@ -279,7 +293,7 @@ describe('PATCH /api/projects/:id', () => {
 describe('GET /api/activity', () => {
   it('records project create and status change events', async () => {
     await request(app).post('/api/projects').send(PROJECT);
-    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     const res = await request(app).get('/api/activity');
     expect(res.status).toBe(200);
     const types = res.body.items.map((i: any) => i.type);
@@ -295,7 +309,7 @@ describe('GET /api/projects/:id/summary', () => {
     await request(app).post('/api/projects').send(PROJECT);
     const res = await request(app).get('/api/projects/p1/summary');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 'p1', name: 'Test Project', status: 'estimating', version: 1 });
+    expect(res.body).toMatchObject({ id: 'p1', name: 'Test Project', status: 'bidding', version: 1 });
     expect(res.body.pages).toBeUndefined();
   });
 
@@ -367,7 +381,7 @@ describe('GET /api/activity?projectId=', () => {
   it('filters the feed to one project', async () => {
     await request(app).post('/api/projects').send(PROJECT);
     await request(app).post('/api/projects').send({ ...PROJECT, id: 'p2', name: 'Other' });
-    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'awarded' });
+    await request(app).patch('/api/projects/p1').send({ version: 1, status: 'in_progress' });
     const res = await request(app).get('/api/activity?projectId=p1');
     expect(res.body.items.length).toBeGreaterThan(0);
     for (const item of res.body.items) expect(item.projectId).toBe('p1');
@@ -391,18 +405,25 @@ describe('project files', () => {
       id: 'doc1', projectId: 'p1', kind: 'document', name: 'Contract.pdf',
       mime: 'application/pdf', versionNumber: 1, parentFileId: null,
     });
+    expect(res.body).toMatchObject({ success: true, fileId: 'doc1', versioned: false });
   });
 
-  it('GET /api/projects/:id/files lists live files newest-first, no version rows', async () => {
-    await request(app).post('/api/files/doc1?projectId=p1&kind=document&name=A.pdf')
-      .set('Content-Type', 'application/pdf').send(Buffer.from('a'));
-    await request(app).post('/api/files/doc2?projectId=p1&kind=spreadsheet&name=B.xlsx')
-      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      .send(Buffer.from('b'));
-    const res = await request(app).get('/api/projects/p1/files');
-    expect(res.status).toBe(200);
-    expect(res.body.map((f: any) => f.id).sort()).toEqual(['doc1', 'doc2']);
-    expect(res.body[0].sha256).toBeUndefined(); // slim listing
+  it('POST /api/files/:id versions the source document instead of adding a second row', async () => {
+    const qs = 'projectId=p1&kind=invoice&sourceType=invoice&sourceId=inv-1&customerId=c1&name=Invoice%2012.pdf';
+    const first = await request(app).post(`/api/files/gen1?${qs}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
+    expect(first.body).toMatchObject({ fileId: 'gen1', versioned: false });
+
+    // a regenerate mints a new id client-side; it must land on the same document
+    const second = await request(app).post(`/api/files/gen2?${qs}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(second.body).toMatchObject({ fileId: 'gen1', versioned: true });
+    expect((await request(app).get('/api/files/gen2/meta')).status).toBe(404);
+
+    const meta = await request(app).get('/api/files/gen1/meta');
+    expect(meta.body).toMatchObject({ versionNumber: 2, sourceType: 'invoice', sourceId: 'inv-1', customerId: 'c1' });
+    const versions = await request(app).get('/api/files/gen1/versions');
+    expect(versions.body.map((v: any) => v.versionNumber)).toEqual([2, 1]);
   });
 
   it('GET /api/files/:id/meta 404s for unknown files', async () => {
@@ -750,6 +771,19 @@ describe('AIA billing routes (admin-gated)', () => {
       .send({ version: 1, lines: [{ sovLineId: sovId, percentComplete: 75, storedMaterialsCents: 0 }] });
     expect(stale.status).toBe(409);
     expect(stale.body.code).toBe('version_conflict');
+  });
+
+  it('new pay app defaults storedRetainagePercent to retainagePercent, ignoring legacy stored settings', async () => {
+    // Legacy projects still carry a distinct storedRetainagePercent in
+    // aiaSettings from the two-rate era; the single-rate world must not let
+    // that leak into new apps — they should snapshot 15/15, not 15/10.
+    await request(app).put('/api/projects/p1/aia/settings')
+      .send({ retainagePercent: 15, storedRetainagePercent: 10 });
+    const create = await request(app).post('/api/projects/p1/aia/pay-apps').send({});
+    expect(create.status).toBe(200);
+    const get = await request(app).get(`/api/aia/pay-apps/${create.body.id}`);
+    expect(get.body.app.retainagePercent).toBe(15);
+    expect(get.body.app.storedRetainagePercent).toBe(15);
   });
 
   it('aia/settings round-trips via project meta', async () => {
@@ -1485,5 +1519,105 @@ describe('customers routes', () => {
     });
     const del = await request(app).delete(`/api/customers/${cid}`);
     expect(del.status).toBe(409);
+  });
+
+  it('PUT rename propagates to every owned project.contractor', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Old Co' });
+    const cid = post.body.id;
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-rn-1', customerId: cid,
+      pages: [{ id: 'pg-rn-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-rn-2', customerId: cid, contractor: 'Stale Name',
+      pages: [{ id: 'pg-rn-2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    const put = await request(app).put(`/api/customers/${cid}`).send({ name: 'New Co Name', emails: {} });
+    expect(put.status).toBe(200);
+
+    expect((await request(app).get('/api/projects/pc-rn-1')).body.contractor).toBe('New Co Name');
+    expect((await request(app).get('/api/projects/pc-rn-2')).body.contractor).toBe('New Co Name');
+  });
+
+  it('PUT without a name change leaves project.contractor alone', async () => {
+    const post = await request(app).post('/api/customers').send({ name: 'Same Co' });
+    const cid = post.body.id;
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-nc-1', customerId: cid, contractor: 'Hand-typed GC',
+      pages: [{ id: 'pg-nc-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    // A phone edit is not a rename — contractor must survive it verbatim.
+    const put = await request(app).put(`/api/customers/${cid}`).send({ name: 'Same Co', phone: '555-0100', emails: {} });
+    expect(put.status).toBe(200);
+    expect((await request(app).get('/api/projects/pc-nc-1')).body.contractor).toBe('Hand-typed GC');
+  });
+
+  it('PUT on the Unassigned bucket never stamps its name onto project.contractor', async () => {
+    // The migration seeds customer-unassigned; its name is a placeholder, not a
+    // company, and it must never reach a project (contractor feeds document PDFs).
+    await request(app).post('/api/projects').send({
+      ...PROJECT, id: 'pc-un-1', customerId: 'customer-unassigned', contractor: '',
+      pages: [{ id: 'pg-un-1', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    });
+
+    const put = await request(app).put('/api/customers/customer-unassigned').send({ name: 'Unassigned Renamed', emails: {} });
+    expect(put.status).toBe(200);
+    expect((await request(app).get('/api/projects/pc-un-1')).body.contractor).toBe('');
+  });
+
+  describe('GET /api/customers/summary and /:id/overview', () => {
+    let userApp: express.Express;
+
+    beforeEach(() => {
+      // A second app wired with a non-admin 'user' role — proves money fields are gated.
+      userApp = express();
+      userApp.use(express.json());
+      registerDataRoutes(userApp, {
+        db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+        authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
+        requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+        verifyToken: () => null,
+      });
+    });
+
+    it('summary includes outstandingCents for admin, omits it for non-admin', async () => {
+      const post = await request(app).post('/api/customers').send({ name: 'Billed Co' });
+      const cid = post.body.id;
+      await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc-sum-1', customerId: cid });
+      await request(app).post('/api/projects/pc-sum-1/invoices').send({ number: 'INV-1', status: 'sent', lines: [{ description: 'Work', qty: 1, unitPrice: 40 }] });
+
+      const admin = await request(app).get('/api/customers/summary');
+      expect(admin.status).toBe(200);
+      const adminRow = admin.body.find((r: any) => r.id === cid);
+      expect(adminRow.outstandingCents).toBe(4000);
+      expect(adminRow.projectCounts).toEqual({ bidding: 1, inProgress: 0, archived: 0 });
+
+      const nonAdmin = await request(userApp).get('/api/customers/summary');
+      expect(nonAdmin.status).toBe(200);
+      const nonAdminRow = nonAdmin.body.find((r: any) => r.id === cid);
+      expect(nonAdminRow.outstandingCents).toBeUndefined();
+    });
+
+    it('overview includes billing/attention money items for admin, omits them for non-admin; 404 for unknown id', async () => {
+      const post = await request(app).post('/api/customers').send({ name: 'Overview Co' });
+      const cid = post.body.id;
+      await request(app).post('/api/projects').send({ ...PROJECT, id: 'pc-ov-1', customerId: cid });
+      await request(app).post('/api/projects/pc-ov-1/invoices').send({ number: 'INV-1', status: 'sent', lines: [{ description: 'Work', qty: 1, unitPrice: 40 }] });
+
+      const admin = await request(app).get(`/api/customers/${cid}/overview`);
+      expect(admin.status).toBe(200);
+      expect(admin.body.customer.id).toBe(cid);
+      expect(admin.body.billing.outstandingCents).toBe(4000);
+      expect(admin.body.billing.ledger).toHaveLength(1);
+
+      const nonAdmin = await request(userApp).get(`/api/customers/${cid}/overview`);
+      expect(nonAdmin.status).toBe(200);
+      expect(nonAdmin.body.billing).toBeUndefined();
+      expect(nonAdmin.body.attention.some((a: any) => a.type === 'outstanding_invoice')).toBe(false);
+
+      expect((await request(app).get('/api/customers/does-not-exist/overview')).status).toBe(404);
+    });
   });
 });

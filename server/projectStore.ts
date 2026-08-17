@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
-import { billingSummary } from './billingStore';
+import { removeFile, listVersions } from './files';
+import { billingSummary, listBilledDocuments } from './billingStore';
 import { countOpenIssues } from './issueStore';
 import { punchProgress } from './punchStore';
 
@@ -8,12 +9,22 @@ export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
 
-// Project lifecycle stages (spec §2). 'archived' is reachable via the
-// archived flag rather than the stage dropdown, but remains a valid value.
-export const PROJECT_STATUSES = [
-  'estimating', 'proposal_sent', 'awarded', 'in_progress',
-  'punch_list', 'complete', 'archived', 'lost',
-] as const;
+// Project lifecycle stages (spec 2026-08-16: two-stage collapse). Archiving
+// and lost-bid tracking are independent meta flags, not stages.
+export const PROJECT_STATUSES = ['bidding', 'in_progress'] as const;
+
+// Collapse table for the two-stage lifecycle (spec 2026-08-16). Legacy values
+// arrive from old full-document saves and pre-migration rows; anything
+// unrecognized is treated as a bid so nothing vanishes.
+const LEGACY_STATUS_MAP: Record<string, 'bidding' | 'in_progress'> = {
+  estimating: 'bidding', proposal_sent: 'bidding', lost: 'bidding',
+  awarded: 'in_progress', in_progress: 'in_progress',
+  punch_list: 'in_progress', complete: 'in_progress', archived: 'in_progress',
+};
+export function normalizeProjectStatus(s: unknown): 'bidding' | 'in_progress' {
+  if (s === 'bidding' || s === 'in_progress') return s;
+  return LEGACY_STATUS_MAP[String(s)] ?? 'bidding';
+}
 
 const parse = (s: string | null): any => (s == null ? undefined : JSON.parse(s));
 
@@ -29,7 +40,7 @@ export function loadProject(db: Database.Database, id: string): any | null {
   // Pre-normalization fallback (should not occur after migration 5, but a
   // legacy-dir import racing ahead of a re-run must not crash the API).
   if (row.data) {
-    try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'estimating' }; }
+    try { return { ...JSON.parse(row.data), version: row.version ?? 1, status: row.status ?? 'bidding' }; }
     catch {
       console.warn(`[projectStore] project ${id} has an unparseable legacy blob`);
       return null;
@@ -126,18 +137,12 @@ function validate(payload: any, id?: string): void {
   }
 }
 
-// Status is intentionally sticky: once a project leaves 'estimating', legacy
-// flags (submitted/accepted/archived) no longer drive it.
-// NOTE: patchProject can leave meta.archived and status transiently divergent
-// (PATCH archived:true keeps the real stage; the next full save re-derives
-// status='archived' here). Accepted for 3a — revisit when archived/status
-// are decoupled.
+// deriveStatus: full-document saves carry the client's status; normalize it.
+// The archived flag no longer influences status (it is orthogonal).
 export function deriveStatus(meta: any, existing?: string): string {
-  if (existing && existing !== 'estimating') return existing;
-  if (meta.archived) return 'archived';
-  if (meta.accepted) return 'awarded';
-  if (meta.submitted) return 'proposal_sent';
-  return 'estimating';
+  if (existing) return normalizeProjectStatus(existing);
+  if (meta.accepted) return 'in_progress';
+  return 'bidding';
 }
 
 // Splits a validated legacy-shaped payload into rows. Caller wraps in a
@@ -225,22 +230,102 @@ export function createProject(db: Database.Database, payload: any): { version: n
   return { version: 1 };
 }
 
-export function saveProject(db: Database.Database, id: string, payload: any): { version: number } {
+// Every file id the payload still mentions — the array entries themselves plus
+// any id embedded in an /api/files/<id> or /api/images/<id> URL anywhere in the
+// document (same walk shape as routes.ts's orphan sweep). A dropped id that
+// still turns up here is kept.
+function referencedFileIds(payload: any): Set<string> {
+  const refs = new Set<string>();
+  const urlRe = /\/api\/(?:images|files)\/([^/"'?\s]+)/g;
+  const walk = (v: any) => {
+    if (v == null) return;
+    if (typeof v === 'string') {
+      refs.add(v);
+      urlRe.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = urlRe.exec(v)) !== null) {
+        try { refs.add(decodeURIComponent(m[1])); } catch { refs.add(m[1]); }
+      }
+      return;
+    }
+    if (Array.isArray(v)) { for (const x of v) walk(x); return; }
+    if (typeof v === 'object') { for (const k in v) walk(v[k]); }
+  };
+  walk(payload);
+  return refs;
+}
+
+// Source-side deletions: the project document OWNS its printout files and
+// proposal photos, and those rows carry a sourceType, so DELETE /api/files/:id
+// refuses them (spec's deletion tiers) and orphan cleanup structurally exempts
+// anything attributed to a live project. Dropping the entry here is therefore
+// the only moment their bytes can be reclaimed.
+//
+// A missing key is NOT an empty list: partial or legacy payloads omit
+// printouts/proposalPhotoIds entirely, and reading that as "all removed" would
+// delete every printout in the project. Only an actual array opts its own
+// field into the diff.
+function droppedSourceFileIds(oldMetaJson: string | null, payload: any): string[] {
+  let oldMeta: any;
+  try { oldMeta = oldMetaJson ? JSON.parse(oldMetaJson) : {}; } catch { return []; }
+  if (!oldMeta || typeof oldMeta !== 'object') return [];
+
+  const candidates = new Set<string>();
+  if (Array.isArray(payload.printouts) && Array.isArray(oldMeta.printouts)) {
+    for (const p of oldMeta.printouts) {
+      if (p && typeof p.fileId === 'string' && p.fileId) candidates.add(p.fileId);
+    }
+  }
+  if (Array.isArray(payload.proposalPhotoIds) && Array.isArray(oldMeta.proposalPhotoIds)) {
+    for (const fid of oldMeta.proposalPhotoIds) {
+      if (typeof fid === 'string' && fid) candidates.add(fid);
+    }
+  }
+  if (candidates.size === 0) return [];
+
+  const surviving = referencedFileIds(payload);
+  return [...candidates].filter(fid => !surviving.has(fid));
+}
+
+export function saveProject(
+  db: Database.Database,
+  id: string,
+  payload: any,
+  dataDir?: string
+): { version: number } {
   validate(payload, id);
   if (!Number.isInteger(payload.version) || payload.version < 1) {
     throw new ValidationError('Missing or invalid version — reload the project and try again');
   }
   let newVersion = 0;
+  let dropped: string[] = [];
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM projects WHERE id = ?').get(id) as { version: number } | undefined;
+    // meta is read here because it is the last moment the OLD printouts /
+    // proposalPhotoIds exist — decomposeProject overwrites the column.
+    const row = db.prepare('SELECT version, meta FROM projects WHERE id = ?').get(id) as
+      | { version: number; meta: string | null }
+      | undefined;
     if (!row) throw new ValidationError('Project not found');
     if (row.version !== payload.version) {
       throw new ConflictError(`Project changed since it was loaded (server v${row.version}, payload v${payload.version})`);
     }
     newVersion = row.version + 1;
+    if (dataDir) dropped = droppedSourceFileIds(row.meta, payload);
     decomposeProject(db, payload, newVersion);
   });
   tx();
+
+  // After the commit, and never fatal: the save itself already succeeded, so a
+  // failed cascade is a storage leak to report, not a lost edit.
+  if (dataDir) {
+    for (const fid of dropped) {
+      try {
+        for (const v of listVersions(db, fid)) removeFile(db, dataDir, v.id);
+      } catch (e) {
+        console.warn(`[projectStore] could not remove dropped source file ${fid}:`, e);
+      }
+    }
+  }
   return { version: newVersion };
 }
 
@@ -252,7 +337,8 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
   const hasCustCol = (db.prepare('PRAGMA table_info(projects)').all() as any[]).some((c: any) => c.name === 'customerId');
   const rows = db.prepare(`
     SELECT id, name, status, contractor, ${hasCustCol ? 'customerId,' : ''} address, bidDueDate, version, createdAt, updatedAt,
-           COALESCE(json_extract(meta, '$.archived'), 0) AS archived
+           COALESCE(json_extract(meta, '$.archived'), 0) AS archived,
+           COALESCE(json_extract(meta, '$.lostBid'), 0) AS lostBid
     FROM projects ${id ? 'WHERE id = ?' : ''} ORDER BY createdAt DESC
   `).all(...(id ? [id] : [])) as any[];
 
@@ -276,7 +362,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
     const base = {
       id: r.id,
       name: r.name ?? 'Untitled',
-      status: r.status ?? 'estimating',
+      status: r.status ?? 'bidding',
       contractor: r.contractor ?? null,
       customerId: r.customerId ?? null,
       address: r.address ?? null,
@@ -285,6 +371,7 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       createdAt: r.createdAt ?? 0,
       updatedAt: r.updatedAt ?? null,
       archived: !!r.archived,
+      lostBid: !!r.lostBid,
       pageCount: pageIdsByProject.get(r.id)?.length ?? 0,
       takeoffCount: takeoffCounts.get(r.id) ?? 0,
       pageIds: pageIdsByProject.get(r.id) ?? [],
@@ -293,14 +380,29 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       punchTotal: pp.total,
     };
     if (!includeBilling) return base;
-    const bs = billingSummary(db, r.id);
-    return { ...base, contractValueCents: bs.contractValueCents, invoiceCount: bs.invoiceCount };
+    // Fetched once and handed to billingSummary so it doesn't re-query the
+    // same rows; outstandingCents spans invoices AND AIA pay applications —
+    // an AIA-billed project would otherwise read $0 on the board (see
+    // billingStore).
+    const docs = listBilledDocuments(db, r.id);
+    const bs = billingSummary(db, r.id, docs);
+    return {
+      ...base,
+      contractValueCents: bs.contractValueCents,
+      invoiceCount: bs.invoiceCount,
+      outstandingCents: docs.reduce((a, d) => a + d.balanceCents, 0),
+    };
   });
 }
 
 // Explicit user action — the one place project-owned files are deleted.
 export function deleteProject(db: Database.Database, dataDir: string, id: string): void {
-  const fileIds = (db.prepare('SELECT id FROM files WHERE projectId = ?').all(id) as { id: string }[]).map(r => r.id);
+  // Task photos are the one exception to the project-owned sweep: tasks (and
+  // their photos) outlive the project they merely REFER to, and they always
+  // have — before migration 23 gave them a projectId they were invisible to
+  // this query. Keeping them excluded preserves that behavior exactly.
+  const OWNED = `projectId = ? AND kind != 'task-photo'`;
+  const fileIds = (db.prepare(`SELECT id FROM files WHERE ${OWNED}`).all(id) as { id: string }[]).map(r => r.id);
   const tx = db.transaction(() => {
     for (const t of ['measurements', 'pages', 'takeoffs', 'plan_sets']) {
       db.prepare(`DELETE FROM ${t} WHERE projectId = ?`).run(id);
@@ -326,8 +428,8 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     db.prepare('DELETE FROM aia_sov_lines WHERE projectId = ?').run(id);
     // Drop editor drafts for this project's files before the files vanish, so
     // the subquery can still resolve their ids (prevents a slow drafts leak).
-    db.prepare('DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE projectId = ?)').run(id);
-    db.prepare('DELETE FROM files WHERE projectId = ?').run(id);
+    db.prepare(`DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
+    db.prepare(`DELETE FROM files WHERE ${OWNED}`).run(id);
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
   });
   tx();
@@ -346,7 +448,7 @@ export function patchProject(
   if (!Number.isInteger(patch.version) || patch.version < 1) {
     throw new ValidationError('Missing or invalid version — reload the project and try again');
   }
-  const ALLOWED = ['version', 'name', 'status', 'archived', 'contractor', 'address', 'bidDueDate'];
+  const ALLOWED = ['version', 'name', 'status', 'archived', 'lostBid', 'contractor', 'address', 'bidDueDate'];
   for (const k of Object.keys(patch)) {
     if (!ALLOWED.includes(k)) throw new ValidationError(`Unknown field: ${k}`);
   }
@@ -358,6 +460,9 @@ export function patchProject(
   }
   if (patch.archived !== undefined && typeof patch.archived !== 'boolean') {
     throw new ValidationError('archived must be a boolean');
+  }
+  if (patch.lostBid !== undefined && typeof patch.lostBid !== 'boolean') {
+    throw new ValidationError('lostBid must be a boolean');
   }
   for (const k of ['contractor', 'address'] as const) {
     if (patch[k] !== undefined && patch[k] !== null && typeof patch[k] !== 'string') {
@@ -386,16 +491,22 @@ export function patchProject(
         vals.push(patch[k]);
       }
     }
-    if (patch.archived !== undefined) {
+    if (patch.archived !== undefined || patch.lostBid !== undefined) {
       let meta: any = {};
       try { meta = JSON.parse(row.meta || '{}'); } catch { /* keep {} */ }
-      if (patch.archived) meta.archived = true;
-      else delete meta.archived; // legacy shape omits the key when not archived
+      if (patch.archived !== undefined) {
+        if (patch.archived) meta.archived = true;
+        else delete meta.archived; // legacy shape omits the key when not archived
+      }
+      if (patch.lostBid !== undefined) {
+        if (patch.lostBid) meta.lostBid = true;
+        else delete meta.lostBid; // same omit-when-falsy shape as archived
+      }
       sets.push('meta = ?');
       vals.push(JSON.stringify(meta));
     }
     db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
-    out = { version: newVersion, status: patch.status ?? row.status ?? 'estimating' };
+    out = { version: newVersion, status: patch.status ?? row.status ?? 'bidding' };
   });
   tx();
   return out;

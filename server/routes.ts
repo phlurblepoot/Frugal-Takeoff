@@ -49,7 +49,11 @@ import {
   ConflictError as AiaConflictError,
   NotFoundError as AiaNotFoundError,
 } from './aiaStore';
-import { listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer } from './customerStore';
+import {
+  listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
+  customerSummaries, customerOverview,
+} from './customerStore';
+import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -128,7 +132,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   app.put('/api/projects/:id', authenticateToken, (req, res) => {
     try {
-      const result = saveProject(db, req.params.id, req.body);
+      const result = saveProject(db, req.params.id, req.body, dataDir);
       res.json({ success: true, version: result.version });
     } catch (e) {
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
@@ -336,9 +340,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       // A new pay app inherits the project's retainage defaults from aiaSettings.
       // Explicit values in the request body take precedence over the settings.
+      // storedRetainagePercent is dropped from the settings-derived defaults:
+      // legacy projects still carry a two-rate storedRetainagePercent, but the
+      // single-rate world wants new apps to default it to retainagePercent
+      // (createPayApp's own `?? retainagePercent` fallback) unless the caller
+      // explicitly requests a distinct value via the request body.
       const project = loadProject(db, req.params.id);
-      const settings = (project && project.aiaSettings) || {};
-      const input = { ...settings, ...req.body };
+      const { storedRetainagePercent: _legacyStoredRetainagePercent, ...settingsDefaults } = (project && project.aiaSettings) || {};
+      const input = { ...settingsDefaults, ...req.body };
       res.json(createPayApp(db, req.params.id, input));
     } catch (e) { aiaErr(e, res); }
   });
@@ -379,7 +388,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const project = loadProject(db, req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
       project.aiaSettings = { ...(project.aiaSettings ?? {}), ...req.body };
-      saveProject(db, req.params.id, project);
+      saveProject(db, req.params.id, project, dataDir);
       res.json(project.aiaSettings);
     } catch (e) {
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
@@ -639,7 +648,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof id !== 'string' || !id || typeof data !== 'string' || !data) {
         return res.status(400).json({ error: 'id and data are required' });
       }
-      putDataUrl(db, dataDir, id, data);
+      // Optional attribution (spec docs/superpowers/specs/2026-08-17-documents-clutter-design.md
+      // §Implementation): page-asset callers pass kind=plan so ALWAYS_EXCLUDED_KINDS
+      // hides them at upload time too, not just via the NOT-EXISTS fallback.
+      const q = req.query;
+      const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+      putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
       res.json({ success: true });
     } catch (e) {
       console.error('Error saving image:', e);
@@ -664,12 +678,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         // file id with a different ?projectId relabels it. Real uploads use
         // fresh UUIDs so this only triggers on deliberate re-posts.
         const q = req.query;
-        putBuffer(db, dataDir, req.params.id, body, mime, {
-          projectId: typeof q.projectId === 'string' && q.projectId ? q.projectId : undefined,
-          kind: typeof q.kind === 'string' && q.kind ? q.kind : undefined,
-          name: typeof q.name === 'string' && q.name ? q.name : undefined,
+        const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+        // With a full sourceType+sourceId+kind triple this versions the
+        // document that source already owns, so fileId can differ from the id
+        // in the URL — callers must store the returned fileId.
+        const result = putBuffer(db, dataDir, req.params.id, body, mime, {
+          projectId: str(q.projectId),
+          kind: str(q.kind),
+          name: str(q.name),
+          customerId: str(q.customerId),
+          sourceType: str(q.sourceType),
+          sourceId: str(q.sourceId),
         });
-        res.json({ success: true });
+        res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
         console.error('Error saving file:', e);
         res.status(500).json({ error: 'Failed to save file' });
@@ -764,16 +785,76 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
   });
 
-  app.get('/api/projects/:id/files', authenticateToken, (req, res) => {
+  // ── Global Documents page ─────────────────────────────────────────────────
+  // GET /api/projects/:id/files is gone with ProjectDocuments: it had no role
+  // gate, so it leaked billing-kind rows (invoice/pay-app/CO/proposal) to
+  // non-admins. /api/documents below is the one listing endpoint, and it
+  // applies that exclusion.
+  // spec docs/superpowers/specs/2026-08-17-unified-documents-design.md §Server
+
+  app.get('/api/documents', authenticateToken, (req, res) => {
     try {
-      res.json(db.prepare(`
-        SELECT id, projectId, name, mime, size, kind, parentFileId, versionNumber, createdAt
-        FROM files WHERE projectId = ? AND parentFileId IS NULL
-        ORDER BY createdAt DESC
-      `).all(req.params.id));
+      const isAdmin = (req as any).user?.role === 'admin';
+      const q = req.query;
+      const csv = (v: unknown): string[] | undefined => {
+        if (typeof v !== 'string' || !v) return undefined;
+        const arr = v.split(',').map(s => s.trim()).filter(Boolean);
+        return arr.length ? arr : undefined;
+      };
+      const int = (v: unknown): number | undefined => {
+        if (typeof v !== 'string' || !v) return undefined;
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const filters: DocumentFilters = {
+        projectIds: csv(q.projectIds),
+        customerIds: csv(q.customerIds),
+        kinds: csv(q.kinds),
+        q: typeof q.q === 'string' && q.q ? q.q : undefined,
+        archived: q.archived === '1',
+        // Admin-only inside listDocuments (re-checked against isAdmin there);
+        // passed through as-is here since the raw param is harmless for a
+        // non-admin — it's simply ignored.
+        unassigned: q.unassigned === '1',
+        limit: int(q.limit),
+        offset: int(q.offset),
+      };
+      res.json(listDocuments(db, filters, isAdmin));
     } catch (e) {
-      console.error('Error listing project files:', e);
-      res.status(500).json({ error: 'Failed to list project files' });
+      console.error('Error listing documents:', e);
+      res.status(500).json({ error: 'Failed to list documents' });
+    }
+  });
+
+  app.patch('/api/files/:id', authenticateToken, (req, res) => {
+    try {
+      const { archived, kind } = req.body ?? {};
+      if (archived !== undefined && typeof archived !== 'boolean') {
+        return res.status(400).json({ error: 'archived must be a boolean' });
+      }
+      if (kind !== undefined && typeof kind !== 'string') {
+        return res.status(400).json({ error: 'kind must be a string' });
+      }
+      const isAdmin = (req as any).user?.role === 'admin';
+      const result = patchDocument(db, req.params.id, { archived, kind }, isAdmin);
+      if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      const { sha256, legacyFormat, ...slim } = result.value as any;
+      res.json({ success: true, ...slim, archived: !!slim.archived });
+    } catch (e) {
+      console.error('Error updating file:', e);
+      res.status(500).json({ error: 'Failed to update file' });
+    }
+  });
+
+  app.delete('/api/files/:id', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
+      if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      res.json({ success: true });
+    } catch (e) {
+      console.error('Error deleting file:', e);
+      res.status(500).json({ error: 'Failed to delete file' });
     }
   });
 
@@ -814,6 +895,15 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     for (const r of shareRows) {
       addString(r.resourceId);
       try { walk(JSON.parse(r.resourceId)); } catch { /* plain id */ }
+    }
+    // Photo join tables hold their file ids in a column, not in any JSON the
+    // walk above reaches. Project-attributed rows are covered by the clause
+    // below, but task photos are deliberately project-less (a task outlives the
+    // project it merely refers to), so without this pass they read as orphans.
+    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos']) {
+      let rows: { fileId: string | null }[] = [];
+      try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
+      for (const r of rows) if (r.fileId) referenced.add(r.fileId);
     }
     // Files attributed to a live project are referenced by definition (e.g.
     // standalone Documents uploads whose id never appears in project JSON).
@@ -1031,12 +1121,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── Customers ────────────────────────────────────────────────────────────────
 
   app.get('/api/customers', authenticateToken, (_req, res) => res.json(listCustomers(db)));
+  // NOTE: must be registered before '/api/customers/:id' or Express matches
+  // 'summary' as a customer id (same gotcha as /api/projects/summary above).
+  app.get('/api/customers/summary', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      res.json(customerSummaries(db, isAdmin));
+    } catch (e) {
+      console.error('Error fetching customer summaries:', e);
+      res.status(500).json({ error: 'Failed to fetch customer summaries' });
+    }
+  });
   app.get('/api/customers/:id', authenticateToken, (req, res) => {
     const c = getCustomer(db, req.params.id);
     return c ? res.json(c) : res.status(404).json({ error: 'not found' });
   });
   app.get('/api/customers/:id/projects', authenticateToken, (req, res) =>
     res.json(listProjectsForCustomer(db, req.params.id)));
+  app.get('/api/customers/:id/overview', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      const overview = customerOverview(db, req.params.id, isAdmin);
+      if (!overview) return res.status(404).json({ error: 'not found' });
+      res.json(overview);
+    } catch (e) {
+      console.error('Error fetching customer overview:', e);
+      res.status(500).json({ error: 'Failed to fetch customer overview' });
+    }
+  });
   app.post('/api/customers', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
@@ -1044,7 +1156,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.put('/api/customers/:id', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
-    res.json(saveCustomer(db, { ...req.body, id: req.params.id }));
+    const newName = String(req.body.name).trim();
+    const previousName = getCustomer(db, req.params.id)?.name;
+    const saved = saveCustomer(db, { ...req.body, id: req.params.id });
+    // Keep each project's legacy `contractor` string in sync with the customer
+    // name it belongs to (contractor was the pre-customerId identity; several
+    // reads/exports still display it directly). Only an actual RENAME may write
+    // it — a phone/email edit must leave contractor alone — and never for the
+    // "Unassigned" bucket, whose name is a placeholder, not a company: its
+    // projects deliberately carry a blank or hand-typed contractor.
+    if (req.params.id !== 'customer-unassigned' && newName !== previousName) {
+      db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
+    }
+    res.json(saved);
   });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {
     try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
@@ -1229,7 +1353,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       // await between this load and the save, nothing can interleave.
       const fresh = loadProject(db, req.params.id) ?? project;
       const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
-      saveProject(db, req.params.id, updatedProject);
+      saveProject(db, req.params.id, updatedProject, dataDir);
       res.json(loadProject(db, req.params.id));
     } catch (error: any) {
       console.error('Error sending project proposal:', error);

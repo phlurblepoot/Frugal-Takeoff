@@ -37,7 +37,7 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(projectId, f, 'punch');
+        const { fileId } = await uploadProjectFile(projectId, f, 'punch-photo', { sourceType: 'punch', sourceId: item.id });
         await addPunchPhoto(item.id, fileId, stage);
         ok++;
       } catch { /* keep going */ }

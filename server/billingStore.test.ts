@@ -13,7 +13,9 @@ import {
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
+  listBilledDocuments,
 } from './billingStore';
+import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 let db: Database.Database;
 
@@ -280,6 +282,32 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(Math.round(reloaded.amount * 100)).toBe(reloaded.totalCents);
   });
 
+  it('title round-trips through create and save, and blank/whitespace normalizes to null', () => {
+    const { id } = createChangeOrder(db, 'p1', { number: '001', title: '  Kitchen electrical add  ', lumpSumAmount: 0 });
+    let co = getChangeOrder(db, id)!;
+    expect(co.title).toBe('Kitchen electrical add');
+
+    const saved = saveChangeOrder(db, id, { version: co.version, title: '   ', lumpSumAmount: 0 });
+    co = getChangeOrder(db, id)!;
+    expect(saved.version).toBe(2);
+    expect(co.title).toBeNull();
+
+    const untitled = createChangeOrder(db, 'p1', { number: '002', lumpSumAmount: 0 });
+    expect(getChangeOrder(db, untitled.id)!.title).toBeNull();
+  });
+
+  it('a non-string title (raw JSON body sent a number/object) is stored as null instead of throwing', () => {
+    // title is optional/display-only, like description — malformed input is
+    // normalized away rather than raising a 500 from calling .trim() on it.
+    const created = createChangeOrder(db, 'p1', { number: '003', title: 42 as any, lumpSumAmount: 0 });
+    expect(getChangeOrder(db, created.id)!.title).toBeNull();
+
+    const co = getChangeOrder(db, created.id)!;
+    const saved = saveChangeOrder(db, created.id, { version: co.version, title: { bad: true } as any, lumpSumAmount: 0 });
+    expect(saved.version).toBe(2);
+    expect(getChangeOrder(db, created.id)!.title).toBeNull();
+  });
+
   it('saveChangeOrder throws ConflictError on a stale version', () => {
     const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0 });
     saveChangeOrder(db, id, { version: 1, lumpSumAmount: 1 }); // now v2
@@ -411,5 +439,61 @@ describe('billingSummary — SOV-derived contract total', () => {
     expect(s.invoiceTotalCents).toBe(500000);
     expect(s.invoiceOutstandingCents).toBe(300000); // 500000 - 200000
     expect(s.outstandingCents).toBe(300000);
+  });
+});
+
+describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contract split)', () => {
+  it('mixed project: finalized pay app (net of retainage) + sent invoice + draft invoice excluded', () => {
+    // Pay app: $1,000 SOV line, 100% complete, 10% retainage, no prior app.
+    //   completedToDateCents = 100000; retainage = round(100000*10%) = 10000
+    //   L8 = (100000 - 10000) - previous(0) = 90000c
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', { retainagePercent: 10, storedRetainagePercent: 10 });
+    const sov = listSovLines(db, 'p1');
+    savePayAppLines(db, app.id, [{ sovLineId: sov[0].id, percentComplete: 100, storedMaterialsCents: 0 }], 1);
+    setPayApp(db, app.id, { status: 'finalized' });
+    recordPayment(db, 'payapp', app.id, { amount: 250 }); // 25000c of the 90000c billed
+
+    // Sent invoice: $200 (20000c), $50 (5000c) paid.
+    const inv = createInvoice(db, 'p1', { number: 'INV-1', status: 'sent', lines: [{ description: 'A', qty: 1, unitPrice: 200 }] });
+    recordPayment(db, 'invoice', inv.id, { amount: 50 });
+
+    // Draft invoice — not billed (excluded from listBilledDocuments/payApp
+    // figures), but billingSummary's legacy invoiceTotalCents pre-existingly
+    // sums ALL invoices including drafts, so it DOES land here — that's
+    // existing behavior, unrelated to this change.
+    createInvoice(db, 'p1', { number: 'INV-DRAFT', lines: [{ description: 'B', qty: 1, unitPrice: 999 }] });
+
+    const s = billingSummary(db, 'p1');
+    expect(s.payAppBilledCents).toBe(90000);
+    expect(s.payAppOutstandingCents).toBe(65000); // 90000 - 25000
+    expect(s.payAppPaidCents).toBe(25000);
+
+    // Legacy invoice-only fields are unchanged by the new pay-app fields —
+    // draft-INCLUSIVE (pre-existing behavior).
+    expect(s.invoiceTotalCents).toBe(119900); // 20000 sent + 99900 draft (pre-existing behavior)
+    expect(s.invoiceOutstandingCents).toBe(114900); // 119900 - 5000 paid
+    expect(s.paid.payAppsCents).toBe(25000);
+
+    // New invoice-leg fields are draft-EXCLUSIVE — only the sent invoice
+    // counts, mirroring listBilledDocuments/the customer ledger.
+    expect(s.invoiceBilledCents).toBe(20000);
+    expect(s.invoicePaidCents).toBe(5000);
+    expect(s.invoiceOutstandingBilledCents).toBe(15000); // 20000 - 5000
+
+    // A caller that already fetched listBilledDocuments (customerOverview,
+    // listProjectSummaries) can pass it in and get identical figures back,
+    // without billingSummary re-querying the same rows.
+    const docs = listBilledDocuments(db, 'p1');
+    const s2 = billingSummary(db, 'p1', docs);
+    expect(s2).toEqual(s);
+  });
+
+  it('is zero when the project has no finalized pay apps (draft apps excluded)', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    createPayApp(db, 'p1', {}); // stays draft
+    const s = billingSummary(db, 'p1');
+    expect(s.payAppBilledCents).toBe(0);
+    expect(s.payAppOutstandingCents).toBe(0);
   });
 });

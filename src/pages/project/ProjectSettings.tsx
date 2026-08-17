@@ -8,7 +8,7 @@
 // patchProject({ archived }) toggle; delete matches deleteProject + confirm.
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Settings as SettingsIcon, ShieldAlert, Trash2, Archive, ArchiveRestore } from 'lucide-react';
+import { Settings as SettingsIcon, ShieldAlert, ThumbsDown, Trash2, Archive, ArchiveRestore } from 'lucide-react';
 import { Project, Customer, CustomerRoleEmails } from '../../types';
 import { getProject, saveProject, deleteProject, patchProject, ConflictError, getCustomers } from '../../utils/store';
 import { AddressAutocomplete } from '../../components/AddressAutocomplete';
@@ -18,6 +18,7 @@ import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
+  normalizeProjectStatus,
 } from '../../components/ui';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
@@ -165,17 +166,44 @@ export const ProjectSettings: React.FC = () => {
   };
 
   const isArchived = !!project.archived;
+  // Only an open bid can be lost — an in-progress job that ends badly is an
+  // archive, not a lost bid.
+  const isBidding = !isArchived && normalizeProjectStatus(project.status ?? '') === 'bidding';
 
   // Archive toggle matches ProjectsPage.applyPatch: patchProject({ archived }).
   const toggleArchive = async () => {
     if (!project) return;
     setBusy(true);
     try {
-      await patchProject(project.id, { version: project.version ?? 1, archived: !isArchived });
+      // Restoring clears the lost-bid marker with it — see ProjectsPage.
+      await patchProject(project.id, isArchived
+        ? { version: project.version ?? 1, archived: false, lostBid: false }
+        : { version: project.version ?? 1, archived: true });
       toast(isArchived ? 'Project restored' : 'Project archived', { type: 'success' });
       reload();
     } catch (e) {
       toast(e instanceof ConflictError ? 'Project changed elsewhere — refresh and retry' : 'Failed to update archive state', { type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // A lost bid is an archive with a reason: the project leaves the board but
+  // keeps a Lost badge in the Archive tab instead of looking merely tidied away.
+  const markLostBid = async () => {
+    if (!project) return;
+    if (!await confirm({
+      title: 'Mark as lost bid',
+      message: 'Archive this project and record the bid as lost? You can restore it later.',
+      confirmLabel: 'Mark as lost',
+    })) return;
+    setBusy(true);
+    try {
+      await patchProject(project.id, { version: project.version ?? 1, archived: true, lostBid: true });
+      toast('Marked as lost bid', { type: 'success' });
+      reload();
+    } catch (e) {
+      toast(e instanceof ConflictError ? 'Project changed elsewhere — refresh and retry' : 'Failed to mark as lost', { type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -280,6 +308,20 @@ export const ProjectSettings: React.FC = () => {
               {isArchived ? <><ArchiveRestore size={14} />Restore</> : <><Archive size={14} />Archive</>}
             </Button>
           </div>
+
+          {isBidding && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-edge pt-4">
+              <div>
+                <p className="text-sm font-medium text-ink">Mark as lost bid</p>
+                <p className="text-xs text-ink-faint">
+                  Archive this project and flag the bid as lost. It keeps a "Lost" badge in the Archive tab.
+                </p>
+              </div>
+              <Button variant="secondary" onClick={markLostBid} disabled={busy}>
+                <ThumbsDown size={14} />Mark as lost
+              </Button>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-edge pt-4">
             <div>

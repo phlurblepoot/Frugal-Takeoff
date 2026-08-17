@@ -4,7 +4,7 @@ import { Camera, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,
   saveChangeOrder, setChangeOrderStatus, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
-  uploadProjectFile, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
+  uploadProjectFile, persistGeneratedDocument, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
@@ -30,6 +30,7 @@ export const ChangeOrderEditor: React.FC<{
   const co = changeOrder;
   const [number, setNumber] = useState(co.number ?? '');
   const [date, setDate] = useState(co.date ? new Date(co.date).toISOString().slice(0, 10) : '');
+  const [title, setTitle] = useState(co.title ?? '');
   const [description, setDescription] = useState(co.description ?? '');
   const [lines, setLines] = useState<ChangeOrderLine[]>(co.lines.length ? co.lines : []);
   const [lumpSumAmount, setLumpSumAmount] = useState(String(co.lumpSumAmount ?? 0));
@@ -96,6 +97,7 @@ export const ChangeOrderEditor: React.FC<{
         ...co,
         number: number || null,
         date: date ? new Date(date).getTime() : null,
+        title: title || null,
         description: description || null,
         lumpSumAmount: Number(lumpSumAmount) || 0,
         scheduleImpactDays: scheduleImpactDays.trim() === '' ? null : (Number(scheduleImpactDays) || 0),
@@ -116,7 +118,7 @@ export const ChangeOrderEditor: React.FC<{
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(projectId, f, 'change-order');
+        const { fileId } = await uploadProjectFile(projectId, f, 'change-order-photo', { sourceType: 'change-order', sourceId: co.id });
         await addCOPhoto(co.id, fileId);
         ok++;
       } catch { /* keep going */ }
@@ -186,10 +188,15 @@ export const ChangeOrderEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = `CO-${co.number ?? co.id}.pdf`;
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'change-order', name: fileName, sourceType: 'change-order', sourceId: co.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `CO-${co.number ?? co.id}.pdf`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -220,6 +227,10 @@ export const ChangeOrderEditor: React.FC<{
         <Field label="Number" htmlFor="co-num"><Input id="co-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="co-date"><Input id="co-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Schedule impact (days)" htmlFor="co-impact"><Input id="co-impact" type="number" value={scheduleImpactDays} onChange={e => setScheduleImpactDays(e.target.value)} placeholder="0" /></Field>
+      </div>
+
+      <div className="mt-3">
+        <Field label="Title" htmlFor="co-title"><Input id="co-title" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Kitchen electrical add" /></Field>
       </div>
 
       <div className="mt-3">
@@ -307,10 +318,10 @@ export const ChangeOrderEditor: React.FC<{
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildBytes(effectiveHeaderEmail);
           const file = new File([bytes], `CO-${co.number || 'change-order'}.pdf`, { type: 'application/pdf' });
-          // The PDF is uploaded as a project document before sending; if the send
-          // fails the file remains in Documents (project-attributed), and a retry
-          // uploads another — acceptable for v1.
-          const fileId = await uploadProjectFile(projectId, file, 'change-order');
+          // The PDF is uploaded as a project document before sending; the source
+          // triple makes the server version this CO's one document rather than pile
+          // up copies, so a failed send + retry (and Download) share one document.
+          const { fileId } = await uploadProjectFile(projectId, file, 'change-order', { sourceType: 'change-order', sourceId: co.id });
           await sendChangeOrder(co.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('Change order request sent', { type: 'success' });
           onSaved();

@@ -1,9 +1,10 @@
 // src/pages/tasks/TaskEditor.tsx
+import { v4 as uuidv4 } from 'uuid';
 import React, { useState, useRef } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
 import {
   Task, AssignableUser, ProjectSummary, saveTask, setTaskStatus, addTaskPhoto, removeTaskPhoto,
-  saveFile, getImageUrl,
+  saveBinaryFile, getImageUrl,
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui';
@@ -28,17 +29,6 @@ const STAGES: { stage: string; label: string }[] = [
   { stage: 'in_progress', label: 'In progress' },
   { stage: 'after', label: 'After' },
 ];
-
-// Tasks are not project-scoped, so there is no projectId to upload against.
-// Mirror the legacy ChecklistEditor path: FileReader → dataUrl → saveFile(id, …)
-// (POST /api/images), then getImageUrl(id) (= /api/images/:id/raw) for display.
-const readDataUrl = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
-    reader.readAsDataURL(file);
-  });
 
 export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, onClose, onSaved }) => {
   const { toast } = useToast();
@@ -97,9 +87,15 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const dataUrl = await readDataUrl(f);
-        const fileId = `task-photo-${crypto.randomUUID()}`;
-        await saveFile(fileId, dataUrl);
+        // Attributed streaming upload into the same file store the display path
+        // (getImageUrl → /api/images/:id/raw) already reads from. A task carries a
+        // customer of its own only when it has no project, matching how the
+        // server derives customer from the project when one is set.
+        const { fileId } = await saveBinaryFile(uuidv4(), f, {
+          kind: 'task-photo', name: f.name,
+          sourceType: 'task', sourceId: task.id,
+          ...(task.projectId ? { projectId: task.projectId } : task.customerId ? { customerId: task.customerId } : {}),
+        });
         await addTaskPhoto(task.id, fileId, stage);
         ok++;
       } catch { /* keep going */ }

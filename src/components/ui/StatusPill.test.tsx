@@ -1,7 +1,9 @@
 // src/components/ui/StatusPill.test.tsx
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { StatusPill, ProjectStatusPill, PROJECT_STATUS_META } from './StatusPill';
+import {
+  StatusPill, ProjectStatusPill, LostBadge, PROJECT_STATUS_META, normalizeProjectStatus,
+} from './StatusPill';
 
 describe('StatusPill', () => {
   it('renders children with the requested tone', () => {
@@ -16,26 +18,49 @@ describe('StatusPill', () => {
   });
 });
 
-describe('ProjectStatusPill', () => {
-  it('maps every lifecycle status from the spec', () => {
-    for (const s of ['estimating', 'proposal_sent', 'awarded', 'in_progress',
-                     'punch_list', 'complete', 'archived', 'lost']) {
+describe('normalizeProjectStatus', () => {
+  it('passes the live statuses through untouched', () => {
+    for (const s of ['bidding', 'in_progress', 'archived']) {
       expect(PROJECT_STATUS_META[s], `missing status ${s}`).toBeDefined();
+      expect(normalizeProjectStatus(s)).toBe(s);
     }
   });
 
-  it('renders the human label for a known status', () => {
+  it('collapses legacy status ids the way migration 21 did', () => {
+    expect(normalizeProjectStatus('estimating')).toBe('bidding');
+    expect(normalizeProjectStatus('proposal_sent')).toBe('bidding');
+    expect(normalizeProjectStatus('lost')).toBe('bidding');
+    expect(normalizeProjectStatus('awarded')).toBe('in_progress');
+    expect(normalizeProjectStatus('punch_list')).toBe('in_progress');
+    expect(normalizeProjectStatus('complete')).toBe('in_progress');
+  });
+
+  it('folds unknown and prototype keys into bidding', () => {
+    expect(normalizeProjectStatus('something_else')).toBe('bidding');
+    expect(normalizeProjectStatus('constructor')).toBe('bidding');
+  });
+});
+
+describe('ProjectStatusPill', () => {
+  it('renders the human label for a live status', () => {
+    render(<ProjectStatusPill status="in_progress" />);
+    expect(screen.getByText('In Progress')).toBeInTheDocument();
+  });
+
+  it('renders a legacy status under its collapsed label', () => {
     render(<ProjectStatusPill status="proposal_sent" />);
-    expect(screen.getByText('Proposal Sent')).toBeInTheDocument();
+    expect(screen.getByText('Bidding')).toBeInTheDocument();
   });
 
-  it('falls back to slate + raw text for unknown statuses', () => {
-    render(<ProjectStatusPill status="something_else" />);
-    expect(screen.getByText('something_else').className).toContain('slate');
+  it('shows Unknown rather than guessing when the status is missing', () => {
+    render(<ProjectStatusPill status={null} />);
+    expect(screen.getByText('Unknown').className).toContain('slate');
   });
+});
 
-  it('treats prototype keys as unknown statuses', () => {
-    render(<ProjectStatusPill status="constructor" />);
-    expect(screen.getByText('constructor').className).toContain('slate');
+describe('LostBadge', () => {
+  it('renders a red Lost marker', () => {
+    render(<LostBadge />);
+    expect(screen.getByText('Lost').className).toContain('red');
   });
 });

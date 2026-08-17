@@ -1,7 +1,7 @@
 // src/pages/project/rfi/RfiEditor.tsx
 import React, { useEffect, useState, useRef } from 'react';
 import { Camera, FileUp, Trash2 } from 'lucide-react';
-import { Rfi, saveRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
+import { Rfi, saveRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, uploadProjectFile, persistGeneratedDocument, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -84,7 +84,7 @@ export const RfiEditor: React.FC<{
     let ok = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(projectId, f, 'photo');
+        const { fileId } = await uploadProjectFile(projectId, f, 'rfi-photo', { sourceType: 'rfi', sourceId: rfi.id });
         await addRfiPhoto(rfi.id, fileId);
         ok++;
       } catch { /* keep going */ }
@@ -108,7 +108,7 @@ export const RfiEditor: React.FC<{
     }
     setUploadingResponse(true);
     try {
-      const fileId = await uploadProjectFile(projectId, list[0], 'rfi-response');
+      const { fileId } = await uploadProjectFile(projectId, list[0], 'rfi-response', { sourceType: 'rfi', sourceId: rfi.id });
       await setRfiResponse(rfi.id, { fileId });
       toast('Response attached', { type: 'success' });
       onSaved();
@@ -171,8 +171,14 @@ export const RfiEditor: React.FC<{
   const handleDownload = async () => {
     try {
       const bytes = await buildRfiBytes();
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      const a = document.createElement('a'); a.href = url; a.download = `RFI-${String(rfi.number).padStart(3, '0')}.pdf`;
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = `RFI-${String(rfi.number).padStart(3, '0')}.pdf`;
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'rfi', name: fileName, sourceType: 'rfi', sourceId: rfi.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = fileName;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { toast('Failed to generate report', { type: 'error' }); }
@@ -322,9 +328,10 @@ export const RfiEditor: React.FC<{
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildRfiBytes(effectiveHeaderEmail);
           const file = new File([bytes], `RFI-${padded}.pdf`, { type: 'application/pdf' });
-          // Uploaded as a project document before sending; a failed send leaves it in
-          // Documents (project-attributed), and a retry uploads another — fine for v1.
-          const fileId = await uploadProjectFile(projectId, file, 'rfi');
+          // Uploaded as a project document before sending; the source triple makes the
+          // server version this RFI's one document rather than pile up copies, so a
+          // failed send + retry (and plain Download) all land on the same document.
+          const { fileId } = await uploadProjectFile(projectId, file, 'rfi', { sourceType: 'rfi', sourceId: rfi.id });
           await sendRfi(rfi.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
           toast('RFI sent', { type: 'success' });
           onSaved();

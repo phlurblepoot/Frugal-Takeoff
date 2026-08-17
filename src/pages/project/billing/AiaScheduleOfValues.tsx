@@ -3,8 +3,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle, Download } from 'lucide-react';
 import {
-  AiaSovLine, getSov, createSovLine, saveSovLine, deleteSovLine,
-  seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate,
+  AiaSettings, AiaSovLine, getSov, createSovLine, saveSovLine, deleteSovLine,
+  seedSov, syncChangeOrders, getProject, computeSovSeedFromEstimate, resolveRetainageMode,
 } from '../../../utils/store';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
@@ -18,10 +18,15 @@ import {
 
 const isCo = (l: AiaSovLine) => !!l.isChangeOrder;
 
-export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId }) => {
+export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: AiaSettings | null }> = ({ projectId, aiaSettings }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
+  const baseRetainagePercent = aiaSettings?.retainagePercent ?? 10;
   const [lines, setLines] = useState<AiaSovLine[] | null>(null);
+  // Resolved mode: absent aiaSettings.retainageMode falls back to inferring
+  // from the SOV lines themselves, so a legacy per-line project keeps
+  // showing its column before anyone visits AIA settings.
+  const perLine = resolveRetainageMode(aiaSettings?.retainageMode, lines ?? []) === 'perLine';
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -248,14 +253,14 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
             description="Seed from the estimate or add lines manually to build the G703." />
         ) : (
           <Table>
-            <THead><TR><TH>Item no.</TH><TH>Description</TH><TH>Scheduled value</TH><TH>Retainage %</TH><TH></TH></TR></THead>
+            <THead><TR><TH>Item no.</TH><TH>Description</TH><TH>Scheduled value</TH>{perLine && <TH>Retainage %</TH>}<TH></TH></TR></THead>
             <TBody>
               {lines.map(l => editId === l.id ? (
                 <TR key={l.id}>
                   <TD className="w-24"><Input value={eItemNo} onChange={e => setEItemNo(e.target.value)} /></TD>
                   <TD><Input value={eDesc} onChange={e => setEDesc(e.target.value)} /></TD>
                   <TD className="w-32"><Input type="number" value={eValue} onChange={e => setEValue(e.target.value)} placeholder="0.00" /></TD>
-                  <TD className="w-24"><Input type="number" value={eRetainage} onChange={e => setERetainage(e.target.value)} placeholder="default" /></TD>
+                  {perLine && <TD className="w-24"><Input type="number" value={eRetainage} onChange={e => setERetainage(e.target.value)} placeholder={`base ${baseRetainagePercent}%`} /></TD>}
                   <TD>
                     <div className="flex items-center gap-1">
                       <button onClick={() => saveEdit(l)} title="Save" className="rounded-md p-1 text-green-600 hover:bg-hover"><Check size={15} /></button>
@@ -271,7 +276,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
                     {isCo(l) && <span className="ml-2 rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-faint">CO</span>}
                   </TD>
                   <TD className="text-ink-soft">{formatMoney(l.scheduledValueCents)}</TD>
-                  <TD className="text-ink-soft">{l.retainagePercent != null ? `${l.retainagePercent}%` : '—'}</TD>
+                  {perLine && <TD className="text-ink-soft">{l.retainagePercent != null ? `${l.retainagePercent}%` : '—'}</TD>}
                   <TD>
                     <div className="flex items-center gap-1">
                       <button onClick={() => startEdit(l)} title="Edit" className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-ink"><Pencil size={14} /></button>
@@ -283,13 +288,18 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string }> = ({ projectId
             </TBody>
           </Table>
         )}
+        {!perLine && lines && lines.length > 0 && (
+          <p className="border-t border-edge px-4 py-2 text-xs text-ink-faint">
+            Retainage: base rate {baseRetainagePercent}% applies to all lines (change in AIA settings)
+          </p>
+        )}
 
         {/* Add line */}
         <div className="flex flex-wrap items-end gap-2 border-t border-edge p-4">
           <div className="w-full sm:w-auto"><Field label="Item no." htmlFor="sov-item"><Input id="sov-item" value={nItemNo} onChange={e => setNItemNo(e.target.value)} className="w-full sm:w-24" /></Field></div>
           <div className="w-full sm:w-auto"><Field label="Description" htmlFor="sov-desc"><Input id="sov-desc" value={nDesc} onChange={e => setNDesc(e.target.value)} className="w-full sm:w-56" /></Field></div>
           <div className="w-full sm:w-auto"><Field label="Scheduled value" htmlFor="sov-value"><Input id="sov-value" type="number" value={nValue} onChange={e => setNValue(e.target.value)} className="w-full sm:w-32" placeholder="0.00" /></Field></div>
-          <div className="w-full sm:w-auto"><Field label="Retainage %" htmlFor="sov-ret"><Input id="sov-ret" type="number" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-full sm:w-28" placeholder="default" /></Field></div>
+          {perLine && <div className="w-full sm:w-auto"><Field label="Retainage %" htmlFor="sov-ret"><Input id="sov-ret" type="number" value={nRetainage} onChange={e => setNRetainage(e.target.value)} className="w-full sm:w-28" placeholder={`base ${baseRetainagePercent}%`} /></Field></div>}
           <Button variant="secondary" onClick={addLine} className="w-full sm:w-auto"><Plus size={14} />Add line</Button>
         </div>
 

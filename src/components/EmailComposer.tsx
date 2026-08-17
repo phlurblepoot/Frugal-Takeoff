@@ -104,7 +104,7 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
     let failed = 0;
     for (const f of Array.from(list)) {
       try {
-        const fileId = await uploadProjectFile(projectId, f, 'email-attachment');
+        const { fileId } = await uploadProjectFile(projectId, f, 'email-attachment');
         setAttachments(prev => [...prev, { fileId, name: f.name }]);
       } catch {
         failed++;

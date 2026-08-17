@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { DollarSign, ShieldAlert } from 'lucide-react';
 import {
-  BillingSummary, AiaSettings,
-  getBillingSummary, getAiaSettings,
+  BillingSummary, AiaSettings, AiaSovLine, AiaPayApp,
+  getBillingSummary, getAiaSettings, getSov, getPayApps,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
 import {
@@ -38,6 +38,8 @@ export const ProjectBilling: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [aiaSettings, setAiaSettings] = useState<AiaSettings | null>(null);
+  const [sovLines, setSovLines] = useState<AiaSovLine[] | null>(null);
+  const [payApps, setPayApps] = useState<AiaPayApp[] | null>(null);
 
   const admin = isAdmin();
 
@@ -61,6 +63,14 @@ export const ProjectBilling: React.FC = () => {
     if (!projectId || !admin) return;
     reloadSummary();
     getAiaSettings(projectId).then(setAiaSettings).catch(() => setAiaSettings({}));
+    // Needed (not just for the SOV tab) so AiaSettingsForm can infer a
+    // sensible default retainage mode for legacy projects that never wrote
+    // aiaSettings.retainageMode — see resolveRetainageMode in utils/store.
+    getSov(projectId).then(setSovLines).catch(() => setSovLines([]));
+    // Also for AiaSettingsForm: switching the retainage mode recomputes every
+    // existing pay application, so the form confirms the save when there are
+    // any — it needs their count.
+    getPayApps(projectId).then(setPayApps).catch(() => setPayApps([]));
   };
   useEffect(load, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -91,19 +101,41 @@ export const ProjectBilling: React.FC = () => {
           {summary === null ? (
             <Skeleton className="h-10 w-full" />
           ) : (
-            <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-3 lg:grid-cols-5">
-              {[
-                ['Contract total', summary.contractTotalCents],
-                ['Invoiced', summary.invoiceTotalCents],
-                ['Paid (contract)', summary.paid.payAppsCents],
-                ['Paid (invoices)', summary.paid.invoicesCents],
-                ['Invoice outstanding', summary.invoiceOutstandingCents],
-              ].map(([label, cents]) => (
-                <div key={label as string}>
-                  <div className="text-ink-faint">{label}</div>
-                  <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
+            <div className="space-y-4">
+              <div data-testid="billing-summary-contract">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Contract</div>
+                <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                  {[
+                    ['Contract total', summary.contractTotalCents],
+                    ['Billed', summary.payAppBilledCents],
+                    ['Outstanding', summary.payAppOutstandingCents],
+                    ['Paid', summary.payAppPaidCents],
+                  ].map(([label, cents]) => (
+                    <div key={label as string}>
+                      <div className="text-ink-faint">{label}</div>
+                      <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div data-testid="billing-summary-invoices">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Invoices</div>
+                {/* Same 4-column grid as the Contract row above, with the middle
+                    two cells left empty so "Paid" lands in the same column as
+                    the Contract row's "Paid" — they align when scanning. */}
+                <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+                  <div>
+                    <div className="text-ink-faint">Invoiced</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(summary.invoiceBilledCents)}</div>
+                  </div>
+                  <div className="hidden sm:block" aria-hidden="true" />
+                  <div className="hidden sm:block" aria-hidden="true" />
+                  <div>
+                    <div className="text-ink-faint">Paid</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(summary.invoicePaidCents)}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </CardBody>
@@ -128,7 +160,7 @@ export const ProjectBilling: React.FC = () => {
       </div>
 
       {/* Active section */}
-      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} />}
+      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} aiaSettings={aiaSettings} />}
       {projectId && activeTab === 'change-orders' && (
         <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
       )}
@@ -140,13 +172,17 @@ export const ProjectBilling: React.FC = () => {
         <PaymentsSection projectId={projectId} onChange={reloadSummary} />
       )}
       {activeTab === 'settings' && (
-        aiaSettings === null ? (
+        aiaSettings === null || sovLines === null || payApps === null ? (
           // AiaSettingsForm seeds its fields from props at mount only (no prop
-          // sync), so wait for the settings to load before mounting it —
-          // otherwise a direct reload on ?tab=settings would show defaults.
+          // sync), so wait for settings AND the SOV lines to load before
+          // mounting it — the lines are needed to infer a default retainage
+          // mode for legacy projects — otherwise a direct reload on
+          // ?tab=settings would show defaults. The pay apps are waited on for
+          // the same reason: a mode-change save must never slip through
+          // unconfirmed just because the list hadn't arrived yet.
           <Card className="mb-5"><CardBody><Skeleton className="h-10 w-full" /></CardBody></Card>
         ) : (
-          <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} onSaved={setAiaSettings} defaultOpen />
+          <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} sovLines={sovLines} payApps={payApps} onSaved={setAiaSettings} defaultOpen />
         )
       )}
     </div>

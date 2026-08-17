@@ -32,30 +32,50 @@ export const StatusPill: React.FC<{
   </span>
 );
 
-// Project lifecycle (spec §2): estimating → proposal_sent → awarded →
-// in_progress → punch_list → complete → archived, with lost as an exit.
+// Project lifecycle: two live stages, `bidding` → `in_progress`. Archiving is
+// an independent flag, not a stage, but the board still pills it as "Archived".
 export const PROJECT_STATUS_META: Record<string, { label: string; tone: PillTone }> = {
-  estimating:    { label: 'Estimating',    tone: 'blue' },
-  proposal_sent: { label: 'Proposal Sent', tone: 'violet' },
-  awarded:       { label: 'Awarded',       tone: 'green' },
-  in_progress:   { label: 'In Progress',   tone: 'amber' },
-  punch_list:    { label: 'Punch List',    tone: 'orange' },
-  complete:      { label: 'Complete',      tone: 'emerald' },
-  archived:      { label: 'Archived',      tone: 'slate' },
-  lost:          { label: 'Lost',          tone: 'red' },
+  bidding:     { label: 'Bidding',     tone: 'blue' },
+  in_progress: { label: 'In Progress', tone: 'amber' },
+  archived:    { label: 'Archived',    tone: 'slate' },
+};
+
+// Pre-two-stage status ids, collapsed exactly the way migration 21 collapsed
+// them server-side. A client can still meet these in a stale summary, an old
+// bookmark's ?stage=, or a tab that was open across the deploy.
+export const LEGACY_STATUS_MAP: Record<string, string> = {
+  estimating:    'bidding',
+  proposal_sent: 'bidding',
+  lost:          'bidding',
+  awarded:       'in_progress',
+  punch_list:    'in_progress',
+  complete:      'in_progress',
+};
+
+// Resolves any status string onto the live pair. Unrecognised ids fold into
+// `bidding`, matching the board's "nothing vanishes" rule. Object.hasOwn keeps
+// prototype keys ("constructor") from resolving to a function.
+export const normalizeProjectStatus = (status: string): string => {
+  if (Object.hasOwn(PROJECT_STATUS_META, status)) return status;
+  if (Object.hasOwn(LEGACY_STATUS_MAP, status)) return LEGACY_STATUS_MAP[status];
+  return 'bidding';
 };
 
 export const ProjectStatusPill: React.FC<{ status?: string | null; className?: string }> = ({
   status,
   className,
 }) => {
-  const entry = status != null && Object.hasOwn(PROJECT_STATUS_META, status)
-    ? PROJECT_STATUS_META[status]
-    : null;
-  const meta = entry ?? { label: status || 'Unknown', tone: 'slate' as PillTone };
+  // A missing status means "not loaded yet" rather than a stage — don't claim
+  // the project is bidding when we simply don't know.
+  const meta = status ? PROJECT_STATUS_META[normalizeProjectStatus(status)] : null;
   return (
-    <StatusPill tone={meta.tone} className={className}>
-      {meta.label}
+    <StatusPill tone={meta?.tone ?? 'slate'} className={className}>
+      {meta?.label ?? 'Unknown'}
     </StatusPill>
   );
 };
+
+// A lost bid is a marker on an archived project, not a stage of its own.
+export const LostBadge: React.FC<{ className?: string }> = ({ className }) => (
+  <StatusPill tone="red" className={className}>Lost</StatusPill>
+);

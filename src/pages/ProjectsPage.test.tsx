@@ -1,51 +1,97 @@
 // src/pages/ProjectsPage.test.tsx
 import { describe, it, expect } from 'vitest';
-import { groupSummaries, sortProjects } from './ProjectsPage';
+import { groupSummaries, resolveTab, sortProjects, tabForProject } from './ProjectsPage';
 import type { ProjectSummary } from '../utils/store';
 
 const mk = (over: Partial<ProjectSummary>): ProjectSummary => ({
-  id: 'x', name: 'P', status: 'estimating', contractor: null, customerId: null, address: null,
+  id: 'x', name: 'P', status: 'bidding', contractor: null, customerId: null, address: null,
   bidDueDate: null, version: 1, createdAt: 1, updatedAt: null, archived: false,
   pageCount: 0, takeoffCount: 0, pageIds: [], openIssueCount: 0, punchDone: 0, punchTotal: 0, contractValueCents: 0, invoiceCount: 0, ...over,
 });
 
+describe('tabForProject', () => {
+  it('routes the two live stages to their own tabs', () => {
+    expect(tabForProject(mk({ status: 'bidding' }))).toBe('bidding');
+    expect(tabForProject(mk({ status: 'in_progress' }))).toBe('in_progress');
+  });
+
+  it('lets archived win over whatever status the project carries', () => {
+    expect(tabForProject(mk({ status: 'in_progress', archived: true }))).toBe('archive');
+    expect(tabForProject(mk({ status: 'bidding', archived: true }))).toBe('archive');
+  });
+
+  it('collapses legacy statuses and folds unknown ones into bidding', () => {
+    expect(tabForProject(mk({ status: 'proposal_sent' }))).toBe('bidding');
+    expect(tabForProject(mk({ status: 'awarded' }))).toBe('in_progress');
+    expect(tabForProject(mk({ status: 'punch_list' }))).toBe('in_progress');
+    expect(tabForProject(mk({ status: 'something_weird' }))).toBe('bidding');
+  });
+});
+
+describe('resolveTab', () => {
+  it('accepts the three tab ids', () => {
+    expect(resolveTab('bidding')).toBe('bidding');
+    expect(resolveTab('in_progress')).toBe('in_progress');
+    expect(resolveTab('archive')).toBe('archive');
+  });
+
+  it('lands old bookmarks on the tab their projects moved to', () => {
+    expect(resolveTab('estimating')).toBe('bidding');
+    expect(resolveTab('proposal_sent')).toBe('bidding');
+    expect(resolveTab('awarded')).toBe('in_progress');
+    expect(resolveTab('active')).toBe('in_progress');
+    // migration 21 auto-archived complete and lost projects.
+    expect(resolveTab('complete')).toBe('archive');
+    expect(resolveTab('lost')).toBe('archive');
+  });
+
+  it('defaults to bidding when the param is missing or nonsense', () => {
+    expect(resolveTab(null)).toBe('bidding');
+    expect(resolveTab('')).toBe('bidding');
+    expect(resolveTab('constructor')).toBe('bidding');
+  });
+});
+
 describe('groupSummaries', () => {
-  it('gives every lifecycle stage its own group, in workflow order', () => {
+  it('returns exactly the three tabs, in board order', () => {
+    const groups = groupSummaries([]);
+    expect(groups.map(g => g.id)).toEqual(['bidding', 'in_progress', 'archive']);
+  });
+
+  it('puts every project in exactly one tab', () => {
     const groups = groupSummaries([
-      mk({ id: 'a', status: 'estimating' }),
+      mk({ id: 'a', status: 'bidding' }),
       mk({ id: 'b', status: 'proposal_sent' }),
-      mk({ id: 'c', status: 'awarded' }),
-      mk({ id: 'd', status: 'in_progress' }),
-      mk({ id: 'e', status: 'punch_list' }),
-      mk({ id: 'f', status: 'complete' }),
-      mk({ id: 'g', status: 'lost' }),
-    ]);
-    expect(groups.map(g => g.id)).toEqual([
-      'estimating', 'proposal_sent', 'awarded', 'in_progress', 'punch_list', 'complete', 'lost',
-    ]);
-    // estimating and proposal_sent are now separate groups.
-    expect(groups[0].projects.map(p => p.id)).toEqual(['a']);
-    expect(groups[1].projects.map(p => p.id)).toEqual(['b']);
-    expect(groups[2].projects.map(p => p.id)).toEqual(['c']);
-    expect(groups[6].projects.map(p => p.id)).toEqual(['g']);
+      mk({ id: 'c', status: 'in_progress' }),
+      mk({ id: 'd', status: 'awarded' }),
+      mk({ id: 'e', status: 'in_progress', archived: true }),
+      mk({ id: 'f', status: 'something_weird' }),
+    ], 'name');
+    expect(groups[0].projects.map(p => p.id)).toEqual(['a', 'b', 'f']);
+    expect(groups[1].projects.map(p => p.id)).toEqual(['c', 'd']);
+    expect(groups[2].projects.map(p => p.id)).toEqual(['e']);
   });
 
-  it('drops archived projects and folds unknown statuses into Estimating', () => {
+  it('defaults bidding to bid-due order and the other tabs to last updated', () => {
     const groups = groupSummaries([
-      mk({ id: 'a', status: 'awarded', archived: true }),
-      mk({ id: 'b', status: 'something_weird' }),
+      mk({ id: 'late', status: 'bidding', bidDueDate: 200, updatedAt: 99 }),
+      mk({ id: 'soon', status: 'bidding', bidDueDate: 100, updatedAt: 1 }),
+      mk({ id: 'stale', status: 'in_progress', updatedAt: 10 }),
+      mk({ id: 'fresh', status: 'in_progress', updatedAt: 20 }),
+      mk({ id: 'old-arch', status: 'in_progress', archived: true, updatedAt: 10 }),
+      mk({ id: 'new-arch', status: 'in_progress', archived: true, updatedAt: 20 }),
     ]);
-    expect(groups.find(g => g.id === 'awarded')!.projects).toHaveLength(0);
-    expect(groups[0].id).toBe('estimating');
-    expect(groups[0].projects.map(p => p.id)).toEqual(['b']);
+    expect(groups[0].projects.map(p => p.id)).toEqual(['soon', 'late']);
+    expect(groups[1].projects.map(p => p.id)).toEqual(['fresh', 'stale']);
+    expect(groups[2].projects.map(p => p.id)).toEqual(['new-arch', 'old-arch']);
   });
 
-  it('applies the chosen sort within each group (default: last updated)', () => {
+  it('lets an explicit sort override every tab default', () => {
     const groups = groupSummaries([
-      mk({ id: 'old', status: 'awarded', updatedAt: 10 }),
-      mk({ id: 'new', status: 'awarded', updatedAt: 20 }),
-    ]);
-    expect(groups.find(g => g.id === 'awarded')!.projects.map(p => p.id)).toEqual(['new', 'old']);
+      mk({ id: 'late', status: 'bidding', bidDueDate: 200, updatedAt: 99 }),
+      mk({ id: 'soon', status: 'bidding', bidDueDate: 100, updatedAt: 1 }),
+    ], 'updated');
+    expect(groups[0].projects.map(p => p.id)).toEqual(['late', 'soon']);
   });
 });
 

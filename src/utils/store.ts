@@ -1,4 +1,5 @@
-import { Project, TakeoffTemplate, SmtpSettings, ProjectNote } from '../types';
+import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '../types';
+import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
 
@@ -184,10 +185,18 @@ export const deleteProject = async (id: string): Promise<void> => {
   await handleResponse(res);
 };
 
-export const saveImage = async (id: string, dataUrl: string): Promise<void> => {
+export const saveImage = async (
+  id: string,
+  dataUrl: string,
+  opts?: { kind?: string; projectId?: string },
+): Promise<void> => {
   // Per-page images can be several MB, so allow a longer timeout than the
   // default for callers on slow connections.
-  const res = await fetchWithRetry('/api/images', {
+  const qs = new URLSearchParams();
+  if (opts?.kind) qs.set('kind', opts.kind);
+  if (opts?.projectId) qs.set('projectId', opts.projectId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetchWithRetry(`/api/images${suffix}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ id, data: dataUrl })
@@ -206,6 +215,46 @@ export const getImage = async (id: string): Promise<string | null> => {
 export const saveFile = saveImage;
 export const getFile = getImage;
 
+// Attribution carried on every upload. sourceType/sourceId name the owning
+// entity; with a kind that is single-instance the server versions that
+// entity's existing document instead of creating a new row, so the returned
+// fileId can differ from the id that was posted.
+export interface FileUploadOpts {
+  projectId?: string;
+  kind?: string;
+  name?: string;
+  customerId?: string;
+  sourceType?: string;
+  sourceId?: string;
+}
+
+export interface UploadResult {
+  fileId: string;
+  versioned: boolean;
+}
+
+const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
+  const q = new URLSearchParams();
+  if (opts?.projectId) q.set('projectId', opts.projectId);
+  if (opts?.kind) q.set('kind', opts.kind);
+  if (opts?.name) q.set('name', opts.name);
+  if (opts?.customerId) q.set('customerId', opts.customerId);
+  if (opts?.sourceType) q.set('sourceType', opts.sourceType);
+  if (opts?.sourceId) q.set('sourceId', opts.sourceId);
+  return q;
+};
+
+// Older servers answered these uploads with a bare { success: true }; fall
+// back to the posted id so a stale deployment keeps working.
+const readUploadResult = async (res: Response, postedId: string): Promise<UploadResult> => {
+  try {
+    const body = await res.json() as { fileId?: string; versioned?: boolean };
+    return { fileId: body?.fileId || postedId, versioned: !!body?.versioned };
+  } catch {
+    return { fileId: postedId, versioned: false };
+  }
+};
+
 // Streams a Blob/File to the server without going through a base64 dataUrl,
 // avoiding the ~4× in-browser memory blowup that base64 + JSON.stringify
 // produce for large PDFs (which can OOM Chrome on plan-set uploads). The
@@ -214,26 +263,30 @@ export const getFile = getImage;
 export const saveBinaryFile = async (
   id: string,
   blob: Blob,
-  opts?: { projectId?: string; kind?: string; name?: string },
-): Promise<void> => {
+  opts?: FileUploadOpts,
+): Promise<UploadResult> => {
   const headers: Record<string, string> = {
     'Content-Type': blob.type || 'application/octet-stream',
     ...getAuthHeaders(),
   };
-  const q = new URLSearchParams();
-  if (opts?.projectId) q.set('projectId', opts.projectId);
-  if (opts?.kind) q.set('kind', opts.kind);
-  if (opts?.name) q.set('name', opts.name);
-  const qs = q.toString();
+  const qs = uploadQuery(opts).toString();
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`, {
     method: 'POST',
     headers,
     body: blob,
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
+  return await readUploadResult(res, id);
 };
+// Real delete (server/documents.ts's deleteDocument guard: 409s unless the
+// row is an unsourced direct upload — see documentsPolicy.ts). Superseded the
+// old no-op stub once the Documents page needed an actual delete affordance.
 export const deleteFile = async (id: string): Promise<void> => {
-  // Image deletion is handled by project deletion in this simple version
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
+  });
+  await handleResponse(res);
 };
 
 // Template functions
@@ -445,6 +498,9 @@ export interface ProjectSummary {
   createdAt: number;
   updatedAt: number | null;
   archived: boolean;
+  // Set only on archived projects whose bid was lost — drives the Archive
+  // tab's "Lost" badge.
+  lostBid?: boolean;
   pageCount: number;
   takeoffCount: number;
   pageIds: string[];
@@ -453,6 +509,8 @@ export interface ProjectSummary {
   punchTotal: number;
   contractValueCents?: number;
   invoiceCount?: number;
+  // Admin-only (billing is gated server-side) — absent for non-admins.
+  outstandingCents?: number;
 }
 
 export interface ProjectPatch {
@@ -460,6 +518,7 @@ export interface ProjectPatch {
   name?: string;
   status?: string;
   archived?: boolean;
+  lostBid?: boolean;
   contractor?: string | null;
   address?: string | null;
   bidDueDate?: number | null;
@@ -568,14 +627,6 @@ export const getProjectSummary = async (id: string): Promise<ProjectSummary | nu
   return await res.json();
 };
 
-export const getProjectFiles = async (projectId: string): Promise<ProjectFile[]> => {
-  const res = await fetchWithRetry(`/api/projects/${encodeURIComponent(projectId)}/files`, {
-    headers: { ...getAuthHeaders() },
-  });
-  await handleResponse(res);
-  return await res.json();
-};
-
 export const getFileMeta = async (id: string): Promise<ProjectFile | null> => {
   const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}/meta`, {
     headers: { ...getAuthHeaders() },
@@ -593,22 +644,33 @@ export const listFileVersions = async (id: string): Promise<ProjectFile[]> => {
   return await res.json();
 };
 
-// Upload a new project document. Returns the generated file id.
+// Upload a project document. Callers must record the RETURNED fileId, not the
+// id this mints: for single-instance kinds the server may version the document
+// the given source already owns and return that row's id instead.
 export const uploadProjectFile = async (
   projectId: string,
   file: File,
-  kind: string
-): Promise<string> => {
-  const id = crypto.randomUUID();
-  const qs = `projectId=${encodeURIComponent(projectId)}&kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(file.name)}`;
+  kind: string,
+  opts?: Omit<FileUploadOpts, 'projectId' | 'kind' | 'name'>,
+): Promise<UploadResult> => {
+  const id = uuidv4();
+  const qs = uploadQuery({ ...opts, projectId, kind, name: file.name }).toString();
   const res = await fetchWithRetry(`/api/files/${id}?${qs}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type || 'application/octet-stream', ...getAuthHeaders() },
     body: file,
   }, { timeoutMs: 300_000 });
   await handleResponse(res);
-  return id;
+  return await readUploadResult(res, id);
 };
+
+// Store a freshly generated document (PDF/XLSX) so Generate, Download and Send
+// of the same entity converge on ONE living document: the source triple makes
+// the server version the existing row rather than pile up duplicates.
+export const persistGeneratedDocument = async (
+  blob: Blob,
+  opts: FileUploadOpts & { kind: string; name: string },
+): Promise<UploadResult> => saveBinaryFile(uuidv4(), blob, opts);
 
 // Save-as-version: live content keeps its id; old bytes become history.
 export const saveFileVersion = async (id: string, blob: Blob): Promise<{ versionNumber: number }> => {
@@ -654,6 +716,99 @@ export const deleteDraft = async (fileId: string): Promise<void> => {
     headers: { ...getAuthHeaders() },
   });
   await handleResponse(res);
+};
+
+// ── Global Documents page (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md) ──
+
+export interface DocumentSource {
+  type: string;
+  id: string;
+  label: string;
+  href: string | null;
+}
+
+export interface DocumentRow {
+  id: string;
+  name: string | null;
+  mime: string;
+  size: number;
+  kind: string;
+  createdAt: number;
+  versionNumber: number;
+  archived: boolean;
+  projectId: string | null;
+  projectName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  source: DocumentSource | null;
+}
+
+export interface DocumentFilters {
+  projectIds?: string[];
+  customerIds?: string[];
+  kinds?: string[];
+  q?: string;
+  archived?: boolean;
+  // Admin-only exclusive view — ignored by the server for non-admins. See
+  // server/documents.ts DocumentFilters for the full semantics.
+  unassigned?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export const getDocuments = async (
+  filters: DocumentFilters = {}
+): Promise<{ rows: DocumentRow[]; total: number }> => {
+  const p = new URLSearchParams();
+  if (filters.projectIds?.length) p.set('projectIds', filters.projectIds.join(','));
+  if (filters.customerIds?.length) p.set('customerIds', filters.customerIds.join(','));
+  if (filters.kinds?.length) p.set('kinds', filters.kinds.join(','));
+  if (filters.q) p.set('q', filters.q);
+  if (filters.archived) p.set('archived', '1');
+  if (filters.unassigned) p.set('unassigned', '1');
+  if (filters.limit != null) p.set('limit', String(filters.limit));
+  if (filters.offset != null) p.set('offset', String(filters.offset));
+  const res = await fetchWithRetry(`/api/documents?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Archive/restore or re-type a file (server/documents.ts's patchDocument
+// guard: kind may only move between direct-upload kinds; archived toggles
+// freely). Returns the updated row's slim metadata.
+export const patchFile = async (
+  id: string,
+  patch: { archived?: boolean; kind?: string },
+): Promise<{ id: string; kind: string; archived: boolean }> => {
+  const res = await fetchWithRetry(`/api/files/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(patch),
+  });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Admin-managed custom document types (spec §Data model: settings.documentTypes
+// JSON [{id,label}], files store the id). Saved through the general settings
+// PUT path like every other admin setting — see Settings.tsx's other cards.
+export interface CustomDocType {
+  id: string;
+  label: string;
+}
+
+export const getDocumentTypes = async (): Promise<CustomDocType[]> => {
+  const s = await getSettings();
+  try {
+    const parsed = s.documentTypes ? JSON.parse(s.documentTypes) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveDocumentTypes = async (types: CustomDocType[]): Promise<void> => {
+  await saveSettings({ documentTypes: JSON.stringify(types) });
 };
 
 // ── Phase 4a: billing ────────────────────────────────────────────────────────
@@ -711,6 +866,7 @@ export interface ChangeOrder {
   projectId: string;
   number: string | null;
   date: number | null;
+  title: string | null;
   description: string | null;
   lumpSumAmount: number;
   scheduleImpactDays: number | null;
@@ -728,6 +884,7 @@ export interface ChangeOrderListItem {
   projectId: string;
   number: string | null;
   date: number | null;
+  title: string | null;
   description: string | null;
   lumpSumAmount: number;
   scheduleImpactDays: number | null;
@@ -740,6 +897,7 @@ export interface ChangeOrderListItem {
 export interface ChangeOrderInput {
   number?: string;
   date?: number | null;
+  title?: string | null;
   description?: string;
   lumpSumAmount?: number;
   scheduleImpactDays?: number | null;
@@ -760,6 +918,12 @@ export interface BillingSummary {
   outstandingCents: number;
   invoiceCount: number;
   changeOrderCount: number;
+  payAppBilledCents: number;
+  payAppOutstandingCents: number;
+  payAppPaidCents: number;
+  invoiceBilledCents: number;
+  invoicePaidCents: number;
+  invoiceOutstandingBilledCents: number;
 }
 export interface InvoiceInput {
   number?: string; date?: number | null; terms?: string; status?: string;
@@ -1140,8 +1304,18 @@ export interface AiaPayApp {
   id: string; projectId: string; number: number;
   periodTo: string | null; applicationDate: string | null;
   retainagePercent: number; storedRetainagePercent: number;
+  releasedRetainagePoints: number;
   status: string; version: number; createdAt: number;
 }
+// getPayApps list row: adds Amount = G702 L8 (live for drafts, as-billed for
+// finalized apps); Balance = Amount − payments, null for drafts (not yet
+// billed — the UI renders "—"). Mirrors the Invoice/InvoiceListItem split.
+export interface AiaPayAppListItem extends AiaPayApp {
+  totalCents: number; paidCents: number; balanceCents: number | null;
+}
+// getPayApp's `app` — carries the payments recorded against this app. Same
+// row shape as Invoice['payments'] (id/date/amount/method/note).
+export type AiaPayAppDetail = AiaPayApp & { payments: Payment[] };
 export interface AiaPayAppLine {
   id: string; payAppId: string; sovLineId: string;
   percentComplete: number; storedMaterialsCents: number; createdAt: number;
@@ -1168,14 +1342,36 @@ export interface AiaG702 {
   L8currentPaymentDueCents: number;
   L9balanceToFinishCents: number;
   changeOrders: { additionsCents: number; deductionsCents: number; netCents: number };
+  // Mirrors server/aiaStore.ts G702['retainage'] — the effective-rate release
+  // summary (Task 1). effectiveWorkPercent is null in perLine mode because a
+  // single number can't represent per-line rates.
+  retainage: {
+    mode: 'uniform' | 'perLine';
+    baseWorkPercent: number;
+    cumulativeReleasedPoints: number;
+    releasedThisApp: number;
+    remainingPoints: number;
+    effectiveWorkPercent: number | null;
+  };
 }
 export interface AiaSettings {
   billingMode?: string; retainagePercent?: number; storedRetainagePercent?: number;
+  retainageMode?: 'uniform' | 'perLine';
   ownerName?: string; ownerAddress?: string;
   architectName?: string; architectAddress?: string;
   contractDate?: string; ownerProjectNumber?: string; architectProjectNumber?: string;
   contractFor?: string;
 }
+
+// Legacy projects never wrote `retainageMode`. Mirrors the server-side
+// inference: an explicit mode always wins; when absent, a stored per-line
+// rate on any SOV line means the project was already using per-line
+// retainage, so keep showing it that way until someone touches settings.
+export const resolveRetainageMode = (
+  mode: AiaSettings['retainageMode'] | undefined,
+  lines: Pick<AiaSovLine, 'retainagePercent'>[],
+): 'uniform' | 'perLine' =>
+  mode ?? (lines.some(l => l.retainagePercent != null) ? 'perLine' : 'uniform');
 
 const aiaJson = (method: string, url: string, body?: unknown) =>
   fetchWithRetry(url, {
@@ -1215,7 +1411,7 @@ export const syncChangeOrders = async (projectId: string): Promise<{ added: numb
 };
 
 // Pay applications
-export const getPayApps = async (projectId: string): Promise<AiaPayApp[]> => {
+export const getPayApps = async (projectId: string): Promise<AiaPayAppListItem[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/aia/pay-apps`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
@@ -1223,7 +1419,7 @@ export const createPayApp = async (projectId: string, input: { periodTo?: string
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/pay-apps`, input);
   await handleResponse(res); return res.json();
 };
-export const getPayApp = async (id: string): Promise<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }> => {
+export const getPayApp = async (id: string): Promise<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }> => {
   const res = await fetchWithRetry(`/api/aia/pay-apps/${id}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
@@ -1232,7 +1428,7 @@ export const savePayAppLines = async (payAppId: string, lines: { sovLineId: stri
   if (res.status === 409) throw new ConflictError(payAppId);
   await handleResponse(res); return res.json();
 };
-export const setPayApp = async (id: string, patch: Partial<{ periodTo: string | null; applicationDate: string | null; status: string; retainagePercent: number; storedRetainagePercent: number }>): Promise<{ version: number }> => {
+export const setPayApp = async (id: string, patch: Partial<{ periodTo: string | null; applicationDate: string | null; status: string; retainagePercent: number; storedRetainagePercent: number; releasedRetainagePoints: number }>): Promise<{ version: number }> => {
   const res = await aiaJson('PATCH', `/api/aia/pay-apps/${id}`, patch);
   await handleResponse(res); return res.json();
 };
@@ -1265,9 +1461,89 @@ export const getAlwaysCc = async (): Promise<string> => {
 
 // ── Customers ────────────────────────────────────────────────────────────────
 
-export const getCustomers = async () => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
-export const getCustomer = async (id: string) => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
-export const getCustomerProjects = async (id: string) => (await fetch(`/api/customers/${id}/projects`, { headers: getAuthHeaders() })).json();
+export interface CustomerProjectCounts {
+  bidding: number;
+  inProgress: number;
+  archived: number;
+}
+
+// Sidebar row shape for the customers split view. Server-derived (see
+// server/customerStore.ts customerSummaries).
+export interface CustomerSummary {
+  id: string;
+  name: string;
+  contactName: string | null;
+  phone: string | null;
+  projectCounts: CustomerProjectCounts;
+  openTaskCount: number;
+  overdueTaskCount: number;
+  // Admin-only (billing is gated server-side) — absent (not zero/null) for
+  // non-admins.
+  outstandingCents?: number;
+}
+
+export interface CustomerOverviewProject {
+  id: string;
+  name: string;
+  status: string; // already normalizeProjectStatus()'d server-side
+  archived: boolean;
+  lostBid: boolean;
+  bidDueDate: number | null;
+  updatedAt: number | null;
+  // Admin-only — absent for non-admins.
+  outstandingCents?: number;
+}
+
+export interface CustomerBillingLedgerEntry {
+  projectId: string;
+  projectName: string;
+  kind: 'invoice' | 'payapp';
+  number: string | number;
+  date: string | number | null;
+  status: string;
+  totalCents: number;
+  paidCents: number;
+  balanceCents: number;
+}
+
+export interface CustomerBilling {
+  contractTotalCents: number;
+  invoicedCents: number;
+  paidCents: number;
+  outstandingCents: number;
+  ledger: CustomerBillingLedgerEntry[];
+  contract: { billedCents: number; paidCents: number; outstandingCents: number };
+  invoices: { invoicedCents: number; paidCents: number; outstandingCents: number };
+}
+
+export type CustomerAttentionItem =
+  | { type: 'overdue_task'; label: string; projectId?: string; taskId: string; date: string }
+  | { type: 'bid_due'; label: string; projectId: string; date: number; overdue?: true }
+  | { type: 'outstanding_invoice'; label: string; projectId: string; date?: string | number; ageDays?: number; balanceCents: number };
+
+export interface CustomerOverview {
+  customer: Customer;
+  projects: CustomerOverviewProject[];
+  // Admin-only — key is entirely absent (not null) for non-admins.
+  billing?: CustomerBilling;
+  attention: CustomerAttentionItem[];
+  taskCounts: { open: number; overdue: number };
+}
+
+export const getCustomersSummary = async (): Promise<CustomerSummary[]> => {
+  const res = await fetchWithRetry('/api/customers/summary', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getCustomerOverview = async (id: string): Promise<CustomerOverview> => {
+  const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getCustomers = async (): Promise<Customer[]> => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
+export const getCustomer = async (id: string): Promise<Customer> => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
 export const saveCustomer = async (c: any) => {
   const res = await fetch(c.id ? '/api/customers/' + c.id : '/api/customers', {
     method: c.id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify(c),

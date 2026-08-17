@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveFile, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
+import { getProject, saveProject, getImageUrl, saveImage, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator } from '../utils/pdf';
@@ -704,9 +704,13 @@ export const ProjectView: React.FC = () => {
         if (isPdf) {
           try {
             setAddProgress(prev => ({ ...prev, status: 'uploading source PDF', current: 0, total: 0 }));
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            // plan-source is multi-instance (a set is often several PDFs), so this
+            // never versions a sibling — each upload keeps its own row.
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId: project.id, kind: 'plan-source', name: file.name,
+              sourceType: 'plan-set', sourceId: planSetId,
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Failed to upload source PDF for ${file.name} — falling back to raster only`, pdfErr);
             sourcePdfFileId = undefined;
@@ -734,12 +738,12 @@ export const ProjectView: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: project.id });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: project.id });
               }
               // Thumbnails are keyed by `thumbnailId` (always set) so naming-step
               // lookups work uniformly for vector and legacy pages.
@@ -929,9 +933,11 @@ export const ProjectView: React.FC = () => {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (isPdf) {
           try {
-            sourcePdfFileId = uuidv4();
             const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
-            await saveBinaryFile(sourcePdfFileId, pdfBlob);
+            sourcePdfFileId = (await saveBinaryFile(uuidv4(), pdfBlob, {
+              projectId: project.id, kind: 'plan-source', name: file.name,
+              ...(retryPlanSetId ? { sourceType: 'plan-set', sourceId: retryPlanSetId } : {}),
+            })).fileId;
           } catch (pdfErr) {
             console.warn(`Retry: source PDF upload failed for ${fileName}`, pdfErr);
             sourcePdfFileId = undefined;
@@ -965,12 +971,12 @@ export const ProjectView: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: project.id });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: project.id });
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
@@ -1132,18 +1138,21 @@ export const ProjectView: React.FC = () => {
 
       setProgressMessage('Saving…');
       const name = `Printout - ${new Date().toLocaleString()}`;
-      const fileId = uuidv4();
+      // The printout id is minted first so it can attribute its own file; each
+      // printout entry therefore keeps a distinct document.
+      const printoutId = uuidv4();
       // Raw streaming save — base64-in-JSON dies at the server's JSON body cap
       // for big plan-set printouts, and silently at that (413).
-      await saveBinaryFile(fileId, new Blob([outBuffer], { type: 'application/pdf' }), {
+      const { fileId } = await saveBinaryFile(uuidv4(), new Blob([outBuffer], { type: 'application/pdf' }), {
         projectId: project.id, kind: 'printout', name,
+        sourceType: 'printout', sourceId: printoutId,
       });
       if (overBudget) {
         toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
       }
 
       const newPrintout: Printout = {
-        id: uuidv4(),
+        id: printoutId,
         name,
         fileId,
         createdAt: Date.now(),
@@ -1312,18 +1321,18 @@ export const ProjectView: React.FC = () => {
       const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const excelBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-      const base64data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error ?? new Error('Failed to read Excel export'));
-        reader.readAsDataURL(excelBlob);
+      const printoutId = uuidv4();
+      const name = `Excel Export - ${new Date().toLocaleString()}`;
+      // Attributed streaming save, same as the PDF printout above, so the export
+      // lands in Documents as this printout entry's document.
+      const { fileId } = await saveBinaryFile(uuidv4(), excelBlob, {
+        projectId: project.id, kind: 'printout', name,
+        sourceType: 'printout', sourceId: printoutId,
       });
-      const fileId = uuidv4();
-      await saveFile(fileId, base64data);
 
       const newPrintout: Printout = {
-        id: uuidv4(),
-        name: `Excel Export - ${new Date().toLocaleString()}`,
+        id: printoutId,
+        name,
         fileId,
         createdAt: Date.now(),
         type: 'excel',
@@ -1680,7 +1689,7 @@ export const ProjectView: React.FC = () => {
           const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
           
           const thumbnailId = uuidv4();
-          await saveImage(thumbnailId, thumbnailDataUrl);
+          await saveImage(thumbnailId, thumbnailDataUrl, { kind: 'plan', projectId: project.id });
           
           // Update page
           const pageIndex = updatedPages.findIndex(p => p.id === page.id);

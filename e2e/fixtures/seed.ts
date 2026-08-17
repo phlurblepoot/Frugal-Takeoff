@@ -3,9 +3,21 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
+import { PDFDocument } from 'pdf-lib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
+
+// Local YYYY-MM-DD offset from today — mirrors server/customerStore.ts's
+// todayStr() comparison base. Using toISOString() (UTC) here would drift a
+// day off local "today" depending on timezone and time of day, so a fixture
+// meant to be "yesterday" could equal today's local date and never trip the
+// overdue branch.
+function daysFromToday(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 export interface LoginResult {
   token: string;
@@ -86,7 +98,7 @@ export async function seedProjectWithPage(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -188,7 +200,7 @@ export async function seedProjectWithAreaTakeoffLength(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -319,7 +331,7 @@ export async function seedProjectWithSupersededRevision(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
 
   const projRes = await request.post('/api/projects', {
@@ -407,7 +419,7 @@ export async function seedProjectWithTakeoffMeasurement(
       },
     ],
     version: 1,
-    status: 'estimating',
+    status: 'bidding',
   };
   const projRes = await request.post('/api/projects', {
     headers: auth,
@@ -418,4 +430,397 @@ export async function seedProjectWithTakeoffMeasurement(
   }
 
   return { projectId, pageId, imageId, name, takeoffId, takeoffName, measurementId };
+}
+
+export interface SeedCustomerPortfolioResult {
+  customerId: string;
+  customerName: string;
+  biddingProjectId: string;
+  biddingProjectName: string;
+  bidDueDate: number;
+  inProgressProjectId: string;
+  inProgressProjectName: string;
+  taskId: string;
+  taskTitle: string;
+  taskDueDate: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceAmountCents: number;
+  /** Present only when `opts.withPayApp` was set. */
+  payApp?: {
+    payAppId: string;
+    payAppNumber: number;
+    sovLineId: string;
+    /** Schedule-of-values line amount — becomes `billing.contractTotalCents`. */
+    sovAmountCents: number;
+    /** G702 L8 (current payment due) for the finalized app, net of retainage. */
+    billedCents: number;
+    retainagePercent: number;
+    /** Sum of payments recorded against the finalized app. */
+    paidCents: number;
+    /** billedCents - paidCents. */
+    balanceCents: number;
+  };
+}
+
+/**
+ * Seed a full customer "portfolio" via the REST API for the customers split
+ * view: one customer with (1) a bidding project carrying a bidDueDate inside
+ * the 14-day attention window, (2) an in_progress project carrying one SENT,
+ * UNPAID invoice (so it surfaces as `outstanding_invoice` attention + a
+ * Billing-tab ledger row), and (3) a customer-level (no projectId) task due
+ * YESTERDAY, so it's already overdue by construction and shows up in both
+ * taskCounts.overdue and the Needs-attention feed.
+ *
+ * This is the minimum shape customerOverview()/customerSummaries() need to
+ * exercise every tile, attention-row type, and ledger row on the customer
+ * pane in one seed — see server/customerStore.ts for the exact rollup rules
+ * this mirrors (archived-project exclusion doesn't apply here; nothing here
+ * is archived).
+ *
+ * `opts.withPayApp` additionally gives the SAME in_progress project a
+ * one-line Schedule of Values and a FINALIZED pay app against it (100%
+ * complete, default 10% retainage) with a partial payment recorded against
+ * it, via the same API routes the AIA editor uses. This is opt-in because it
+ * changes the combined Outstanding figures (customer overview tile,
+ * attention rows) that other assertions of this seed's return value depend
+ * on — callers that only care about the invoice leg should omit it and keep
+ * their existing numbers.
+ */
+export async function seedCustomerWithPortfolio(
+  request: APIRequestContext,
+  token: string,
+  opts: { withPayApp?: boolean } = {},
+): Promise<SeedCustomerPortfolioResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const short = randomUUID().slice(0, 8);
+
+  const customerName = `E2E Portfolio Customer ${short}`;
+  const custRes = await request.post('/api/customers', { headers: auth, data: { name: customerName } });
+  if (!custRes.ok()) {
+    throw new Error(`customer create failed: ${custRes.status()} ${await custRes.text()}`);
+  }
+  const customer = await custRes.json();
+  const customerId = customer.id as string;
+
+  // Bidding project, due in 5 days — inside the 14-day attention window and
+  // not overdue.
+  const biddingProjectId = randomUUID();
+  const biddingProjectName = `E2E Portfolio Bidding ${short}`;
+  const bidDueDate = Date.now() + 5 * 86400000;
+  const p1Res = await request.post('/api/projects', {
+    headers: auth,
+    data: {
+      id: biddingProjectId,
+      name: biddingProjectName,
+      createdAt: Date.now(),
+      customerId,
+      status: 'bidding',
+      bidDueDate,
+      pages: [],
+      takeoffs: [],
+      version: 1,
+    },
+  });
+  if (!p1Res.ok()) {
+    throw new Error(`bidding project create failed: ${p1Res.status()} ${await p1Res.text()}`);
+  }
+
+  // In-progress project that will carry the sent/unpaid invoice.
+  const inProgressProjectId = randomUUID();
+  const inProgressProjectName = `E2E Portfolio Active ${short}`;
+  const p2Res = await request.post('/api/projects', {
+    headers: auth,
+    data: {
+      id: inProgressProjectId,
+      name: inProgressProjectName,
+      createdAt: Date.now(),
+      customerId,
+      status: 'in_progress',
+      pages: [],
+      takeoffs: [],
+      version: 1,
+    },
+  });
+  if (!p2Res.ok()) {
+    throw new Error(`in-progress project create failed: ${p2Res.status()} ${await p2Res.text()}`);
+  }
+
+  // A SENT invoice with one line and no payments recorded → balanceCents > 0,
+  // which is what makes it show up as `outstanding_invoice` attention and a
+  // Billing-tab ledger row (see server/customerStore.ts customerOverview()).
+  const invoiceNumber = `INV-${short}`;
+  const invoiceAmountCents = 75000; // $750.00
+  const invRes = await request.post(`/api/projects/${inProgressProjectId}/invoices`, {
+    headers: auth,
+    data: {
+      number: invoiceNumber,
+      date: Date.now(),
+      status: 'sent',
+      lines: [{ description: 'Work performed', qty: 1, unitPrice: invoiceAmountCents / 100 }],
+    },
+  });
+  if (!invRes.ok()) {
+    throw new Error(`invoice create failed: ${invRes.status()} ${await invRes.text()}`);
+  }
+  const invoice = await invRes.json();
+
+  // Customer-level task (no projectId) due yesterday — already overdue.
+  // customerOverview()/customerSummaries() compare dueDate against today's
+  // LOCAL date string, so this must be computed in local time (not UTC) to
+  // guarantee the overdue branch regardless of time-of-day/timezone.
+  const taskTitle = `E2E Portfolio Overdue Task ${short}`;
+  const taskDueDate = daysFromToday(-1);
+  const taskRes = await request.post('/api/tasks', {
+    headers: auth,
+    data: { title: taskTitle, customerId, dueDate: taskDueDate, category: 'Follow-up' },
+  });
+  if (!taskRes.ok()) {
+    throw new Error(`task create failed: ${taskRes.status()} ${await taskRes.text()}`);
+  }
+  const task = await taskRes.json();
+
+  let payApp: SeedCustomerPortfolioResult['payApp'];
+  if (opts.withPayApp) {
+    // One SOV line on the same in-progress project — becomes
+    // billing.contractTotalCents for this project (hasSov=true path).
+    const sovAmountCents = 100000; // $1,000.00
+    const sovRes = await request.post(`/api/projects/${inProgressProjectId}/aia/sov`, {
+      headers: auth,
+      data: { description: 'Contract scope', scheduledValueCents: sovAmountCents },
+    });
+    if (!sovRes.ok()) {
+      throw new Error(`sov line create failed: ${sovRes.status()} ${await sovRes.text()}`);
+    }
+    const sovLine = await sovRes.json();
+
+    // Pay app #1 with no explicit retainage override → DEFAULT_RETAINAGE (10%).
+    const payAppRes = await request.post(`/api/projects/${inProgressProjectId}/aia/pay-apps`, {
+      headers: auth,
+      data: { applicationDate: daysFromToday(0) },
+    });
+    if (!payAppRes.ok()) {
+      throw new Error(`pay app create failed: ${payAppRes.status()} ${await payAppRes.text()}`);
+    }
+    const payAppCreated = await payAppRes.json();
+    const retainagePercent = 10;
+
+    // 100% complete, nothing stored — createPayApp already seeded a line for
+    // the SOV line at 0%/0, this bumps it to 100% (version 1 → 2).
+    const linesRes = await request.put(`/api/aia/pay-apps/${payAppCreated.id}/lines`, {
+      headers: auth,
+      data: {
+        lines: [{ sovLineId: sovLine.id, percentComplete: 100, storedMaterialsCents: 0 }],
+        version: 1,
+      },
+    });
+    if (!linesRes.ok()) {
+      throw new Error(`pay app lines save failed: ${linesRes.status()} ${await linesRes.text()}`);
+    }
+
+    // Finalize — the AIA analog of "sent", and what makes listBilledDocuments
+    // (and therefore the customer/project Contract rollup + ledger) count it.
+    const finalizeRes = await request.patch(`/api/aia/pay-apps/${payAppCreated.id}`, {
+      headers: auth,
+      data: { status: 'finalized' },
+    });
+    if (!finalizeRes.ok()) {
+      throw new Error(`pay app finalize failed: ${finalizeRes.status()} ${await finalizeRes.text()}`);
+    }
+
+    // G702 L8 (current payment due) = completed-to-date less retainage, with
+    // no prior app to subtract: sovAmountCents * (1 - retainagePercent/100).
+    const billedCents = Math.round(sovAmountCents * (1 - retainagePercent / 100));
+
+    // A partial payment against the finalized app — makes Amount (billed,
+    // gross) and Balance (billed less paid) differ downstream, exercising
+    // both columns instead of a degenerate equal-values case.
+    const paidCents = 25000; // $250.00
+    const balanceCents = billedCents - paidCents;
+    const paymentRes = await request.post(`/api/projects/${inProgressProjectId}/payments`, {
+      headers: auth,
+      data: { targetType: 'payapp', targetId: payAppCreated.id, amount: paidCents / 100 },
+    });
+    if (!paymentRes.ok()) {
+      throw new Error(`pay app payment create failed: ${paymentRes.status()} ${await paymentRes.text()}`);
+    }
+
+    payApp = {
+      payAppId: payAppCreated.id,
+      payAppNumber: payAppCreated.number,
+      sovLineId: sovLine.id,
+      sovAmountCents,
+      billedCents,
+      retainagePercent,
+      paidCents,
+      balanceCents,
+    };
+  }
+
+  return {
+    customerId,
+    customerName,
+    biddingProjectId,
+    biddingProjectName,
+    bidDueDate,
+    inProgressProjectId,
+    inProgressProjectName,
+    taskId: task.id,
+    taskTitle,
+    taskDueDate,
+    invoiceId: invoice.id,
+    invoiceNumber,
+    invoiceAmountCents,
+    payApp,
+  };
+}
+
+export interface SeedDocumentsPortfolioResult extends SeedCustomerPortfolioResult {
+  issueId: string;
+  issueTitle: string;
+  issuePhotoFileId: string;
+  invoiceFileId: string;
+  invoiceFileName: string;
+  payAppFileId: string;
+  payAppFileName: string;
+  printoutId: string;
+  printoutFileId: string;
+  printoutFileName: string;
+  printoutPageCount: number;
+}
+
+/**
+ * Extends seedCustomerWithPortfolio (with a pay app) with real DOCUMENT rows
+ * for the global Documents page (unified-documents spec), via the same
+ * two calls the real client flows make — no direct DB writes:
+ *
+ *  - an issue (any-user, field-created) with a photo uploaded + linked the
+ *    way IssueEditor.tsx does it: `POST /api/files/:id?kind=issue-photo&
+ *    sourceType=issue&sourceId=<issueId>` then `POST /api/issues/:id/photos`;
+ *  - an invoice PDF and a pay-app export "persisted on generate" by POSTing
+ *    straight to the raw file endpoint with sourceType/sourceId set, the way
+ *    persistGeneratedDocument()/saveBinaryFile() do after a real client-side
+ *    PDF/XLSX render — the bytes themselves don't matter here, only that the
+ *    row lands with a resolvable source (real invoice/pay-app ids from the
+ *    base portfolio seed) so GET /api/documents can label + link it;
+ *  - a printout, mirroring ProjectProposal.tsx's real save sequence (mint id
+ *    -> upload file against it -> append to project.printouts[] -> PUT the
+ *    project). Unlike invoice/change-order/proposal, printout carries no
+ *    dollar figure so it stays visible to non-admins (spec §Decisions "Role
+ *    visibility"). Its bytes ARE a real (pdf-lib-generated) multi-page PDF,
+ *    unlike the invoice/pay-app fixtures — the document-previews viewer opens
+ *    it and needs pdf.js to actually parse it and see >1 page for page-nav
+ *    coverage (e2e/documents.spec.ts).
+ *
+ * All four resolve to real navigable `source.href` values (billing tabs /
+ * issues page / proposal page) since they reference the base seed's real
+ * invoice/pay-app/issue/printout entries — this is what makes the Documents
+ * page's Source column non-trivial to assert against instead of a
+ * dangling-reference fallback.
+ */
+export async function seedDocumentsPortfolio(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedDocumentsPortfolioResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const portfolio = await seedCustomerWithPortfolio(request, token, { withPayApp: true });
+  if (!portfolio.payApp) throw new Error('seedCustomerWithPortfolio did not return a payApp (withPayApp set)');
+  // NOT portfolio.customerId.slice(0, 8) — customer ids are minted server-side
+  // as `customer-${Date.now()}-${random}` (see POST /api/customers), so their
+  // first 8 characters are always the literal string "customer", identical
+  // across every seed call. A fresh randomUUID() is what every other seed
+  // helper in this file uses for its "short" disambiguator.
+  const short = randomUUID().slice(0, 8);
+
+  // Issue + linked photo, on the same in-progress project as the invoice/pay
+  // app so a single project filter picks up every seeded doc.
+  const issueTitle = `E2E Doc Issue ${short}`;
+  const issueRes = await request.post(`/api/projects/${portfolio.inProgressProjectId}/issues`, {
+    headers: auth,
+    data: { title: issueTitle, description: 'Seeded for documents e2e coverage' },
+  });
+  if (!issueRes.ok()) throw new Error(`issue create failed: ${issueRes.status()} ${await issueRes.text()}`);
+  const issue = await issueRes.json();
+
+  const png = readFileSync(TEST_PAGE_PNG);
+  const issuePhotoFileId = randomUUID();
+  const photoUploadRes = await request.post(
+    `/api/files/${issuePhotoFileId}?projectId=${portfolio.inProgressProjectId}&kind=issue-photo&sourceType=issue&sourceId=${issue.id}&name=site-photo-${short}.png`,
+    { headers: { ...auth, 'Content-Type': 'image/png' }, data: png },
+  );
+  if (!photoUploadRes.ok()) throw new Error(`issue photo upload failed: ${photoUploadRes.status()} ${await photoUploadRes.text()}`);
+  const linkPhotoRes = await request.post(`/api/issues/${issue.id}/photos`, {
+    headers: auth,
+    data: { fileId: issuePhotoFileId },
+  });
+  if (!linkPhotoRes.ok()) throw new Error(`issue photo link failed: ${linkPhotoRes.status()} ${await linkPhotoRes.text()}`);
+
+  const invoiceFileName = `Invoice-${short}.pdf`;
+  const invoiceFileId = randomUUID();
+  const invoiceFileRes = await request.post(
+    `/api/files/${invoiceFileId}?projectId=${portfolio.inProgressProjectId}&customerId=${portfolio.customerId}` +
+    `&kind=invoice&sourceType=invoice&sourceId=${portfolio.invoiceId}&name=${encodeURIComponent(invoiceFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from('%PDF-1.4 e2e fixture invoice bytes') },
+  );
+  if (!invoiceFileRes.ok()) throw new Error(`invoice file upload failed: ${invoiceFileRes.status()} ${await invoiceFileRes.text()}`);
+
+  const payAppFileName = `Pay-App-${portfolio.payApp.payAppNumber}-${short}.xlsx`;
+  const payAppFileId = randomUUID();
+  const payAppFileRes = await request.post(
+    `/api/files/${payAppFileId}?projectId=${portfolio.inProgressProjectId}&customerId=${portfolio.customerId}` +
+    `&kind=payapp-export&sourceType=payapp&sourceId=${portfolio.payApp.payAppId}&name=${encodeURIComponent(payAppFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, data: Buffer.from('e2e fixture xlsx bytes') },
+  );
+  if (!payAppFileRes.ok()) throw new Error(`pay app file upload failed: ${payAppFileRes.status()} ${await payAppFileRes.text()}`);
+
+  // Printout — a non-billing generated kind (visible to non-admins), whose
+  // source lives in project.printouts[] JSON rather than a table row (spec
+  // §Data model). Mirrors ProjectProposal.tsx's real save sequence: mint the
+  // printout id first, upload the file against it, then append the printout
+  // entry to the project and PUT the whole project back (optimistic version).
+  const printoutId = randomUUID();
+  const printoutFileName = `Printout-${short}.pdf`;
+  const printoutFileId = randomUUID();
+  // A real, minimal 2-page PDF (not just bytes with a %PDF header) — the
+  // document-previews viewer modal renders this with pdf.js, and 2 pages
+  // exercises page-nav (e2e/documents.spec.ts).
+  const printoutPageCount = 2;
+  const printoutDoc = await PDFDocument.create();
+  for (let i = 0; i < printoutPageCount; i++) printoutDoc.addPage([200, 200]);
+  const printoutPdfBytes = await printoutDoc.save();
+  const printoutFileRes = await request.post(
+    `/api/files/${printoutFileId}?projectId=${portfolio.inProgressProjectId}&kind=printout&sourceType=printout&sourceId=${printoutId}&name=${encodeURIComponent(printoutFileName)}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(printoutPdfBytes) },
+  );
+  if (!printoutFileRes.ok()) throw new Error(`printout file upload failed: ${printoutFileRes.status()} ${await printoutFileRes.text()}`);
+
+  const projectRes = await request.get(`/api/projects/${portfolio.inProgressProjectId}`, { headers: auth });
+  if (!projectRes.ok()) throw new Error(`project fetch (for printout) failed: ${projectRes.status()} ${await projectRes.text()}`);
+  const project = await projectRes.json();
+  const putRes = await request.put(`/api/projects/${portfolio.inProgressProjectId}`, {
+    headers: auth,
+    data: {
+      ...project,
+      printouts: [
+        ...(project.printouts ?? []),
+        { id: printoutId, name: printoutFileName, fileId: printoutFileId, createdAt: Date.now(), type: 'pdf' },
+      ],
+    },
+  });
+  if (!putRes.ok()) throw new Error(`project save (printout) failed: ${putRes.status()} ${await putRes.text()}`);
+
+  return {
+    ...portfolio,
+    issueId: issue.id,
+    issueTitle,
+    issuePhotoFileId,
+    invoiceFileId,
+    invoiceFileName,
+    payAppFileId,
+    payAppFileName,
+    printoutId,
+    printoutFileId,
+    printoutFileName,
+    printoutPageCount,
+  };
 }

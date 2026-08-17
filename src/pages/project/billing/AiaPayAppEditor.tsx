@@ -1,8 +1,8 @@
 // src/pages/project/billing/AiaPayAppEditor.tsx
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AiaPayApp, AiaPayAppLine, AiaG703Row, AiaG702,
-  getPayApp, savePayAppLines, setPayApp,
+  AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
+  getPayApp, savePayAppLines, setPayApp, persistGeneratedDocument,
 } from '../../../utils/store';
 import { exportAiaXlsx } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
@@ -21,6 +21,11 @@ const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
 
 const STATUS_OPTIONS = ['draft', 'finalized'];
 
+// Retainage points are floats (15 - 8.05 = 6.949999999999999). Everything the
+// panel SHOWS — and the value "Release all remaining" types into the input —
+// goes through this so no float residue reaches the user.
+const fmtPts = (n: number): string => String(+n.toFixed(4));
+
 // Local editable per-line state, keyed by sovLineId.
 interface EditLine { percentComplete: string; storedMaterials: string }
 
@@ -31,7 +36,7 @@ export const AiaPayAppEditor: React.FC<{
 }> = ({ payAppId, onClose, onSaved }) => {
   const { toast } = useToast();
 
-  const [data, setData] = useState<{ app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
+  const [data, setData] = useState<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -41,11 +46,10 @@ export const AiaPayAppEditor: React.FC<{
   // Editable app fields.
   const [periodTo, setPeriodTo] = useState('');
   const [applicationDate, setApplicationDate] = useState('');
-  const [retainagePercent, setRetainagePercent] = useState('');
-  const [storedRetainagePercent, setStoredRetainagePercent] = useState('');
+  const [releasedRetainagePoints, setReleasedRetainagePoints] = useState('');
   const [status, setStatus] = useState('draft');
 
-  const seed = useCallback((d: { app: AiaPayApp; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
+  const seed = useCallback((d: { app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
     const byLine: Record<string, AiaPayAppLine> = {};
     for (const l of d.lines) byLine[l.sovLineId] = l;
     const next: Record<string, EditLine> = {};
@@ -59,8 +63,7 @@ export const AiaPayAppEditor: React.FC<{
     setEdits(next);
     setPeriodTo(d.app.periodTo ?? '');
     setApplicationDate(d.app.applicationDate ?? '');
-    setRetainagePercent(String(d.app.retainagePercent ?? 0));
-    setStoredRetainagePercent(String(d.app.storedRetainagePercent ?? 0));
+    setReleasedRetainagePoints(String(d.app.releasedRetainagePoints ?? 0));
     setStatus(d.app.status ?? 'draft');
   }, []);
 
@@ -79,18 +82,26 @@ export const AiaPayAppEditor: React.FC<{
     if (!data) return;
     setSaving(true);
     try {
-      // Persist app-level field changes first (date/retainage/status).
+      // Persist app-level field changes first (date/retainage-release/status).
       const app = data.app;
       const patch: Record<string, unknown> = {};
-      const retNum = parseFloat(retainagePercent);
-      const storedRetNum = parseFloat(storedRetainagePercent);
+      // A cleared box is an explicit "release nothing" (0), not a no-op —
+      // otherwise parseFloat('') is NaN and the guard below silently drops the
+      // patch, leaving the previous release in place. Genuine garbage still
+      // parses to NaN and is still skipped.
+      const releaseRaw = releasedRetainagePoints.trim();
+      const releasedNum = releaseRaw === '' ? 0 : parseFloat(releaseRaw);
       if ((periodTo || null) !== (app.periodTo ?? null)) patch.periodTo = periodTo || null;
       if ((applicationDate || null) !== (app.applicationDate ?? null)) patch.applicationDate = applicationDate || null;
-      if (Number.isFinite(retNum) && retNum !== app.retainagePercent) patch.retainagePercent = retNum;
-      if (Number.isFinite(storedRetNum) && storedRetNum !== app.storedRetainagePercent) patch.storedRetainagePercent = storedRetNum;
+      if (Number.isFinite(releasedNum) && releasedNum !== (app.releasedRetainagePoints ?? 0)) patch.releasedRetainagePoints = releasedNum;
       if (status !== app.status) patch.status = status;
+      // setPayApp bumps the pay app's version, so the version used for the
+      // line save below must be its returned version, not the stale one this
+      // component loaded with — otherwise the line save 409s against its own
+      // just-applied patch.
+      let version = app.version;
       if (Object.keys(patch).length > 0) {
-        await setPayApp(payAppId, patch);
+        ({ version } = await setPayApp(payAppId, patch));
       }
 
       // Persist line edits (version-checked).
@@ -103,7 +114,7 @@ export const AiaPayAppEditor: React.FC<{
           storedMaterialsCents: e ? dollarsToCents(e.storedMaterials) : row.storedCents,
         };
       });
-      await savePayAppLines(payAppId, lines, app.version);
+      await savePayAppLines(payAppId, lines, version);
 
       toast('Pay application saved', { type: 'success' });
       load(); // refetch + re-seed so G702/G703 + version reflect saved state
@@ -151,7 +162,15 @@ export const AiaPayAppEditor: React.FC<{
         sovLines: env.sovLines,
         g702: data.g702,
         g703: data.g703,
-      }, env.template);
+      }, env.template, undefined, async (blob) => {
+        // Keep a copy in Documents, but never let that failure block the export.
+        try {
+          await persistGeneratedDocument(blob, {
+            projectId, kind: 'payapp-export', name: `Pay App #${data.app.number} — G702.xlsx`,
+            sourceType: 'payapp', sourceId: data.app.id,
+          });
+        } catch { toast('Exported, but saving to Documents failed', { type: 'warning' }); }
+      });
     } catch {
       toast('Excel export failed', { type: 'error' });
     } finally {
@@ -174,6 +193,17 @@ export const AiaPayAppEditor: React.FC<{
   }, [data, edits]);
 
   const g702 = data?.g702;
+
+  // Paid/balance for the read-only Payments section below. Derived from the
+  // GET payload (data.app.payments + g702.L8) rather than a server-provided
+  // field — matches the list's balance rule: drafts aren't billed yet, so
+  // balance is null ("—") even though payments could technically exist.
+  const payments = data?.app.payments ?? [];
+  const paymentsPaidCents = useMemo(
+    () => payments.reduce((a, p) => a + Math.round((Number(p.amount) || 0) * 100), 0),
+    [data],
+  );
+  const paymentsBalanceCents = isFinalized && g702 ? g702.L8currentPaymentDueCents - paymentsPaidCents : null;
 
   return (
     <Modal
@@ -206,8 +236,40 @@ export const AiaPayAppEditor: React.FC<{
                 {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STATUS_META[s]?.label ?? s}</option>)}
               </Select>
             </Field>
-            <Field label="Retainage % (work)" htmlFor="pa-ret"><Input id="pa-ret" type="number" value={retainagePercent} onChange={e => setRetainagePercent(e.target.value)} disabled={isFinalized} /></Field>
-            <Field label="Retainage % (stored)" htmlFor="pa-sret"><Input id="pa-sret" type="number" value={storedRetainagePercent} onChange={e => setStoredRetainagePercent(e.target.value)} disabled={isFinalized} /></Field>
+          </div>
+
+          {/* Retainage panel — rates are read-only facts snapshotted from
+              settings/SOV at app creation; the only editable control here is
+              how many points to release on this application. */}
+          <div className="rounded-lg border border-edge p-4">
+            <h4 className="mb-2 text-sm font-semibold text-ink">Retainage</h4>
+            <p className="mb-3 text-sm text-ink-soft">
+              {data.g702.retainage.mode === 'perLine'
+                ? <>Per-line rates (see Schedule of Values) · Released {fmtPts(data.g702.retainage.cumulativeReleasedPoints)}%</>
+                : <>Base {fmtPts(data.g702.retainage.baseWorkPercent)}% · Released {fmtPts(data.g702.retainage.cumulativeReleasedPoints)}% · Effective {fmtPts(data.g702.retainage.effectiveWorkPercent ?? 0)}%</>}
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Release retainage on this application (% points)" htmlFor="pa-release">
+                <Input
+                  id="pa-release"
+                  type="number"
+                  value={releasedRetainagePoints}
+                  onChange={e => setReleasedRetainagePoints(e.target.value)}
+                  disabled={isFinalized}
+                  min={0}
+                  max={data.g702.retainage.remainingPoints}
+                  step="any"
+                />
+              </Field>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setReleasedRetainagePoints(fmtPts(data.g702.retainage.remainingPoints))}
+                disabled={isFinalized}
+              >
+                Release all remaining ({fmtPts(data.g702.retainage.remainingPoints)}%)
+              </Button>
+            </div>
           </div>
 
           {/* G703 grid + G702 summary side-by-side on wide layouts */}
@@ -385,6 +447,33 @@ export const AiaPayAppEditor: React.FC<{
               </div>
             </div>
           )}
+          </div>
+
+          {/* Payments — read-only; recording/deleting happens in the
+              project's Payments tab. */}
+          <div className="rounded-lg border border-edge p-4">
+            <h4 className="mb-3 text-sm font-semibold text-ink">Payments</h4>
+            {payments.length === 0 ? (
+              <p className="text-sm text-ink-faint">No payments recorded. Record payments in the Billing → Payments tab.</p>
+            ) : (
+              <Table>
+                <THead><TR><TH>Date</TH><TH>Note</TH><TH className="text-right">Amount</TH></TR></THead>
+                <TBody>
+                  {payments.map(p => (
+                    <TR key={p.id}>
+                      <TD className="text-ink-soft">{p.date ? new Date(p.date).toLocaleDateString() : '—'}</TD>
+                      <TD className="text-ink-faint">{p.note || '—'}</TD>
+                      <TD className="text-right tabular-nums text-ink-soft">{formatMoney(Math.round((Number(p.amount) || 0) * 100))}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            )}
+            <p className="mt-3 text-sm text-ink-soft">
+              Paid <span className="font-semibold text-ink">{formatMoney(paymentsPaidCents)}</span>
+              {' · '}
+              Balance <span className="font-semibold text-ink">{paymentsBalanceCents == null ? '—' : formatMoney(paymentsBalanceCents)}</span>
+            </p>
           </div>
         </div>
       )}

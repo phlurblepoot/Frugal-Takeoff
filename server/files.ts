@@ -33,13 +33,61 @@ export interface FileMeta {
   versionNumber: number;
   legacyFormat: string | null; // 'dataurl' | 'base64' | verbatim non-canonical prefix | null
   createdAt: number;
+  customerId: string | null;
+  // Owning entity: invoice|payapp|change-order|issue|punch|rfi|task|proposal|
+  // printout|plan-set + its id. Null on loose uploads and legacy rows.
+  sourceType: string | null;
+  sourceId: string | null;
+  archived: number; // 0 | 1 — soft hide on the Documents page
+}
+
+// Canonical document kinds (spec 2026-08-17 §Data model). System kinds are
+// written by the program; users can never re-type a file into or out of one.
+export const SYSTEM_KINDS = [
+  'plan-source', 'plan', 'proposal', 'proposal-photo', 'printout',
+  'invoice', 'change-order', 'change-order-photo', 'issue-report',
+  'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
+  'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
+  'settings-asset',
+] as const;
+
+// Kinds an entity legitimately holds MANY of: one issue has a dozen photos,
+// all sharing the same (sourceType, sourceId, kind) triple. They are excluded
+// from upsert-by-source — otherwise the second photo would silently overwrite
+// the first as a "new version" of it (spec 2026-08-17, second amendment).
+// `plan-source` belongs here for the same reason and with sharper teeth: a
+// plan set is routinely built from several uploaded PDFs, and versioning one
+// onto another would keep the live id — so the pages split out of the FIRST
+// pdf would start rendering the second.
+export const MULTI_INSTANCE_KINDS = [
+  'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
+  'rfi-photo', 'proposal-photo', 'plan-source',
+] as const;
+
+// Kinds a person can pick in the upload popup — the only ones a file may be
+// re-typed to, and the only ones that are ever really deletable.
+export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other'] as const;
+
+// Admin-defined types are stored as `custom:<id>` and behave like uploads.
+export function isDirectUploadKind(kind: string): boolean {
+  return (DIRECT_UPLOAD_KINDS as readonly string[]).includes(kind) || kind.startsWith('custom:');
 }
 
 export interface PutOpts {
   projectId?: string;
   kind?: string;
   name?: string;
+  customerId?: string;
+  // The entity this file belongs to. With a kind, the pair identifies ONE
+  // stable document — see the upsert-by-source note on `store` below.
+  sourceType?: string;
+  sourceId?: string;
 }
+
+// A put either created/overwrote the requested id, or landed as a new version
+// of the document that already stood for this source (in which case `id` is
+// that document's id, not the one the caller asked for).
+export type PutResult = FileMeta & { versioned: boolean };
 
 function upsertRow(
   db: Database.Database,
@@ -53,7 +101,8 @@ function upsertRow(
   // INSERT OR REPLACE resets unlisted columns to defaults, so carry over
   // every column we don't intend to change.
   const existing = db
-    .prepare('SELECT projectId, kind, name, parentFileId, versionNumber, createdAt FROM files WHERE id = ?')
+    .prepare(`SELECT projectId, kind, name, parentFileId, versionNumber, createdAt,
+                     customerId, sourceType, sourceId, archived FROM files WHERE id = ?`)
     .get(id) as
     | {
         projectId: string | null;
@@ -62,11 +111,15 @@ function upsertRow(
         parentFileId: string | null;
         versionNumber: number;
         createdAt: number;
+        customerId: string | null;
+        sourceType: string | null;
+        sourceId: string | null;
+        archived: number;
       }
     | undefined;
   db.prepare(`
-    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, customerId, sourceType, sourceId, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     opts.projectId ?? existing?.projectId ?? null,
@@ -78,26 +131,95 @@ function upsertRow(
     existing?.parentFileId ?? null,
     existing?.versionNumber ?? 1,
     legacyFormat,
-    existing?.createdAt ?? Date.now()
+    existing?.createdAt ?? Date.now(),
+    opts.customerId ?? existing?.customerId ?? null,
+    opts.sourceType ?? existing?.sourceType ?? null,
+    opts.sourceId ?? existing?.sourceId ?? null,
+    existing?.archived ?? 0
   );
+}
+
+// The live document standing for (sourceType, sourceId, kind), if any. Only
+// live rows qualify: version history hangs off a parentFileId and must never
+// be picked up as an upsert target. Multi-instance kinds never match — an
+// entity's second photo is another photo, not a new version of the first.
+function findLiveBySource(db: Database.Database, opts: PutOpts): string | null {
+  if (!opts.sourceType || !opts.sourceId || !opts.kind) return null;
+  if ((MULTI_INSTANCE_KINDS as readonly string[]).includes(opts.kind)) return null;
+  const row = db.prepare(`
+    SELECT id FROM files
+    WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? AND kind = ?
+    ORDER BY createdAt ASC, id ASC LIMIT 1
+  `).get(opts.sourceType, opts.sourceId, opts.kind) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+// Upsert-by-source (spec 2026-08-17 §Data model): a generate/download flow
+// uploads with the owning entity's source metadata every time, minting a fresh
+// id client-side. When that source already has a live document of the same
+// kind, the bytes become a new VERSION of it rather than a second row — so
+// regenerating an invoice never clutters the Documents page. Without a full
+// sourceType+sourceId+kind triple this is an ordinary create/overwrite.
+function store(
+  db: Database.Database,
+  dataDir: string,
+  id: string,
+  buf: Buffer,
+  mime: string,
+  legacyFormat: string | null,
+  opts: PutOpts
+): PutResult {
+  const existingId = findLiveBySource(db, opts);
+  if (existingId) {
+    saveNewVersion(db, dataDir, existingId, buf, mime);
+    // saveNewVersion re-enters putBuffer with no opts, which stamps the
+    // dataURL format and keeps the old labels. Replay the caller's actual
+    // format (so getDataUrlString still round-trips) and take whichever
+    // descriptive fields this regenerate carried — kind and source are equal
+    // by construction, so nothing about the document's identity moves.
+    // Regenerating a document is also an act of using it: un-archive.
+    const sets = ['legacyFormat = ?', 'archived = 0'];
+    const vals: unknown[] = [legacyFormat];
+    if (opts.name) { sets.push('name = ?'); vals.push(opts.name); }
+    if (opts.projectId) { sets.push('projectId = ?'); vals.push(opts.projectId); }
+    if (opts.customerId) { sets.push('customerId = ?'); vals.push(opts.customerId); }
+    db.prepare(`UPDATE files SET ${sets.join(', ')} WHERE id = ?`).run(...vals, existingId);
+    return { ...getMeta(db, existingId)!, versioned: true };
+  }
+  const { size, sha256 } = writeFileContent(dataDir, id, buf);
+  upsertRow(db, id, mime, size, sha256, legacyFormat, opts);
+  return { ...getMeta(db, id)!, versioned: false };
 }
 
 // Stores a legacy dataURL string (the only format the old /api/images wrote).
 // Non-dataURL strings are treated as bare base64 — getDataUrlString restores
 // the original string shape either way.
-export function putDataUrl(db: Database.Database, dataDir: string, id: string, data: string, opts: PutOpts = {}): FileMeta {
+export function putDataUrl(db: Database.Database, dataDir: string, id: string, data: string, opts: PutOpts = {}): PutResult {
   const { mime, legacyFormat, buf } = parseDataUrl(data);
-  const { size, sha256 } = writeFileContent(dataDir, id, buf);
-  upsertRow(db, id, mime, size, sha256, legacyFormat, opts);
-  return getMeta(db, id)!;
+  return store(db, dataDir, id, buf, mime, legacyFormat, opts);
 }
 
-export function putBuffer(db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string, opts: PutOpts = {}): FileMeta {
-  const { size, sha256 } = writeFileContent(dataDir, id, buf);
+export function putBuffer(db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string, opts: PutOpts = {}): PutResult {
   // Raw uploads were converted to dataURLs by the old code, so reads expect
   // a dataURL back — mark accordingly.
-  upsertRow(db, id, mime || 'application/octet-stream', size, sha256, 'dataurl', opts);
-  return getMeta(db, id)!;
+  return store(db, dataDir, id, buf, mime || 'application/octet-stream', 'dataurl', opts);
+}
+
+// Archive/re-type a document. Deliberately policy-free — which kinds may be
+// re-typed and who may archive is enforced at the route. Version rows are left
+// alone: they are only ever reached through their live row.
+export function setFileFlags(
+  db: Database.Database,
+  id: string,
+  flags: { archived?: boolean; kind?: string }
+): FileMeta | null {
+  if (!getMeta(db, id)) return null;
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (flags.archived !== undefined) { sets.push('archived = ?'); vals.push(flags.archived ? 1 : 0); }
+  if (flags.kind !== undefined) { sets.push('kind = ?'); vals.push(flags.kind); }
+  if (sets.length) db.prepare(`UPDATE files SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+  return getMeta(db, id);
 }
 
 export function getMeta(db: Database.Database, id: string): FileMeta | null {
@@ -147,6 +269,9 @@ export function saveNewVersion(
     const { size, sha256 } = writeFileContent(dataDir, archivedVersionId, oldContent);
     const versionNumber = live.versionNumber + 1;
     const tx = db.transaction(() => {
+      // The archived row deliberately carries no source metadata: the source
+      // points at the LIVE document, and leaving these NULL keeps history out
+      // of every source-keyed lookup (upsert-by-source, /api/documents).
       db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         archivedVersionId, live.projectId, live.name, live.mime, size, sha256, live.kind, id, live.versionNumber, live.legacyFormat, Date.now()

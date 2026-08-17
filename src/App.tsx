@@ -8,7 +8,7 @@ import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
-import { ProjectDocuments } from './pages/project/ProjectDocuments';
+import { DocumentsPage, ProjectDocumentsRedirect } from './pages/documents/DocumentsPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
@@ -23,8 +23,7 @@ import { PdfEditor } from './pages/PdfEditor';
 import { SpreadsheetEditor } from './pages/SpreadsheetEditor';
 import { TasksPage } from './pages/TasksPage';
 import { TimeKeeping } from './pages/TimeKeeping';
-import { CustomersPage } from './pages/CustomersPage';
-import { CustomerDetail } from './pages/CustomerDetail';
+import { CustomersSplitView } from './pages/customers/CustomersSplitView';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
@@ -117,7 +116,7 @@ export default function App() {
             { index: true, element: <ProjectOverview /> },
             { path: 'takeoff', element: <ProjectView /> },
             { path: 'proposal', element: <ProjectProposal /> },
-            { path: 'documents', element: <ProjectDocuments /> },
+            { path: 'documents', element: <ProjectDocumentsRedirect /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },
             { path: 'punch', element: <ProjectPunch /> },
@@ -150,15 +149,19 @@ export default function App() {
         },
         {
           path: 'customers',
-          element: <CustomersPage />,
+          element: <CustomersSplitView />,
         },
         {
           path: 'customers/:id',
-          element: <CustomerDetail />,
+          element: <CustomersSplitView />,
         },
         {
           path: 'tasks',
           element: <TasksPage />,
+        },
+        {
+          path: 'documents',
+          element: <DocumentsPage />,
         },
         {
           path: 'time',
