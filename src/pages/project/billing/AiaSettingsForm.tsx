@@ -1,8 +1,9 @@
 // src/pages/project/billing/AiaSettingsForm.tsx
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { AiaSettings, AiaSovLine, resolveRetainageMode, saveAiaSettings } from '../../../utils/store';
+import { AiaPayApp, AiaSettings, AiaSovLine, resolveRetainageMode, saveAiaSettings } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
+import { useConfirm } from '../../../components/ConfirmDialog';
 import { Button, Card, CardBody, Field, Input, Textarea } from '../../../components/ui';
 
 const numOrUndefined = (v: string): number | undefined => {
@@ -14,16 +15,24 @@ export const AiaSettingsForm: React.FC<{
   projectId: string;
   settings: AiaSettings;
   sovLines: AiaSovLine[];
+  /** Existing pay applications — only their count matters here: switching the
+   *  retainage mode recomputes every one of them, so the save is confirmed. */
+  payApps: AiaPayApp[];
   onSaved: (s: AiaSettings) => void;
   defaultOpen?: boolean;
-}> = ({ projectId, settings, sovLines, onSaved, defaultOpen = false }) => {
+}> = ({ projectId, settings, sovLines, payApps, onSaved, defaultOpen = false }) => {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [retainagePercent, setRetainagePercent] = useState(
     settings.retainagePercent != null ? String(settings.retainagePercent) : '10');
   // No stored mode yet (legacy project): infer from whether any SOV line
   // already carries a per-line rate, so the toggle doesn't silently flip a
   // per-line project to uniform the moment someone opens this form.
   const [retainageMode, setRetainageMode] = useState<'uniform' | 'perLine'>(
+    resolveRetainageMode(settings.retainageMode, sovLines));
+  // The mode as last persisted — the baseline the confirm compares against, so
+  // toggling away and back again isn't treated as a change.
+  const [savedMode, setSavedMode] = useState<'uniform' | 'perLine'>(
     resolveRetainageMode(settings.retainageMode, sovLines));
   const [ownerName, setOwnerName] = useState(settings.ownerName ?? '');
   const [ownerAddress, setOwnerAddress] = useState(settings.ownerAddress ?? '');
@@ -37,6 +46,17 @@ export const AiaSettingsForm: React.FC<{
   const [open, setOpen] = useState(defaultOpen);
 
   const handleSave = async () => {
+    // Flipping the mode re-derives retainage on EVERY existing application —
+    // finalized ones included, and the billing rollups move with them — so it
+    // is confirmed whenever there is anything to recompute.
+    if (retainageMode !== savedMode && payApps.length > 0) {
+      const ok = await confirm({
+        title: 'Change retainage mode?',
+        message: `Changing the retainage mode recalculates retainage on ${payApps.length} existing application(s), including finalized ones. Continue?`,
+        confirmLabel: 'Change mode',
+      });
+      if (!ok) return;
+    }
     setSaving(true);
     const next: AiaSettings = {
       ...settings,
@@ -53,6 +73,7 @@ export const AiaSettingsForm: React.FC<{
     };
     try {
       await saveAiaSettings(projectId, next);
+      setSavedMode(retainageMode);
       toast('AIA settings saved', { type: 'success' });
       onSaved(next);
     } catch {

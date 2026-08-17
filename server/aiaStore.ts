@@ -321,9 +321,12 @@ export function setPayApp(db: Database.Database, id: string, patch: PayAppPatch)
       if (!Number.isFinite(pts) || pts < 0) {
         throw new ValidationError('releasedRetainagePoints must be a finite number of percentage points ≥ 0');
       }
+      // Compare with an epsilon: `remaining` is a float subtraction (e.g.
+      // 15 - 8.05 = 6.949999999999999), so an exact `>` would reject the very
+      // value the UI reports as remaining.
       const remaining = remainingReleasablePoints(db, id);
-      if (pts > remaining) {
-        throw new ValidationError(`Cannot release ${pts} points — only ${remaining} remain on this application`);
+      if (pts > remaining + 1e-9) {
+        throw new ValidationError(`Cannot release ${pts} points — only ${+remaining.toFixed(4)} remain on this application`);
       }
     }
     const status = patch.status !== undefined ? patch.status : app.status;
@@ -382,6 +385,12 @@ export interface G703Row {
 
 export type RetainageMode = 'uniform' | 'perLine';
 
+// Percentage POINTS are floats (15 - 8.05 = 6.949999999999999), so the figures
+// REPORTED to clients are rounded to 4 decimals — enough for any real retainage
+// rate, and it keeps the UI from printing float residue. The internal math is
+// never rounded; only this reported block is.
+const round4 = (n: number): number => +n.toFixed(4);
+
 // Read project.meta.aiaSettings.retainageMode.
 //   'perLine' → per-line rates, base as the fallback for blank lines
 //   'uniform' → base rate only; stray values left in the per-line column are
@@ -425,6 +434,13 @@ function effectiveStoredPct(ctx: ComputeContext): number {
 // Points still releasable on this app BEFORE its own release — i.e. the base
 // (the largest relevant base in perLine mode) less everything released on
 // STRICTLY PRIOR apps. Floored at 0. "Release all remaining" sends this value.
+//
+// In perLine mode the ceiling is max(app base, line rates) — deliberately more
+// permissive than a strict max-over-lines when every line sits below the app
+// base. Harmless: per-line clamping (effectiveWorkPct floors at 0) holds those
+// lines' retainage dollars at 0 regardless, and keeping the app base in the
+// ceiling means a line ADDED LATER at the base rate can still be released
+// against instead of being permanently locked out by an earlier low ceiling.
 export function remainingReleasablePoints(db: Database.Database, payAppId: string): number {
   const app = db.prepare('SELECT * FROM aia_pay_apps WHERE id = ?').get(payAppId) as any;
   if (!app) throw new NotFoundError('Pay application not found');
@@ -614,12 +630,12 @@ export function computeG702(db: Database.Database, payAppId: string): G702 {
       // per-line rates under an absent toggle still reveals its per-line column.
       mode: ctx.mode,
       baseWorkPercent: app.retainagePercent,
-      cumulativeReleasedPoints: ctx.cumulativeReleasedPoints,
+      cumulativeReleasedPoints: round4(ctx.cumulativeReleasedPoints),
       releasedThisApp: ctx.releasedThisApp,
-      remainingPoints: remainingReleasablePoints(db, payAppId),
+      remainingPoints: round4(remainingReleasablePoints(db, payAppId)),
       effectiveWorkPercent: ctx.mode === 'perLine'
         ? null
-        : Math.max(0, app.retainagePercent - ctx.cumulativeReleasedPoints),
+        : round4(Math.max(0, app.retainagePercent - ctx.cumulativeReleasedPoints)),
     },
   };
 }

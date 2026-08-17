@@ -146,6 +146,11 @@ function applyPageSetup(ws: ExcelJS.Worksheet, landscape = false): void {
 //   trivial formula, so the sheet still "recalculates" from a literal input
 //   rather than silently going wrong. Lines 6 and 8 need no changes — they
 //   never depended on G22 directly.
+// - The same literal L7 is used in UNIFORM mode whenever any retainage has
+//   been released (cumulativeReleasedPoints > 0): the old formula assumes the
+//   prior application billed at the rate G22 now holds, which is false the
+//   moment G22 drops to the post-release effective rate. Uniform projects with
+//   no releases keep the legacy formula byte-for-byte.
 // ---------------------------------------------------------------------------
 
 // Split a multi-line / comma-joined address into up to two display lines.
@@ -443,12 +448,19 @@ function buildG702(ws: ExcelJS.Worksheet, ctx: AiaExportCtx, g: G703Anchors): vo
 
   line(5, 'TOTAL EARNED LESS RETAINAGE:', `'G703'!G${grand}-'G703'!J${grand}`);
 
-  if (perLine) {
-    // The old formula backed into "previous certificate" by assuming ONE
-    // constant rate (prior cumulative x G22) — meaningless once G22 isn't a
-    // rate. The server already computed L7 correctly (it walks the prior
-    // app's own math), so write it as a literal in an aux cell and keep H26
-    // a trivial formula over it, same pattern as the 5a/5b literals above.
+  // The legacy L7 formula backs into "previous certificates" as
+  // prior-cumulative x G22 — it assumes the PRIOR application was billed at
+  // the same rate G22 now holds. That assumption breaks two ways: in perLine
+  // mode G22 isn't a rate at all, and on any release application G22 holds the
+  // NEW (lower) effective rate, so the back-derived L7 overstates and L8
+  // (current payment due) collapses toward zero on exactly the application
+  // that pays the retainage out. The server already computed L7 correctly (it
+  // walks the prior app's own math), so in both cases write it as a literal in
+  // an aux cell with H26 a trivial formula over it — same pattern as the
+  // 5a/5b literals above. Zero-release uniform exports keep the old formula.
+  const literalL7 = perLine || retainage.cumulativeReleasedPoints > 0;
+
+  if (literalL7) {
     setCell(ws, `D${L7row}`, '7.', { bold: true });
     setCell(ws, `E${L7row}`, 'LESS PREVIOUS CERTIFICATES FOR PAYMENT:', {});
     setCell(ws, `G${L7row}`, dollars(ctx.g702.L7lessPreviousCents), { money: true });

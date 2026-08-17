@@ -220,6 +220,100 @@ describe('buildAiaWorkbook', () => {
       .toBe(`'G703'!J${CONTRACT_TOTAL_ROW}+'G703'!J${CO_TOTAL_ROW}`);
   });
 
+  it('uniform mode keeps the legacy back-derived Line 7 formula when nothing has been released', async () => {
+    const wb = await buildAiaWorkbook(ctx); // cumulativeReleasedPoints: 0
+    const ws = wb.getWorksheet('G702')!;
+    expect(formulaOf(ws.getCell('H26').value))
+      .toBe(`'G703'!D${GRAND_ROW}-('G703'!D${GRAND_ROW}*'G702'!G22)`);
+  });
+
+  it('uniform mode with a release writes Line 7 as a literal so Line 8 still pays out the released retainage', async () => {
+    // Mirrors the server fixture: one $100,000 line at 50%, base retainage 15,
+    // 5 points released on this application.
+    //   app #1: retainage 15% of 5,000,000 → L6 = 4,250,000
+    //   app #2: effective 10%            → L6 = 4,500,000, L7 = 4,250,000
+    //   L8 = 250,000 cents = $2,500 (exactly the 5 released points)
+    // The legacy formula would back-derive L7 as D_grand − D_grand*G22 =
+    // 50,000 − 5,000 = 45,000 — i.e. equal to L6, exporting L8 as $0 on the
+    // one application that actually releases the money.
+    const releaseG703: AiaG703Row[] = [
+      {
+        sovLineId: 'sov1', itemNo: '001', description: 'Line 1', isChangeOrder: 0,
+        scheduledValueCents: 10000000, previousCents: 5000000, thisPeriodCents: 0,
+        storedCents: 0, totalToDateCents: 5000000, percentComplete: 50,
+        balanceToFinishCents: 5000000, retainageCents: 500000,
+      },
+    ];
+    const releaseCtx: AiaExportCtx = {
+      ...ctx,
+      sovLines: [sovLines[0]],
+      g703: releaseG703,
+      g702: {
+        L1originalContractCents: 10000000,
+        L2changeOrdersCents: 0,
+        L3contractSumToDateCents: 10000000,
+        L4totalCompletedStoredCents: 5000000,
+        L5aRetainageWorkCents: 500000,
+        L5bRetainageStoredCents: 0,
+        L5retainageCents: 500000,
+        L6earnedLessRetainageCents: 4500000,
+        L7lessPreviousCents: 4250000,
+        L8currentPaymentDueCents: 250000,
+        L9balanceToFinishCents: 5500000,
+        changeOrders: { additionsCents: 0, deductionsCents: 0, netCents: 0 },
+        retainage: {
+          mode: 'uniform',
+          baseWorkPercent: 15,
+          cumulativeReleasedPoints: 5,
+          releasedThisApp: 5,
+          remainingPoints: 15,
+          effectiveWorkPercent: 10, // 15 − 5
+        },
+      },
+      app: { ...ctx.app, retainagePercent: 15, storedRetainagePercent: 15, releasedRetainagePoints: 5 },
+    };
+
+    const wb = await buildAiaWorkbook(releaseCtx);
+    const g702ws = wb.getWorksheet('G702')!;
+    const g703ws = wb.getWorksheet('G703')!;
+
+    // One contract line, zero change orders → G703 anchors shift:
+    // items 11, TOTALS 12, CO label 14, CO letters 15, CO header 16-19,
+    // CO TOTALS (empty section) 20, GRAND TOTAL 21.
+    const ONE_LINE_GRAND = 21;
+
+    // Line 7 is the server's literal (prior application's Line 6), in dollars,
+    // with H26 a trivial formula over it — NOT the G22 back-derivation.
+    expect(g702ws.getCell('G26').value).toBe(42500);            // 4,250,000 cents
+    expect(g702ws.getCell('G26').value).toBe(releaseCtx.g702.L7lessPreviousCents / 100);
+    expect(formulaOf(g702ws.getCell('H26').value)).toBe('G26');
+    expect(formulaOf(g702ws.getCell('H26').value)).not.toContain('G22');
+
+    // Line 8 = H24 − H26, and H24 (Line 6) = G703 GRAND G − GRAND J.
+    expect(formulaOf(g702ws.getCell('H28').value)).toBe('H24-H26');
+    expect(formulaOf(g702ws.getCell('H24').value))
+      .toBe(`'G703'!G${ONE_LINE_GRAND}-'G703'!J${ONE_LINE_GRAND}`);
+
+    // Evaluate those inputs from the literal cells the sheet actually carries.
+    const d = Number(g703ws.getCell(`D${CONTRACT_START}`).value);
+    const e = Number(g703ws.getCell(`E${CONTRACT_START}`).value);
+    const f = Number(g703ws.getCell(`F${CONTRACT_START}`).value);
+    const rate = Number(g702ws.getCell('G22').value);
+    expect(d).toBe(50000);          // previous applications, dollars
+    expect(rate).toBeCloseTo(0.10, 4); // EFFECTIVE rate, not the base 15%
+
+    const grandG = d + e + f;                 // 50,000
+    const grandJ = (d + e) * rate;            // 5,000
+    const L6 = grandG - grandJ;               // 45,000 — what H24 evaluates to
+    const L7 = Number(g702ws.getCell('G26').value);
+    expect(L6 - L7).toBeCloseTo(2500, 2);     // $2,500 released — matches the server
+    expect(L6 - L7).toBeCloseTo(releaseCtx.g702.L8currentPaymentDueCents / 100, 2);
+
+    // The legacy back-derivation on the same sheet would have paid nothing.
+    const legacyL7 = grandG - grandG * rate;  // 45,000 == L6
+    expect(L6 - legacyL7).toBeCloseTo(0, 2);
+  });
+
   it('perLine mode writes 5a/5b as numeric literals from ctx.g702 and per-row G703 retainage as literals', async () => {
     const perLineCtx: AiaExportCtx = {
       ...ctx,

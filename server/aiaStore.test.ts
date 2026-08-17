@@ -695,6 +695,40 @@ describe('retainage release (effective-rate model)', () => {
     expect(getPayApp(db, a2.id)!.version).toBe(2);
   });
 
+  it('fractional releases: the reported remainder is exact and releasing it is accepted', () => {
+    // 15 − (3.05 + 5) is 6.949999999999999 in binary floating point. The UI
+    // must show 6.95, and typing that 6.95 back must NOT be rejected as an
+    // over-release by a hair.
+    setAiaSettings('p1', { retainageMode: 'uniform', retainagePercent: 15 });
+    setupOneLine();
+
+    const a1 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    const a2 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    const a3 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    setPayApp(db, a1.id, { releasedRetainagePoints: 3.05 });
+    setPayApp(db, a2.id, { releasedRetainagePoints: 5 }); // prior sum = 8.05
+
+    // Raw arithmetic really does carry the residue…
+    expect(remainingReleasablePoints(db, a3.id)).not.toBe(6.95);
+    // …but what a client is told is the clean number.
+    expect(computeG702(db, a3.id).retainage.remainingPoints).toBe(6.95);
+    expect(computeG702(db, a3.id).retainage.cumulativeReleasedPoints).toBe(8.05);
+
+    // And releasing exactly that reported remainder is accepted (epsilon).
+    setPayApp(db, a3.id, { releasedRetainagePoints: 6.95 });
+    expect(getPayApp(db, a3.id)!.releasedRetainagePoints).toBe(6.95);
+    // Everything is now released → effective rate reports a clean 0.
+    expect(computeG702(db, a3.id).retainage.effectiveWorkPercent).toBe(0);
+
+    // A release genuinely beyond the remainder is still rejected, and the
+    // message quotes the rounded remainder rather than float residue.
+    const a4 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    setPayApp(db, a4.id, { releasedRetainagePoints: 0 });
+    const a5 = createPayApp(db, 'p1', { retainagePercent: 15 });
+    expect(() => setPayApp(db, a5.id, { releasedRetainagePoints: 0.01 }))
+      .toThrow(/only 0 remain/);
+  });
+
   it('perLine mode: effective per-line rate = (line ?? base) − cumulative, clamped at 0', () => {
     setAiaSettings('p1', { retainageMode: 'perLine', retainagePercent: 15 });
     const { id: line1 } = createSovLine(db, 'p1', { itemNo: '1', description: 'A', scheduledValueCents: 10000000, retainagePercent: 15 });

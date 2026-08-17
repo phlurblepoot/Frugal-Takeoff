@@ -21,6 +21,11 @@ const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
 
 const STATUS_OPTIONS = ['draft', 'finalized'];
 
+// Retainage points are floats (15 - 8.05 = 6.949999999999999). Everything the
+// panel SHOWS — and the value "Release all remaining" types into the input —
+// goes through this so no float residue reaches the user.
+const fmtPts = (n: number): string => String(+n.toFixed(4));
+
 // Local editable per-line state, keyed by sovLineId.
 interface EditLine { percentComplete: string; storedMaterials: string }
 
@@ -80,7 +85,12 @@ export const AiaPayAppEditor: React.FC<{
       // Persist app-level field changes first (date/retainage-release/status).
       const app = data.app;
       const patch: Record<string, unknown> = {};
-      const releasedNum = parseFloat(releasedRetainagePoints);
+      // A cleared box is an explicit "release nothing" (0), not a no-op —
+      // otherwise parseFloat('') is NaN and the guard below silently drops the
+      // patch, leaving the previous release in place. Genuine garbage still
+      // parses to NaN and is still skipped.
+      const releaseRaw = releasedRetainagePoints.trim();
+      const releasedNum = releaseRaw === '' ? 0 : parseFloat(releaseRaw);
       if ((periodTo || null) !== (app.periodTo ?? null)) patch.periodTo = periodTo || null;
       if ((applicationDate || null) !== (app.applicationDate ?? null)) patch.applicationDate = applicationDate || null;
       if (Number.isFinite(releasedNum) && releasedNum !== (app.releasedRetainagePoints ?? 0)) patch.releasedRetainagePoints = releasedNum;
@@ -216,8 +226,8 @@ export const AiaPayAppEditor: React.FC<{
             <h4 className="mb-2 text-sm font-semibold text-ink">Retainage</h4>
             <p className="mb-3 text-sm text-ink-soft">
               {data.g702.retainage.mode === 'perLine'
-                ? <>Per-line rates (see Schedule of Values) · Released {data.g702.retainage.cumulativeReleasedPoints}%</>
-                : <>Base {data.g702.retainage.baseWorkPercent}% · Released {data.g702.retainage.cumulativeReleasedPoints}% · Effective {data.g702.retainage.effectiveWorkPercent ?? 0}%</>}
+                ? <>Per-line rates (see Schedule of Values) · Released {fmtPts(data.g702.retainage.cumulativeReleasedPoints)}%</>
+                : <>Base {fmtPts(data.g702.retainage.baseWorkPercent)}% · Released {fmtPts(data.g702.retainage.cumulativeReleasedPoints)}% · Effective {fmtPts(data.g702.retainage.effectiveWorkPercent ?? 0)}%</>}
             </p>
             <div className="flex flex-wrap items-end gap-3">
               <Field label="Release retainage on this application (% points)" htmlFor="pa-release">
@@ -235,10 +245,10 @@ export const AiaPayAppEditor: React.FC<{
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => setReleasedRetainagePoints(String(data.g702.retainage.remainingPoints))}
+                onClick={() => setReleasedRetainagePoints(fmtPts(data.g702.retainage.remainingPoints))}
                 disabled={isFinalized}
               >
-                Release all remaining ({data.g702.retainage.remainingPoints}%)
+                Release all remaining ({fmtPts(data.g702.retainage.remainingPoints)}%)
               </Button>
             </div>
           </div>
