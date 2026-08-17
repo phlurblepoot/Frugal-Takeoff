@@ -25,6 +25,7 @@ const WORKSPACE_NAV: NavEntry[] = [
   { id: 'projects', label: 'Projects', Icon: FolderKanban, path: '/projects', match: p => p.startsWith('/projects') || p === '/new' || p.startsWith('/project') },
   { id: 'customers', label: 'Customers', Icon: Users, path: '/customers', match: p => p.startsWith('/customers') },
   { id: 'tasks', label: 'Tasks', Icon: ListTodo, path: '/tasks', match: p => p.startsWith('/tasks') },
+  { id: 'documents', label: 'Documents', Icon: FolderOpen, path: '/documents', match: p => p.startsWith('/documents') },
   { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
 ];
 

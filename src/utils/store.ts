@@ -710,6 +710,57 @@ export const deleteDraft = async (fileId: string): Promise<void> => {
   await handleResponse(res);
 };
 
+// ── Global Documents page (spec docs/superpowers/specs/2026-08-17-unified-documents-design.md) ──
+
+export interface DocumentSource {
+  type: string;
+  id: string;
+  label: string;
+  href: string | null;
+}
+
+export interface DocumentRow {
+  id: string;
+  name: string | null;
+  mime: string;
+  size: number;
+  kind: string;
+  createdAt: number;
+  versionNumber: number;
+  archived: boolean;
+  projectId: string | null;
+  projectName: string | null;
+  customerId: string | null;
+  customerName: string | null;
+  source: DocumentSource | null;
+}
+
+export interface DocumentFilters {
+  projectIds?: string[];
+  customerIds?: string[];
+  kinds?: string[];
+  q?: string;
+  archived?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export const getDocuments = async (
+  filters: DocumentFilters = {}
+): Promise<{ rows: DocumentRow[]; total: number }> => {
+  const p = new URLSearchParams();
+  if (filters.projectIds?.length) p.set('projectIds', filters.projectIds.join(','));
+  if (filters.customerIds?.length) p.set('customerIds', filters.customerIds.join(','));
+  if (filters.kinds?.length) p.set('kinds', filters.kinds.join(','));
+  if (filters.q) p.set('q', filters.q);
+  if (filters.archived) p.set('archived', '1');
+  if (filters.limit != null) p.set('limit', String(filters.limit));
+  if (filters.offset != null) p.set('offset', String(filters.offset));
+  const res = await fetchWithRetry(`/api/documents?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
 // ── Phase 4a: billing ────────────────────────────────────────────────────────
 
 export interface InvoiceLine {

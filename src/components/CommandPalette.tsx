@@ -77,6 +77,7 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:pdf', type: 'action', title: 'PDF editor', icon: <FileText size={16} />, run: () => navigate('/tools/pdf') },
     { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
     { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
+    { id: 'a:documents', type: 'action', title: 'Documents', icon: <FolderOpen size={16} />, run: () => navigate('/documents') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
     {
       id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,
@@ -105,7 +106,7 @@ export const CommandPalette: React.FC = () => {
       { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
       { id: 'ctx:overview', type: 'action' as const, title: 'Project overview', subtitle: 'Project', icon: <LayoutGrid size={16} />, run: () => navigate(`/project/${projectId}`) },
       { id: 'ctx:takeoff', type: 'action' as const, title: 'Takeoff & estimate', subtitle: 'Project', icon: <Ruler size={16} />, run: () => navigate(`/project/${projectId}/takeoff`) },
-      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/project/${projectId}/documents`) },
+      { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/documents?projectIds=${projectId}`) },
       { id: 'ctx:punch', type: 'action' as const, title: 'Punch & checklists', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch`) },
       { id: 'ctx:issues', type: 'action' as const, title: 'Issues', subtitle: 'Project', icon: <AlertCircle size={16} />, run: () => navigate(`/project/${projectId}/issues`) },
       { id: 'ctx:rfis', type: 'action' as const, title: 'RFIs', subtitle: 'Project', icon: <MessageCircleQuestion size={16} />, run: () => navigate(`/project/${projectId}/rfis`) },

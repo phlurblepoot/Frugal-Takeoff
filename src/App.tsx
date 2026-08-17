@@ -8,7 +8,7 @@ import { ProjectView } from './pages/ProjectView';
 import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
-import { ProjectDocuments } from './pages/project/ProjectDocuments';
+import { DocumentsPage, ProjectDocumentsRedirect } from './pages/documents/DocumentsPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
@@ -116,7 +116,7 @@ export default function App() {
             { index: true, element: <ProjectOverview /> },
             { path: 'takeoff', element: <ProjectView /> },
             { path: 'proposal', element: <ProjectProposal /> },
-            { path: 'documents', element: <ProjectDocuments /> },
+            { path: 'documents', element: <ProjectDocumentsRedirect /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },
             { path: 'punch', element: <ProjectPunch /> },
@@ -158,6 +158,10 @@ export default function App() {
         {
           path: 'tasks',
           element: <TasksPage />,
+        },
+        {
+          path: 'documents',
+          element: <DocumentsPage />,
         },
         {
           path: 'time',
