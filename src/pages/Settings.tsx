@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveFile, getAuthHeaders, getUserPreferences, saveUserPreferences } from '../utils/store';
+import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences } from '../utils/store';
 import { SmtpSettings } from '../types';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
@@ -1325,22 +1325,22 @@ const AiaTemplateTab: React.FC = () => {
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const id = `aia-template-${crypto.randomUUID()}`;
-        await saveFile(id, reader.result as string);
-        await saveSettings({ aiaTemplateFileId: id, aiaTemplateName: file.name });
-        setTemplateFileId(id);
-        setTemplateName(file.name);
-        toast('Template uploaded', { type: 'success' });
-      } catch {
-        toast('Failed to upload template', { type: 'error' });
-      }
-    };
-    reader.readAsDataURL(file);
     e.target.value = ''; // allow re-uploading the same filename
+    if (!file) return;
+    try {
+      // settings-asset keeps the template out of the Documents page; it belongs to
+      // no project or entity, so it carries no projectId/source. The read path
+      // (getFile → dataUrl) is unchanged — the server still reconstructs a dataURL.
+      const { fileId } = await saveBinaryFile(crypto.randomUUID(), file, {
+        kind: 'settings-asset', name: file.name,
+      });
+      await saveSettings({ aiaTemplateFileId: fileId, aiaTemplateName: file.name });
+      setTemplateFileId(fileId);
+      setTemplateName(file.name);
+      toast('Template uploaded', { type: 'success' });
+    } catch {
+      toast('Failed to upload template', { type: 'error' });
+    }
   };
 
   const handleRemove = async () => {

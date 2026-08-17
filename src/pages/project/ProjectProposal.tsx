@@ -728,14 +728,18 @@ export const ProjectProposal: React.FC = () => {
                 },
               };
               const totals = computeTakeoffTotals(project, currentPageIds);
-              const { pdfBytes, overBudget } = await generateProposalPdf(
+              const { pdfBytes, suggestedName, overBudget } = await generateProposalPdf(
                 project, totals, selectedTakeoffIds, currentPageIds, options, settings, () => {},
               );
-              const tempFileId = uuidv4();
-              // Throwaway attachment for this one send — no projectId/kind/name
-              // so it never shows up in project Documents.
-              await saveBinaryFile(tempFileId, new Blob([pdfBytes], { type: 'application/pdf' }));
-              fileIdToSend = tempFileId;
+              // Not throwaway: the send records this id as project.proposalFileId, so
+              // it must be attributed like any proposal — kind 'proposal' keeps it
+              // admin-only and guarded, and the source triple versions the one
+              // proposal document instead of adding a row per send.
+              const { fileId } = await saveBinaryFile(uuidv4(), new Blob([pdfBytes], { type: 'application/pdf' }), {
+                projectId: project.id, kind: 'proposal', name: suggestedName,
+                sourceType: 'proposal', sourceId: project.id,
+              });
+              fileIdToSend = fileId;
               if (overBudget) {
                 toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
               }

@@ -147,7 +147,9 @@ export const InvoiceEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = `invoice-${invoice.number ?? invoice.id}.pdf`;
+      // Same name the send flow uses: both upsert onto one document row, so a
+      // differing name here would flip the stored name depending on which ran last.
+      const fileName = `${invoice.number || 'invoice'}.pdf`;
       // Keep a copy in Documents, but never let that failure block the download.
       try {
         await persistGeneratedDocument(blob, { projectId, kind: 'invoice', name: fileName, sourceType: 'invoice', sourceId: invoice.id });
