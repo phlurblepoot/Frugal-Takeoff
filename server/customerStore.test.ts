@@ -57,6 +57,16 @@ describe('customerStore', () => {
   });
 });
 
+// Local YYYY-MM-DD offset from today — mirrors customerStore's todayStr()
+// comparison base. Using toISOString() (UTC) here would drift a day off
+// local "today" depending on timezone and time of day, making these
+// fixtures flaky rather than date-robust.
+function daysFromToday(offsetDays: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 describe('customerSummaries / customerOverview', () => {
   let d: Database.Database;
   let cid: string;
@@ -85,7 +95,7 @@ describe('customerSummaries / customerOverview', () => {
     setInvoiceStatus(d, archInv.id, 'sent');
 
     // tasks: one overdue (yesterday, todo), one done (should not count as open)
-    const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10);
+    const yesterday = daysFromToday(-1);
     d.prepare(`INSERT INTO tasks (id, title, status, dueDate, customerId, version, createdAt) VALUES (?, ?, ?, ?, ?, 1, ?)`)
       .run('t-overdue', 'Call back', 'todo', yesterday, cid, Date.now());
     d.prepare(`INSERT INTO tasks (id, title, status, dueDate, customerId, version, createdAt) VALUES (?, ?, ?, ?, ?, 1, ?)`)
@@ -109,7 +119,7 @@ describe('customerSummaries / customerOverview', () => {
 
   it('overdue comparison crosses month boundaries correctly (not a same-month fluke)', () => {
     // 40 days always crosses at least one month boundary, whatever "today" is.
-    const old = new Date(Date.now() - 40 * DAY).toISOString().slice(0, 10);
+    const old = daysFromToday(-40);
     d.prepare(`INSERT INTO tasks (id, title, status, dueDate, customerId, version, createdAt) VALUES (?, ?, ?, ?, ?, 1, ?)`)
       .run('t-old', 'Old overdue', 'todo', old, cid, Date.now());
     const row = customerSummaries(d, false).find(r => r.id === cid)!;
@@ -146,7 +156,7 @@ describe('customerSummaries / customerOverview', () => {
   });
 
   it('an overdue task tied to an archived project is excluded from counts and attention; the same task tied to a live project counts', () => {
-    const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10);
+    const yesterday = daysFromToday(-1);
     d.prepare(`INSERT INTO tasks (id, title, status, dueDate, customerId, projectId, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`)
       .run('t-arch-task', 'Archived project task', 'todo', yesterday, cid, 'p-arch', Date.now());
 
