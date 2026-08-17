@@ -278,13 +278,13 @@ export const NewProject: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: newProjectId });
 
               // Legacy raster path: only used when we couldn't store the source PDF.
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: newProjectId });
               }
               // Thumbnails are keyed by `thumbnailId` (always set) so the naming
               // UI can look them up uniformly for vector and legacy pages.
@@ -502,12 +502,12 @@ export const NewProject: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: projectId ?? undefined });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: projectId ?? undefined });
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 

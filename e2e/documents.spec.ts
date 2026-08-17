@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, seedCustomerWithPortfolio, seedDocumentsPortfolio } from './fixtures/test';
+import { test, expect, seedCustomerWithPortfolio, seedDocumentsPortfolio, seedProjectWithPage } from './fixtures/test';
 
 // Characterization spec for the global Documents page (unified-documents
 // spec, docs/superpowers/specs/2026-08-17-unified-documents-design.md) plus
@@ -450,4 +450,93 @@ test('row actions column: version-history toggle only for multi-version rows', a
   // historyFor state), which would otherwise make this a strict-mode clash.
   await rowFor(authedPage, v2Name).getByLabel('Version history', { exact: true }).click();
   await expect(authedPage.locator('table').getByText('v1', { exact: true })).toBeVisible();
+});
+
+// Clutter exclusions (docs/superpowers/specs/2026-08-17-documents-clutter-design.md).
+test('clutter exclusions: a seeded page-asset image never appears in the default view; admin Unassigned toggle is exclusive with Archived and shows only unassigned rows', async ({
+  authedPage, request, apiToken,
+}) => {
+  const auth = { Authorization: `Bearer ${apiToken.token}` };
+
+  // seedProjectWithPage uploads its raster via plain POST /api/images (no
+  // kind param) and wires it as pages[0].imageId — this exercises the
+  // NOT-EXISTS fallback (label-independent), not the kind='plan' attribution,
+  // proving the exclusion is self-healing for pre-existing/differently-kinded
+  // page assets too.
+  const paged = await seedProjectWithPage(request, apiToken.token);
+  await authedPage.goto(`/documents?projectIds=${paged.projectId}`);
+  await expect(authedPage.getByTestId('documents-upload')).toBeVisible();
+  await expect(tableRows(authedPage)).toHaveCount(0);
+
+  // An unassigned system-leftover row: no projectId, no name.
+  const unassignedFileId = randomUUID();
+  const unassignedRes = await request.post(`/api/files/${unassignedFileId}`, {
+    headers: { ...auth, 'Content-Type': 'text/plain' },
+    data: Buffer.from('unassigned fixture bytes'),
+  });
+  if (!unassignedRes.ok()) throw new Error(`unassigned fixture upload failed: ${unassignedRes.status()} ${await unassignedRes.text()}`);
+
+  // Admin sees the Unassigned toggle; toggling it shows the unassigned
+  // fixture (unscoped by project, since it has none) and hides it again on
+  // toggle-off. Exclusive with Archived: checking Unassigned unchecks it.
+  const unassignedToggle = authedPage.getByTestId('doc-filter-unassigned');
+  const archivedToggle = authedPage.getByTestId('doc-filter-archived');
+  await authedPage.goto('/documents');
+  await expect(unassignedToggle).toBeVisible();
+  // .click() + a separate assertion, not .check()/.uncheck() — these are
+  // React controlled checkboxes whose `checked` prop only reflects after a
+  // re-render (see the bulk-select test above for the same note).
+  await archivedToggle.click();
+  await expect(archivedToggle).toBeChecked();
+  await unassignedToggle.click();
+  await expect(unassignedToggle).toBeChecked();
+  await expect(archivedToggle).not.toBeChecked();
+  await expect(authedPage).toHaveURL(/unassigned=1/);
+  await expect(authedPage).not.toHaveURL(/archived=1/);
+  // A nameless row falls back to showing its raw id (DocumentsTable: `row.name
+  // ?? row.id`) — the unassigned fixture is visible by that id.
+  await expect(rowFor(authedPage, unassignedFileId)).toHaveCount(1);
+  await unassignedToggle.click();
+  await expect(unassignedToggle).not.toBeChecked();
+  await expect(authedPage).not.toHaveURL(/unassigned=1/);
+  await expect(rowFor(authedPage, unassignedFileId)).toHaveCount(0);
+});
+
+test('clutter exclusions: a non-admin gets no Unassigned toggle, and an unassigned=1 param is silently ignored', async ({
+  page, request, apiToken,
+}) => {
+  const auth = { Authorization: `Bearer ${apiToken.token}` };
+  const unassignedFileId = randomUUID();
+  const unassignedRes = await request.post(`/api/files/${unassignedFileId}`, {
+    headers: { ...auth, 'Content-Type': 'text/plain' },
+    data: Buffer.from('unassigned fixture bytes'),
+  });
+  if (!unassignedRes.ok()) throw new Error(`unassigned fixture upload failed: ${unassignedRes.status()} ${await unassignedRes.text()}`);
+
+  const username = `e2e-nonadmin-unassigned-${randomUUID().slice(0, 8)}`;
+  const password = 'password123';
+  const createRes = await request.post('/api/users', {
+    headers: { Authorization: `Bearer ${apiToken.token}` },
+    data: { username, password, role: 'user' },
+  });
+  if (!createRes.ok()) throw new Error(`user create failed: ${createRes.status()} ${await createRes.text()}`);
+  const loginRes = await request.post('/api/auth/login', { data: { username, password } });
+  if (!loginRes.ok()) throw new Error(`non-admin login failed: ${loginRes.status()} ${await loginRes.text()}`);
+  const session = await loginRes.json();
+
+  await page.addInitScript(
+    ([token, user]) => {
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', user);
+    },
+    [session.token, JSON.stringify(session.user)] as const,
+  );
+
+  // The param is present in the URL but the toggle never renders, and the
+  // row list is the normal (non-unassigned) view — proving the server-side
+  // ignore, not just a client-side hidden toggle.
+  await page.goto('/documents?unassigned=1');
+  await expect(page.getByTestId('documents-upload')).toBeVisible();
+  await expect(page.getByTestId('doc-filter-unassigned')).toHaveCount(0);
+  await expect(rowFor(page, unassignedFileId)).toHaveCount(0);
 });

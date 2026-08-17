@@ -42,6 +42,14 @@ export interface DocumentFilters {
   kinds?: string[];
   q?: string;
   archived?: boolean; // true = ONLY archived rows; false/undefined = exclude archived
+  // Admin-only exclusive view (spec docs/superpowers/specs/2026-08-17-documents-clutter-design.md):
+  // shows ONLY the hidden "unassigned" class (projectId+name both null). Gated
+  // on isAdmin inside listDocuments itself, not just at the route, so a
+  // non-admin request can never see it even if a caller forgets the check.
+  // Takes precedence over `archived` when both are set — it's a distinct view,
+  // not a narrowing of the default one, so no archived clause is applied
+  // within it (both archived and non-archived unassigned rows show).
+  unassigned?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -97,10 +105,25 @@ export function listDocuments(
   const where: string[] = [
     'f.parentFileId IS NULL',
     `f.kind NOT IN (${inClause(excluded.length)})`,
+    // Page assets can never appear (spec §Decisions "Page assets can never
+    // appear"): live NOT-EXISTS against pages.imageId/thumbnailId, so it's
+    // label-independent and self-healing — it hides a row even if it was
+    // uploaded before `kind='plan'` attribution existed, or under some other
+    // kind entirely.
+    'NOT EXISTS (SELECT 1 FROM pages pg WHERE pg.imageId = f.id OR pg.thumbnailId = f.id)',
   ];
   const params: unknown[] = [...excluded];
 
-  where.push(filters.archived ? 'f.archived = 1' : 'f.archived = 0');
+  // Unassigned view (admin-only, exclusive with archived — see DocumentFilters
+  // doc comment). isAdmin is re-checked here, not trusted from the caller, so
+  // this can never leak to a non-admin regardless of what the route passes.
+  const unassignedView = isAdmin && !!filters.unassigned;
+  if (unassignedView) {
+    where.push('f.projectId IS NULL AND f.name IS NULL');
+  } else {
+    where.push('NOT (f.projectId IS NULL AND f.name IS NULL)');
+    where.push(filters.archived ? 'f.archived = 1' : 'f.archived = 0');
+  }
 
   if (filters.projectIds?.length) {
     where.push(`f.projectId IN (${inClause(filters.projectIds.length)})`);

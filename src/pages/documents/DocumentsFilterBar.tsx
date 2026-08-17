@@ -20,10 +20,17 @@ export const DocumentsFilterBar: React.FC<{
   onKindsChange: (ids: string[]) => void;
   archived: boolean;
   onArchivedChange: (archived: boolean) => void;
+  // Admin-only exclusive view (spec docs/superpowers/specs/2026-08-17-documents-clutter-design.md);
+  // the toggle itself isn't rendered at all for a non-admin, matching the
+  // Billing-kind gating pattern used elsewhere in the app.
+  isAdmin: boolean;
+  unassigned: boolean;
+  onUnassignedChange: (unassigned: boolean) => void;
 }> = ({
   q, onQChange, projectOptions, projectIds, onProjectIdsChange,
   customerOptions, customerIds, onCustomerIdsChange,
   kindOptions, kinds, onKindsChange, archived, onArchivedChange,
+  isAdmin, unassigned, onUnassignedChange,
 }) => {
   // Local box tracks keystrokes instantly; the URL-driven `q` (and therefore
   // the fetch) only updates after a pause, so typing never fights re-renders.
@@ -72,6 +79,14 @@ export const DocumentsFilterBar: React.FC<{
         checked={archived}
         onChange={e => onArchivedChange(e.target.checked)}
       />
+      {isAdmin && (
+        <Checkbox
+          data-testid="doc-filter-unassigned"
+          label="Unassigned"
+          checked={unassigned}
+          onChange={e => onUnassignedChange(e.target.checked)}
+        />
+      )}
     </div>
   );
 };

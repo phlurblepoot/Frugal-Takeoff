@@ -648,7 +648,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof id !== 'string' || !id || typeof data !== 'string' || !data) {
         return res.status(400).json({ error: 'id and data are required' });
       }
-      putDataUrl(db, dataDir, id, data);
+      // Optional attribution (spec docs/superpowers/specs/2026-08-17-documents-clutter-design.md
+      // §Implementation): page-asset callers pass kind=plan so ALWAYS_EXCLUDED_KINDS
+      // hides them at upload time too, not just via the NOT-EXISTS fallback.
+      const q = req.query;
+      const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+      putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
       res.json({ success: true });
     } catch (e) {
       console.error('Error saving image:', e);
@@ -807,6 +812,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         kinds: csv(q.kinds),
         q: typeof q.q === 'string' && q.q ? q.q : undefined,
         archived: q.archived === '1',
+        // Admin-only inside listDocuments (re-checked against isAdmin there);
+        // passed through as-is here since the raw param is harmless for a
+        // non-admin — it's simply ignored.
+        unassigned: q.unassigned === '1',
         limit: int(q.limit),
         offset: int(q.offset),
       };

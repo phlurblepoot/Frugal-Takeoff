@@ -185,10 +185,18 @@ export const deleteProject = async (id: string): Promise<void> => {
   await handleResponse(res);
 };
 
-export const saveImage = async (id: string, dataUrl: string): Promise<void> => {
+export const saveImage = async (
+  id: string,
+  dataUrl: string,
+  opts?: { kind?: string; projectId?: string },
+): Promise<void> => {
   // Per-page images can be several MB, so allow a longer timeout than the
   // default for callers on slow connections.
-  const res = await fetchWithRetry('/api/images', {
+  const qs = new URLSearchParams();
+  if (opts?.kind) qs.set('kind', opts.kind);
+  if (opts?.projectId) qs.set('projectId', opts.projectId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetchWithRetry(`/api/images${suffix}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ id, data: dataUrl })
@@ -741,6 +749,9 @@ export interface DocumentFilters {
   kinds?: string[];
   q?: string;
   archived?: boolean;
+  // Admin-only exclusive view — ignored by the server for non-admins. See
+  // server/documents.ts DocumentFilters for the full semantics.
+  unassigned?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -754,6 +765,7 @@ export const getDocuments = async (
   if (filters.kinds?.length) p.set('kinds', filters.kinds.join(','));
   if (filters.q) p.set('q', filters.q);
   if (filters.archived) p.set('archived', '1');
+  if (filters.unassigned) p.set('unassigned', '1');
   if (filters.limit != null) p.set('limit', String(filters.limit));
   if (filters.offset != null) p.set('offset', String(filters.offset));
   const res = await fetchWithRetry(`/api/documents?${p.toString()}`, { headers: { ...getAuthHeaders() } });

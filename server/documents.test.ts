@@ -167,6 +167,76 @@ describe('GET /api/documents — filters', () => {
   });
 });
 
+describe('GET /api/documents — clutter exclusions (spec 2026-08-17-documents-clutter-design)', () => {
+  it('default view hides both unassigned (no project + no name) rows and page-referenced files, regardless of kind', async () => {
+    // Unassigned: no projectId, no name.
+    const unassigned = await upload('unassigned1', { kind: 'other' });
+    // A visible, normal upload for contrast.
+    const visible = await upload('visible1', { projectId: 'p1', kind: 'document', name: 'Visible.pdf' });
+    // A page-referenced file uploaded under an ordinary kind (not 'plan') —
+    // the NOT-EXISTS check is label-independent, so this must still be hidden.
+    const pageAsset = await upload('pageasset1', { projectId: 'p1', kind: 'document', name: 'raster.png' });
+    db.prepare(`
+      INSERT INTO pages (id, projectId, name, pageNumber, sortOrder, imageId, thumbnailId)
+      VALUES ('pg1', 'p1', 'Sheet 1', '1', 0, ?, NULL)
+    `).run(pageAsset);
+
+    const res = await request(app).get('/api/documents');
+    expect(res.body.rows.map((r: any) => r.id)).toEqual([visible]);
+    expect(res.body.rows.map((r: any) => r.id)).not.toContain(unassigned);
+    expect(res.body.rows.map((r: any) => r.id)).not.toContain(pageAsset);
+  });
+
+  it('page-referenced file hidden via thumbnailId too, and even under kind=plan (belt-and-suspenders with ALWAYS_EXCLUDED_KINDS)', async () => {
+    const thumbAsset = await upload('thumbasset1', { projectId: 'p1', kind: 'plan', name: 'thumb.png' });
+    db.prepare(`
+      INSERT INTO pages (id, projectId, name, pageNumber, sortOrder, imageId, thumbnailId)
+      VALUES ('pg2', 'p1', 'Sheet 2', '2', 0, NULL, ?)
+    `).run(thumbAsset);
+
+    const res = await request(app).get('/api/documents');
+    expect(res.body.rows.map((r: any) => r.id)).not.toContain(thumbAsset);
+  });
+
+  it('unassigned=1 (admin) shows ONLY the unassigned class, and page-asset exclusion still applies', async () => {
+    const unassignedA = await upload('unassignedA', { kind: 'other' });
+    const unassignedB = await upload('unassignedB', { kind: 'document' });
+    const visible = await upload('visibleX', { projectId: 'p1', kind: 'document', name: 'Visible.pdf' });
+    // Unassigned-shaped but ALSO page-referenced — must stay hidden even in
+    // the unassigned view (page-asset exclusion is unconditional).
+    const unassignedPageAsset = await upload('unassignedPage', { kind: 'other' });
+    db.prepare(`
+      INSERT INTO pages (id, projectId, name, pageNumber, sortOrder, imageId, thumbnailId)
+      VALUES ('pg3', 'p1', 'Sheet 3', '3', 0, ?, NULL)
+    `).run(unassignedPageAsset);
+
+    const res = await request(app).get('/api/documents?unassigned=1');
+    expect(res.body.rows.map((r: any) => r.id).sort()).toEqual([unassignedA, unassignedB].sort());
+    expect(res.body.rows.map((r: any) => r.id)).not.toContain(visible);
+    expect(res.body.rows.map((r: any) => r.id)).not.toContain(unassignedPageAsset);
+  });
+
+  it('a non-admin sending unassigned=1 gets the normal (non-unassigned) view — the param is ignored', async () => {
+    await upload('unassignedC', { kind: 'other' });
+    const visible = await upload('visibleY', { projectId: 'p1', kind: 'document', name: 'Visible.pdf' });
+
+    const userApp = buildApp('user', 'u3');
+    const res = await request(userApp).get('/api/documents?unassigned=1');
+    expect(res.body.rows.map((r: any) => r.id)).toEqual([visible]);
+  });
+
+  it('unassigned view is exclusive with archived and takes precedence when both params are set', async () => {
+    const unassignedLive = await upload('unassignedLive', { kind: 'other' });
+    const unassignedArchived = await upload('unassignedArchived', { kind: 'other' });
+    await request(app).patch(`/api/files/${unassignedArchived}`).send({ archived: true });
+
+    // Both params set: unassigned wins, and it shows BOTH archived and
+    // non-archived unassigned rows (its own view, not narrowed by archived).
+    const res = await request(app).get('/api/documents?unassigned=1&archived=1');
+    expect(res.body.rows.map((r: any) => r.id).sort()).toEqual([unassignedArchived, unassignedLive].sort());
+  });
+});
+
 describe('GET /api/documents — role exclusion', () => {
   it('non-admin excludes invoice/payapp-export/change-order/proposal but keeps change-order-photo and printout', async () => {
     await upload('inv', { projectId: 'p1', kind: 'invoice', name: 'Inv.pdf' });

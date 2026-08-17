@@ -738,12 +738,12 @@ export const ProjectView: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: project.id });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: project.id });
               }
               // Thumbnails are keyed by `thumbnailId` (always set) so naming-step
               // lookups work uniformly for vector and legacy pages.
@@ -971,12 +971,12 @@ export const ProjectView: React.FC = () => {
 
             try {
               const thumbnailId = uuidv4();
-              await saveImage(thumbnailId, pageData.thumbnailDataUrl);
+              await saveImage(thumbnailId, pageData.thumbnailDataUrl, { kind: 'plan', projectId: project.id });
 
               let imageId = '';
               if (!sourcePdfFileId && pageData.dataUrl) {
                 imageId = uuidv4();
-                await saveImage(imageId, pageData.dataUrl);
+                await saveImage(imageId, pageData.dataUrl, { kind: 'plan', projectId: project.id });
               }
               newThumbnails[thumbnailId] = pageData.thumbnailDataUrl;
 
@@ -1689,7 +1689,7 @@ export const ProjectView: React.FC = () => {
           const thumbnailDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
           
           const thumbnailId = uuidv4();
-          await saveImage(thumbnailId, thumbnailDataUrl);
+          await saveImage(thumbnailId, thumbnailDataUrl, { kind: 'plan', projectId: project.id });
           
           // Update page
           const pageIndex = updatedPages.findIndex(p => p.id === page.id);

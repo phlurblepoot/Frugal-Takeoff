@@ -38,6 +38,7 @@ export type FilterPatch = Partial<{
   kinds: string[];
   q: string;
   archived: boolean;
+  unassigned: boolean;
 }>;
 
 // Pure: applies a filter patch onto a URLSearchParams, returning a new one.
@@ -51,8 +52,14 @@ export const applyFilterPatch = (prev: URLSearchParams, patch: FilterPatch): URL
   if ('kinds' in patch) { patch.kinds!.length ? p.set('kinds', patch.kinds!.join(',')) : p.delete('kinds'); }
   if ('q' in patch) { patch.q ? p.set('q', patch.q) : p.delete('q'); }
   if ('archived' in patch) { patch.archived ? p.set('archived', '1') : p.delete('archived'); }
+  if ('unassigned' in patch) { patch.unassigned ? p.set('unassigned', '1') : p.delete('unassigned'); }
   return p;
 };
+
+// Same pattern as the local isAdmin() in ProjectBilling.tsx/CustomerPane.tsx
+// etc. — no shared helper exists in this codebase, so this mirrors it rather
+// than introducing a new cross-cutting import.
+const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
 export const DocumentsPage: React.FC = () => {
   const { toast } = useToast();
@@ -63,6 +70,11 @@ export const DocumentsPage: React.FC = () => {
   const kinds = useMemo(() => csvParam(searchParams, 'kinds'), [searchParams]);
   const q = searchParams.get('q') ?? '';
   const archived = searchParams.get('archived') === '1';
+  const admin = useMemo(() => isAdmin(), []);
+  // Ignored server-side for a non-admin regardless of what's in the URL, but
+  // also gated client-side so a non-admin who hand-edits the URL never even
+  // sends the param or sees the (unrendered) toggle reflect it.
+  const unassigned = admin && searchParams.get('unassigned') === '1';
 
   const setFilter = (patch: FilterPatch) => {
     setSearchParams(prev => applyFilterPatch(prev, patch), { replace: true });
@@ -107,7 +119,7 @@ export const DocumentsPage: React.FC = () => {
   // A single string key so the fetch effect only re-runs when the filters
   // actually change (arrays/objects would otherwise be new references on
   // every render).
-  const filterKey = `${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${q}|${archived}`;
+  const filterKey = `${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${q}|${archived}|${unassigned}`;
 
   // Bumped every time the filters change (or a refresh is kicked off), so a
   // Load More / refresh that's still in-flight when something else changes
@@ -134,7 +146,7 @@ export const DocumentsPage: React.FC = () => {
     const myId = ++requestIdRef.current;
     setLoading(true);
     try {
-      const res = await getDocuments({ projectIds, customerIds, kinds, q: q || undefined, archived, limit, offset: 0 });
+      const res = await getDocuments({ projectIds, customerIds, kinds, q: q || undefined, archived, unassigned, limit, offset: 0 });
       if (mountedRef.current && myId === requestIdRef.current) {
         setRows(res.rows);
         setTotal(res.total);
@@ -159,7 +171,7 @@ export const DocumentsPage: React.FC = () => {
     setLoadingMore(true);
     try {
       const res = await getDocuments({
-        projectIds, customerIds, kinds, q: q || undefined, archived,
+        projectIds, customerIds, kinds, q: q || undefined, archived, unassigned,
         limit: PAGE_SIZE, offset: rows.length,
       });
       // The filters moved on while this page was in flight — its rows belong
@@ -269,7 +281,7 @@ export const DocumentsPage: React.FC = () => {
     }
   };
 
-  const filtering = projectIds.length > 0 || customerIds.length > 0 || kinds.length > 0 || q.trim() !== '' || archived;
+  const filtering = projectIds.length > 0 || customerIds.length > 0 || kinds.length > 0 || q.trim() !== '' || archived || unassigned;
 
   return (
     <div
@@ -311,7 +323,13 @@ export const DocumentsPage: React.FC = () => {
         kinds={kinds}
         onKindsChange={ids => setFilter({ kinds: ids })}
         archived={archived}
-        onArchivedChange={v => setFilter({ archived: v })}
+        // Exclusive with Unassigned (spec): both fields land in ONE patch, so
+        // this is a single setSearchParams call rather than two racing ones —
+        // see applyFilterPatch's round-trip unit tests for why that matters.
+        onArchivedChange={v => setFilter({ archived: v, ...(v ? { unassigned: false } : {}) })}
+        isAdmin={admin}
+        unassigned={unassigned}
+        onUnassignedChange={v => setFilter({ unassigned: v, ...(v ? { archived: false } : {}) })}
       />
 
       <DocumentsBulkBar
