@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { test, expect, seedCustomerWithPortfolio, seedDocumentsPortfolio } from './fixtures/test';
 
 // Characterization spec for the global Documents page (unified-documents
-// spec, docs/superpowers/specs/2026-08-17-unified-documents-design.md):
+// spec, docs/superpowers/specs/2026-08-17-unified-documents-design.md) plus
+// the row context menu (docs/superpowers/specs/2026-08-17-documents-context-menu-design.md):
 // src/pages/documents/{DocumentsPage,DocumentsTable,DocumentsFilterBar,
-// DocumentsBulkBar,UploadDocumentsModal}.tsx + server/documents.ts.
+// DocumentsBulkBar,UploadDocumentsModal,RowContextMenu}.tsx + server/documents.ts.
 //
 // The suite shares one server/DB across every spec file (playwright.config.ts
 // runs workers:1, fullyParallel:false but never resets .e2e-data), so every
@@ -21,6 +22,17 @@ import { test, expect, seedCustomerWithPortfolio, seedDocumentsPortfolio } from 
 // mobile duplicate.
 const tableRows = (page: Page) => page.locator('table [data-testid="documents-row"]');
 const rowFor = (page: Page, name: string) => tableRows(page).filter({ hasText: name });
+
+// Row actions (archive/delete/change-type) moved from always-visible buttons
+// to a right-click context menu (RowContextMenu.tsx). This suite drives it
+// with a real right-click rather than long-press — Playwright's touch
+// emulation doesn't run at this suite's desktop viewport/project, and the
+// menu's own contents/gating are identical between the two entry points.
+const rowMenu = (page: Page) => page.getByTestId('doc-context-menu');
+const openRowMenu = async (page: Page, row: Locator) => {
+  await row.click({ button: 'right' });
+  await expect(rowMenu(page)).toBeVisible();
+};
 
 test('documents page: project + kind multi-select filters, search narrows, real source links, type badges', async ({
   authedPage, request, apiToken,
@@ -136,33 +148,41 @@ test('upload popup: batch upload with per-file type override, change-type, delet
   await expect(rowFor(authedPage, fileAName).getByText('Document', { exact: true })).toBeVisible();
   await expect(rowFor(authedPage, fileBName).getByText('Photo', { exact: true })).toBeVisible();
 
-  // Change type on file A: Document -> Spreadsheet. Scoped to the open
-  // change-type popover (its own wrapping div, same idiom as
-  // MultiSelectDropdown) — the sidebar's own "Spreadsheet" tool nav button
-  // shares the same accessible name page-wide.
-  const changeTypeTrigger = rowFor(authedPage, fileAName).getByTestId('doc-change-type');
-  await changeTypeTrigger.click();
-  const changeTypePanel = changeTypeTrigger.locator('..');
-  await changeTypePanel.getByRole('button', { name: 'Spreadsheet' }).click();
+  // Change type on file A: Document -> Spreadsheet, via the row's context
+  // menu (right-click replaced the always-visible action buttons — spec
+  // docs/superpowers/specs/2026-08-17-documents-context-menu-design.md). The
+  // "Change type" item expands a nested list of direct-upload kinds inline.
+  await openRowMenu(authedPage, rowFor(authedPage, fileAName));
+  let menu = rowMenu(authedPage);
+  await menu.getByRole('menuitem', { name: 'Change type' }).click();
+  await menu.getByRole('menuitem', { name: 'Spreadsheet' }).click();
   await expect(rowFor(authedPage, fileAName).getByText('Spreadsheet', { exact: true })).toBeVisible();
 
-  // Delete file A (direct upload, unsourced — deletable per documentsPolicy.ts).
-  await rowFor(authedPage, fileAName).getByLabel('Delete', { exact: true }).click();
+  // Delete file A (direct upload, unsourced — deletable per documentsPolicy.ts)
+  // via the menu: the item is present, and clicking it goes through the same
+  // confirm dialog as before.
+  await openRowMenu(authedPage, rowFor(authedPage, fileAName));
+  menu = rowMenu(authedPage);
+  await expect(menu.getByRole('menuitem', { name: 'Delete' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Delete' }).click();
   await authedPage.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
   await expect(rowFor(authedPage, fileAName)).toHaveCount(0);
 
-  // A generated/sourced row (the seeded invoice) has no delete affordance —
-  // only archive (labeled "Managed by its source" since row.source is set)
-  // and no change-type menu (not a direct-upload kind).
+  // A generated/sourced row (the seeded invoice) has no Delete item in its
+  // context menu — only Archive (title hints it's "managed by its source")
+  // and no Change type item (not a direct-upload kind).
   const invoiceRow = rowFor(authedPage, seeded.invoiceFileName);
-  await expect(invoiceRow.getByLabel('Delete', { exact: true })).toHaveCount(0);
-  await expect(invoiceRow.getByTestId('doc-change-type')).toHaveCount(0);
-  await expect(invoiceRow.getByTitle('Managed by its source — archive here')).toBeVisible();
+  await openRowMenu(authedPage, invoiceRow);
+  menu = rowMenu(authedPage);
+  await expect(menu.getByRole('menuitem', { name: 'Delete' })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: 'Change type' })).toHaveCount(0);
+  const archiveItem = menu.getByRole('menuitem', { name: 'Archive' });
+  await expect(archiveItem).toHaveAttribute('title', 'Managed by its source — archive here');
 
   // The affordance actually works, not just renders: archiving a sourced row
   // completes (PATCH archived=true) and it leaves the default view, same as
   // a direct upload's Archive — only the delete tier differs between them.
-  await invoiceRow.getByTitle('Managed by its source — archive here').click();
+  await archiveItem.click();
   await expect(rowFor(authedPage, seeded.invoiceFileName)).toHaveCount(0);
 });
 
@@ -239,7 +259,8 @@ test('archive: a row leaves the default view, appears under Archived, restore re
   await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
   await expect(rowFor(authedPage, name)).toHaveCount(1);
 
-  await rowFor(authedPage, name).getByLabel('Archive', { exact: true }).click();
+  await openRowMenu(authedPage, rowFor(authedPage, name));
+  await rowMenu(authedPage).getByRole('menuitem', { name: 'Archive' }).click();
   await expect(rowFor(authedPage, name)).toHaveCount(0);
 
   const archivedToggle = authedPage.getByTestId('doc-filter-archived');
@@ -247,9 +268,11 @@ test('archive: a row leaves the default view, appears under Archived, restore re
   await expect(archivedToggle).toBeChecked();
   await expect(authedPage).toHaveURL(/archived=1/);
   await expect(rowFor(authedPage, name)).toHaveCount(1);
-  await expect(rowFor(authedPage, name).getByLabel('Restore', { exact: true })).toBeVisible();
 
-  await rowFor(authedPage, name).getByLabel('Restore', { exact: true }).click();
+  await openRowMenu(authedPage, rowFor(authedPage, name));
+  const restoreItem = rowMenu(authedPage).getByRole('menuitem', { name: 'Restore' });
+  await expect(restoreItem).toBeVisible();
+  await restoreItem.click();
   await expect(rowFor(authedPage, name)).toHaveCount(0);
 
   await archivedToggle.click();
@@ -378,4 +401,53 @@ test('Settings Document Types: add, use in an upload, delete blocked while in us
   const typePanel = authedPage.getByTestId('doc-filter-type').locator('..');
   await expect(typePanel.getByText(renamedLabel, { exact: true })).toBeVisible();
   await expect(typePanel.getByText(label, { exact: true })).toHaveCount(0);
+});
+
+test('row actions column: version-history toggle only for multi-version rows', async ({
+  authedPage, request, apiToken,
+}) => {
+  const seeded = await seedCustomerWithPortfolio(request, apiToken.token);
+  const auth = { Authorization: `Bearer ${apiToken.token}` };
+  const short = randomUUID().slice(0, 8);
+
+  // A plain v1 upload — every seeded row in this suite is v1, so this stands
+  // in for "all seeded rows": no version-history button in either the table
+  // row or its (now-menu-only) context menu.
+  const v1Name = `v1-only-${short}.txt`;
+  const v1Id = randomUUID();
+  const v1Res = await request.post(
+    `/api/files/${v1Id}?projectId=${seeded.inProgressProjectId}&kind=document&name=${encodeURIComponent(v1Name)}`,
+    { headers: { ...auth, 'Content-Type': 'text/plain' }, data: Buffer.from('v1 fixture bytes') },
+  );
+  if (!v1Res.ok()) throw new Error(`v1 fixture upload failed: ${v1Res.status()} ${await v1Res.text()}`);
+
+  // A v2 row — cheap via the dedicated versions endpoint (server/files.ts
+  // saveNewVersion via POST /api/files/:id/versions): post once to create the
+  // live row, then post again to the same id's /versions route to bump it.
+  const v2Name = `v2-multi-${short}.txt`;
+  const v2Id = randomUUID();
+  const v2CreateRes = await request.post(
+    `/api/files/${v2Id}?projectId=${seeded.inProgressProjectId}&kind=document&name=${encodeURIComponent(v2Name)}`,
+    { headers: { ...auth, 'Content-Type': 'text/plain' }, data: Buffer.from('v2 fixture bytes, v1') },
+  );
+  if (!v2CreateRes.ok()) throw new Error(`v2 fixture upload failed: ${v2CreateRes.status()} ${await v2CreateRes.text()}`);
+  const v2BumpRes = await request.post(
+    `/api/files/${v2Id}/versions`,
+    { headers: { ...auth, 'Content-Type': 'text/plain' }, data: Buffer.from('v2 fixture bytes, v2') },
+  );
+  if (!v2BumpRes.ok()) throw new Error(`version bump failed: ${v2BumpRes.status()} ${await v2BumpRes.text()}`);
+
+  await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
+  await expect(rowFor(authedPage, v1Name)).toHaveCount(1);
+  await expect(rowFor(authedPage, v2Name)).toHaveCount(1);
+
+  await expect(rowFor(authedPage, v1Name).getByLabel('Version history', { exact: true })).toHaveCount(0);
+  await expect(rowFor(authedPage, v2Name).getByLabel('Version history', { exact: true })).toBeVisible();
+
+  // The button still works: expands the same history list as before. Scoped
+  // to `table` per the file-header note — the md:hidden mobile card list
+  // renders the same "v1" version chip in the DOM simultaneously (shared
+  // historyFor state), which would otherwise make this a strict-mode clash.
+  await rowFor(authedPage, v2Name).getByLabel('Version history', { exact: true }).click();
+  await expect(authedPage.locator('table').getByText('v1', { exact: true })).toBeVisible();
 });

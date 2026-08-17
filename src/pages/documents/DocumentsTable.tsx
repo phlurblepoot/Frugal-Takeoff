@@ -1,22 +1,26 @@
 // src/pages/documents/DocumentsTable.tsx
 // Table (+ mobile card list) for the global Documents page. Version-history
 // expandable row and open-on-click logic are extracted from the retired
-// src/pages/project/ProjectDocuments.tsx (spec §Client). Row selection +
-// per-row archive/delete/change-type affordances are Task 5 — the actual
-// mutations (patchFile/deleteFile calls) live in DocumentsPage, this only
-// decides what to show via selectionPolicy and confirms before delete.
+// src/pages/project/ProjectDocuments.tsx (spec §Client). Per-row
+// archive/delete/change-type affordances used to live as always-visible
+// buttons in this column; they're now a right-click/long-press context menu
+// (RowContextMenu.tsx, spec docs/superpowers/specs/2026-08-17-documents-context-menu-design.md)
+// so a single mis-click can't trigger a destructive action. The actual
+// mutations (patchFile/deleteFile calls) live in DocumentsPage — this only
+// decides what to offer via selectionPolicy (inside RowContextMenu) and
+// confirms before delete.
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, File, FileText, History, Image as ImageIcon, Sheet, Tag, Trash2,
+  File, FileText, History, Image as ImageIcon, Sheet,
 } from 'lucide-react';
 import { DocumentRow, ProjectFile, fetchFileBlob, formatBytes, listFileVersions } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
-import { DIRECT_UPLOAD_KINDS, CustomDocType, isDirectUploadKind, kindLabel, kindTone } from './docTypes';
-import { selectionPolicy } from './documentsPolicy';
+import { CustomDocType, kindLabel, kindTone } from './docTypes';
 import { openTargetFor } from './openTarget';
+import { RowContextMenu, RowContextMenuState } from './RowContextMenu';
 
 export const downloadBlob = (blob: Blob, name: string) => {
   const url = URL.createObjectURL(blob);
@@ -30,6 +34,11 @@ export const downloadBlob = (blob: Blob, name: string) => {
 };
 
 const iconBtnCls = 'flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink md:min-h-0 md:min-w-0';
+
+// Long-press duration (ms) and move tolerance (px) before it's treated as a
+// scroll/drag instead — mirrors the timer-ref idiom in PdfCanvas.tsx.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE = 10;
 
 const MimeIcon: React.FC<{ mime: string }> = ({ mime }) => {
   const { type } = openTargetFor({ id: '', mime });
@@ -67,115 +76,13 @@ const VersionHistory: React.FC<{ fileName: string | null; versions: ProjectFile[
   );
 };
 
-// Popover trigger for the "Change type" row menu (direct uploads only) — same
-// outside-click idiom as MultiSelectDropdown.tsx, single-select instead of
-// checkbox-list.
-const ChangeTypeMenu: React.FC<{
-  row: DocumentRow;
-  customTypes: CustomDocType[];
-  onChange: (kind: string) => void;
-}> = ({ row, customTypes, onChange }) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
-  }, [open]);
-
-  const options = [
-    ...DIRECT_UPLOAD_KINDS.map(k => ({ id: k, label: kindLabel(k) })),
-    ...customTypes.map(t => ({ id: `custom:${t.id}`, label: t.label })),
-  ];
-
+// Row actions column: the version-history toggle is the only affordance left
+// here (spec: "ONLY the version-history toggle remains, rendered ONLY when
+// row.versionNumber > 1") — everything else moved into RowContextMenu.
+const RowActions: React.FC<{ row: DocumentRow; onHistory: () => void }> = ({ row, onHistory }) => {
+  if (row.versionNumber <= 1) return null;
   return (
-    <div ref={ref} className="relative">
-      <button
-        data-testid="doc-change-type"
-        title="Change type"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-        aria-label={`Change type for ${row.name ?? row.id}`}
-        className={iconBtnCls}
-      >
-        <Tag size={14} />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 max-h-64 w-44 overflow-y-auto rounded-lg border border-edge bg-raised py-1 shadow-lg">
-          {options.map(o => (
-            <button
-              key={o.id}
-              onClick={() => { setOpen(false); if (o.id !== row.kind) onChange(o.id); }}
-              className={`block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-hover ${
-                o.id === row.kind ? 'font-semibold text-accent-600 dark:text-accent-400' : 'text-ink'
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Archive/restore, delete, and change-type icons for one row — shared by both
-// the desktop table cell and the mobile card's action row.
-const RowActions: React.FC<{
-  row: DocumentRow;
-  customTypes: CustomDocType[];
-  onArchiveRows: (rows: DocumentRow[], archived: boolean) => Promise<void>;
-  onDeleteRows: (rows: DocumentRow[]) => Promise<void>;
-  onChangeKind: (row: DocumentRow, kind: string) => Promise<void>;
-  onHistory: () => void;
-}> = ({ row, customTypes, onArchiveRows, onDeleteRows, onChangeKind, onHistory }) => {
-  const confirm = useConfirm();
-  const { archivable, deletable } = selectionPolicy([row]);
-  const archivableRow = archivable.length > 0;
-  const deletableRow = deletable.length > 0;
-  const directUpload = isDirectUploadKind(row.kind);
-
-  const handleDelete = async () => {
-    const ok = await confirm({
-      title: 'Delete document',
-      message: `Delete "${row.name ?? row.id}"? This cannot be undone.`,
-      confirmLabel: 'Delete',
-      tone: 'danger',
-    });
-    if (!ok) return;
-    onDeleteRows([row]);
-  };
-
-  return (
-    <div className="flex items-center justify-end gap-0.5">
-      {archivableRow && (
-        row.archived ? (
-          <button title="Restore" aria-label="Restore" onClick={() => onArchiveRows([row], false)} className={iconBtnCls}>
-            <ArchiveRestore size={14} />
-          </button>
-        ) : (
-          <button
-            title={row.source ? 'Managed by its source — archive here' : 'Archive'}
-            aria-label="Archive"
-            onClick={() => onArchiveRows([row], true)}
-            className={iconBtnCls}
-          >
-            <Archive size={14} />
-          </button>
-        )
-      )}
-      {deletableRow && (
-        <button title="Delete" aria-label="Delete" onClick={handleDelete} className={iconBtnCls}>
-          <Trash2 size={14} />
-        </button>
-      )}
-      {directUpload && (
-        <ChangeTypeMenu row={row} customTypes={customTypes} onChange={kind => onChangeKind(row, kind)} />
-      )}
+    <div className="flex items-center justify-end">
       <button title="Version history" aria-label="Version history" onClick={onHistory} className={iconBtnCls}>
         <History size={14} />
       </button>
@@ -195,8 +102,10 @@ export const DocumentsTable: React.FC<{
 }> = ({ rows, customTypes, selected, onToggleRow, onToggleAll, onArchiveRows, onDeleteRows, onChangeKind }) => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [versions, setVersions] = useState<ProjectFile[] | null>(null);
+  const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null);
 
   const handleOpen = async (row: DocumentRow) => {
     const target = openTargetFor(row);
@@ -208,12 +117,75 @@ export const DocumentsTable: React.FC<{
     }
   };
 
+  const handleDownload = async (row: DocumentRow) => {
+    try { downloadBlob(await fetchFileBlob(row.id), row.name ?? row.id); }
+    catch { toast('Download failed', { type: 'error' }); }
+  };
+
+  const handleDelete = async (row: DocumentRow) => {
+    const ok = await confirm({
+      title: 'Delete document',
+      message: `Delete "${row.name ?? row.id}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    onDeleteRows([row]);
+  };
+
   const handleHistory = async (row: DocumentRow) => {
     if (historyFor === row.id) { setHistoryFor(null); setVersions(null); return; }
     setHistoryFor(row.id);
     setVersions(null);
     try { setVersions(await listFileVersions(row.id)); }
     catch { setVersions([]); }
+  };
+
+  // ── Long-press → context menu (touch/mobile cards). A timer armed on
+  // touchstart opens the menu at the touch point if the finger hasn't moved
+  // or lifted by LONG_PRESS_MS; any move past the tolerance (scroll/drag) or
+  // an early lift cancels it. Mirrors PdfCanvas.tsx's longPressTimerRef idiom.
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFiredRef = useRef(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+  useEffect(() => () => cancelLongPress(), []);
+
+  const handleTouchStart = (row: DocumentRow) => (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) { cancelLongPress(); return; }
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    longPressFiredRef.current = false;
+    cancelLongPress();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      longPressTimerRef.current = null;
+      setContextMenu({ x: touch.clientX, y: touch.clientY, row });
+    }, LONG_PRESS_MS);
+  };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    const touch = e.touches[0];
+    if (!start || !touch) return;
+    if (
+      Math.abs(touch.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE
+      || Math.abs(touch.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE
+    ) cancelLongPress();
+  };
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    cancelLongPress();
+    // A long-press already opened the menu — suppress the synthetic click
+    // that would otherwise follow and open the file (mirrors PdfCanvas's
+    // onTap longPressFiredRef check).
+    if (longPressFiredRef.current) {
+      e.preventDefault();
+      longPressFiredRef.current = false;
+    }
   };
 
   const SourceCell: React.FC<{ row: DocumentRow }> = ({ row }) => {
@@ -260,7 +232,15 @@ export const DocumentsTable: React.FC<{
           <TBody>
             {rows.map(row => (
               <React.Fragment key={row.id}>
-                <TR data-testid="documents-row" interactive onClick={() => handleOpen(row)}>
+                <TR
+                  data-testid="documents-row"
+                  interactive
+                  onClick={() => handleOpen(row)}
+                  onContextMenu={e => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, row });
+                  }}
+                >
                   <TD className="w-8" onClick={e => e.stopPropagation()}>
                     <input
                       type="checkbox"
@@ -285,14 +265,7 @@ export const DocumentsTable: React.FC<{
                   <TD><SourceCell row={row} /></TD>
                   <TD className="text-ink-soft">{new Date(row.createdAt).toLocaleDateString()}</TD>
                   <TD className="text-right" onClick={e => e.stopPropagation()}>
-                    <RowActions
-                      row={row}
-                      customTypes={customTypes}
-                      onArchiveRows={onArchiveRows}
-                      onDeleteRows={onDeleteRows}
-                      onChangeKind={onChangeKind}
-                      onHistory={() => handleHistory(row)}
-                    />
+                    <RowActions row={row} onHistory={() => handleHistory(row)} />
                   </TD>
                 </TR>
                 {historyFor === row.id && (
@@ -311,7 +284,15 @@ export const DocumentsTable: React.FC<{
       {/* Mobile document cards — same data + handlers as the table. */}
       <ul className="space-y-3 md:hidden">
         {rows.map(row => (
-          <li key={row.id} data-testid="documents-row" className="rounded-xl border border-edge bg-raised p-3">
+          <li
+            key={row.id}
+            data-testid="documents-row"
+            className="rounded-xl border border-edge bg-raised p-3"
+            onContextMenu={e => e.preventDefault()}
+            onTouchStart={handleTouchStart(row)}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
             <div className="flex items-start gap-2">
               <input
                 type="checkbox"
@@ -342,16 +323,11 @@ export const DocumentsTable: React.FC<{
                 )}
               </button>
             </div>
-            <div className="mt-2 flex items-center justify-end border-t border-edge pt-2">
-              <RowActions
-                row={row}
-                customTypes={customTypes}
-                onArchiveRows={onArchiveRows}
-                onDeleteRows={onDeleteRows}
-                onChangeKind={onChangeKind}
-                onHistory={() => handleHistory(row)}
-              />
-            </div>
+            {row.versionNumber > 1 && (
+              <div className="mt-2 flex items-center justify-end border-t border-edge pt-2">
+                <RowActions row={row} onHistory={() => handleHistory(row)} />
+              </div>
+            )}
             {historyFor === row.id && (
               <div className="mt-2 rounded-lg bg-sunken/50 p-2">
                 <VersionHistory fileName={row.name} versions={versions} />
@@ -360,6 +336,19 @@ export const DocumentsTable: React.FC<{
           </li>
         ))}
       </ul>
+
+      {contextMenu && (
+        <RowContextMenu
+          state={contextMenu}
+          customTypes={customTypes}
+          onClose={() => setContextMenu(null)}
+          onOpen={handleOpen}
+          onDownload={handleDownload}
+          onArchive={(row, archived) => onArchiveRows([row], archived)}
+          onChangeKind={(row, kind) => onChangeKind(row, kind)}
+          onDelete={handleDelete}
+        />
+      )}
     </>
   );
 };
