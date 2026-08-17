@@ -768,6 +768,10 @@ export interface BillingSummary {
   changeOrderCount: number;
   payAppBilledCents: number;
   payAppOutstandingCents: number;
+  payAppPaidCents: number;
+  invoiceBilledCents: number;
+  invoicePaidCents: number;
+  invoiceOutstandingBilledCents: number;
 }
 export interface InvoiceInput {
   number?: string; date?: number | null; terms?: string; status?: string;

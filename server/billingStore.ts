@@ -339,7 +339,7 @@ export function deleteChangeOrder(db: Database.Database, id: string): void {
 // exists, else the legacy projects.contractValue. Approved change orders are
 // added ONCE via change_orders — the CO SOV lines (isChangeOrder=1) are NOT
 // summed into the base, so there is no double-count.
-export function billingSummary(db: Database.Database, projectId: string): {
+export function billingSummary(db: Database.Database, projectId: string, billedDocs?: BilledDocument[]): {
   sovOriginalCents: number; hasSov: boolean;
   baseContractCents: number; approvedChangeCents: number;
   contractTotalCents: number; contractValueCents: number;
@@ -348,7 +348,8 @@ export function billingSummary(db: Database.Database, projectId: string): {
   paidCents: number;
   invoiceOutstandingCents: number; outstandingCents: number;
   invoiceCount: number; changeOrderCount: number;
-  payAppBilledCents: number; payAppOutstandingCents: number;
+  payAppBilledCents: number; payAppOutstandingCents: number; payAppPaidCents: number;
+  invoiceBilledCents: number; invoicePaidCents: number; invoiceOutstandingBilledCents: number;
 } {
   const proj = db.prepare('SELECT contractValue FROM projects WHERE id = ?').get(projectId) as { contractValue: number | null } | undefined;
 
@@ -383,12 +384,29 @@ export function billingSummary(db: Database.Database, projectId: string): {
 
   const invoiceOutstandingCents = invoiceTotalCents - paid.invoicesCents;
 
-  // Contract (pay-app) billed/outstanding — derived from listBilledDocuments
-  // (finalized apps' G702 L8, net of retainage) so this is the same
-  // population/figures the customer ledger uses. One source of truth.
-  const payAppDocs = listBilledDocuments(db, projectId).filter(d => d.kind === 'payapp');
+  // Contract (pay-app) and invoice-leg billed/paid/outstanding — both derived
+  // from the SAME listBilledDocuments() list (finalized pay apps' G702 L8 net
+  // of retainage, and non-draft invoices), the same population the customer
+  // ledger and project-list figures use. `billedDocs` lets hot callers that
+  // already fetched this list once (customerOverview, listProjectSummaries)
+  // pass it in instead of triggering a second DB pass — one source of truth,
+  // one ledger read.
+  //
+  // These are net-of-drafts: a draft invoice/pay app is not yet billed, so it
+  // is excluded here. The legacy invoiceTotalCents/invoiceOutstandingCents
+  // fields above stay draft-inclusive (pre-existing behavior, unchanged) —
+  // callers wanting the customer-ledger-consistent figures should use these
+  // new fields instead.
+  const docs = billedDocs ?? listBilledDocuments(db, projectId);
+  const payAppDocs = docs.filter(d => d.kind === 'payapp');
   const payAppBilledCents = payAppDocs.reduce((a, d) => a + d.totalCents, 0);
+  const payAppPaidCents = payAppDocs.reduce((a, d) => a + d.paidCents, 0);
   const payAppOutstandingCents = payAppDocs.reduce((a, d) => a + d.balanceCents, 0);
+
+  const invoiceDocs = docs.filter(d => d.kind === 'invoice');
+  const invoiceBilledCents = invoiceDocs.reduce((a, d) => a + d.totalCents, 0);
+  const invoicePaidCents = invoiceDocs.reduce((a, d) => a + d.paidCents, 0);
+  const invoiceOutstandingBilledCents = invoiceDocs.reduce((a, d) => a + d.balanceCents, 0);
 
   return {
     sovOriginalCents,
@@ -407,6 +425,10 @@ export function billingSummary(db: Database.Database, projectId: string): {
     changeOrderCount,
     payAppBilledCents,
     payAppOutstandingCents,
+    payAppPaidCents,
+    invoiceBilledCents,
+    invoicePaidCents,
+    invoiceOutstandingBilledCents,
   };
 }
 

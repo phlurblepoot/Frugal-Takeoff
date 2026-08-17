@@ -77,7 +77,7 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   // the ledger's column header) resolves to the right element.
   const rowValue = (container: Locator, label: string) =>
     container.getByText(label, { exact: true }).locator('..');
-  const contractSection = authedPage.getByText('Contract', { exact: true }).locator('..');
+  const contractSection = authedPage.getByTestId('billing-summary-contract');
   await expect(contractSection).toBeVisible();
   await expect(rowValue(contractSection, 'Contract total')).toContainText(fmtCents(payApp.sovAmountCents));
   await expect(rowValue(contractSection, 'Billed')).toContainText(fmtCents(payApp.billedCents));
@@ -85,7 +85,7 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(rowValue(contractSection, 'Paid')).toContainText('$0.00');
 
   // "Invoices" row (invoice leg).
-  const invoicesSection = authedPage.getByText('Invoices', { exact: true }).locator('..');
+  const invoicesSection = authedPage.getByTestId('billing-summary-invoices');
   await expect(invoicesSection).toBeVisible();
   await expect(rowValue(invoicesSection, 'Invoiced')).toContainText(fmtCents(seeded.invoiceAmountCents));
   await expect(rowValue(invoicesSection, 'Paid')).toContainText('$0.00');

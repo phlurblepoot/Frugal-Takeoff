@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { deleteFileContent } from './fileStore';
-import { billingSummary, projectOutstandingCents } from './billingStore';
+import { billingSummary, listBilledDocuments } from './billingStore';
 import { countOpenIssues } from './issueStore';
 import { punchProgress } from './punchStore';
 
@@ -299,14 +299,17 @@ export function listProjectSummaries(db: Database.Database, id?: string, include
       punchTotal: pp.total,
     };
     if (!includeBilling) return base;
-    const bs = billingSummary(db, r.id);
-    // Outstanding spans invoices AND AIA pay applications — an AIA-billed
-    // project would otherwise read $0 on the board (see billingStore).
+    // Fetched once and handed to billingSummary so it doesn't re-query the
+    // same rows; outstandingCents spans invoices AND AIA pay applications —
+    // an AIA-billed project would otherwise read $0 on the board (see
+    // billingStore).
+    const docs = listBilledDocuments(db, r.id);
+    const bs = billingSummary(db, r.id, docs);
     return {
       ...base,
       contractValueCents: bs.contractValueCents,
       invoiceCount: bs.invoiceCount,
-      outstandingCents: projectOutstandingCents(db, r.id),
+      outstandingCents: docs.reduce((a, d) => a + d.balanceCents, 0),
     };
   });
 }

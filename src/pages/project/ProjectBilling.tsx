@@ -102,14 +102,14 @@ export const ProjectBilling: React.FC = () => {
             <Skeleton className="h-10 w-full" />
           ) : (
             <div className="space-y-4">
-              <div>
+              <div data-testid="billing-summary-contract">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Contract</div>
                 <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
                   {[
                     ['Contract total', summary.contractTotalCents],
                     ['Billed', summary.payAppBilledCents],
                     ['Outstanding', summary.payAppOutstandingCents],
-                    ['Paid', summary.paid.payAppsCents],
+                    ['Paid', summary.payAppPaidCents],
                   ].map(([label, cents]) => (
                     <div key={label as string}>
                       <div className="text-ink-faint">{label}</div>
@@ -118,18 +118,22 @@ export const ProjectBilling: React.FC = () => {
                   ))}
                 </div>
               </div>
-              <div>
+              <div data-testid="billing-summary-invoices">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Invoices</div>
+                {/* Same 4-column grid as the Contract row above, with the middle
+                    two cells left empty so "Paid" lands in the same column as
+                    the Contract row's "Paid" — they align when scanning. */}
                 <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-                  {[
-                    ['Invoiced', summary.invoiceTotalCents],
-                    ['Paid', summary.paid.invoicesCents],
-                  ].map(([label, cents]) => (
-                    <div key={label as string}>
-                      <div className="text-ink-faint">{label}</div>
-                      <div className="text-lg font-bold text-ink">{formatMoney(cents as number)}</div>
-                    </div>
-                  ))}
+                  <div>
+                    <div className="text-ink-faint">Invoiced</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(summary.invoiceBilledCents)}</div>
+                  </div>
+                  <div className="hidden sm:block" aria-hidden="true" />
+                  <div className="hidden sm:block" aria-hidden="true" />
+                  <div>
+                    <div className="text-ink-faint">Paid</div>
+                    <div className="text-lg font-bold text-ink">{formatMoney(summary.invoicePaidCents)}</div>
+                  </div>
                 </div>
               </div>
             </div>

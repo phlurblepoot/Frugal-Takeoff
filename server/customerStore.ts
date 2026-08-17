@@ -243,15 +243,19 @@ export function customerOverview(db: Database.Database, customerId: string, incl
     const activeProjects = projRows.filter(p => !Number(p.archived));
 
     for (const p of activeProjects) {
-      contractTotalCents += billingSummary(db, p.id).contractTotalCents;
-      const projectName = projNameById.get(p.id) ?? 'Untitled';
-
       // ONE population drives both the ledger and the rollup above it: every
       // billed document on the project, invoices and AIA pay applications
-      // alike (drafts excluded — not billed yet). Because the three rollup
-      // legs are summed from the same rows, Invoiced/Paid/Outstanding always
-      // reconcile with the ledger the client renders underneath them.
-      for (const doc of listBilledDocuments(db, p.id)) {
+      // alike (drafts excluded — not billed yet). Fetched once here and
+      // handed to billingSummary too, so this loop and billingSummary's own
+      // pay-app/invoice leg computation never re-query the same rows.
+      const docs = listBilledDocuments(db, p.id);
+      contractTotalCents += billingSummary(db, p.id, docs).contractTotalCents;
+      const projectName = projNameById.get(p.id) ?? 'Untitled';
+
+      // Because the three rollup legs are summed from the same rows,
+      // Invoiced/Paid/Outstanding always reconcile with the ledger the
+      // client renders underneath them.
+      for (const doc of docs) {
         invoicedCents += doc.totalCents;
         paidCents += doc.paidCents;
         outstandingCents += doc.balanceCents;

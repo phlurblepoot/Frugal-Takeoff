@@ -55,7 +55,7 @@ export const CustomerBillingTab: React.FC<{ billing?: CustomerBilling }> = ({ bi
         <CardHeader title="Summary" actions={<DollarSign size={15} className="text-ink-faint" />} />
         <CardBody>
           <div className="space-y-4">
-            <div>
+            <div data-testid="billing-summary-contract">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Contract</div>
               <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
                 {([
@@ -71,18 +71,22 @@ export const CustomerBillingTab: React.FC<{ billing?: CustomerBilling }> = ({ bi
                 ))}
               </div>
             </div>
-            <div>
+            <div data-testid="billing-summary-invoices">
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Invoices</div>
+              {/* Same 4-column grid as the Contract row above, with the middle
+                  two cells left empty so "Paid" lands in the same column as
+                  the Contract row's "Paid" — they align when scanning. */}
               <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-                {([
-                  ['Invoiced', billing.invoices.invoicedCents],
-                  ['Paid', billing.invoices.paidCents],
-                ] as const).map(([label, cents]) => (
-                  <div key={label}>
-                    <div className="text-ink-faint">{label}</div>
-                    <div className="text-lg font-bold text-ink">{formatMoney(cents)}</div>
-                  </div>
-                ))}
+                <div>
+                  <div className="text-ink-faint">Invoiced</div>
+                  <div className="text-lg font-bold text-ink">{formatMoney(billing.invoices.invoicedCents)}</div>
+                </div>
+                <div className="hidden sm:block" aria-hidden="true" />
+                <div className="hidden sm:block" aria-hidden="true" />
+                <div>
+                  <div className="text-ink-faint">Paid</div>
+                  <div className="text-lg font-bold text-ink">{formatMoney(billing.invoices.paidCents)}</div>
+                </div>
               </div>
             </div>
           </div>

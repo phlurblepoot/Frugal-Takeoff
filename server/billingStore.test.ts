@@ -13,6 +13,7 @@ import {
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
+  listBilledDocuments,
 } from './billingStore';
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
@@ -440,11 +441,26 @@ describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contrac
     const s = billingSummary(db, 'p1');
     expect(s.payAppBilledCents).toBe(90000);
     expect(s.payAppOutstandingCents).toBe(65000); // 90000 - 25000
+    expect(s.payAppPaidCents).toBe(25000);
 
-    // Legacy invoice-only fields are unchanged by the new pay-app fields.
+    // Legacy invoice-only fields are unchanged by the new pay-app fields —
+    // draft-INCLUSIVE (pre-existing behavior).
     expect(s.invoiceTotalCents).toBe(119900); // 20000 sent + 99900 draft (pre-existing behavior)
     expect(s.invoiceOutstandingCents).toBe(114900); // 119900 - 5000 paid
     expect(s.paid.payAppsCents).toBe(25000);
+
+    // New invoice-leg fields are draft-EXCLUSIVE — only the sent invoice
+    // counts, mirroring listBilledDocuments/the customer ledger.
+    expect(s.invoiceBilledCents).toBe(20000);
+    expect(s.invoicePaidCents).toBe(5000);
+    expect(s.invoiceOutstandingBilledCents).toBe(15000); // 20000 - 5000
+
+    // A caller that already fetched listBilledDocuments (customerOverview,
+    // listProjectSummaries) can pass it in and get identical figures back,
+    // without billingSummary re-querying the same rows.
+    const docs = listBilledDocuments(db, 'p1');
+    const s2 = billingSummary(db, 'p1', docs);
+    expect(s2).toEqual(s);
   });
 
   it('is zero when the project has no finalized pay apps (draft apps excluded)', () => {
