@@ -53,6 +53,7 @@ import {
   listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
   customerSummaries, customerOverview,
 } from './customerStore';
+import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -789,6 +790,69 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) {
       console.error('Error listing project files:', e);
       res.status(500).json({ error: 'Failed to list project files' });
+    }
+  });
+
+  // ── Global Documents page ─────────────────────────────────────────────────
+  // spec docs/superpowers/specs/2026-08-17-unified-documents-design.md §Server
+
+  app.get('/api/documents', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      const q = req.query;
+      const csv = (v: unknown): string[] | undefined => {
+        if (typeof v !== 'string' || !v) return undefined;
+        const arr = v.split(',').map(s => s.trim()).filter(Boolean);
+        return arr.length ? arr : undefined;
+      };
+      const int = (v: unknown): number | undefined => {
+        if (typeof v !== 'string' || !v) return undefined;
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const filters: DocumentFilters = {
+        projectIds: csv(q.projectIds),
+        customerIds: csv(q.customerIds),
+        kinds: csv(q.kinds),
+        q: typeof q.q === 'string' && q.q ? q.q : undefined,
+        archived: q.archived === '1',
+        limit: int(q.limit),
+        offset: int(q.offset),
+      };
+      res.json(listDocuments(db, filters, isAdmin));
+    } catch (e) {
+      console.error('Error listing documents:', e);
+      res.status(500).json({ error: 'Failed to list documents' });
+    }
+  });
+
+  app.patch('/api/files/:id', authenticateToken, (req, res) => {
+    try {
+      const { archived, kind } = req.body ?? {};
+      if (archived !== undefined && typeof archived !== 'boolean') {
+        return res.status(400).json({ error: 'archived must be a boolean' });
+      }
+      if (kind !== undefined && typeof kind !== 'string') {
+        return res.status(400).json({ error: 'kind must be a string' });
+      }
+      const result = patchDocument(db, req.params.id, { archived, kind });
+      if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      const { sha256, legacyFormat, ...slim } = result.value as any;
+      res.json({ success: true, ...slim });
+    } catch (e) {
+      console.error('Error updating file:', e);
+      res.status(500).json({ error: 'Failed to update file' });
+    }
+  });
+
+  app.delete('/api/files/:id', authenticateToken, (req, res) => {
+    try {
+      const result = deleteDocument(db, dataDir, req.params.id);
+      if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      res.json({ success: true });
+    } catch (e) {
+      console.error('Error deleting file:', e);
+      res.status(500).json({ error: 'Failed to delete file' });
     }
   });
 
