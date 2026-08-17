@@ -452,6 +452,92 @@ test('row actions column: version-history toggle only for multi-version rows', a
   await expect(authedPage.locator('table').getByText('v1', { exact: true })).toBeVisible();
 });
 
+// Document previews (docs/superpowers/specs/2026-08-17-document-previews-design.md):
+// hover card (DocumentHoverPreview.tsx) + viewer modal (DocumentViewerModal.tsx).
+// Row click now opens the modal instead of navigating straight to the editor —
+// see the file-header note above this suite's other row interactions, none of
+// which left-click a row body (they use the right-click context menu or a
+// stopPropagation'd nested button), so nothing here needed updating for that
+// change.
+test('document previews: hover shows a thumbnail card, click opens the viewer modal (image + PDF page nav), Open in editor navigates', async ({
+  authedPage, request, apiToken,
+}) => {
+  const seeded = await seedDocumentsPortfolio(request, apiToken.token);
+  const photoRow = tableRows(authedPage).filter({ hasText: 'site-photo-' });
+  const pdfRow = rowFor(authedPage, seeded.printoutFileName);
+  const hoverCard = authedPage.getByTestId('doc-hover-preview');
+  const modal = authedPage.getByTestId('doc-viewer-modal');
+
+  await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
+  await expect(photoRow).toHaveCount(1);
+
+  // (a) Hover the image row: the card appears (past the 350ms delay) showing
+  // an <img> (previewEngine's image kind never fetches — it's the raw
+  // /api/images/:id/raw URL), then hides again once the pointer leaves the
+  // row for somewhere the row doesn't cover.
+  await photoRow.hover();
+  await expect(hoverCard).toBeVisible();
+  await expect(hoverCard.locator('img')).toBeVisible();
+  await authedPage.mouse.move(0, 0);
+  await expect(hoverCard).toBeHidden();
+
+  // (b) Click the image row: the viewer modal opens with the image and the
+  // Download / Open-in-editor actions. Screenshot here (spec item e) — the
+  // image modal, not the PDF one.
+  await photoRow.click();
+  await expect(modal).toBeVisible();
+  await expect(modal.locator('img')).toBeVisible();
+  await expect(authedPage.getByTestId('doc-viewer-download')).toBeVisible();
+  await expect(authedPage.getByTestId('doc-viewer-open-editor')).toBeVisible();
+  await authedPage.screenshot({ path: 'test-results/documents-preview.png', fullPage: true });
+
+  // Esc closes it (Modal.tsx's window keydown listener).
+  await authedPage.keyboard.press('Escape');
+  await expect(modal).toBeHidden();
+
+  // (c) Click the PDF row (the seeded printout — a real pdf-lib 2-page PDF,
+  // see seedDocumentsPortfolio): the modal renders a <canvas> via pdf.js and
+  // shows page nav, since the seeded PDF has more than one page.
+  await pdfRow.click();
+  await expect(modal).toBeVisible();
+  await expect(modal.locator('canvas')).toBeVisible();
+  const prevBtn = authedPage.getByTestId('doc-viewer-page-prev');
+  const nextBtn = authedPage.getByTestId('doc-viewer-page-next');
+  await expect(prevBtn).toBeVisible();
+  await expect(nextBtn).toBeVisible();
+  await expect(authedPage.getByText(`Page 1 / ${seeded.printoutPageCount}`, { exact: true })).toBeVisible();
+  await expect(prevBtn).toBeDisabled();
+  await expect(nextBtn).toBeEnabled();
+
+  await nextBtn.click();
+  await expect(authedPage.getByText(`Page ${seeded.printoutPageCount} / ${seeded.printoutPageCount}`, { exact: true })).toBeVisible();
+  await expect(nextBtn).toBeDisabled();
+  await expect(prevBtn).toBeEnabled();
+
+  // (e continued) "Open in editor" closes the modal and navigates to the pdf
+  // tool for this file (openTargetFor's pdf branch) — last step, since it
+  // leaves the Documents page.
+  await authedPage.getByTestId('doc-viewer-open-editor').click();
+  await expect(authedPage).toHaveURL(new RegExp(`/tools/pdf\\?fileId=${seeded.printoutFileId}$`));
+});
+
+test('document previews: right-click opens the context menu and dismisses any lingering hover card', async ({
+  authedPage, request, apiToken,
+}) => {
+  const seeded = await seedDocumentsPortfolio(request, apiToken.token);
+  const photoRow = tableRows(authedPage).filter({ hasText: 'site-photo-' });
+
+  await authedPage.goto(`/documents?projectIds=${seeded.inProgressProjectId}`);
+  await expect(photoRow).toHaveCount(1);
+
+  await photoRow.hover();
+  await expect(authedPage.getByTestId('doc-hover-preview')).toBeVisible();
+
+  await photoRow.click({ button: 'right' });
+  await expect(rowMenu(authedPage)).toBeVisible();
+  await expect(authedPage.getByTestId('doc-hover-preview')).toBeHidden();
+});
+
 // Clutter exclusions (docs/superpowers/specs/2026-08-17-documents-clutter-design.md).
 test('clutter exclusions: a seeded page-asset image never appears in the default view; admin Unassigned toggle is exclusive with Archived and shows only unassigned rows', async ({
   authedPage, request, apiToken,

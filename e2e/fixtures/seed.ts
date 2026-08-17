@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
+import { PDFDocument } from 'pdf-lib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
@@ -685,6 +686,7 @@ export interface SeedDocumentsPortfolioResult extends SeedCustomerPortfolioResul
   printoutId: string;
   printoutFileId: string;
   printoutFileName: string;
+  printoutPageCount: number;
 }
 
 /**
@@ -705,7 +707,10 @@ export interface SeedDocumentsPortfolioResult extends SeedCustomerPortfolioResul
  *    -> upload file against it -> append to project.printouts[] -> PUT the
  *    project). Unlike invoice/change-order/proposal, printout carries no
  *    dollar figure so it stays visible to non-admins (spec §Decisions "Role
- *    visibility").
+ *    visibility"). Its bytes ARE a real (pdf-lib-generated) multi-page PDF,
+ *    unlike the invoice/pay-app fixtures — the document-previews viewer opens
+ *    it and needs pdf.js to actually parse it and see >1 page for page-nav
+ *    coverage (e2e/documents.spec.ts).
  *
  * All four resolve to real navigable `source.href` values (billing tabs /
  * issues page / proposal page) since they reference the base seed's real
@@ -776,9 +781,16 @@ export async function seedDocumentsPortfolio(
   const printoutId = randomUUID();
   const printoutFileName = `Printout-${short}.pdf`;
   const printoutFileId = randomUUID();
+  // A real, minimal 2-page PDF (not just bytes with a %PDF header) — the
+  // document-previews viewer modal renders this with pdf.js, and 2 pages
+  // exercises page-nav (e2e/documents.spec.ts).
+  const printoutPageCount = 2;
+  const printoutDoc = await PDFDocument.create();
+  for (let i = 0; i < printoutPageCount; i++) printoutDoc.addPage([200, 200]);
+  const printoutPdfBytes = await printoutDoc.save();
   const printoutFileRes = await request.post(
     `/api/files/${printoutFileId}?projectId=${portfolio.inProgressProjectId}&kind=printout&sourceType=printout&sourceId=${printoutId}&name=${encodeURIComponent(printoutFileName)}`,
-    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from('%PDF-1.4 e2e fixture printout bytes') },
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(printoutPdfBytes) },
   );
   if (!printoutFileRes.ok()) throw new Error(`printout file upload failed: ${printoutFileRes.status()} ${await printoutFileRes.text()}`);
 
@@ -809,5 +821,6 @@ export async function seedDocumentsPortfolio(
     printoutId,
     printoutFileId,
     printoutFileName,
+    printoutPageCount,
   };
 }
