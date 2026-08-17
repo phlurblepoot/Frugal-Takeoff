@@ -22,7 +22,7 @@ vi.mock('../../utils/store', () => ({
 
 import {
   previewKindFor, getPreviewThumb, makeGenerationGuard, loadPdfDoc, renderPdfPage,
-  MODAL_PDF_SCALE, HOVER_PDF_SIZE_CAP, _cache,
+  MODAL_PDF_SCALE, MODAL_MAX_LONG_SIDE, HOVER_PDF_SIZE_CAP, _cache,
 } from './previewEngine';
 
 const realCreateElement = document.createElement.bind(document);
@@ -32,9 +32,9 @@ const realCreateElement = document.createElement.bind(document);
 // `cancel` mirrors pdf.js's RenderTask so the modal's page-flip cancellation
 // path can be exercised.
 const renderCancel = vi.fn();
-function makeFakePdf(numPages = 3) {
+function makeFakePdf(numPages = 3, pageWidthPt = 100, pageHeightPt = 50) {
   const page = {
-    getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 50 * scale }),
+    getViewport: ({ scale }: { scale: number }) => ({ width: pageWidthPt * scale, height: pageHeightPt * scale }),
     render: () => ({ promise: Promise.resolve(), cancel: renderCancel }),
   };
   return {
@@ -189,6 +189,25 @@ describe('loadPdfDoc / renderPdfPage (viewer modal path)', () => {
     await renderPdfPage(doc, 1, canvas).promise;
     await renderPdfPage(doc, 2, canvas).promise;
     expect(fetchFileBlob).toHaveBeenCalledTimes(1);
+  });
+
+  it('a letter-size page (612x792pt) renders unclamped at MODAL_PDF_SCALE', async () => {
+    getDocument.mockImplementation(() => ({ promise: Promise.resolve(makeFakePdf(1, 612, 792)) }));
+    const doc = await loadPdfDoc('f12');
+    const canvas = { width: 0, height: 0, getContext: () => ({}) } as unknown as HTMLCanvasElement;
+    await renderPdfPage(doc, 1, canvas).promise;
+    expect(canvas.width).toBe(918);
+    expect(canvas.height).toBe(1188);
+  });
+
+  it('a large-format page (2592x1728pt) is clamped so its long side is exactly MODAL_MAX_LONG_SIDE', async () => {
+    getDocument.mockImplementation(() => ({ promise: Promise.resolve(makeFakePdf(1, 2592, 1728)) }));
+    const doc = await loadPdfDoc('f13');
+    const canvas = { width: 0, height: 0, getContext: () => ({}) } as unknown as HTMLCanvasElement;
+    await renderPdfPage(doc, 1, canvas).promise;
+    expect(Math.max(canvas.width, canvas.height)).toBe(MODAL_MAX_LONG_SIDE);
+    expect(canvas.width).toBe(2400);
+    expect(canvas.height).toBe(1600);
   });
 });
 

@@ -41,12 +41,11 @@ const CACHE_MAX_ENTRIES = 100;
 // newer upload sharing the same file id. Exported for tests only.
 export const _cache: Map<string, Thumb> = new Map();
 
-// In-flight render memo, same key shape as _cache. Covers the hover-then-
-// click case: a hover render can still be pending pdfjs work when the user
-// clicks to open the modal, and rapid re-hovers can overlap too — without
-// this, each concurrent caller would kick off its own fetchFileBlob + pdfjs
-// render for the identical bytes. Entries are removed on settle (success OR
-// failure) so a failed render doesn't wedge — the next call retries.
+// In-flight render memo, same key shape as _cache. Covers rapid re-hover of
+// the same row while its render is still in flight — without this, each
+// concurrent caller would kick off its own fetchFileBlob + pdfjs render for
+// the identical bytes. Entries are removed on settle (success OR failure) so
+// a failed render doesn't wedge — the next call retries.
 const _pending: Map<string, Promise<Thumb>> = new Map();
 
 const cacheKey = (id: string, versionNumber: number): string => `${id}:${versionNumber}`;
@@ -64,6 +63,13 @@ function cacheSet(key: string, thumb: Thumb): void {
 // Scale the viewer modal renders a page at — readable on screen without
 // producing a canvas so large that flipping pages feels sluggish.
 export const MODAL_PDF_SCALE = 1.5;
+
+// Hard cap on the rendered canvas's long side, in device pixels. Large-format
+// plan sheets (e.g. 36"x24"+) at MODAL_PDF_SCALE can exceed iOS Safari's
+// ~16.7M-px canvas limit (blank render or throw); this keeps every page under
+// that regardless of its physical size. Letter-size pages are far below this
+// bound, so MODAL_PDF_SCALE remains their effective scale.
+export const MODAL_MAX_LONG_SIDE = 2400;
 
 // A loaded pdf.js document. The viewer modal holds one of these for as long as
 // it's open so page flips don't refetch or re-parse the bytes; it MUST call
@@ -98,7 +104,10 @@ export function renderPdfPage(
   const promise = (async () => {
     const page = await doc.getPage(pageNumber);
     if (cancelled) return;
-    const vp = page.getViewport({ scale });
+    const vp1 = page.getViewport({ scale: 1 });
+    const longSidePt = Math.max(vp1.width, vp1.height);
+    const effectiveScale = Math.min(scale, MODAL_MAX_LONG_SIDE / longSidePt);
+    const vp = page.getViewport({ scale: effectiveScale });
     canvas.width = Math.round(vp.width);
     canvas.height = Math.round(vp.height);
     const ctx = canvas.getContext('2d');

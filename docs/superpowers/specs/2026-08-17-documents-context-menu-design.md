@@ -13,7 +13,7 @@ where they're too easy to hit accidentally.
 - The row actions column keeps ONLY the version-history toggle, and only for
   rows with `versionNumber > 1`.
 - Right-click on a row opens a context menu with the policy-gated actions
-  formerly in the column: Open, Download, Archive (Restore in the archived
+  formerly in the column: Open in editor, Download, Archive (Restore in the archived
   view), Change type (direct-upload kinds only, submenu or nested list),
   Delete (deletable rows only, same confirm). Unqualified items are absent,
   not disabled.

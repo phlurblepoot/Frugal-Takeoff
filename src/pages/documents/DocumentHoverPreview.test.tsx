@@ -17,8 +17,18 @@ vi.mock('./previewEngine', async importOriginal => ({
   getPreviewThumb: (...args: unknown[]) => getPreviewThumb(...args),
 }));
 
+// Real store module apart from fetchFileBlob, so the "no fetch" assertion
+// below can observe the byte-level network call previewEngine's real
+// getPreviewThumb would (or, for a capped pdf, would NOT) make.
+const fetchFileBlob = vi.fn();
+vi.mock('../../utils/store', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../utils/store')>()),
+  fetchFileBlob: (...args: unknown[]) => fetchFileBlob(...args),
+}));
+
 import { DocumentRow } from '../../utils/store';
 import { DocumentHoverPreview, HOVER_DELAY_MS } from './DocumentHoverPreview';
+import { HOVER_PDF_SIZE_CAP } from './previewEngine';
 
 const makeRow = (id: string, over: Partial<DocumentRow> = {}): DocumentRow => ({
   id,
@@ -52,6 +62,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   getPreviewThumb.mockReset();
   getPreviewThumb.mockResolvedValue({ kind: 'image', url: '/api/images/a/raw' });
+  fetchFileBlob.mockReset();
 });
 
 afterEach(() => {
@@ -102,6 +113,23 @@ describe('DocumentHoverPreview', () => {
     await act(async () => { resolveA({ kind: 'image', url: '/api/images/a/raw' }); });
     expect(thumbSrc()).toBe('/api/images/b/raw');
     expect(screen.getByText('b.png')).toBeInTheDocument();
+  });
+
+  it('a pdf over HOVER_PDF_SIZE_CAP falls back to icon + "Open to preview" without fetching bytes', async () => {
+    // Delegate to previewEngine's real getPreviewThumb (not the file-wide
+    // mock) so the hover-cap check itself is exercised, not just the UI's
+    // reaction to a pre-baked icon result.
+    const { getPreviewThumb: real } = await vi.importActual<typeof import('./previewEngine')>('./previewEngine');
+    getPreviewThumb.mockImplementation(real);
+
+    const row = makeRow('big', { mime: 'application/pdf', size: HOVER_PDF_SIZE_CAP + 1 });
+    render(<DocumentHoverPreview row={row} startX={10} startY={10} customTypes={[]} onHide={vi.fn()} />);
+    await settle(HOVER_DELAY_MS);
+
+    expect(card()).not.toBeNull();
+    expect(screen.getByText('Open to preview')).toBeInTheDocument();
+    expect(thumbSrc()).toBeUndefined();
+    expect(fetchFileBlob).not.toHaveBeenCalled();
   });
 
   it('hides itself on scroll, right-click and click', async () => {
