@@ -21,6 +21,21 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.6',
+    date: 'August 17, 2026',
+    changes: [
+      'Customers are now the front door: the Customers section is a split view — customer list on the left, and a full landing page per customer on the right with Overview, Projects, Tasks, Billing, and Settings tabs. The Overview surfaces things needing attention (past-due bids, overdue tasks, outstanding money) and Billing rolls up every project\'s contract and payment picture in one place.',
+      'Simpler project stages: the Projects board is now two working stages — Bidding and In Progress — plus Archived. Finishing (or losing) a job archives it, and lost bids carry a marker so win/loss history is preserved. Existing projects were moved to the matching stage automatically.',
+      'New unified Documents page: a global Documents section lists every file across all projects — uploads, generated invoices, pay apps, change orders, proposals, reports, and photos — each labeled with its type and a link to where it came from. Filter by multiple types/projects/customers at once, multi-select to download or archive, and re-generated documents version instead of duplicating. Admins can define custom document types in Settings, and uploads get a labeling popup (type, customer, project, multiple files at once). Row actions moved to a right-click menu.',
+      'Live document previews: hovering a row on the Documents page pops a small preview beside the cursor — photos show the image, PDFs show their first page, all after a short delay so scanning the list stays fast. Clicking a row opens a full preview window with page-by-page PDF navigation, spreadsheet preview, and Download / Open in editor / Source / Archive buttons. (Opening the underlying editor moved to the "Open in editor" button.)',
+      'AIA retainage, reworked: set one base retainage rate in Billing → Settings, or switch to per-line rates on the schedule of values. Pay applications can now release retainage in percentage points — release part of it on one application (the remainder carries forward automatically) or hit "Release all" on the final application. Excel exports reflect the effective rates either way.',
+      'Clearer billing totals: project cards and customer billing now show two separate rows — Contract (contract total, billed via pay applications, outstanding, paid) and Invoices (invoiced, paid) — instead of one blended number. Figures no longer include drafts.',
+      'Balances on every invoice and pay application: the Invoices and Pay Applications tabs gained Amount and Balance columns, and opening an invoice or pay app now lists the payments recorded against it.',
+      'Change orders now have a title: shown as a new column in the Change Orders tab and used as the line description when approved change orders sync to the schedule of values.',
+      'Fix: uploading documents from another device on the local network no longer fails immediately with an error.',
+    ],
+  },
+  {
     version: '2.5',
     date: 'August 15, 2026',
     changes: [
