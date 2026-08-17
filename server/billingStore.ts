@@ -205,8 +205,12 @@ interface ChangeOrderInput {
 
 // title is free-text; blank/whitespace-only is stored as NULL so display and
 // syncChangeOrders' fallback-to-description both see "no title" the same way.
-function normalizeTitle(title: string | null | undefined): string | null {
-  if (title === undefined || title === null) return null;
+// A non-string value (a raw JSON body can send anything) is treated the same
+// as absent rather than thrown — title is optional/display-only, like
+// `description`, not a field with money-math correctness implications
+// (compare `lumpSumAmount`, which does throw ValidationError on bad input).
+function normalizeTitle(title: unknown): string | null {
+  if (typeof title !== 'string') return null;
   const trimmed = title.trim();
   return trimmed === '' ? null : trimmed;
 }

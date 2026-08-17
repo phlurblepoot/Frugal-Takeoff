@@ -296,6 +296,18 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(getChangeOrder(db, untitled.id)!.title).toBeNull();
   });
 
+  it('a non-string title (raw JSON body sent a number/object) is stored as null instead of throwing', () => {
+    // title is optional/display-only, like description — malformed input is
+    // normalized away rather than raising a 500 from calling .trim() on it.
+    const created = createChangeOrder(db, 'p1', { number: '003', title: 42 as any, lumpSumAmount: 0 });
+    expect(getChangeOrder(db, created.id)!.title).toBeNull();
+
+    const co = getChangeOrder(db, created.id)!;
+    const saved = saveChangeOrder(db, created.id, { version: co.version, title: { bad: true } as any, lumpSumAmount: 0 });
+    expect(saved.version).toBe(2);
+    expect(getChangeOrder(db, created.id)!.title).toBeNull();
+  });
+
   it('saveChangeOrder throws ConflictError on a stale version', () => {
     const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0 });
     saveChangeOrder(db, id, { version: 1, lumpSumAmount: 1 }); // now v2
