@@ -199,11 +199,6 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     label: row => `Issue #${row.number ?? '?'}`,
     href: pid => pid ? `/project/${pid}/issues` : null,
   },
-  punch: {
-    sql: ph => `SELECT id, description FROM punch_items WHERE id IN (${ph})`,
-    label: row => (typeof row.description === 'string' && row.description.trim()) ? row.description.trim() : 'Punch item',
-    href: pid => pid ? `/project/${pid}/punch` : null,
-  },
   rfi: {
     sql: ph => `SELECT id, number FROM rfis WHERE id IN (${ph})`,
     label: row => `RFI #${row.number ?? '?'}`,
@@ -261,6 +256,43 @@ function resolvePrintouts(db: Database.Database, rows: RawRow[], out: Map<string
   }
 }
 
+// sourceType 'punch' covers two different referents by kind: a punch-photo's
+// sourceId is a punch_items row (one of many items on a punch list), but a
+// punch-report's sourceId is the owning project id — the report is the
+// WHOLE list, generated per project (ProjectPunch.tsx), not per item. Feeding
+// a punch-report's projectId sourceId through the punch_items lookup can
+// never match, so it always fell back to a dead generic label/href.
+function resolvePunch(db: Database.Database, rows: RawRow[], out: Map<string, DocumentSource>): void {
+  const list = rows.filter(r => r.sourceType === 'punch' && r.sourceId);
+  if (!list.length) return;
+
+  const reportRows = list.filter(r => r.kind === 'punch-report');
+  for (const r of reportRows) {
+    const pid = r.projectId ?? r.sourceId; // sourceId IS the projectId by construction; projectId preferred for consistency with the other resolvers
+    out.set(r.id, { type: 'punch', id: r.sourceId as string, label: 'Punch list', href: pid ? `/project/${pid}/punch` : null });
+  }
+
+  const itemRows = list.filter(r => r.kind !== 'punch-report');
+  if (itemRows.length) {
+    const ids = [...new Set(itemRows.map(r => r.sourceId as string))];
+    const found = new Map(
+      (db.prepare(`SELECT id, description FROM punch_items WHERE id IN (${inClause(ids.length)})`).all(...ids) as any[])
+        .map((x: any) => [x.id, x])
+    );
+    for (const r of itemRows) {
+      const match = found.get(r.sourceId as string);
+      out.set(r.id, match
+        ? {
+            type: 'punch',
+            id: r.sourceId as string,
+            label: (typeof match.description === 'string' && match.description.trim()) ? match.description.trim() : 'Punch item',
+            href: r.projectId ? `/project/${r.projectId}/punch` : null,
+          }
+        : { type: 'punch', id: r.sourceId as string, label: genericLabel(r.kind), href: null });
+    }
+  }
+}
+
 function resolveSources(db: Database.Database, rows: RawRow[]): Map<string, DocumentSource> {
   const out = new Map<string, DocumentSource>();
   for (const [type, resolver] of Object.entries(SIMPLE_RESOLVERS)) {
@@ -278,6 +310,7 @@ function resolveSources(db: Database.Database, rows: RawRow[]): Map<string, Docu
     }
   }
   resolvePrintouts(db, rows, out);
+  resolvePunch(db, rows, out);
   return out;
 }
 

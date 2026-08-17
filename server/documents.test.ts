@@ -192,6 +192,19 @@ describe('GET /api/documents — source label resolution', () => {
     expect(byId[taskFid].source).toEqual({ type: 'task', id: task.body.id, label: 'Order fixtures', href: '/tasks?projectId=p1' });
   });
 
+  it('resolves punch-report (sourceId=projectId, whole-list) and punch-photo (sourceId=item) differently under the same sourceType', async () => {
+    const item = await request(app).post('/api/projects/p1/punch').send({ description: 'Fix crack', area: 'Kitchen' });
+
+    const reportFid = await upload('punch-rep', { projectId: 'p1', kind: 'punch-report', sourceType: 'punch', sourceId: 'p1', name: 'Punch.pdf' });
+    const photoFid = await upload('punch-photo1', { projectId: 'p1', kind: 'punch-photo', sourceType: 'punch', sourceId: item.body.id, name: 'photo.jpg' });
+
+    const res = await request(app).get('/api/documents');
+    const byId = Object.fromEntries(res.body.rows.map((r: any) => [r.id, r]));
+
+    expect(byId[reportFid].source).toEqual({ type: 'punch', id: 'p1', label: 'Punch list', href: '/project/p1/punch' });
+    expect(byId[photoFid].source).toEqual({ type: 'punch', id: item.body.id, label: 'Fix crack', href: '/project/p1/punch' });
+  });
+
   it('resolves a printout label from project.printouts[] by its own id', async () => {
     const current = (await request(app).get('/api/projects/p1')).body;
     await request(app).put('/api/projects/p1').send({
