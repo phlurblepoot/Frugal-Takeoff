@@ -140,7 +140,6 @@ describe('resolveGrandTotal', () => {
   const baseOptions = (over: Partial<ProposalOptions> = {}): ProposalOptions => ({
     includeCostDetail: false,
     includeHighlights: false,
-    headerColor: '#000000',
     coverNotes: '',
     fontFamily: 'helvetica',
     validUntil: '',

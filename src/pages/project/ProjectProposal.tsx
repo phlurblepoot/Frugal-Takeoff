@@ -7,7 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera } from 'lucide-react';
+import { FileText, RefreshCw, Eye, Download, Share2, Trash2, Send, Camera, History } from 'lucide-react';
 import { Project, Printout, Customer } from '../../types';
 import {
   getProject, saveProject, saveBinaryFile, getFile, getSettings,
@@ -26,6 +26,7 @@ import {
   normalizeHighlightQuality,
   ProposalOptions,
 } from './proposal/proposalGenerator';
+import { pushHistory, parseHistory, resolveInitialProposalText } from './proposal/proposalTextHistory';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -34,6 +35,73 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Textarea, Select, Checkbox, Skeleton,
 } from '../../components/ui';
 import { EmailComposer } from '../../components/EmailComposer';
+
+// Small ghost icon button next to a textarea label that opens a dropdown of
+// this user's last-used values for that field (proposalTextHistory.ts).
+// Selecting an entry overwrites the field's current content. Disabled when
+// there's no history yet.
+const HistoryMenu: React.FC<{
+  history: string[];
+  testId: string;
+  onSelect: (value: string) => void;
+}> = ({ history, testId, onSelect }) => {
+  const [open, setOpen] = useState(false);
+
+  // Outside-click/Escape close the menu. The wrapper stops its own mousedown
+  // from bubbling (below), so this window listener only ever sees genuinely
+  // outside clicks — including a re-click on the trigger, which toggles via
+  // its own onClick instead of racing the window listener.
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-block" onMouseDown={e => e.stopPropagation()}>
+      <button
+        type="button"
+        data-testid={testId}
+        aria-label="Recent entries"
+        disabled={history.length === 0}
+        onClick={() => setOpen(o => !o)}
+        className="rounded-md p-1 text-ink-faint transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <History size={14} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="Recent entries"
+          className="absolute right-0 top-full z-20 mt-1 w-72 max-w-[80vw] rounded-lg border border-edge bg-raised py-1 shadow-lg"
+        >
+          {history.map((entry, i) => {
+            const firstLine = entry.split('\n')[0];
+            const label = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+            return (
+              <button
+                key={i}
+                role="menuitem"
+                type="button"
+                title={entry.length > 400 ? entry.slice(0, 400) + '…' : entry}
+                onClick={() => { onSelect(entry); setOpen(false); }}
+                className="block w-full truncate px-3 py-1.5 text-left text-sm text-ink hover:bg-hover"
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const ProjectProposal: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -61,11 +129,14 @@ export const ProjectProposal: React.FC = () => {
 
   // Proposal options (ported from ProjectView's proposal state).
   const [customTitle, setCustomTitle] = useState('');
-  const [headerColor, setHeaderColor] = useState('#1e293b');
   const [fontFamily, setFontFamily] = useState<'helvetica' | 'times' | 'courier'>('helvetica');
   const [validUntil, setValidUntil] = useState('');
   const [coverNotes, setCoverNotes] = useState('');
   const [terms, setTerms] = useState('');
+  // This user's last-used cover-notes/terms entries (newest first, max 5 —
+  // proposalTextHistory.ts), shown in the HistoryMenu next to each field.
+  const [notesHistory, setNotesHistory] = useState<string[]>([]);
+  const [termsHistory, setTermsHistory] = useState<string[]>([]);
   const [includeCostDetail, setIncludeCostDetail] = useState(false);
   const [includeHighlights, setIncludeHighlights] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(false);
@@ -131,6 +202,43 @@ export const ProjectProposal: React.FC = () => {
   };
   useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Prefill cover notes/terms + load history (once per project) ─────────────
+  // The project's own saved value always wins; otherwise fall back to this
+  // user's most-recent entry across projects. getProject and getUserPreferences
+  // are resolved together so a slow prefs fetch can't decide "no stored value"
+  // before the project has actually arrived.
+  //
+  // ProjectLayout renders its Outlet WITHOUT `key={projectId}`, so navigating
+  // from project A's /proposal straight to B's /proposal re-renders this SAME
+  // component instance — A's coverNotes/terms would otherwise still be
+  // sitting in state when B's fetch starts. Reset both fields synchronously,
+  // before any async work, so B never inherits A's text (and can't leak it
+  // into a Generate/Send PDF). resolveInitialProposalText's `current` check
+  // then only sees text typed AFTER this reset — either the user typing into
+  // B, or a same-project reload landing — never A's leftovers.
+  useEffect(() => {
+    if (!projectId) return;
+    setCoverNotes('');
+    setTerms('');
+    let cancelled = false;
+    (async () => {
+      try {
+        const [proj, prefs] = await Promise.all([
+          getProject(projectId).catch(() => null),
+          getUserPreferences().catch(() => ({} as Record<string, string>)),
+        ]);
+        if (cancelled || !proj) return;
+        const notesHist = parseHistory(prefs['proposal-coverNotes-history']);
+        const termsHist = parseHistory(prefs['proposal-terms-history']);
+        setNotesHistory(notesHist);
+        setTermsHistory(termsHist);
+        setCoverNotes(prev => resolveInitialProposalText(proj.proposalCoverNotes, notesHist[0], prev));
+        setTerms(prev => resolveInitialProposalText(proj.proposalTerms, termsHist[0], prev));
+      } catch { /* non-fatal — fields stay whatever they already were */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Current-revision page ids — same model ProjectView uses (all plan sets, the
   // '' selection), so the proposal totals match the Takeoff tab exactly.
   const currentPageIds = useMemo(
@@ -145,7 +253,6 @@ export const ProjectProposal: React.FC = () => {
       const raw = localStorage.getItem(getProposalPrefsKey());
       if (raw) {
         const p = JSON.parse(raw);
-        if (p.headerColor)                setHeaderColor(p.headerColor);
         if (p.fontFamily)                 setFontFamily(p.fontFamily);
         if (p.includeCostDetail != null)  setIncludeCostDetail(p.includeCostDetail);
         if (p.includeHighlights != null)  setIncludeHighlights(p.includeHighlights);
@@ -158,7 +265,6 @@ export const ProjectProposal: React.FC = () => {
     } catch { /* ignore corrupt data */ }
 
     getUserPreferences().then(prefs => {
-      if (prefs['proposal-headerColor'])                setHeaderColor(prefs['proposal-headerColor']);
       if (prefs['proposal-fontFamily'])                 setFontFamily(prefs['proposal-fontFamily'] as 'helvetica' | 'times' | 'courier');
       if (prefs['proposal-includeCostDetail'] != null)  setIncludeCostDetail(prefs['proposal-includeCostDetail'] === 'true');
       if (prefs['proposal-includeHighlights'] != null)  setIncludeHighlights(prefs['proposal-includeHighlights'] === 'true');
@@ -174,7 +280,6 @@ export const ProjectProposal: React.FC = () => {
   useEffect(() => {
     try {
       localStorage.setItem(getProposalPrefsKey(), JSON.stringify({
-        headerColor,
         fontFamily,
         includeCostDetail,
         includeHighlights,
@@ -186,7 +291,6 @@ export const ProjectProposal: React.FC = () => {
       }));
     } catch { /* ignore quota errors */ }
     saveUserPreferences({
-      'proposal-headerColor':       headerColor,
       'proposal-fontFamily':        fontFamily,
       'proposal-includeCostDetail': String(includeCostDetail),
       'proposal-includeHighlights': String(includeHighlights),
@@ -196,7 +300,7 @@ export const ProjectProposal: React.FC = () => {
       'proposal-priceMode':         priceMode,
       'proposal-fixedPrice':        fixedPrice,
     }).catch(() => {});
-  }, [headerColor, fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality, priceMode, fixedPrice]);
+  }, [fontFamily, includeCostDetail, includeHighlights, includeSignature, includeTakeoffList, highlightQuality, priceMode, fixedPrice]);
 
   const toggleTakeoff = (id: string) => {
     setSelectedTakeoffIds(prev => {
@@ -204,6 +308,40 @@ export const ProjectProposal: React.FC = () => {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
+
+  // ── Cover notes/terms memory (called after a successful generate) ───────────
+  // Read-modify-write this user's history prefs with pushHistory, skipping the
+  // save entirely when neither array actually changed (both empty texts, or
+  // both already at the front). Never throws — called from both the Generate
+  // and Send flows, and a failure here must not break either.
+  const recordProposalTextHistory = async () => {
+    try {
+      const prefs = await getUserPreferences();
+      const oldNotes = parseHistory(prefs['proposal-coverNotes-history']);
+      const oldTerms = parseHistory(prefs['proposal-terms-history']);
+      const newNotes = pushHistory(oldNotes, coverNotes);
+      const newTerms = pushHistory(oldTerms, terms);
+      if (newNotes === oldNotes && newTerms === oldTerms) return;
+      await saveUserPreferences({
+        'proposal-coverNotes-history': JSON.stringify(newNotes),
+        'proposal-terms-history': JSON.stringify(newTerms),
+      });
+      setNotesHistory(newNotes);
+      setTermsHistory(newTerms);
+    } catch { /* non-fatal */ }
+  };
+
+  // Persists the current cover-notes/terms onto the project (so the editor
+  // prefills from them next time) and refreshes local state — same
+  // save+reload shape as the photo-upload path above. Used by the Send flow,
+  // which (unlike Generate) has no other project-level save in its path.
+  // Never throws.
+  const saveProposalText = async (proj: Project) => {
+    try {
+      await saveProject({ ...proj, proposalCoverNotes: coverNotes, proposalTerms: terms });
+      reload();
+    } catch { /* non-fatal */ }
   };
 
   // ── Generate ────────────────────────────────────────────────────────────────
@@ -248,7 +386,6 @@ export const ProjectProposal: React.FC = () => {
       const options: ProposalOptions = {
         includeCostDetail,
         includeHighlights,
-        headerColor,
         coverNotes,
         fontFamily,
         validUntil,
@@ -297,13 +434,19 @@ export const ProjectProposal: React.FC = () => {
         createdAt: Date.now(),
         type: 'pdf',
       };
-      const updated = { ...project, printouts: [...(project.printouts || []), newPrintout] };
+      const updated = {
+        ...project,
+        printouts: [...(project.printouts || []), newPrintout],
+        proposalCoverNotes: coverNotes,
+        proposalTerms: terms,
+      };
       await saveProject(updated);
       if (overBudget) {
         toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
       }
       toast('Proposal generated', { type: 'success' });
       reload();
+      await recordProposalTextHistory();
     } catch (error) {
       console.error('Error generating proposal:', error);
       toast('Failed to generate proposal PDF.', { type: 'error' });
@@ -517,10 +660,6 @@ export const ProjectProposal: React.FC = () => {
               <Input id="prop-title" value={customTitle} onChange={e => setCustomTitle(e.target.value)}
                 placeholder={project.name} />
             </Field>
-            <Field label="Header color" htmlFor="prop-color">
-              <Input id="prop-color" type="color" value={headerColor} onChange={e => setHeaderColor(e.target.value)}
-                className="h-10 w-20 p-1" />
-            </Field>
             <Field label="Font" htmlFor="prop-font">
               <Select id="prop-font" value={fontFamily} onChange={e => setFontFamily(e.target.value as 'helvetica' | 'times' | 'courier')}>
                 <option value="helvetica">Helvetica</option>
@@ -541,14 +680,22 @@ export const ProjectProposal: React.FC = () => {
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-4">
-            <Field label="Cover notes" htmlFor="prop-notes">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="prop-notes" className="block text-sm font-medium text-ink">Cover notes</label>
+                <HistoryMenu history={notesHistory} testId="prop-notes-history" onSelect={setCoverNotes} />
+              </div>
               <Textarea id="prop-notes" rows={3} value={coverNotes} onChange={e => setCoverNotes(e.target.value)}
                 placeholder="Optional intro shown on the cover page" />
-            </Field>
-            <Field label="Terms & conditions" htmlFor="prop-terms">
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="prop-terms" className="block text-sm font-medium text-ink">Terms & conditions</label>
+                <HistoryMenu history={termsHistory} testId="prop-terms-history" onSelect={setTerms} />
+              </div>
               <Textarea id="prop-terms" rows={4} value={terms} onChange={e => setTerms(e.target.value)}
                 placeholder="Optional terms appended as a final page" />
-            </Field>
+            </div>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2">
@@ -705,7 +852,6 @@ export const ProjectProposal: React.FC = () => {
               const options: ProposalOptions = {
                 includeCostDetail,
                 includeHighlights,
-                headerColor,
                 coverNotes,
                 fontFamily,
                 validUntil,
@@ -745,6 +891,11 @@ export const ProjectProposal: React.FC = () => {
               if (overBudget) {
                 toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
               }
+              // Awaited so the project's saved version reflects these texts
+              // before send-proposal reloads it server-side (server/routes.ts).
+              // Both helpers swallow their own errors — never breaks the send.
+              await saveProposalText(project);
+              await recordProposalTextHistory();
             } catch { /* fall back to the pre-generated printout */ }
           }
           const updated = await sendProjectProposal(project.id, {
