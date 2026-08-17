@@ -95,7 +95,16 @@ file. Generate/Download/Send flows therefore just upload with source
 metadata every time; regeneration versions, never duplicates. Photo kinds
 never collide with document kinds on the same entity (distinct `kind`
 values), and printouts keep one file per printout entry (each has its own
-sourceId).
+sourceId). **Multi-instance kinds are excluded from the upsert** (second
+amendment, from Task-1 review): an entity legitimately has MANY photos
+sharing one (sourceType, sourceId, kind) triple — `issue-photo`,
+`punch-photo`, `task-photo`, `change-order-photo`, `rfi-photo`,
+`proposal-photo` always create new rows; only single-instance document
+kinds (invoice, change-order PDF, issue-report, punch-report, rfi,
+rfi-response, proposal, payapp-export) participate in upsert-by-source.
+Also: `issue-report` replaces the legacy `issue` kind (renamed in the
+migration + at the write site); regenerating an archived document
+un-archives it.
 
 Custom types: `settings.documentTypes` JSON `[{ id, label }]` (admin-gated
 save path as other settings).
