@@ -61,11 +61,12 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
             <EmptyState icon={<FileText size={20} />} title="No change orders yet" description="Approved change orders increase the contract value." />
           ) : (
             <Table>
-              <THead><TR><TH>Number</TH><TH>Status</TH><TH>Amount</TH><TH>Date</TH><TH></TH></TR></THead>
+              <THead><TR><TH>Number</TH><TH>Title</TH><TH>Status</TH><TH>Amount</TH><TH>Date</TH><TH></TH></TR></THead>
               <TBody>
                 {changeOrders.map(co => (
                   <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
                     <TD className="font-medium text-ink">CO-{co.number || '—'}</TD>
+                    <TD className="text-ink-soft">{co.title || '—'}</TD>
                     <TD><ChangeOrderStatusPill status={co.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>
                     <TD className="text-ink-soft">{co.date ? new Date(co.date).toLocaleDateString() : '—'}</TD>

@@ -139,8 +139,8 @@ export function syncChangeOrders(db: Database.Database, projectId: string): { ad
   const now = Date.now();
   const tx = db.transaction(() => {
     const cos = db.prepare(
-      `SELECT id, number, description, amount FROM change_orders WHERE projectId = ? AND status = 'approved'`
-    ).all(projectId) as { id: string; number: string | null; description: string | null; amount: number | null }[];
+      `SELECT id, number, title, description, amount FROM change_orders WHERE projectId = ? AND status = 'approved'`
+    ).all(projectId) as { id: string; number: string | null; title: string | null; description: string | null; amount: number | null }[];
     const ins = db.prepare(
       'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, ?, NULL, 1, ?, ?, 1, ?)'
     );
@@ -154,7 +154,7 @@ export function syncChangeOrders(db: Database.Database, projectId: string): { ad
         crypto.randomUUID(),
         projectId,
         'CO-' + (co.number ?? ''),
-        co.description ?? '',
+        co.title?.trim() || co.description || '',
         cents,
         co.id,
         max + 1,

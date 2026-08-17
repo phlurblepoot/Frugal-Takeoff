@@ -282,6 +282,20 @@ describe('change orders — line items, lump sum, version, photos (Phase 9)', ()
     expect(Math.round(reloaded.amount * 100)).toBe(reloaded.totalCents);
   });
 
+  it('title round-trips through create and save, and blank/whitespace normalizes to null', () => {
+    const { id } = createChangeOrder(db, 'p1', { number: '001', title: '  Kitchen electrical add  ', lumpSumAmount: 0 });
+    let co = getChangeOrder(db, id)!;
+    expect(co.title).toBe('Kitchen electrical add');
+
+    const saved = saveChangeOrder(db, id, { version: co.version, title: '   ', lumpSumAmount: 0 });
+    co = getChangeOrder(db, id)!;
+    expect(saved.version).toBe(2);
+    expect(co.title).toBeNull();
+
+    const untitled = createChangeOrder(db, 'p1', { number: '002', lumpSumAmount: 0 });
+    expect(getChangeOrder(db, untitled.id)!.title).toBeNull();
+  });
+
   it('saveChangeOrder throws ConflictError on a stale version', () => {
     const { id } = createChangeOrder(db, 'p1', { lumpSumAmount: 0 });
     saveChangeOrder(db, id, { version: 1, lumpSumAmount: 1 }); // now v2

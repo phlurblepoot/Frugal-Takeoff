@@ -193,6 +193,7 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
 interface ChangeOrderInput {
   number?: string;
   date?: number | null;
+  title?: string | null;
   description?: string;
   lumpSumAmount?: number;
   scheduleImpactDays?: number | null;
@@ -200,6 +201,14 @@ interface ChangeOrderInput {
   amount?: number;
   status?: string;
   lines?: LineInput[];
+}
+
+// title is free-text; blank/whitespace-only is stored as NULL so display and
+// syncChangeOrders' fallback-to-description both see "no title" the same way.
+function normalizeTitle(title: string | null | undefined): string | null {
+  if (title === undefined || title === null) return null;
+  const trimmed = title.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 function coLineTotalsCents(db: Database.Database, changeOrderId: string): number {
@@ -255,8 +264,8 @@ export function createChangeOrder(db: Database.Database, projectId: string, inpu
     const number = input.number ?? nextChangeOrderNumber(db, projectId);
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
-      .run(id, projectId, number, input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
+    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
+      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -280,8 +289,8 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
     newVersion = row.version + 1;
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('UPDATE change_orders SET number = ?, date = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
+    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
     writeChangeOrderLines(db, id, lines);
   });
   tx();

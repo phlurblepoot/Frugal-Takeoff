@@ -866,6 +866,7 @@ export interface ChangeOrder {
   projectId: string;
   number: string | null;
   date: number | null;
+  title: string | null;
   description: string | null;
   lumpSumAmount: number;
   scheduleImpactDays: number | null;
@@ -883,6 +884,7 @@ export interface ChangeOrderListItem {
   projectId: string;
   number: string | null;
   date: number | null;
+  title: string | null;
   description: string | null;
   lumpSumAmount: number;
   scheduleImpactDays: number | null;
@@ -895,6 +897,7 @@ export interface ChangeOrderListItem {
 export interface ChangeOrderInput {
   number?: string;
   date?: number | null;
+  title?: string | null;
   description?: string;
   lumpSumAmount?: number;
   scheduleImpactDays?: number | null;

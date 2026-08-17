@@ -30,6 +30,7 @@ export const ChangeOrderEditor: React.FC<{
   const co = changeOrder;
   const [number, setNumber] = useState(co.number ?? '');
   const [date, setDate] = useState(co.date ? new Date(co.date).toISOString().slice(0, 10) : '');
+  const [title, setTitle] = useState(co.title ?? '');
   const [description, setDescription] = useState(co.description ?? '');
   const [lines, setLines] = useState<ChangeOrderLine[]>(co.lines.length ? co.lines : []);
   const [lumpSumAmount, setLumpSumAmount] = useState(String(co.lumpSumAmount ?? 0));
@@ -96,6 +97,7 @@ export const ChangeOrderEditor: React.FC<{
         ...co,
         number: number || null,
         date: date ? new Date(date).getTime() : null,
+        title: title || null,
         description: description || null,
         lumpSumAmount: Number(lumpSumAmount) || 0,
         scheduleImpactDays: scheduleImpactDays.trim() === '' ? null : (Number(scheduleImpactDays) || 0),
@@ -225,6 +227,10 @@ export const ChangeOrderEditor: React.FC<{
         <Field label="Number" htmlFor="co-num"><Input id="co-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="co-date"><Input id="co-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Schedule impact (days)" htmlFor="co-impact"><Input id="co-impact" type="number" value={scheduleImpactDays} onChange={e => setScheduleImpactDays(e.target.value)} placeholder="0" /></Field>
+      </div>
+
+      <div className="mt-3">
+        <Field label="Title" htmlFor="co-title"><Input id="co-title" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Kitchen electrical add" /></Field>
       </div>
 
       <div className="mt-3">

@@ -1152,4 +1152,18 @@ export const migrations: Migration[] = [
       // historical rows — project attribution stays the link (spec §Data model).
     },
   },
+  {
+    version: 24,
+    name: 'change-order-title',
+    // Change Order Title (spec docs/superpowers/specs/2026-08-17-change-order-title-design.md).
+    // ADDITIVE, IDEMPOTENT: one nullable column. Existing rows get NULL, so
+    // every legacy CO display/PDF/SOV-sync path falls back to `description`
+    // exactly as it did before this migration.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(change_orders)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('title')) {
+        db.exec(`ALTER TABLE change_orders ADD COLUMN title TEXT;`);
+      }
+    },
+  },
 ];

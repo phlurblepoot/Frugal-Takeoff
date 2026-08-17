@@ -424,6 +424,33 @@ describe('migration 21: two-stage project lifecycle', () => {
   });
 });
 
+describe('migration 24: change-order-title', () => {
+  it('adds title (nullable) to change_orders, and re-runs as a no-op', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 23));
+    expect(columnNames(db, 'change_orders')).not.toContain('title');
+
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
+    db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('co1', 'p1', '1', 'Extra electrical', 100, 'draft', 1);
+
+    runMigrations(db, tmpDir(), migrations);
+
+    expect(columnNames(db, 'change_orders')).toContain('title');
+    const row = db.prepare('SELECT title FROM change_orders WHERE id = ?').get('co1') as any;
+    expect(row.title).toBeNull();
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE change_orders SET title = ? WHERE id = ?').run('Kitchen electrical add', 'co1');
+    const mig24 = migrations.find(m => m.version === 24)!;
+    expect(() => mig24.up({ db, dataDir: tmpDir() })).not.toThrow();
+    const after = db.prepare('SELECT title FROM change_orders WHERE id = ?').get('co1') as any;
+    expect(after.title).toBe('Kitchen electrical add');
+
+    db.close();
+  });
+});
+
 describe('migration 22: payapp-released-retainage', () => {
   it('adds releasedRetainagePoints defaulting to 0 on existing pay apps, and re-runs as a no-op', () => {
     const db = openDb(':memory:');

@@ -18,9 +18,9 @@ import { recordPayment, listBilledDocuments } from './billingStore';
 
 let db: Database.Database;
 
-function insertChangeOrder(id: string, projectId: string, number: string, description: string, amount: number, status: string) {
-  db.prepare('INSERT INTO change_orders (id, projectId, number, description, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, projectId, number, description, amount, status, Date.now());
+function insertChangeOrder(id: string, projectId: string, number: string, description: string, amount: number, status: string, title: string | null = null) {
+  db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, projectId, number, title, description, amount, status, Date.now());
 }
 
 beforeEach(() => {
@@ -216,6 +216,24 @@ describe('syncChangeOrders', () => {
     const list = listSovLines(db, 'p1');
     expect(list.map(l => l.description)).toEqual(['E1', 'E2', 'CO']);
     expect(list.map(l => l.sortOrder)).toEqual([0, 1, 2]);
+  });
+
+  it('new SOV lines use title when present, falling back to description; existing lines are untouched on re-sync', () => {
+    insertChangeOrder('co1', 'p1', '1', 'Extra electrical', 500.00, 'approved', 'Kitchen electrical add');
+    insertChangeOrder('co2', 'p1', '2', 'Demo work', 200.00, 'approved', null);
+    insertChangeOrder('co3', 'p1', '3', 'Untitled but blank', 50.00, 'approved', '   ');
+
+    syncChangeOrders(db, 'p1');
+    const list = listSovLines(db, 'p1');
+    expect(list.find(l => l.changeOrderId === 'co1')!.description).toBe('Kitchen electrical add'); // titled
+    expect(list.find(l => l.changeOrderId === 'co2')!.description).toBe('Demo work'); // falls back to description
+    expect(list.find(l => l.changeOrderId === 'co3')!.description).toBe('Untitled but blank'); // whitespace-only title also falls back
+
+    // Re-sync must not touch the already-mirrored line, even if the CO's
+    // title changes afterward (the exists-check skips it — same as before).
+    db.prepare('UPDATE change_orders SET title = ? WHERE id = ?').run('Renamed after sync', 'co1');
+    syncChangeOrders(db, 'p1');
+    expect(listSovLines(db, 'p1').find(l => l.changeOrderId === 'co1')!.description).toBe('Kitchen electrical add');
   });
 });
 
