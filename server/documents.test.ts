@@ -431,3 +431,28 @@ describe('DELETE /api/files/:id', () => {
     expect(res.status).toBe(404);
   });
 });
+
+// Migration 25 exists because the listing's page-asset NOT EXISTS was
+// O(files × pages) without these indexes (2.7s COUNT at 20k files / 6k pages).
+describe('pages asset indexes (migration 25)', () => {
+  it('creates idx_pages_imageId and idx_pages_thumbnailId', () => {
+    const names = (db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'pages'`
+    ).all() as { name: string }[]).map(r => r.name);
+    expect(names).toContain('idx_pages_imageId');
+    expect(names).toContain('idx_pages_thumbnailId');
+  });
+
+  it('the page-asset NOT EXISTS predicate is served by both indexes, not a scan', () => {
+    // Mirrors the predicate in server/documents.ts listDocuments. If either
+    // index is dropped (or the OR stops being MULTI-INDEX-able), the plan
+    // degrades to `SCAN pg`, and this fails.
+    const plan = (db.prepare(`
+      EXPLAIN QUERY PLAN SELECT COUNT(*) FROM files f
+      WHERE NOT EXISTS (SELECT 1 FROM pages pg WHERE pg.imageId = f.id OR pg.thumbnailId = f.id)
+    `).all() as { detail: string }[]).map(r => r.detail).join('\n');
+    expect(plan).toContain('idx_pages_imageId');
+    expect(plan).toContain('idx_pages_thumbnailId');
+    expect(plan).not.toMatch(/SCAN pg\b/);
+  });
+});
