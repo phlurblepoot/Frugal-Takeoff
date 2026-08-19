@@ -21,6 +21,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.6.1',
+    date: 'August 19, 2026',
+    changes: [
+      'Fix: the Documents page now loads fast on servers with a large number of files. The file list was re-checking every plan page for every document on each load; a database index fix makes that check instant (measured ~2.7 seconds → 6 milliseconds on a 20,000-file test database).',
+    ],
+  },
+  {
     version: '2.6',
     date: 'August 17, 2026',
     changes: [
