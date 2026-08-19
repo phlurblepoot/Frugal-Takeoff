@@ -1166,4 +1166,20 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 25,
+    name: 'pages-asset-indexes',
+    // ADDITIVE, IDEMPOTENT: index-only. The Documents listing hides plan-page
+    // assets with `NOT EXISTS (SELECT 1 FROM pages WHERE imageId = f.id OR
+    // thumbnailId = f.id)` (server/documents.ts). Without these indexes that
+    // correlated subquery full-scans `pages` once per candidate file, so the
+    // COUNT(*) half of the listing is O(files × pages) — measured 2.7s at
+    // 20k files / 6k pages, 6ms with the indexes (SQLite MULTI-INDEX OR).
+    up({ db }) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_pages_imageId ON pages (imageId);
+        CREATE INDEX IF NOT EXISTS idx_pages_thumbnailId ON pages (thumbnailId);
+      `);
+    },
+  },
 ];
