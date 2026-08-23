@@ -104,11 +104,27 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       if (s) socket.broadcast.emit('session-updated', publicSession(s));
     });
 
+    socket.on('heartbeat', () => registry.touch(sessionId));
+
     socket.on('disconnect', () => {
       const removed = registry.remove(sessionId);
       if (removed) io.emit('session-left', { sessionId });
     });
   });
 
-  return { registry, dispose: () => {} };
+  const sweepIntervalMs = opts.sweepIntervalMs ?? 30_000;
+  const staleAfterMs = opts.staleAfterMs ?? 60_000;
+  const sweepTimer = setInterval(() => {
+    const swept = registry.sweep(staleAfterMs);
+    for (const s of swept) {
+      io.emit('session-left', { sessionId: s.sessionId });
+      for (const [, sock] of io.of('/').sockets) {
+        if (sock.data.sessionId === s.sessionId) { sock.disconnect(true); break; }
+      }
+    }
+  }, sweepIntervalMs);
+  // unref() so a leaked handle can never keep the process (or vitest) alive
+  sweepTimer.unref?.();
+
+  return { registry, dispose: () => clearInterval(sweepTimer) };
 }
