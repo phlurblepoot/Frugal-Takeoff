@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { EmailComposer } from '../../components/EmailComposer';
 import { PunchItemEditor } from './punch/PunchItemEditor';
+import { EditingChip } from '../../components/EditingChip';
 import { buildPunchPdf } from './punch/punchPdf';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useProjectOutlet } from './ProjectLayout';
@@ -252,6 +253,7 @@ export const ProjectPunch: React.FC = () => {
                           <span className={`flex-1 text-sm ${item.done ? 'text-ink-faint line-through' : 'text-ink'}`}>
                             {item.description || '(no description)'}
                           </span>
+                          <EditingChip type="punch" id={item.id} />
                           {item.photoCount > 0 && (
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs text-ink-faint">
                               <ImageIcon size={13} />{item.photoCount}

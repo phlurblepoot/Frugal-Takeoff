@@ -7,6 +7,8 @@ import {
 } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 
 interface Props {
   item: PunchItem;
@@ -30,6 +32,13 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const dirty = area !== item.area || description !== item.description;
+
+  const collab = useCollabEditing({
+    type: 'punch',
+    id: item.id,
+    isDirty: () => dirty,
+    onFresh: onSaved,
+  });
 
   const handlePhotos = async (stage: string, list: FileList | null) => {
     if (!list || !list.length) return;
@@ -56,7 +65,11 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
   const handleSave = async () => {
     setSaving(true);
     try {
-      await savePunchItem(item.id, { ...item, area, description });
+      await savePunchItem(item.id, {
+        ...item,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
+        area, description,
+      });
       toast('Punch item saved', { type: 'success' });
       onSaved();
     } catch (e) {
@@ -76,6 +89,7 @@ export const PunchItemEditor: React.FC<Props> = ({ item, projectId, onClose, onS
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="mb-3 flex items-center gap-2">
         <Button variant={item.done ? 'secondary' : 'primary'} size="sm" onClick={toggleDone}>
           {item.done ? 'Done' : 'Mark done'}

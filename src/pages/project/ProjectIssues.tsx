@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { IssueStatusPill } from '../../components/ui/IssueStatusPill';
 import { IssueEditor } from './issues/IssueEditor';
+import { EditingChip } from '../../components/EditingChip';
 
 export const issueNo = (n: number): string => `ISS-${String(n).padStart(3, '0')}`;
 
@@ -89,7 +90,7 @@ export const ProjectIssues: React.FC = () => {
             {issues.map(iss => (
               <TR key={iss.id} interactive onClick={() => openIssue(iss.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{issueNo(iss.number)}</TD>
-                <TD className="font-medium text-ink">{iss.title || '(untitled)'}</TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{iss.title || '(untitled)'}<EditingChip type="issue" id={iss.id} /></span></TD>
                 <TD><IssueStatusPill status={iss.status} /></TD>
                 <TD className="text-ink-soft">{iss.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{iss.photoCount}</span> : '—'}</TD>
                 <TD onClick={e => e.stopPropagation()}>

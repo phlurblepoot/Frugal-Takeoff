@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { RfiStatusPill } from '../../components/ui/RfiStatusPill';
 import { RfiEditor } from './rfi/RfiEditor';
+import { EditingChip } from '../../components/EditingChip';
 
 export const rfiNo = (n: number): string => `RFI-${String(n).padStart(3, '0')}`;
 
@@ -97,7 +98,7 @@ export const ProjectRfis: React.FC = () => {
             {rfis.map(rfi => (
               <TR key={rfi.id} interactive onClick={() => openRfi(rfi.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{rfiNo(rfi.number)}</TD>
-                <TD className="font-medium text-ink">{rfi.title || '(untitled)'}</TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{rfi.title || '(untitled)'}<EditingChip type="rfi" id={rfi.id} /></span></TD>
                 <TD><RfiStatusPill status={rfi.status} /></TD>
                 <TD className={isRfiOverdue(rfi) ? 'font-medium text-red-600' : 'text-ink-soft'}>
                   {rfi.responseNeededBy ? new Date(`${rfi.responseNeededBy}T00:00:00`).toLocaleDateString() : '—'}

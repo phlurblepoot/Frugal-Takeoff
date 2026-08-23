@@ -7,6 +7,8 @@ import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { IssueStatusPill, ISSUE_STATUS_META } from '../../../components/ui/IssueStatusPill';
 import { buildIssuePdf } from './issuePdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -25,6 +27,15 @@ export const IssueEditor: React.FC<{
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+
+  const dirty = title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '');
+
+  const collab = useCollabEditing({
+    type: 'issue',
+    id: issue.id,
+    isDirty: () => dirty,
+    onFresh: onSaved,
+  });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
   const [emailDefaults, setEmailDefaults] = useState<{
@@ -144,7 +155,7 @@ export const IssueEditor: React.FC<{
   const padded = String(issue.number).padStart(3, '0');
   // Save-first guard: don't open the composer with unsaved title/description edits.
   const openComposer = () => {
-    if (title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '')) {
+    if (dirty) {
       toast('Save your changes before sending', { type: 'warning' });
       return;
     }
@@ -155,7 +166,11 @@ export const IssueEditor: React.FC<{
     if (!title.trim()) { toast('A title is required', { type: 'warning' }); return; }
     setSaving(true);
     try {
-      await saveIssue(issue.id, { ...issue, title: title.trim(), description: description || null });
+      await saveIssue(issue.id, {
+        ...issue,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
+        title: title.trim(), description: description || null,
+      });
       toast('Issue saved', { type: 'success' });
       onSaved();
     } catch (e) {
@@ -164,7 +179,7 @@ export const IssueEditor: React.FC<{
   };
 
   const cycleStatus = async () => {
-    if (title.trim() !== (issue.title ?? '') || description !== (issue.description ?? '')) {
+    if (dirty) {
       toast('Save your changes before changing status', { type: 'warning' });
       return;
     }
@@ -179,6 +194,7 @@ export const IssueEditor: React.FC<{
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="mb-3 flex items-center gap-2">
         <button onClick={cycleStatus} title="Click to advance status"><IssueStatusPill status={issue.status} /></button>
         <span className="text-xs text-ink-faint">{Object.values(ISSUE_STATUS_META).map(m => m.label).join(' → ')}</span>
