@@ -869,7 +869,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       // hides them at upload time too, not just via the NOT-EXISTS fallback.
       const q = req.query;
       const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
-      putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
+      const result = putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
+      deps.broadcastChange({
+        type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+        action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
+      });
       res.json({ success: true });
     } catch (e) {
       console.error('Error saving image:', e);
@@ -1409,7 +1413,19 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }
   });
   app.post('/api/customers/merge', authenticateToken, (req, res) => {
-    try { mergeCustomers(db, req.body.targetId, req.body.sourceIds || []); res.json({ success: true }); }
+    try {
+      const targetId = req.body.targetId;
+      const sourceIds: string[] = req.body.sourceIds || [];
+      // Mirror mergeCustomers' own skip rules (self-merge, unknown id) so we only
+      // broadcast a 'deleted' for sources it will actually remove.
+      const mergedIds = sourceIds.filter(sid => sid !== targetId && !!getCustomer(db, sid));
+      mergeCustomers(db, targetId, sourceIds);
+      for (const sid of mergedIds) {
+        deps.broadcastChange({ type: 'customer', id: sid, action: 'deleted', ...requestMeta(req) });
+      }
+      deps.broadcastChange({ type: 'customer', id: targetId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    }
     catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
   });
 }

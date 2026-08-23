@@ -12,6 +12,22 @@ import { registerDataRoutes } from './routes';
 import { createChangeFeed, ENTITY_CHANGED, type EntityChangedEvent } from './realtime/changeFeed';
 import { startRealtimeServer, connectClient, makeToken, waitFor } from './realtime/testHarness';
 
+// Collects `count` events off a socket (for routes that broadcast more than
+// once per request, e.g. a customer merge deleting sources + updating target).
+function collectEvents<T = unknown>(socket: { on: (event: string, cb: (e: T) => void) => void; off: (event: string, cb: (e: T) => void) => void }, event: string, count: number): Promise<T[]> {
+  return new Promise((resolve) => {
+    const events: T[] = [];
+    const handler = (e: T) => {
+      events.push(e);
+      if (events.length >= count) {
+        socket.off(event, handler);
+        resolve(events);
+      }
+    };
+    socket.on(event, handler);
+  });
+}
+
 describe('route mutations broadcast entity-changed', () => {
   let srv: Awaited<ReturnType<typeof startRealtimeServer>>;
   let app: express.Express;
@@ -279,6 +295,27 @@ describe('route mutations broadcast entity-changed', () => {
     const res = await request(app).post('/api/customers').send({ name: 'Acme' }).expect(200);
     const e = await evt;
     expect(e).toMatchObject({ type: 'customer', action: 'created' });
+    c.close();
+  });
+
+  it('POST /api/images broadcasts file created', async () => {
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post('/api/images').send({ id: 'img-merge-test', data: PNG }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'file', id: 'img-merge-test', action: 'created' });
+    c.close();
+  });
+
+  it('POST /api/customers/merge broadcasts source deleted + target updated', async () => {
+    await request(app).post('/api/customers').send({ id: 'cust-a', name: 'A' }).expect(200);
+    await request(app).post('/api/customers').send({ id: 'cust-b', name: 'B' }).expect(200);
+    const c = await connectedClient();
+    const events = collectEvents<EntityChangedEvent>(c, ENTITY_CHANGED, 2);
+    await request(app).post('/api/customers/merge').send({ targetId: 'cust-a', sourceIds: ['cust-b'] }).expect(200);
+    const es = await events;
+    expect(es).toContainEqual(expect.objectContaining({ type: 'customer', id: 'cust-b', action: 'deleted' }));
+    expect(es).toContainEqual(expect.objectContaining({ type: 'customer', id: 'cust-a', action: 'updated' }));
     c.close();
   });
 });
