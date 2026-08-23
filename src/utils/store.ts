@@ -175,7 +175,11 @@ export const getProject = async (id: string): Promise<Project | null> => {
   const res = await fetchWithRetry('/api/projects/' + id, { headers: getAuthHeaders() });
   if (res.status === 404) return null;
   await handleResponse(res);
-  return await res.json();
+  const project = await res.json();
+  if (project && typeof project.version === 'number') {
+    latestVersions.set(project.id, project.version);
+  }
+  return project;
 };
 
 export const getAllProjects = async (): Promise<Project[]> => {

@@ -365,6 +365,18 @@ export const ProjectView: React.FC = () => {
   // of the effect above so it can be filter-scoped independently.
   useLiveQuery(() => { if (projectId) loadProject(projectId); }, { types: ['project'], projectId, id: projectId });
 
+  // A 409 conflict on this tab resolves by refetching in place (see
+  // ProjectConflictListener); once that refetch lands, pick it up the same
+  // way any other live refresh does.
+  useEffect(() => {
+    const onRefreshed = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.projectId === projectId) loadProject(projectId);
+    };
+    window.addEventListener('project-refreshed', onRefreshed);
+    return () => window.removeEventListener('project-refreshed', onRefreshed);
+  }, [projectId]);
+
   useEffect(() => {
     if (!projectId) return;
     getTasks({ projectId }).then(setProjectTasks).catch(() => setProjectTasks([]));
