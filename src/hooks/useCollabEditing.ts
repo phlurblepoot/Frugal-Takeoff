@@ -17,7 +17,18 @@ export function useCollabEditing(args: {
   isDirty: () => boolean;
   onFresh: () => void;    // parent's refetch — editors are remounted via key={id:version}
 }): CollabEditingState {
-  const { socket, sessions, mySessionId } = useCollaboration();
+  // useCollaboration() throws outside a CollaborationProvider. The call
+  // itself (a single useContext under the hood) always runs unconditionally
+  // here, so hook order stays stable across renders — only the subsequent
+  // plain-JS throw is caught, degrading to a no-op the same way the
+  // socket-null branches below already do. This lets editors render inside
+  // tests that mount without the provider (e.g. AiaPayAppEditor.test.tsx)
+  // instead of crashing.
+  let collabCtx: ReturnType<typeof useCollaboration> | null;
+  try { collabCtx = useCollaboration(); } catch { collabCtx = null; }
+  const socket = collabCtx?.socket ?? null;
+  const sessions = collabCtx?.sessions ?? [];
+  const mySessionId = collabCtx?.mySessionId ?? null;
   const [remoteChange, setRemoteChange] = useState<EntityChangedEvent | null>(null);
   const [keepMineVersion, setKeepMineVersion] = useState<number | null>(null);
   const argsRef = useRef(args);

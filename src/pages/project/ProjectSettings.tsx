@@ -20,6 +20,8 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Select, Skeleton,
   normalizeProjectStatus,
 } from '../../components/ui';
+import { useCollabEditing } from '../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../components/EditPresenceBanner';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
@@ -74,6 +76,26 @@ export const ProjectSettings: React.FC = () => {
   };
   useEffect(reload, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fields here auto-save individually on blur/change (no single "Save"
+  // button), so dirty is a snapshot-compare against the loaded project —
+  // true only in the brief window between typing and the field's own save.
+  const dirty =
+    !!project && (
+      name !== (project.name ?? '') ||
+      contractor !== (project.contractor ?? '') ||
+      address !== (project.address ?? '') ||
+      dueDate !== (project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '') ||
+      selectedCustomerId !== (project.customerId ?? undefined) ||
+      JSON.stringify(contactEmails) !== JSON.stringify(project.contactEmails ?? {})
+    );
+
+  const collab = useCollabEditing({
+    type: 'project',
+    id: projectId ?? '',
+    isDirty: () => dirty,
+    onFresh: reload,
+  });
+
   // Admins only: never load or expose project data otherwise.
   if (!admin) {
     return (
@@ -108,7 +130,11 @@ export const ProjectSettings: React.FC = () => {
   const saveField = async (patch: Partial<Project>, label: string) => {
     if (!project) return;
     const previous = project;
-    const updated = { ...project, ...patch };
+    const updated = {
+      ...project,
+      ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
+      ...patch,
+    };
     setProject(updated);
     setBusy(true);
     try {
@@ -232,6 +258,7 @@ export const ProjectSettings: React.FC = () => {
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 md:px-8 space-y-6">
       <h1 className="text-xl font-bold text-ink">Project Settings</h1>
+      <EditPresenceBanner state={collab} />
 
       {/* Metadata */}
       <Card>

@@ -1,5 +1,5 @@
 // src/pages/project/billing/AiaPayAppEditor.tsx
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
   getPayApp, savePayAppLines, setPayApp, persistGeneratedDocument,
@@ -13,6 +13,8 @@ import {
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import type { PillTone } from '../../../components/ui';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -49,6 +51,17 @@ export const AiaPayAppEditor: React.FC<{
   const [releasedRetainagePoints, setReleasedRetainagePoints] = useState('');
   const [status, setStatus] = useState('draft');
 
+  // Snapshot of the values `seed` last set, so `dirty` can compare current
+  // (possibly hand-edited) state against what was last loaded — without
+  // re-deriving the per-line seed shape from `data` on every render.
+  const pristineRef = useRef<{
+    edits: Record<string, EditLine>;
+    periodTo: string;
+    applicationDate: string;
+    releasedRetainagePoints: string;
+    status: string;
+  }>({ edits: {}, periodTo: '', applicationDate: '', releasedRetainagePoints: '', status: 'draft' });
+
   const seed = useCallback((d: { app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 }) => {
     const byLine: Record<string, AiaPayAppLine> = {};
     for (const l of d.lines) byLine[l.sovLineId] = l;
@@ -60,11 +73,19 @@ export const AiaPayAppEditor: React.FC<{
         storedMaterials: line ? String(centsToDollars(line.storedMaterialsCents)) : String(centsToDollars(row.storedCents ?? 0)),
       };
     }
+    const periodToNext = d.app.periodTo ?? '';
+    const applicationDateNext = d.app.applicationDate ?? '';
+    const releasedRetainagePointsNext = String(d.app.releasedRetainagePoints ?? 0);
+    const statusNext = d.app.status ?? 'draft';
     setEdits(next);
-    setPeriodTo(d.app.periodTo ?? '');
-    setApplicationDate(d.app.applicationDate ?? '');
-    setReleasedRetainagePoints(String(d.app.releasedRetainagePoints ?? 0));
-    setStatus(d.app.status ?? 'draft');
+    setPeriodTo(periodToNext);
+    setApplicationDate(applicationDateNext);
+    setReleasedRetainagePoints(releasedRetainagePointsNext);
+    setStatus(statusNext);
+    pristineRef.current = {
+      edits: next, periodTo: periodToNext, applicationDate: applicationDateNext,
+      releasedRetainagePoints: releasedRetainagePointsNext, status: statusNext,
+    };
   }, []);
 
   const load = useCallback(() => {
@@ -72,6 +93,20 @@ export const AiaPayAppEditor: React.FC<{
   }, [payAppId, seed, toast]);
 
   useEffect(() => { load(); }, [load]);
+
+  const dirty =
+    periodTo !== pristineRef.current.periodTo ||
+    applicationDate !== pristineRef.current.applicationDate ||
+    releasedRetainagePoints !== pristineRef.current.releasedRetainagePoints ||
+    status !== pristineRef.current.status ||
+    JSON.stringify(edits) !== JSON.stringify(pristineRef.current.edits);
+
+  const collab = useCollabEditing({
+    type: 'aiaPayApp',
+    id: payAppId,
+    isDirty: () => dirty,
+    onFresh: load,
+  });
 
   const isFinalized = (data?.app.status ?? status) === 'finalized';
 
@@ -98,8 +133,9 @@ export const AiaPayAppEditor: React.FC<{
       // setPayApp bumps the pay app's version, so the version used for the
       // line save below must be its returned version, not the stale one this
       // component loaded with — otherwise the line save 409s against its own
-      // just-applied patch.
-      let version = app.version;
+      // just-applied patch. "Keep mine" adopts the remote version as the new
+      // starting point instead of this component's stale loaded version.
+      let version = collab.keepMineVersion !== null ? collab.keepMineVersion : app.version;
       if (Object.keys(patch).length > 0) {
         ({ version } = await setPayApp(payAppId, patch));
       }
@@ -220,6 +256,7 @@ export const AiaPayAppEditor: React.FC<{
         <Button onClick={handleSave} disabled={saving || isFinalized}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       {!data ? (
         <div className="space-y-2">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-9" />)}</div>
       ) : (

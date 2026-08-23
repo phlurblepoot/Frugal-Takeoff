@@ -16,6 +16,7 @@ import { InvoiceStatusPill } from '../../../components/ui/BillingPills';
 import { InvoiceEditor } from './InvoiceEditor';
 import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { EditingChip } from '../../../components/EditingChip';
 
 export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
@@ -67,7 +68,7 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
               <TBody>
                 {invoices.map(inv => (
                   <TR key={inv.id} interactive onClick={() => openInvoice(inv.id)}>
-                    <TD className="font-medium text-ink">{inv.number || '(untitled)'}</TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{inv.number || '(untitled)'}<EditingChip type="invoice" id={inv.id} /></span></TD>
                     <TD title="Click to advance status" onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(inv.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(inv.balanceCents)}</TD>

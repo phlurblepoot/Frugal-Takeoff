@@ -35,6 +35,8 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Textarea, Select, Checkbox, Skeleton,
 } from '../../components/ui';
 import { EmailComposer } from '../../components/EmailComposer';
+import { useCollabEditing } from '../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../components/EditPresenceBanner';
 
 // Small ghost icon button next to a textarea label that opens a dropdown of
 // this user's last-used values for that field (proposalTextHistory.ts).
@@ -201,6 +203,16 @@ export const ProjectProposal: React.FC = () => {
       .finally(() => setLoading(false));
   };
   useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Presence + silent live refresh only — no dedicated 'proposal' entity type
+  // exists (proposal fields save onto the project record), and this page has
+  // no single dirty draft to protect with a merge banner.
+  const collab = useCollabEditing({
+    type: 'project',
+    id: projectId ?? '',
+    isDirty: () => false,
+    onFresh: reload,
+  });
 
   // ── Prefill cover notes/terms + load history (once per project) ─────────────
   // The project's own saved value always wins; otherwise fall back to this
@@ -579,6 +591,7 @@ export const ProjectProposal: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8 space-y-6">
+      <EditPresenceBanner state={collab} />
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-bold text-ink">Proposal</h1>
         <Button onClick={handleGenerate} disabled={busy || (priceMode === 'takeoffs' && selectedTakeoffIds.size === 0)}>

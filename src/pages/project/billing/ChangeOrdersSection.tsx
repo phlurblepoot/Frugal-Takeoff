@@ -16,6 +16,7 @@ import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { ChangeOrderEditor } from './ChangeOrderEditor';
 import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { EditingChip } from '../../../components/EditingChip';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
@@ -66,7 +67,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
               <TBody>
                 {changeOrders.map(co => (
                   <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
-                    <TD className="font-medium text-ink">CO-{co.number || '—'}</TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">CO-{co.number || '—'}<EditingChip type="changeOrder" id={co.id} /></span></TD>
                     <TD className="text-ink-soft">{co.title || '—'}</TD>
                     <TD><ChangeOrderStatusPill status={co.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>
