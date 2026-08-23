@@ -26,6 +26,19 @@ function publicSession(s: SessionInfo): SessionInfo {
   return { ...s };
 }
 
+export const projectRoom = (id: string) => `project:${id}`;
+export const pageRoom = (id: string) => `page:${id}`;
+export const sheetRoom = (id: string) => `sheet:${id}`;
+export const pathRoom = (path: string) => `path:${path}`;
+
+function roomsForLocation(loc: { path: string; projectId?: string; pageId?: string; fileId?: string }): string[] {
+  const rooms = [pathRoom(loc.path)];
+  if (loc.projectId) rooms.push(projectRoom(loc.projectId));
+  if (loc.pageId) rooms.push(pageRoom(loc.pageId));
+  if (loc.fileId) rooms.push(sheetRoom(loc.fileId));
+  return rooms;
+}
+
 export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHandle {
   const registry = new PresenceRegistry();
 
@@ -60,6 +73,36 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       sessions: registry.all().map(publicSession),
     });
     socket.broadcast.emit('session-joined', publicSession(session));
+
+    socket.on('set-location', (loc: unknown) => {
+      if (!loc || typeof loc !== 'object' || typeof (loc as any).path !== 'string') return;
+      const l = loc as { path: string; projectId?: string; section?: string; pageId?: string; fileId?: string; label?: string };
+      const prev = registry.get(sessionId)?.location;
+      if (prev) for (const room of roomsForLocation(prev)) socket.leave(room);
+      const next = {
+        path: l.path,
+        projectId: typeof l.projectId === 'string' ? l.projectId : undefined,
+        section: typeof l.section === 'string' ? l.section : undefined,
+        pageId: typeof l.pageId === 'string' ? l.pageId : undefined,
+        fileId: typeof l.fileId === 'string' ? l.fileId : undefined,
+        label: typeof l.label === 'string' ? l.label : undefined,
+      };
+      for (const room of roomsForLocation(next)) socket.join(room);
+      registry.setLocation(sessionId, next);
+      const s = registry.get(sessionId);
+      if (s) socket.broadcast.emit('session-updated', publicSession(s));
+    });
+
+    socket.on('update-user', (patch: unknown) => {
+      if (!patch || typeof patch !== 'object') return;
+      const p = patch as { name?: unknown; color?: unknown };
+      const allowed: { name?: string; color?: string } = {};
+      if (typeof p.name === 'string' && p.name) allowed.name = p.name;
+      if (typeof p.color === 'string' && p.color) allowed.color = p.color;
+      registry.update(sessionId, allowed);
+      const s = registry.get(sessionId);
+      if (s) socket.broadcast.emit('session-updated', publicSession(s));
+    });
 
     socket.on('disconnect', () => {
       const removed = registry.remove(sessionId);
