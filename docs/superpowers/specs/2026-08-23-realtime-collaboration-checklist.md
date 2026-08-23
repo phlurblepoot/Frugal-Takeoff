@@ -15,19 +15,19 @@
 
 ## WS1 — Realtime core
 
-Plan: _not yet written_
+Plan: docs/superpowers/plans/2026-08-23-ws1-realtime-core.md
 
-- [ ] `server/realtime/` module scaffolding; socket logic moved out of `server.ts`
-- [ ] JWT handshake auth (`io.use`), identity from token only; unauthenticated sockets rejected
-- [ ] Session model (`sessionId` via uuid, server-side device label from User-Agent)
-- [ ] `PresenceRegistry` (in-memory, interface-wrapped) + structured `location` via `set-location`
-- [ ] Heartbeat ping (25s) + stale-session sweep + departure broadcast
-- [ ] Resource rooms: `project:<id>`, `page:<id>`, `sheet:<fileId>`; membership enforced on emit
-- [ ] Global delta presence events (`sessions-snapshot`, `session-joined/left/updated`) replacing full-array `global-users`
-- [ ] Client: `CollaborationContext` connects with JWT, reports location, consumes deltas
-- [ ] Compat shim: legacy canvas relay + user-list events still work (removed in WS4)
-- [ ] Vitest integration tests: auth rejection, membership, presence lifecycle, heartbeat sweep, deltas
-- [ ] Full existing test suite passing
+- [x] `server/realtime/` module scaffolding; socket logic moved out of `server.ts` (`1749e54`, `36756d5`)
+- [x] JWT handshake auth (`io.use`), identity from token only; unauthenticated sockets rejected (`ab5f135`)
+- [x] Session model (`sessionId` via uuid, server-side device label from User-Agent) (`00e607b`, `ab5f135`)
+- [x] `PresenceRegistry` (in-memory, interface-wrapped) + structured `location` via `set-location` (`1749e54`, `8b92e87`)
+- [x] Heartbeat ping (25s) + stale-session sweep + departure broadcast (`bde55c0`)
+- [x] Resource rooms: `project:<id>`, `page:<id>`, `sheet:<fileId>`; membership enforced on emit (`8b92e87`)
+- [x] Global delta presence events (`sessions-snapshot`, `session-joined/left/updated`) replacing full-array `global-users` (`8b92e87`, `36756d5`)
+- [x] Client: `CollaborationContext` connects with JWT, reports location, consumes deltas (`5d1b36a`, `10efe01`)
+- [x] Compat shim: legacy canvas relay + user-list events still work (removed in WS4) (`bbb49b4`)
+- [x] Vitest integration tests: auth rejection, membership, presence lifecycle, heartbeat sweep, deltas (`ab5f135`, `8b92e87`, `bde55c0`, `bbb49b4`)
+- [x] Full existing test suite passing (`10efe01`)
 
 ## WS2 — Change feed + live refresh + edit awareness
 
