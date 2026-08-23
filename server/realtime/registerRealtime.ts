@@ -112,6 +112,19 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       if (s) io.emit('session-updated', publicSession(s));
     });
 
+    socket.on('set-editing', (payload: unknown) => {
+      let editing: { type: string; id: string } | null = null;
+      if (payload && typeof payload === 'object') {
+        const p = payload as { type?: unknown; id?: unknown };
+        if (typeof p.type === 'string' && p.type && typeof p.id === 'string' && p.id) {
+          editing = { type: p.type, id: p.id };
+        } else return; // malformed object — ignore
+      } else if (payload !== null) return; // only null or {type,id}
+      registry.update(sessionId, { editing });
+      const s = registry.get(sessionId);
+      if (s) io.emit('session-updated', publicSession(s));
+    });
+
     socket.on('heartbeat', () => registry.touch(sessionId));
 
     // ---- WS1 compat shim (removed in WS4): legacy canvas events ----
