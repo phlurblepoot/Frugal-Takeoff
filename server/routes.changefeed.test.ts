@@ -204,4 +204,62 @@ describe('route mutations broadcast entity-changed', () => {
     expect(e).toMatchObject({ type: 'aiaPayApp', id: res.body.id, projectId: 'p13', action: 'created' });
     c.close();
   });
+
+  // Photo add/remove on issues, RFIs, and punch items does NOT bump the
+  // parent row's version — so the broadcast must omit version entirely.
+  // Including the row's (unchanged) version would let a version-dedupe
+  // client skip the event, since it looks identical to the last-seen version.
+  const PNG = 'data:image/png;base64,' + Buffer.from('pngbytes').toString('base64');
+
+  it('POST /api/issues/:id/photos broadcasts issue updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p14', name: 'P14', pages: [], takeoffs: [] }).expect(200);
+    const iss = await request(app).post('/api/projects/p14/issues').send({ title: 'crack' }).expect(200);
+    await request(app).post('/api/images').send({ id: 'f14', data: PNG }).expect(200);
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/issues/${iss.body.id}/photos`).send({ fileId: 'f14' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'issue', id: iss.body.id, projectId: 'p14', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/rfis/:id/photos broadcasts rfi updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p15', name: 'P15', pages: [], takeoffs: [] }).expect(200);
+    const rfi = await request(app).post('/api/projects/p15/rfis').send({ title: 'question' }).expect(200);
+    await request(app).post('/api/images').send({ id: 'f15', data: PNG }).expect(200);
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/rfis/${rfi.body.id}/photos`).send({ fileId: 'f15' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'rfi', id: rfi.body.id, projectId: 'p15', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/punch/:id/photos broadcasts punch updated WITHOUT a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p16', name: 'P16', pages: [], takeoffs: [] }).expect(200);
+    const item = await request(app).post('/api/projects/p16/punch').send({ description: 'fix trim' }).expect(200);
+    await request(app).post('/api/images').send({ id: 'f16', data: PNG }).expect(200);
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/punch/${item.body.id}/photos`).send({ fileId: 'f16' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'punch', id: item.body.id, projectId: 'p16', action: 'updated' });
+    expect(e.version).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/change-orders/:id/photos still broadcasts a version (its store DOES bump it)', async () => {
+    await request(app).post('/api/projects').send({ id: 'p17', name: 'P17', pages: [], takeoffs: [] }).expect(200);
+    const co = await request(app).post('/api/projects/p17/change-orders').send({ number: 'CO-2', title: 'extra work' }).expect(200);
+    await request(app).post('/api/images').send({ id: 'f17', data: PNG }).expect(200);
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/change-orders/${co.body.id}/photos`).send({ fileId: 'f17' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'changeOrder', id: co.body.id, projectId: 'p17', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+    c.close();
+  });
 });

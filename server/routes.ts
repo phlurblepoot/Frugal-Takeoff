@@ -564,7 +564,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addPhoto(db, req.params.id, req.body.fileId);
       const row = getIssue(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPhoto/removePhoto don't bump the issue's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { issueErr(e, res); }
   });
@@ -572,7 +574,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       removePhoto(db, req.params.id, req.params.fileId);
       const row = getIssue(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPhoto/removePhoto don't bump the issue's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { issueErr(e, res); }
   });
@@ -638,7 +642,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addRfiPhoto(db, req.params.id, req.body.fileId);
       const row = getRfi(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPhoto/removePhoto don't bump the RFI's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
   });
@@ -646,7 +652,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       removeRfiPhoto(db, req.params.id, req.params.fileId);
       const row = getRfi(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPhoto/removePhoto don't bump the RFI's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
   });
@@ -723,7 +731,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addPunchPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
       const row = getPunchItem(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPunchPhoto/removePunchPhoto don't bump the item's version —
+      // attaching the unchanged version would let a client's version-dedupe
+      // skip this event.
+      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { punchErr(e, res); }
   });
@@ -731,7 +742,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       removePunchPhoto(db, req.params.id, req.params.fileId);
       const row = getPunchItem(db, req.params.id);
-      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      // addPunchPhoto/removePunchPhoto don't bump the item's version —
+      // attaching the unchanged version would let a client's version-dedupe
+      // skip this event.
+      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { punchErr(e, res); }
   });
