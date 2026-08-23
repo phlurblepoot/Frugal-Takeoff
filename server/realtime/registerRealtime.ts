@@ -2,7 +2,6 @@
 // server.ts. Identity comes ONLY from the verified JWT — never from
 // client-supplied fields (the old code trusted a client-asserted userId).
 import type { Server, Socket } from 'socket.io';
-import { v4 as uuidv4 } from 'uuid';
 import { PresenceRegistry } from './presenceRegistry';
 import { deviceLabel } from './deviceLabel';
 import type { SessionInfo } from './types';
@@ -51,7 +50,10 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
   });
 
   io.on('connection', (socket: Socket) => {
-    const sessionId = uuidv4();
+    // socket.id doubles as the sessionId: it's server-generated and unique per
+    // connection (our model is one connection = one session), and legacy
+    // client consumers self-identify by comparing against socket.id.
+    const sessionId = socket.id;
     socket.data.sessionId = sessionId;
     const auth = socket.handshake.auth ?? {};
     const session: SessionInfo = {
