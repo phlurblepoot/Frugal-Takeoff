@@ -36,6 +36,7 @@ beforeEach(() => {
     authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
     requireAdmin: (_req: any, _res: any, next: any) => next(),
     verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
+    broadcastChange: () => {},
   });
 });
 
@@ -338,6 +339,7 @@ describe('GET /api/projects/:id/summary', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     const res = await request(memberApp).get('/api/projects/pm/summary');
     expect(res.status).toBe(200);
@@ -368,6 +370,7 @@ describe('GET /api/projects/:id/summary', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u3', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
 
     const res = await request(userApp).get('/api/projects/pp/summary');
@@ -575,6 +578,7 @@ describe('billing routes', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/invoices')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
@@ -594,6 +598,7 @@ describe('unified project payment routes (admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/payments')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: 'x', amount: 1 })).status).toBe(403);
@@ -678,6 +683,7 @@ describe('AIA billing routes (admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/aia/sov')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/aia/sov').send({ description: 'X', scheduledValueCents: 1 })).status).toBe(403);
@@ -985,6 +991,7 @@ describe('punch routes', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
   });
 
@@ -1044,6 +1051,7 @@ describe('users-list + task routes (auth-only, not admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
   });
 
@@ -1158,6 +1166,7 @@ describe('email send routes', () => {
       buildTransporter: (_userId: string) => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
       // From header now comes from the SENDING user's per-user SMTP config.
       getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
+      broadcastChange: () => {},
     });
     return a;
   };
@@ -1196,6 +1205,7 @@ describe('email send routes', () => {
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       buildTransporter: (uid: string) => { const c = getUserSmtp(uid); return (c.host && c.username) ? ({ verify: async () => true } as any) : null; },
       getUserSmtp,
+      broadcastChange: () => {},
     });
     return a;
   };
@@ -1579,6 +1589,7 @@ describe('customers routes', () => {
         authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
         requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
         verifyToken: () => null,
+        broadcastChange: () => {},
       });
     });
 

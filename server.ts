@@ -20,6 +20,8 @@ import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
 import { registerRealtime } from './server/realtime/registerRealtime';
+import { createChangeFeed } from './server/realtime/changeFeed';
+import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 
 dotenv.config();
 
@@ -127,10 +129,12 @@ async function startServer() {
 
   const realtime = registerRealtime(io, {
     verifyToken: (token: string) => {
-      try { return jwt.verify(token, JWT_SECRET) as { id: string; username: string; role: string }; }
+      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
       catch { return null; }
     },
   });
+
+  const broadcastChange = createChangeFeed(io);
 
   // Health check
   app.get("/api/health", (req, res) => {
@@ -169,8 +173,9 @@ async function startServer() {
     authenticateToken,
     requireAdmin,
     verifyToken: (token: string) => {
-      try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); } catch { return null; }
     },
+    broadcastChange,
   });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
@@ -554,6 +559,7 @@ async function startServer() {
     requireAdmin,
     buildTransporter,
     getUserSmtp,
+    broadcastChange,
   });
 
   registerAiRoutes(app, {

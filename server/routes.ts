@@ -54,6 +54,7 @@ import {
   customerSummaries, customerOverview,
 } from './customerStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
+import type { BroadcastChange } from './realtime/changeFeed';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -64,6 +65,7 @@ export interface RouteDeps {
   // Verifies a JWT from a query parameter (for streaming URLs that can't set
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
+  broadcastChange: BroadcastChange;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -1197,6 +1199,7 @@ export interface EmailRouteDeps {
   // Returns the given user's SMTP config (smtp.* keys, prefix stripped). Used
   // for the From header and the per-user config GET route.
   getUserSmtp: (userId: string) => Record<string, string>;
+  broadcastChange: BroadcastChange;
 }
 
 // Sends one or more stored files as attachments via SMTP. Throws on

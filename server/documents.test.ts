@@ -28,6 +28,7 @@ const buildApp = (role: 'admin' | 'user', userId = 'u1') => {
     authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role }; next(); },
     requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
     verifyToken: () => null,
+    broadcastChange: () => {},
   });
   return a;
 };
