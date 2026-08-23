@@ -19,7 +19,7 @@ Plan: docs/superpowers/plans/2026-08-23-ws1-realtime-core.md
 
 - [x] `server/realtime/` module scaffolding; socket logic moved out of `server.ts` (`1749e54`, `36756d5`)
 - [x] JWT handshake auth (`io.use`), identity from token only; unauthenticated sockets rejected (`ab5f135`)
-- [x] Session model (`sessionId` via uuid, server-side device label from User-Agent) (`00e607b`, `ab5f135`)
+- [x] Session model (`sessionId` = socket.id, server-assigned; server-side device label from User-Agent) (`00e607b`, `ab5f135`, `3b4f483`)
 - [x] `PresenceRegistry` (in-memory, interface-wrapped) + structured `location` via `set-location` (`1749e54`, `8b92e87`)
 - [x] Heartbeat ping (25s) + stale-session sweep + departure broadcast (`bde55c0`)
 - [x] Resource rooms: `project:<id>`, `page:<id>`, `sheet:<fileId>`; membership enforced on emit (`8b92e87`)

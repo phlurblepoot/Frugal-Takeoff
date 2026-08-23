@@ -8,7 +8,7 @@ export interface LocationInfo {
 }
 
 export interface SessionInfo {
-  sessionId: string;     // server-generated uuid
+  sessionId: string;     // socket.id (server-assigned, unique per connection)
   userId: string;        // from verified JWT (payload.id)
   name: string;          // from verified JWT (payload.username)
   role: string;          // from verified JWT (payload.role)

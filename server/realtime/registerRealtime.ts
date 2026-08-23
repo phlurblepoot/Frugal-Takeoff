@@ -70,6 +70,12 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
     };
     registry.add(session);
 
+    // Engine-level packets (incl. ping/pong) are sent from message handlers,
+    // which browsers do NOT throttle in hidden tabs — unlike the client's
+    // 25s heartbeat timer. Touching here makes the sweep a true last resort
+    // for zombie connections instead of a killer of backgrounded tabs.
+    socket.conn.on('packet', () => registry.touch(sessionId));
+
     socket.emit('sessions-snapshot', {
       selfId: sessionId,
       sessions: registry.all().map(publicSession),
@@ -92,7 +98,7 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       for (const room of roomsForLocation(next)) socket.join(room);
       registry.setLocation(sessionId, next);
       const s = registry.get(sessionId);
-      if (s) socket.broadcast.emit('session-updated', publicSession(s));
+      if (s) io.emit('session-updated', publicSession(s));
     });
 
     socket.on('update-user', (patch: unknown) => {
@@ -103,7 +109,7 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       if (typeof p.color === 'string' && p.color) allowed.color = p.color;
       registry.update(sessionId, allowed);
       const s = registry.get(sessionId);
-      if (s) socket.broadcast.emit('session-updated', publicSession(s));
+      if (s) io.emit('session-updated', publicSession(s));
     });
 
     socket.on('heartbeat', () => registry.touch(sessionId));

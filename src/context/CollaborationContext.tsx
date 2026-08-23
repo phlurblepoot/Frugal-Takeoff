@@ -62,6 +62,13 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [authEpoch, setAuthEpoch] = useState(0);
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
+  // Latest location payload, re-emitted on every (re)connect. socket.io-client
+  // reuses the same socket object across auto-reconnects, so the set-location
+  // effect below (keyed on socket/path/search/pageName) doesn't re-fire just
+  // because the underlying transport dropped and came back — without this,
+  // the new server-side session has location=null and joins no rooms, so
+  // cursor/measurement relay goes silently dead until manual navigation.
+  const latestLocationRef = useRef<ReturnType<typeof locationFromPath> | null>(null);
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -110,6 +117,9 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     newSocket.on('project-sync', (data) => {  // dead wire, kept until WS4
       projectCallbacks.current.forEach(cb => cb(data));
     });
+    newSocket.on('connect', () => {
+      if (latestLocationRef.current) newSocket.emit('set-location', latestLocationRef.current);
+    });
 
     const beat = setInterval(() => newSocket.emit('heartbeat'), 25_000);
 
@@ -125,7 +135,9 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   // Report structured location on every route change (and page-label change)
   useEffect(() => {
     if (!socket) return;
-    socket.emit('set-location', locationFromPath(location.pathname, location.search, currentPageName));
+    const payload = locationFromPath(location.pathname, location.search, currentPageName);
+    latestLocationRef.current = payload;
+    socket.emit('set-location', payload);
   }, [socket, location.pathname, location.search, currentPageName]);
 
   // Reset page label off-canvas

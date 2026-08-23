@@ -56,11 +56,15 @@ describe('set-location and rooms', () => {
     await waitFor(b, 'sessions-snapshot');
 
     const updated = waitFor<any>(b, 'session-updated');
+    const selfUpdated = waitFor<any>(a, 'session-updated'); // acting client sees its own update too (I2)
     a.emit('update-user', { color: '#10b981', role: 'admin-spoof' });
     const evt = await updated;
     expect(evt.sessionId).toBe(aSnap.selfId);
     expect(evt.color).toBe('#10b981');
     expect(evt.role).toBe('admin'); // role can't be patched via update-user
+    const selfEvt = await selfUpdated;
+    expect(selfEvt.sessionId).toBe(aSnap.selfId);
+    expect(selfEvt.color).toBe('#10b981');
     a.close(); b.close();
   });
 

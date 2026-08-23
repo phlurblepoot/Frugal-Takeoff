@@ -92,4 +92,12 @@ describe('CollaborationContext', () => {
     mount();
     expect(ioMock).not.toHaveBeenCalled();
   });
+
+  it('re-emits set-location on reconnect (rooms are lost server-side on a new session)', () => {
+    mount();
+    fakeSocket.emit.mockClear();
+    act(() => fakeSocket.fire('connect'));
+    expect(fakeSocket.emit).toHaveBeenCalledWith('set-location',
+      expect.objectContaining({ path: '/dashboard' }));
+  });
 });
