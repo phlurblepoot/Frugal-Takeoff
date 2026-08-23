@@ -19,6 +19,7 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
+import { registerRealtime } from './server/realtime/registerRealtime';
 
 dotenv.config();
 
@@ -89,8 +90,6 @@ function initDb() {
   }
 }
 
-const users: Record<string, { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number }> = {};
-
 async function startServer() {
   await ensureDirs();
   initDb();
@@ -125,6 +124,13 @@ async function startServer() {
       console.log('Generated a new JWT signing secret and saved it to the database.');
     }
   }
+
+  const realtime = registerRealtime(io, {
+    verifyToken: (token: string) => {
+      try { return jwt.verify(token, JWT_SECRET) as { id: string; username: string; role: string }; }
+      catch { return null; }
+    },
+  });
 
   // Health check
   app.get("/api/health", (req, res) => {
@@ -376,8 +382,9 @@ async function startServer() {
   // Active pages endpoint
   app.get("/api/pages/active", authenticateToken, (req, res) => {
     try {
-      const activePageIds = Array.from(new Set(Object.values(users).map(u => u?.pageId).filter(Boolean)));
-      console.log(`GET /api/pages/active - current users count: ${Object.keys(users).length}, active page IDs: ${JSON.stringify(activePageIds)}`);
+      const activePageIds = Array.from(new Set(
+        realtime.registry.all().map(s => s.location?.path).filter((p): p is string => Boolean(p))
+      ));
       res.json(activePageIds);
     } catch (error) {
       console.error("Error in /api/pages/active route:", error);
@@ -553,75 +560,6 @@ async function startServer() {
     dataDir: DATA_DIR,
     authenticateToken,
     runner: getAiRunner(),
-  });
-
-  // WebSocket Logic
-
-  io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
-    socket.on("join-page", ({ pageId, pageName, name, userId, color }) => {
-      // If this socket already had a different page, leave it so we don't
-      // accidentally fan out room messages to stale rooms.
-      const previous = users[socket.id];
-      if (previous && previous.pageId && previous.pageId !== pageId) {
-        socket.leave(previous.pageId);
-      }
-      users[socket.id] = {
-        id: socket.id,
-        userId: userId || undefined,
-        name,
-        pageId,
-        pageName: pageName || '',
-        cursor: null,
-        color,
-        lastActive: Date.now(),
-      };
-      socket.join(pageId);
-
-      // Notify others in the room
-      const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
-      io.to(pageId).emit("room-users", roomUsers);
-
-      // Notify everyone about global users
-      io.emit("global-users", Object.values(users));
-    });
-
-    socket.on("cursor-move", ({ x, y }) => {
-      const user = users[socket.id];
-      if (user) {
-        user.cursor = { x, y };
-        user.lastActive = Date.now();
-        socket.to(user.pageId).emit("user-cursor", { id: socket.id, cursor: { x, y } });
-      }
-    });
-
-    socket.on("measurement-update", ({ pageId, action, measurement }) => {
-      socket.to(pageId).emit("measurement-sync", { action, measurement });
-    });
-
-    socket.on("update-user", ({ name, color }) => {
-      const user = users[socket.id];
-      if (user) {
-        user.name = name;
-        user.color = color;
-        const roomUsers = Object.values(users).filter(u => u.pageId === user.pageId);
-        io.to(user.pageId).emit("room-users", roomUsers);
-        io.emit("global-users", Object.values(users));
-      }
-    });
-
-    socket.on("disconnect", () => {
-      const user = users[socket.id];
-      if (user) {
-        const pageId = user.pageId;
-        delete users[socket.id];
-        const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
-        io.to(pageId).emit("room-users", roomUsers);
-        io.emit("global-users", Object.values(users));
-      }
-      console.log("User disconnected:", socket.id);
-    });
   });
 
   // Time Entry Routes
