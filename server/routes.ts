@@ -547,7 +547,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.status === 'resolved' && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'issue_resolved', message: `Issue ISS-${String(before.number).padStart(3, '0')} resolved` });
       }
-      if (before) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: before.projectId, action: 'updated', ...requestMeta(req) });
+      // Re-read after the mutation: setIssueStatus bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — a dirty
+      // editor's Keep-mine would then adopt `null` and bounce off the 409
+      // backstop on its next save.
+      const after = getIssue(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { issueErr(e, res); }
   });
@@ -625,7 +630,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.status === 'closed' && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_closed', message: `RFI ${rfiNo(before.number)} closed` });
       }
-      if (before) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, action: 'updated', ...requestMeta(req) });
+      // Re-read after the mutation: setRfiStatus bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — see the
+      // matching comment on the issue PATCH route above.
+      const after = getRfi(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { rfiErr(e, res); }
   });
@@ -665,7 +674,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const r = setRfiResponse(db, req.params.id, { fileId: req.body?.fileId, text: req.body?.text });
       if (before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_answered', message: `RFI ${rfiNo(before.number)} answered` });
-        deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, action: 'updated', ...requestMeta(req) });
+        // Re-read after the mutation: setRfiResponse bumps the version.
+        const after = getRfi(db, req.params.id);
+        deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
       }
       res.json({ success: true, ...r });
     } catch (e) { rfiErr(e, res); }
@@ -714,7 +725,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.done && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'punch_done', message: `Punch item done${before.area ? ` (${before.area})` : ''}: ${before.description ?? ''}` });
       }
-      if (before) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: before.projectId, action: 'updated', ...requestMeta(req) });
+      // Re-read after the mutation: setPunchDone bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — see the
+      // matching comment on the issue PATCH route above.
+      const after = getPunchItem(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { punchErr(e, res); }
   });

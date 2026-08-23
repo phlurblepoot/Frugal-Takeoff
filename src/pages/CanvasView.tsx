@@ -363,6 +363,21 @@ const CanvasViewInner: React.FC = () => {
     };
   }, [projectId, pageId, onMeasurementSync, onProjectSync]);
 
+  // A 409 conflict on this tab resolves by refetching in place (see
+  // ProjectConflictListener); once that refetch lands, pick it up the same
+  // way any other live refresh does — otherwise this canvas keeps editing a
+  // stale local copy and a later save can silently overwrite someone else's
+  // work (the version check passes because ProjectConflictListener already
+  // healed the OTHER tab's latestVersions, not this one's data).
+  useEffect(() => {
+    const onRefreshed = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.projectId === projectId && pageId) loadData(projectId, pageId);
+    };
+    window.addEventListener('project-refreshed', onRefreshed);
+    return () => window.removeEventListener('project-refreshed', onRefreshed);
+  }, [projectId, pageId]);
+
   const loadTemplates = async () => {
     const data = await getTemplates();
     setTemplates(data);

@@ -63,12 +63,37 @@ describe('useCollabEditing', () => {
     expect(fakeSocket.emit).toHaveBeenCalledWith('set-editing', null);
   });
 
-  it('pristine: a foreign entity-changed for this type+id calls onFresh immediately, leaves remoteChange null', () => {
-    const onFresh = vi.fn();
-    render(<Harness type="task" id="t1" isDirty={() => false} onFresh={onFresh} />);
-    act(() => { fakeSocket.fire('entity-changed', changeEvt()); });
-    expect(onFresh).toHaveBeenCalledTimes(1);
-    expect(latest?.remoteChange).toBeNull();
+  it('pristine: a foreign entity-changed for this type+id debounce-calls onFresh (300ms), leaves remoteChange null', () => {
+    vi.useFakeTimers();
+    try {
+      const onFresh = vi.fn();
+      render(<Harness type="task" id="t1" isDirty={() => false} onFresh={onFresh} />);
+      act(() => { fakeSocket.fire('entity-changed', changeEvt()); });
+      expect(onFresh).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(300); });
+      expect(onFresh).toHaveBeenCalledTimes(1);
+      expect(latest?.remoteChange).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('pristine: a burst of foreign entity-changed events coalesces into a single debounced onFresh call', () => {
+    vi.useFakeTimers();
+    try {
+      const onFresh = vi.fn();
+      render(<Harness type="task" id="t1" isDirty={() => false} onFresh={onFresh} />);
+      act(() => { fakeSocket.fire('entity-changed', changeEvt({ version: 3 })); });
+      act(() => { vi.advanceTimersByTime(100); });
+      act(() => { fakeSocket.fire('entity-changed', changeEvt({ version: 4 })); });
+      act(() => { vi.advanceTimersByTime(100); });
+      act(() => { fakeSocket.fire('entity-changed', changeEvt({ version: 5 })); });
+      expect(onFresh).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(300); });
+      expect(onFresh).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('dirty: a foreign entity-changed sets remoteChange (not onFresh); keepMine adopts its version and clears the banner', () => {

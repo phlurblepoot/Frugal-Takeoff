@@ -64,12 +64,19 @@ describe('TaskEditor collab awareness', () => {
     expect(fakeSocket.emit).toHaveBeenCalledWith('set-editing', { type: 'task', id: 't1' });
   });
 
-  it('pristine: a foreign entity-changed event for this task calls onSaved (no banner)', () => {
-    const onSaved = vi.fn();
-    renderEditor(onSaved);
-    act(() => { fakeSocket.fire('entity-changed', changeEvt()); });
-    expect(onSaved).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/saved changes while you were editing/)).toBeNull();
+  it('pristine: a foreign entity-changed event for this task debounce-calls onSaved (no banner)', () => {
+    vi.useFakeTimers();
+    try {
+      const onSaved = vi.fn();
+      renderEditor(onSaved);
+      act(() => { fakeSocket.fire('entity-changed', changeEvt()); });
+      expect(onSaved).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(300); });
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/saved changes while you were editing/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('dirty: a foreign entity-changed event shows the banner instead of reloading', () => {

@@ -1,5 +1,5 @@
 // src/pages/project/ProjectNotes.tsx
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { NotesBoard } from '../../components/NotesBoard';
 import { getProjectNotes, saveProjectNotes } from '../../utils/store';
@@ -17,24 +17,34 @@ export const ProjectNotes: React.FC = () => {
   const { toast } = useToast();
   const [note, setNote] = useState<ProjectNote | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Which project's initial load has already landed. A background refresh
+  // (foreign note event) for the SAME project updates `note` in place
+  // without flipping `loaded` back to false — NotesBoard saves on ~14
+  // interactions including pan/zoom, and unmounting it to a skeleton on
+  // every refresh would throw away the user's current viewport mid-session.
+  const loadedForProjectRef = useRef<string | null>(null);
 
   const load = () => {
     if (!projectId) return;
-    setLoaded(false);
+    if (loadedForProjectRef.current !== projectId) setLoaded(false);
     getProjectNotes(projectId)
       .then(setNote)
       .catch(() => {})
-      .finally(() => setLoaded(true));
+      .finally(() => {
+        loadedForProjectRef.current = projectId;
+        setLoaded(true);
+      });
   };
   useLiveQuery(load, { types: ['note'], projectId });
 
-  // Presence + silent live refresh only — the notes board autosaves its own
-  // drafts, so there's no single dirty flag to protect with a merge banner.
+  // Presence only — useLiveQuery above already reloads on foreign 'note'
+  // events, so onFresh must be a no-op here or every event double-loads
+  // (useLiveQuery's debounced load + this undebounced one racing each other).
   const collab = useCollabEditing({
     type: 'note',
     id: projectId ?? '',
     isDirty: () => false,
-    onFresh: load,
+    onFresh: () => {},
   });
 
   const handleSave = async (n: ProjectNote) => {

@@ -73,6 +73,20 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  it('PATCH /api/issues/:id (status) broadcasts a bumped version, not the pre-mutation one', async () => {
+    await request(app).post('/api/projects').send({ id: 'p1c', name: 'P1c', pages: [], takeoffs: [] }).expect(200);
+    const created = await request(app).post('/api/projects/p1c/issues').send({ title: 'crack' }).expect(200);
+    const beforeVersion = (await request(app).get(`/api/issues/${created.body.id}`).expect(200)).body.version;
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).patch(`/api/issues/${created.body.id}`).send({ status: 'resolved' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'issue', id: created.body.id, projectId: 'p1c', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+    expect(e.version).toBeGreaterThan(beforeVersion);
+    c.close();
+  });
+
   it('DELETE /api/issues/:id captures projectId BEFORE deleting', async () => {
     await request(app).post('/api/projects').send({ id: 'p1', name: 'P1', pages: [], takeoffs: [] }).expect(200);
     const created = await request(app).post('/api/projects/p1/issues').send({ title: 'x' }).expect(200);

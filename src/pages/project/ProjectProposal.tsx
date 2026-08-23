@@ -191,18 +191,40 @@ export const ProjectProposal: React.FC = () => {
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Tracks the takeoff ids from the previous reload, so a background refresh
+  // (foreign project event) can tell whether the estimator had everything
+  // selected — in which case newly-added takeoffs join the selection too —
+  // or had made a deliberate partial pick, which must survive the refresh
+  // instead of silently reverting to select-all mid-composition. Reset to
+  // null on a project switch so THAT load always selects everything.
+  const priorTakeoffIdsRef = useRef<Set<string> | null>(null);
+
   const reload = () => {
     if (!projectId) return;
     setLoading(true);
     getProject(projectId)
       .then(p => {
         setProject(p);
-        if (p) setSelectedTakeoffIds(new Set(p.takeoffs.map(t => t.id)));
+        if (p) {
+          const freshIds = new Set(p.takeoffs.map(t => t.id));
+          const priorIds = priorTakeoffIdsRef.current;
+          setSelectedTakeoffIds(prevSelected => {
+            if (!priorIds) return freshIds; // first load for this project
+            const wasFullSelection = priorIds.size === prevSelected.size &&
+              [...priorIds].every(id => prevSelected.has(id));
+            if (wasFullSelection) return freshIds;
+            return new Set([...prevSelected].filter(id => freshIds.has(id)));
+          });
+          priorTakeoffIdsRef.current = freshIds;
+        }
       })
       .catch(() => setProject(null))
       .finally(() => setLoading(false));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    priorTakeoffIdsRef.current = null;
+    reload();
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Presence + silent live refresh only — no dedicated 'proposal' entity type
   // exists (proposal fields save onto the project record), and this page has

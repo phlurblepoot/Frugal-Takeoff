@@ -39,14 +39,25 @@ export function useCollabEditing(args: {
     const declare = () => socket.emit('set-editing', { type: args.type, id: args.id });
     declare();
     socket.on('connect', declare); // reconnect wipes server session state
+    // Pristine-path onFresh is trailing-debounced (same 300ms shape as
+    // useLiveQuery's debounce) — undebounced, a sustained burst of foreign
+    // events (e.g. someone else drawing on the canvas) would call a
+    // consumer's refetch once per event. The dirty path (remoteChange) stays
+    // immediate — it just flips a banner, no refetch.
+    let freshTimer: ReturnType<typeof setTimeout> | null = null;
     const onEvent = (ev: EntityChangedEvent) => {
       if (ev.bySessionId === CLIENT_SESSION_ID) return;
       if (ev.type !== argsRef.current.type || ev.id !== argsRef.current.id) return;
-      if (!argsRef.current.isDirty()) argsRef.current.onFresh();
-      else setRemoteChange(ev);
+      if (!argsRef.current.isDirty()) {
+        if (freshTimer) clearTimeout(freshTimer);
+        freshTimer = setTimeout(() => { freshTimer = null; argsRef.current.onFresh(); }, 300);
+      } else {
+        setRemoteChange(ev);
+      }
     };
     socket.on('entity-changed', onEvent);
     return () => {
+      if (freshTimer) clearTimeout(freshTimer);
       socket.off('connect', declare);
       socket.off('entity-changed', onEvent);
       socket.emit('set-editing', null);
