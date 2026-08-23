@@ -106,6 +106,29 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
 
     socket.on('heartbeat', () => registry.touch(sessionId));
 
+    // ---- WS1 compat shim (removed in WS4): legacy canvas events ----
+    socket.on('cursor-move', (pos: unknown) => {
+      if (!pos || typeof pos !== 'object') return;
+      const { x, y } = pos as { x?: unknown; y?: unknown };
+      if (typeof x !== 'number' || typeof y !== 'number') return;
+      registry.update(sessionId, { cursor: { x, y } });
+      const s = registry.get(sessionId);
+      if (s?.location) {
+        socket.to(pathRoom(s.location.path)).emit('user-cursor', { id: sessionId, cursor: { x, y } });
+      }
+    });
+
+    socket.on('measurement-update', (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return;
+      const { pageId, action, measurement } = payload as { pageId?: unknown; action?: unknown; measurement?: unknown };
+      if (typeof pageId !== 'string' || typeof action !== 'string') return;
+      const room = pathRoom(pageId);
+      if (!socket.rooms.has(room)) return; // membership enforced (old code relayed blindly)
+      registry.touch(sessionId);
+      socket.to(room).emit('measurement-sync', { action, measurement });
+    });
+    // ---- end compat shim ----
+
     socket.on('disconnect', () => {
       const removed = registry.remove(sessionId);
       if (removed) io.emit('session-left', { sessionId });
