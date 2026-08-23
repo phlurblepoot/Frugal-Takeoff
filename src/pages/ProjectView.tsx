@@ -224,6 +224,23 @@ export const ProjectView: React.FC = () => {
   const [isEditTakeoffAdvanced, setIsEditTakeoffAdvanced] = useState(false);
   const [editTakeoffCustomCosts, setEditTakeoffCustomCosts] = useState<any[]>([]);
 
+  // Live-refresh guard: a foreign 'project' change-feed event (another user
+  // deleting this takeoff) can now update `project` while the edit modal is
+  // still open for it. Before live refresh existed, a save against the stale
+  // local copy would 409 and surface a conflict toast; without this guard the
+  // save would instead silently no-op (project.takeoffs.map's id match just
+  // fails), which is worse — a real edit the user thinks they made simply
+  // vanishes. So close the modal and tell them the moment the takeoff
+  // disappears from underneath it, rather than waiting for a doomed save.
+  useEffect(() => {
+    if (!editingTakeoff || !project) return;
+    const stillExists = project.takeoffs.some(t => t.id === editingTakeoff.id);
+    if (!stillExists) {
+      setEditingTakeoff(null);
+      toast('This takeoff was deleted by another user', { type: 'warning' });
+    }
+  }, [project, editingTakeoff]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [expandedTakeoffs, setExpandedTakeoffs] = useState<Record<string, boolean>>({});
   const [expandedTakeoffPages, setExpandedTakeoffPages] = useState<Record<string, boolean>>({});
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
