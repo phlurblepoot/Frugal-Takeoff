@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { io, Socket } from 'socket.io-client';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Measurement } from '../types';
+import { locationFromPath } from '../utils/locationInfo';
 
 interface User {
   id: string;
@@ -19,10 +20,25 @@ interface User {
   lastActive?: number;
 }
 
+export interface SessionView {
+  sessionId: string;
+  userId: string;
+  name: string;
+  role: string;
+  color: string;
+  device: string;
+  location: { path: string; projectId?: string; section?: string; pageId?: string; fileId?: string; label?: string } | null;
+  editing: { type: string; id: string } | null;
+  cursor: { x: number; y: number } | null;
+  lastActive: number;
+}
+
 interface CollaborationContextType {
   socket: Socket | null;
   users: User[];
   globalUsers: User[];
+  sessions: SessionView[];
+  mySessionId: string | null;
   followedUserId: string | null;
   setFollowedUserId: (id: string | null) => void;
   sendCursor: (x: number, y: number) => void;
@@ -38,143 +54,126 @@ const CollaborationContext = createContext<CollaborationContextType | undefined>
 
 export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
-  const [globalUsers, setGlobalUsers] = useState<User[]>([]);
+  const [sessions, setSessions] = useState<SessionView[]>([]);
+  const [mySessionId, setMySessionId] = useState<string | null>(null);
   const [followedUserId, setFollowedUserId] = useState<string | null>(null);
   const [currentPageName, setCurrentPageName] = useState('Projects');
+  // authEpoch bumps when a login happens so the connect effect re-runs
+  const [authEpoch, setAuthEpoch] = useState(0);
   const measurementCallbacks = useRef<((data: any) => void)[]>([]);
   const projectCallbacks = useRef<((data: any) => void)[]>([]);
-  const currentUserNameRef = useRef<string>('');
-  const currentUserIdRef = useRef<string | undefined>(undefined);
 
   const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
-    const newSocket = io();
-    setSocket(newSocket);
+    const onPrefsSync = () => setAuthEpoch(e => e + 1);
+    window.addEventListener('app:prefs-sync', onPrefsSync);
+    return () => window.removeEventListener('app:prefs-sync', onPrefsSync);
+  }, []);
 
-    const storedUser = localStorage.getItem('user');
-    const user = storedUser ? JSON.parse(storedUser) : null;
-    const userName = user?.username || `User${Math.floor(Math.random() * 1000)}`;
-    currentUserNameRef.current = userName;
-    currentUserIdRef.current = user?.id ? String(user.id) : undefined;
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return; // not logged in — no socket until app:prefs-sync fires
 
     const storedColor = localStorage.getItem('userColor');
     const colors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
     const userColor = storedColor || colors[Math.floor(Math.random() * colors.length)];
     if (!storedColor) localStorage.setItem('userColor', userColor);
 
-    // Join with current location
-    newSocket.emit('join-page', {
-      pageId: location.pathname,
-      pageName: currentPageName,
-      name: userName,
-      userId: currentUserIdRef.current,
-      color: userColor,
+    const newSocket = io({
+      // function form: reconnect attempts re-read the (possibly refreshed) token
+      auth: (cb) => cb({ token: localStorage.getItem('token'), color: localStorage.getItem('userColor') || userColor }),
     });
+    setSocket(newSocket);
 
-    newSocket.on('room-users', (roomUsers: User[]) => {
-      setUsers(roomUsers);
+    newSocket.on('sessions-snapshot', ({ selfId, sessions }: { selfId: string; sessions: SessionView[] }) => {
+      setMySessionId(selfId);
+      setSessions(sessions);
     });
-
-    newSocket.on('global-users', (allUsers: User[]) => {
-      setGlobalUsers(allUsers);
+    newSocket.on('session-joined', (s: SessionView) => {
+      setSessions(prev => [...prev.filter(p => p.sessionId !== s.sessionId), s]);
     });
-
+    newSocket.on('session-left', ({ sessionId }: { sessionId: string }) => {
+      setSessions(prev => prev.filter(p => p.sessionId !== sessionId));
+    });
+    newSocket.on('session-updated', (s: SessionView) => {
+      setSessions(prev => prev.map(p => (p.sessionId === s.sessionId ? s : p)));
+    });
     newSocket.on('user-cursor', ({ id, cursor }: { id: string; cursor: { x: number; y: number } }) => {
       const now = Date.now();
-      setUsers(prev => prev.map(u => u.id === id ? { ...u, cursor, lastActive: now } : u));
-      setGlobalUsers(prev => prev.map(u => u.id === id ? { ...u, cursor, lastActive: now } : u));
+      setSessions(prev => prev.map(p => (p.sessionId === id ? { ...p, cursor, lastActive: now } : p)));
     });
-
     newSocket.on('measurement-sync', (data) => {
       measurementCallbacks.current.forEach(cb => cb(data));
     });
-
-    newSocket.on('project-sync', (data) => {
+    newSocket.on('project-sync', (data) => {  // dead wire, kept until WS4
       projectCallbacks.current.forEach(cb => cb(data));
     });
 
-    return () => {
-      newSocket.close();
-    };
-  }, []);
+    const beat = setInterval(() => newSocket.emit('heartbeat'), 25_000);
 
-  // Reset page name when returning to the home/projects page
+    return () => {
+      clearInterval(beat);
+      newSocket.close();
+      setSocket(null);
+      setSessions([]);
+      setMySessionId(null);
+    };
+  }, [authEpoch]);
+
+  // Report structured location on every route change (and page-label change)
   useEffect(() => {
-    if (location.pathname === '/') {
-      setCurrentPageName('Projects');
-    }
+    if (!socket) return;
+    socket.emit('set-location', locationFromPath(location.pathname, location.search, currentPageName));
+  }, [socket, location.pathname, location.search, currentPageName]);
+
+  // Reset page label off-canvas
+  useEffect(() => {
+    if (location.pathname === '/') setCurrentPageName('Projects');
   }, [location.pathname]);
 
-  // Update location when URL changes
+  // Legacy derived shapes — keeps CanvasView/PdfCanvas/UserPresenceOverlay untouched in WS1
+  const globalUsers: User[] = sessions.map(s => ({
+    id: s.sessionId, userId: s.userId, name: s.name,
+    pageId: s.location?.path ?? '', pageName: s.location?.label ?? '',
+    cursor: s.cursor, color: s.color, lastActive: s.lastActive,
+  }));
+  const users: User[] = globalUsers.filter(u => u.pageId === location.pathname);
+
+  // Following (unchanged semantics: followedUserId holds a session id)
   useEffect(() => {
-    if (socket) {
-      socket.emit('join-page', {
-        pageId: location.pathname,
-        pageName: currentPageName,
-        name: currentUserNameRef.current,
-        userId: currentUserIdRef.current,
-        color: localStorage.getItem('userColor') || '#3b82f6',
-      });
+    if (followedUserId && sessions.length > 0) {
+      const followed = sessions.find(s => s.sessionId === followedUserId);
+      const path = followed?.location?.path;
+      if (path && path !== location.pathname) navigate(path);
     }
-  }, [location.pathname, socket, currentPageName]);
+  }, [followedUserId, sessions, location.pathname, navigate]);
 
-  // Handle following
-  useEffect(() => {
-    if (followedUserId && globalUsers.length > 0) {
-      const followedUser = globalUsers.find(u => u.id === followedUserId);
-      if (followedUser && followedUser.pageId !== location.pathname) {
-        navigate(followedUser.pageId);
-      }
-    }
-  }, [followedUserId, globalUsers, location.pathname, navigate]);
-
-  const sendCursor = (x: number, y: number) => {
-    socket?.emit('cursor-move', { x, y });
-  };
-
+  const sendCursor = (x: number, y: number) => { socket?.emit('cursor-move', { x, y }); };
   const sendMeasurementUpdate = (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => {
     socket?.emit('measurement-update', { pageId, action, measurement });
   };
-
-  const sendProjectUpdate = (projectId: string) => {
-    socket?.emit('project-update', { projectId });
-  };
-
+  const sendProjectUpdate = (projectId: string) => { socket?.emit('project-update', { projectId }); };
   const updateUser = (name: string, color: string) => {
+    localStorage.setItem('userColor', color);
     socket?.emit('update-user', { name, color });
   };
-
   const onMeasurementSync = (callback: (data: any) => void) => {
     measurementCallbacks.current.push(callback);
-    return () => {
-      measurementCallbacks.current = measurementCallbacks.current.filter(cb => cb !== callback);
-    };
+    return () => { measurementCallbacks.current = measurementCallbacks.current.filter(cb => cb !== callback); };
   };
-
   const onProjectSync = (callback: (data: any) => void) => {
     projectCallbacks.current.push(callback);
-    return () => {
-      projectCallbacks.current = projectCallbacks.current.filter(cb => cb !== callback);
-    };
+    return () => { projectCallbacks.current = projectCallbacks.current.filter(cb => cb !== callback); };
   };
 
   return (
-    <CollaborationContext.Provider value={{ 
-      socket, 
-      users, 
-      globalUsers,
-      followedUserId,
-      setFollowedUserId,
-      sendCursor, 
-      sendMeasurementUpdate, 
-      sendProjectUpdate,
-      updateUser,
-      setPageName: setCurrentPageName,
-      onMeasurementSync,
-      onProjectSync
+    <CollaborationContext.Provider value={{
+      socket, users, globalUsers, sessions, mySessionId,
+      followedUserId, setFollowedUserId,
+      sendCursor, sendMeasurementUpdate, sendProjectUpdate, updateUser,
+      setPageName: setCurrentPageName, onMeasurementSync, onProjectSync,
     }}>
       {children}
     </CollaborationContext.Provider>
