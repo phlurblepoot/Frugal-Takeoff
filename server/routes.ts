@@ -778,32 +778,57 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks', authenticateToken, (req, res) => {
-    try { res.json(createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null })); } catch (e) { taskErr(e, res); }
+    try {
+      const r = createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null });
+      const projectId = typeof req.body?.projectId === 'string' && req.body.projectId ? req.body.projectId : undefined;
+      deps.broadcastChange({ type: 'task', id: r.id, projectId, action: 'created', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { taskErr(e, res); }
   });
   app.get('/api/tasks/:id', authenticateToken, (req, res) => {
     try { const t = getTask(db, req.params.id); if (!t) return res.status(404).json({ error: 'Task not found' }); res.json(t); } catch (e) { taskErr(e, res); }
   });
   app.put('/api/tasks/:id', authenticateToken, (req, res) => {
-    try { res.json({ success: true, ...saveTask(db, req.params.id, req.body) }); } catch (e) { taskErr(e, res); }
+    try {
+      const r = saveTask(db, req.params.id, req.body);
+      const row = getTask(db, req.params.id);
+      deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: r.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
+    } catch (e) { taskErr(e, res); }
   });
   app.patch('/api/tasks/:id', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
-      res.json({ success: true, ...setTaskStatus(db, req.params.id, req.body.status) });
+      const r = setTaskStatus(db, req.params.id, req.body.status);
+      const row = getTask(db, req.params.id);
+      deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: row?.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
     } catch (e) { taskErr(e, res); }
   });
   app.delete('/api/tasks/:id', authenticateToken, (req, res) => {
-    try { deleteTask(db, req.params.id); res.json({ success: true }); } catch (e) { taskErr(e, res); }
+    try {
+      const before = getTask(db, req.params.id);
+      deleteTask(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks/:id/photos', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addTaskPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
+      const row = getTask(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { taskErr(e, res); }
   });
   app.delete('/api/tasks/:id/photos/:fileId', authenticateToken, (req, res) => {
-    try { removeTaskPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { taskErr(e, res); }
+    try {
+      removeTaskPhoto(db, req.params.id, req.params.fileId);
+      const row = getTask(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { taskErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────
@@ -881,6 +906,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
         });
+        deps.broadcastChange({
+          type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+          action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
+        });
         res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
         console.error('Error saving file:', e);
@@ -947,6 +976,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
+        deps.broadcastChange({ type: 'file', id: req.params.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
         res.json({ success: true, ...result });
       } catch (e) {
         console.error('Error saving file version:', e);
@@ -1029,6 +1059,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const isAdmin = (req as any).user?.role === 'admin';
       const result = patchDocument(db, req.params.id, { archived, kind }, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      deps.broadcastChange({ type: 'file', id: req.params.id, projectId: result.value.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
       const { sha256, legacyFormat, ...slim } = result.value as any;
       res.json({ success: true, ...slim, archived: !!slim.archived });
     } catch (e) {
@@ -1040,8 +1071,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.delete('/api/files/:id', authenticateToken, (req, res) => {
     try {
       const isAdmin = (req as any).user?.role === 'admin';
+      const before = getMeta(db, req.params.id);
       const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      if (before) deps.broadcastChange({ type: 'file', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) {
       console.error('Error deleting file:', e);
@@ -1343,7 +1376,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.post('/api/customers', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-    res.json(saveCustomer(db, { ...req.body, id }));
+    const saved = saveCustomer(db, { ...req.body, id });
+    deps.broadcastChange({ type: 'customer', id: saved.id, action: 'created', ...requestMeta(req) });
+    res.json(saved);
   });
   app.put('/api/customers/:id', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
@@ -1359,10 +1394,18 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     if (req.params.id !== 'customer-unassigned' && newName !== previousName) {
       db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
     }
+    // One event, not one-per-affected-project: the contractor-string backfill
+    // above is a display-string side effect, not something project screens
+    // need to live-refresh on (see task-3 brief — YAGNI).
+    deps.broadcastChange({ type: 'customer', id: req.params.id, action: 'updated', ...requestMeta(req) });
     res.json(saved);
   });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {
-    try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
+    try {
+      deleteCustomer(db, req.params.id);
+      deps.broadcastChange({ type: 'customer', id: req.params.id, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    }
     catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }
   });
   app.post('/api/customers/merge', authenticateToken, (req, res) => {

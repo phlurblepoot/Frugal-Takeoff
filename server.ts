@@ -20,7 +20,7 @@ import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
 import { registerRealtime } from './server/realtime/registerRealtime';
-import { createChangeFeed } from './server/realtime/changeFeed';
+import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 
 dotenv.config();
@@ -266,6 +266,7 @@ async function startServer() {
       db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(
         id, username.trim(), hash, assignedRole
       );
+      broadcastChange({ type: 'user', id, action: 'created', ...requestMeta(req as any) });
       res.json({ success: true, user: { id, username: username.trim(), role: assignedRole } });
     } catch (error: any) {
       if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -298,6 +299,7 @@ async function startServer() {
         }
       }
       db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+      broadcastChange({ type: 'user', id: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json({ id: targetUser.id, username: targetUser.username, role });
     } catch (error) {
       res.status(500).json({ error: 'Failed to update user role' });
@@ -317,6 +319,7 @@ async function startServer() {
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
+      broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete user' });
@@ -339,6 +342,7 @@ async function startServer() {
       const t = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO templates (id, data) VALUES (?, ?)');
       stmt.run(t.id, JSON.stringify(t));
+      broadcastChange({ type: 'template', id: t.id, action: 'updated', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving template:", error);
@@ -350,6 +354,7 @@ async function startServer() {
     try {
       const stmt = db.prepare('DELETE FROM templates WHERE id = ?');
       stmt.run(req.params.id);
+      broadcastChange({ type: 'template', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting template:", error);
@@ -377,6 +382,7 @@ async function startServer() {
       const note = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO notes (id, projectId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)');
       stmt.run(note.id, req.params.projectId, JSON.stringify(note), note.createdAt || Date.now(), Date.now());
+      broadcastChange({ type: 'note', id: note.id, projectId: req.params.projectId, action: 'updated', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving notes:", error);
@@ -627,6 +633,7 @@ async function startServer() {
       db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
       );
+      broadcastChange({ type: 'timeEntry', id: entry.id, action: 'created', ...requestMeta(req) });
       res.json(entry);
     } catch (error) {
       res.status(500).json({ error: 'Failed to clock in' });
@@ -642,6 +649,7 @@ async function startServer() {
       }
       const clockOut = Date.now();
       db.prepare('UPDATE time_entries SET clockOut = ?, description = ? WHERE id = ?').run(clockOut, description ?? existing.description, existing.id);
+      broadcastChange({ type: 'timeEntry', id: existing.id, action: 'updated', ...requestMeta(req) });
       res.json({ ...existing, clockOut, description: description ?? existing.description });
     } catch (error) {
       res.status(500).json({ error: 'Failed to clock out' });
@@ -666,6 +674,7 @@ async function startServer() {
       db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
       );
+      broadcastChange({ type: 'timeEntry', id: entry.id, action: 'created', ...requestMeta(req) });
       res.json(entry);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create time entry' });
@@ -682,6 +691,7 @@ async function startServer() {
       db.prepare('UPDATE time_entries SET clockIn = ?, clockOut = ?, description = ? WHERE id = ?').run(
         clockIn ?? existing.clockIn, clockOut ?? existing.clockOut, description ?? existing.description, existing.id
       );
+      broadcastChange({ type: 'timeEntry', id: existing.id, action: 'updated', ...requestMeta(req) });
       res.json({ ...existing, clockIn: clockIn ?? existing.clockIn, clockOut: clockOut ?? existing.clockOut, description: description ?? existing.description });
     } catch (error) {
       res.status(500).json({ error: 'Failed to update time entry' });
@@ -695,6 +705,7 @@ async function startServer() {
         return res.status(404).json({ error: 'Entry not found' });
       }
       db.prepare('DELETE FROM time_entries WHERE id = ?').run(req.params.id);
+      broadcastChange({ type: 'timeEntry', id: req.params.id, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete time entry' });

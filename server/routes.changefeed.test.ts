@@ -262,4 +262,23 @@ describe('route mutations broadcast entity-changed', () => {
     expect(typeof e.version).toBe('number');
     c.close();
   });
+
+  it('POST /api/tasks broadcasts task created (projectId omitted when unscoped)', async () => {
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    const res = await request(app).post('/api/tasks').set('X-Session-Id', 'tab-B').send({ title: 'call supplier' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'task', id: res.body.id, action: 'created', bySessionId: 'tab-B' });
+    expect(e.projectId).toBeUndefined();
+    c.close();
+  });
+
+  it('POST /api/customers broadcasts customer created', async () => {
+    const c = await connectedClient();
+    const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    const res = await request(app).post('/api/customers').send({ name: 'Acme' }).expect(200);
+    const e = await evt;
+    expect(e).toMatchObject({ type: 'customer', action: 'created' });
+    c.close();
+  });
 });
