@@ -1,5 +1,5 @@
 // src/pages/project/billing/ChangeOrdersSection.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { FileText, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderListItem,
@@ -15,6 +15,7 @@ import {
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { ChangeOrderEditor } from './ChangeOrderEditor';
 import { useProjectOutlet } from '../ProjectLayout';
+import { useLiveQuery } from '../../../hooks/useLiveQuery';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
@@ -27,7 +28,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
     if (!projectId) return;
     getChangeOrders(projectId).then(setChangeOrders).catch(() => setChangeOrders([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['changeOrder'], projectId });
 
   const openChangeOrder = async (id: string) => {
     try { setEditing(await getChangeOrder(id)); } catch { toast('Failed to open change order', { type: 'error' }); }

@@ -1,5 +1,5 @@
 // src/pages/project/billing/AiaPayApplications.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { AiaPayAppListItem, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
@@ -11,6 +11,7 @@ import {
 } from '../../../components/ui';
 import type { PillTone } from '../../../components/ui';
 import { AiaPayAppEditor } from './AiaPayAppEditor';
+import { useLiveQuery } from '../../../hooks/useLiveQuery';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -34,7 +35,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
   const reload = () => {
     getPayApps(projectId).then(setApps).catch(() => setApps([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['aiaPayApp', 'payment'], projectId });
 
   const startCreate = () => {
     setNPeriodTo('');

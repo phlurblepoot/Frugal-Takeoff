@@ -10,6 +10,7 @@ import { formatMoney } from '../../utils/money';
 import {
   Card, CardBody, CardHeader, EmptyState, Skeleton,
 } from '../../components/ui';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { AiaSettingsForm } from './billing/AiaSettingsForm';
 import { AiaScheduleOfValues } from './billing/AiaScheduleOfValues';
 import { ChangeOrdersSection } from './billing/ChangeOrdersSection';
@@ -72,7 +73,7 @@ export const ProjectBilling: React.FC = () => {
     // any — it needs their count.
     getPayApps(projectId).then(setPayApps).catch(() => setPayApps([]));
   };
-  useEffect(load, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['invoice', 'changeOrder', 'payment', 'aiaSov', 'aiaPayApp', 'project'], projectId });
 
   // Refresh the always-visible summary totals whenever the active tab changes,
   // so edits made in any tab (e.g. SOV / change orders affecting the contract

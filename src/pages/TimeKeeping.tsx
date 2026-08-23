@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Clock, LogIn, LogOut, PenLine, Trash2, ChevronLeft, ChevronRight, Users, User as UserIcon } from 'lucide-react';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 interface TimeEntry {
   id: string;
@@ -234,8 +235,13 @@ export const TimeKeeping: React.FC = () => {
     } catch {}
   }, [token, isAdmin]);
 
-  useEffect(() => { fetchEntries(); }, [fetchEntries]);
+  useLiveQuery(fetchEntries, { types: ['timeEntry'] });
   useEffect(() => { if (view === 'team') { fetchUsers(); fetchTeamEntries(); } }, [view, fetchUsers, fetchTeamEntries]);
+  // Socket-driven refresh for the team view, layered alongside the tab-switch
+  // effect above (which still does the immediate load when `view` flips to
+  // 'team'). Guarded on `view` inside the load fn — rules of hooks forbid
+  // calling useLiveQuery conditionally — so this is a no-op while on 'me'.
+  useLiveQuery(() => { if (view === 'team') fetchTeamEntries(); }, { types: ['timeEntry'] });
 
   useEffect(() => {
     if (activeEntry) {

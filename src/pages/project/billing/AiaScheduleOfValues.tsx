@@ -1,5 +1,5 @@
 // src/pages/project/billing/AiaScheduleOfValues.tsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle, Download } from 'lucide-react';
 import {
@@ -15,6 +15,7 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
+import { useLiveQuery } from '../../../hooks/useLiveQuery';
 
 const isCo = (l: AiaSovLine) => !!l.isChangeOrder;
 
@@ -48,7 +49,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
   const reload = () => {
     getSov(projectId).then(setLines).catch(() => setLines([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['aiaSov', 'changeOrder'], projectId });
 
   // Zero-charge SOV export — the same G702/G703 workbook (or admin template) a
   // pay-app export produces, with all billing at $0. Lets the SOV be presented

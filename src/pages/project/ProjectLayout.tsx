@@ -1,8 +1,9 @@
 // src/pages/project/ProjectLayout.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Outlet, useOutletContext, useParams } from 'react-router-dom';
 import { ProjectSummary, getProjectSummary } from '../../utils/store';
 import { useRegisterProjectShell } from '../../context/ProjectShellContext';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 
 export interface ProjectOutletCtx {
   summary: ProjectSummary | null;
@@ -26,15 +27,25 @@ export const ProjectLayout: React.FC = () => {
     getProjectSummary(projectId).then(setSummary).catch(() => {});
   };
 
-  // On project switch, guard against an out-of-order resolution: if A→B
-  // happens fast and A's request resolves after B's, the stale flag drops it.
-  useEffect(() => {
-    setSummary(null);
+  // useLiveQuery re-runs this on mount, whenever `projectId` changes (it's
+  // part of the filter identity), and on foreign project-changed socket
+  // events. Only reset `summary` to null on an actual project switch — not on
+  // every live refresh of the SAME project, which would otherwise flash the
+  // sidebar name on background sync. loadSeqRef guards the project-switch
+  // case against an out-of-order resolution (A→B fast, A's request resolves
+  // after B's).
+  const lastProjectIdRef = useRef<string | undefined>(undefined);
+  const loadSeqRef = useRef(0);
+  const load = () => {
+    const seq = ++loadSeqRef.current;
+    if (projectId !== lastProjectIdRef.current) {
+      lastProjectIdRef.current = projectId;
+      setSummary(null);
+    }
     if (!projectId) return;
-    let stale = false;
-    getProjectSummary(projectId).then(s => { if (!stale) setSummary(s); }).catch(() => {});
-    return () => { stale = true; };
-  }, [projectId]);
+    getProjectSummary(projectId).then(s => { if (loadSeqRef.current === seq) setSummary(s); }).catch(() => {});
+  };
+  useLiveQuery(load, { types: ['project'], projectId, id: projectId });
 
   // Register only once the name is known — the sidebar shows 'Project' until then.
   useRegisterProjectShell(summary?.id, summary?.name);

@@ -16,6 +16,7 @@ import {
   Button, Card, EmptyState, Input, LostBadge, Modal, ProjectStatusPill,
   Select, Skeleton, StatusPill, normalizeProjectStatus,
 } from '../components/ui';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 export type TabId = 'bidding' | 'in_progress' | 'archive';
 
@@ -273,7 +274,7 @@ export const ProjectsPage: React.FC = () => {
       setIsLoading(false);
     }
   };
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['project', 'customer', 'invoice', 'aiaPayApp', 'payment'] });
 
   // Server is the source of truth for the sort preference (cross-device); the
   // localStorage init above is just the instant default. Ignore missing/invalid.

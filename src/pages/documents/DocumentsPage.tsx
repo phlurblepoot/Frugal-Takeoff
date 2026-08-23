@@ -15,6 +15,7 @@ import {
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { DocumentsBulkBar } from './DocumentsBulkBar';
 import { DocumentsFilterBar } from './DocumentsFilterBar';
 import { downloadBlob, DocumentsTable } from './DocumentsTable';
@@ -165,6 +166,14 @@ export const DocumentsPage: React.FC = () => {
   };
 
   useEffect(() => { refresh(); }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Change-feed live refresh. Kept ALONGSIDE the filterKey effect above rather
+  // than replacing it: the hook's filter identity can't carry this page's own
+  // (much richer) filterKey, so this hook exists only to add the socket
+  // subscription. Its own mount-time call to `refresh()` is a harmless
+  // duplicate of the effect above's — the requestIdRef race guard in
+  // `refresh` already makes the loser's response a no-op (last request wins).
+  useLiveQuery(refresh, { types: ['file'] });
 
   const loadMore = async () => {
     const myId = requestIdRef.current;

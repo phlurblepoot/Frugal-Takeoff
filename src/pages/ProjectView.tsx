@@ -43,6 +43,7 @@ import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
 import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { TakeoffEditModal } from './project/TakeoffEditModal';
 import { TakeoffDeleteModals } from './project/TakeoffDeleteModals';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 // Renders `text` with the first case-insensitive occurrence of `term` wrapped
 // in <mark> so search hits visibly pop out of page titles and snippets. No
@@ -324,9 +325,6 @@ export const ProjectView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (projectId) {
-      loadProject(projectId);
-    }
     loadTemplates();
 
     // Poll for active pages
@@ -338,11 +336,17 @@ export const ProjectView: React.FC = () => {
         console.error('Failed to fetch active pages:', error);
       }
     };
-    
+
     fetchActivePages();
     const interval = setInterval(fetchActivePages, 5000);
     return () => clearInterval(interval);
   }, [projectId]);
+
+  // Live refresh: reloads the project on mount, on projectId change, and on
+  // foreign 'project' change-feed events (self-echo suppressed, so this
+  // component's own saves don't trigger a redundant reload loop). Pulled out
+  // of the effect above so it can be filter-scoped independently.
+  useLiveQuery(() => { if (projectId) loadProject(projectId); }, { types: ['project'], projectId, id: projectId });
 
   useEffect(() => {
     if (!projectId) return;
