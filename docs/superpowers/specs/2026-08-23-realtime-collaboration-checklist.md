@@ -53,6 +53,8 @@ Plan: _not yet written_
 - [ ] `<EditPresenceBanner>` shared component + list-row "being edited" chips
 - [ ] Open-editor live refresh: pristine→silent reload; dirty→Review & merge / Keep mine
 - [ ] 409 hard-reload replaced with in-place project refresh (`ProjectConflictListener` reload deleted)
+- [ ] Carried from WS1 final review: normalize/validate the `verifyToken` payload at the boundary (`server.ts` — a legacy token missing `role` currently becomes the string `"undefined"`; WS2 gates on role)
+- [ ] Carried from WS1: `X-Session-Id` must read the CURRENT socket id fresh per request (sessionId = socket.id changes on every reconnect — never cache it)
 - [ ] Full test suite passing
 
 ## WS3 — Presence UI: sessions, Follow, page guard, live dashboard
@@ -77,6 +79,7 @@ Plan: _not yet written_
 - [ ] Cursor + mid-drag throttling (rAF + min-distance; drag-end always sent)
 - [ ] Server rejects ops on superseded plan-set pages
 - [ ] Dead `project-update`/`project-sync` wire deleted; WS1 compat shim removed
+- [ ] Carried from WS1 final review: cross-page measurement emits (CanvasView emits to a `pageRoom(sourcePageId)` the sender may not be in) are silently dropped by the WS1 membership check — WS4's server-side op application must accept ops for any page in a project the sender's `project:` room covers
 - [ ] Two-browser-context Playwright click-drag sync proof (+ screenshots)
 - [ ] Full test suite passing
 
