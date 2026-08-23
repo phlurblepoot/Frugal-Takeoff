@@ -31,31 +31,31 @@ Plan: docs/superpowers/plans/2026-08-23-ws1-realtime-core.md
 
 ## WS2 — Change feed + live refresh + edit awareness
 
-Plan: _not yet written_
+Plan: docs/superpowers/plans/2026-08-24-ws2-change-feed-live-refresh.md
 
-- [ ] `broadcastChange()` wired at all mutation route sites (co-located with `logActivity`)
-- [ ] `X-Session-Id` header on client REST calls for self-echo suppression
-- [ ] `useLiveQuery` hook (refetch-on-event, self-echo skip, ~300ms debounce, version skip, reconnect catch-up) + RTL tests
-- [ ] Section conversions to `useLiveQuery`:
-  - [ ] Tasks (global list + project tab + dashboard cards)
-  - [ ] Issues
-  - [ ] RFIs
-  - [ ] Punch
-  - [ ] Billing: invoices / pay apps / SOV / change orders / payments / summary
-  - [ ] Documents (global + project)
-  - [ ] Project list
-  - [ ] Project sections overview / project cards
-  - [ ] Notes
-  - [ ] Customers
-  - [ ] Users list, time keeping
+- [x] `broadcastChange()` wired at all mutation route sites (co-located with `logActivity`) (`76c57b9`, `5826e1c`, `12b60e3`, `4f85bb9`, `a40cef8`)
+- [x] `X-Session-Id` header on client REST calls for self-echo suppression (`7ef8fcd`)
+- [x] `useLiveQuery` hook (refetch-on-event, self-echo skip, ~300ms debounce, version skip, reconnect catch-up) + RTL tests (`7ef8fcd`)
+- [x] Section conversions to `useLiveQuery`:
+  - [x] Tasks (global list + project tab + dashboard cards) (`cd88682`)
+  - [x] Issues (`cd88682`)
+  - [x] RFIs (`cd88682`)
+  - [x] Punch (`cd88682`)
+  - [x] Billing: invoices / pay apps / SOV / change orders / payments / summary (`36f5cdc`)
+  - [x] Documents (global + project) (`36f5cdc`)
+  - [x] Project list (`36f5cdc`)
+  - [x] Project sections overview / project cards (`36f5cdc`)
+  - [x] Notes (`cd88682`)
+  - [x] Customers (`36f5cdc`)
+  - [x] Users list, time keeping (`36f5cdc`)
   - _(Dashboard + activity feed convert in WS3)_
-- [ ] `editing` presence declared by all entity editors (Task/Issue/Rfi/Punch/Invoice/ChangeOrder/AiaPayApp/AiaSov/ProjectSettings/proposal/notes)
-- [ ] `<EditPresenceBanner>` shared component + list-row "being edited" chips
-- [ ] Open-editor live refresh: pristine→silent reload; dirty→Review & merge / Keep mine
-- [ ] 409 hard-reload replaced with in-place project refresh (`ProjectConflictListener` reload deleted)
-- [ ] Carried from WS1 final review: normalize/validate the `verifyToken` payload at the boundary (`server.ts` — a legacy token missing `role` currently becomes the string `"undefined"`; WS2 gates on role)
-- [ ] Carried from WS1: `X-Session-Id` must read the CURRENT socket id fresh per request (sessionId = socket.id changes on every reconnect — never cache it)
-- [ ] Full test suite passing
+- [x] `editing` presence declared by all entity editors (Task/Issue/Rfi/Punch/Invoice/ChangeOrder/AiaPayApp/AiaSov/ProjectSettings/proposal/notes) (`f04c11c`, `71571af`, `29547c9`)
+- [x] `<EditPresenceBanner>` shared component + list-row "being edited" chips (`f04c11c`, `71571af`, `29547c9`)
+- [x] Open-editor live refresh: pristine→silent reload; dirty→Review & merge / Keep mine (`f04c11c`, `71571af`, `29547c9`)
+- [x] 409 hard-reload replaced with in-place project refresh (`ProjectConflictListener` reload deleted) (`549f7a6`)
+- [x] Carried from WS1 final review: normalize/validate the `verifyToken` payload at the boundary (`server.ts` — a legacy token missing `role` currently becomes the string `"undefined"`; WS2 gates on role) (`76c57b9`)
+- [x] Carried from WS1: `X-Session-Id` is a stable per-tab client id (`CLIENT_SESSION_ID`), decoupled from the reconnect-sensitive socket id (`7ef8fcd`)
+- [x] Full test suite passing (unit: 1082/1082; e2e: 49/49 incl. two-context `e2e/collab-live-refresh.spec.ts`)
 
 ## WS3 — Presence UI: sessions, Follow, page guard, live dashboard
 
