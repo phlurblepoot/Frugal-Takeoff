@@ -2,10 +2,14 @@ import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '.
 import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
+import { CLIENT_SESSION_ID } from './clientSession';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
-  return token ? { 'Authorization': `Bearer ${token}` } : {};
+  return {
+    'X-Session-Id': CLIENT_SESSION_ID,
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
 };
 
 export const getImageUrl = (id: string) => {
