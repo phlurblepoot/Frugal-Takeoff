@@ -8,6 +8,7 @@ import {
 import { useProjectOutlet } from './ProjectLayout';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '../../components/ui';
@@ -29,7 +30,7 @@ export const ProjectIssues: React.FC = () => {
     if (!projectId) return;
     getIssues(projectId).then(setIssues).catch(() => setIssues([]));
   };
-  useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['issue'], projectId });
 
   // Focus the create-form input when arriving via the command palette's "New issue" action.
   const [searchParams, setSearchParams] = useSearchParams();

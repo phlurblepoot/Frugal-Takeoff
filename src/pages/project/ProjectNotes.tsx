@@ -1,11 +1,12 @@
 // src/pages/project/ProjectNotes.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { NotesBoard } from '../../components/NotesBoard';
 import { getProjectNotes, saveProjectNotes } from '../../utils/store';
 import { ProjectNote } from '../../types';
 import { useToast } from '../../components/Toast';
 import { Skeleton } from '../../components/ui';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 
 // Full-page notes section. The same NotesBoard still powers the canvas
 // overlay (NotesOverlay) — this page just gives it a permanent home.
@@ -15,14 +16,15 @@ export const ProjectNotes: React.FC = () => {
   const [note, setNote] = useState<ProjectNote | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
+  const load = () => {
     if (!projectId) return;
     setLoaded(false);
     getProjectNotes(projectId)
       .then(setNote)
       .catch(() => {})
       .finally(() => setLoaded(true));
-  }, [projectId]);
+  };
+  useLiveQuery(load, { types: ['note'], projectId });
 
   const handleSave = async (n: ProjectNote) => {
     if (!projectId) return;

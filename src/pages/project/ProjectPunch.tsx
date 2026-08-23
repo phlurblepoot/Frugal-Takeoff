@@ -17,6 +17,7 @@ import { PunchItemEditor } from './punch/PunchItemEditor';
 import { buildPunchPdf } from './punch/punchPdf';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useProjectOutlet } from './ProjectLayout';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 
 const UNASSIGNED = 'Unassigned';
 
@@ -77,7 +78,7 @@ export const ProjectPunch: React.FC = () => {
     if (!projectId) return;
     getPunchItems(projectId).then(setItems).catch(() => setItems([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['punch'], projectId });
 
   // Focus the create-form input when arriving via the command palette's "New punch item" action.
   const [searchParams, setSearchParams] = useSearchParams();

@@ -8,6 +8,7 @@ import {
 import { useProjectOutlet } from './ProjectLayout';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '../../components/ui';
@@ -37,7 +38,7 @@ export const ProjectRfis: React.FC = () => {
     if (!projectId) return;
     getRfis(projectId).then(setRfis).catch(() => setRfis([]));
   };
-  useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['rfi'], projectId });
 
   // Focus the create-form input when arriving via the command palette's "New RFI" action.
   const [searchParams, setSearchParams] = useSearchParams();

@@ -11,6 +11,7 @@ import { useToast } from '../components/Toast';
 import { Button, Card, CardBody, Field, Input, Select } from '../components/ui';
 import { TaskListPanel } from '../components/tasks/TaskListPanel';
 import { TaskEditor } from './tasks/TaskEditor';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 export const TasksPage: React.FC = () => {
   const { toast } = useToast();
@@ -32,14 +33,11 @@ export const TasksPage: React.FC = () => {
     const projectId = searchParams.get('projectId') || undefined;
     const customerId = searchParams.get('customerId') || undefined;
     getTasks({ projectId, customerId }).then(setTasks).catch(() => setTasks([]));
-  };
-
-  useEffect(() => {
-    reload();
     getAssignableUsers().then(setUsers).catch(() => setUsers([]));
     getProjectsSummary().then(ps => setProjects(ps.filter(p => !p.archived))).catch(() => setProjects([]));
     getCustomers().then((cs: any[]) => setCustomers(cs.map(c => ({ id: c.id, name: c.name })))).catch(() => setCustomers([]));
-  }, []);
+  };
+  useLiveQuery(reload, { types: ['task'] });
 
   // Re-fetch when the project/customer scope in the URL changes.
   useEffect(() => {
