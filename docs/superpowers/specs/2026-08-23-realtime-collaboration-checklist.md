@@ -59,15 +59,15 @@ Plan: docs/superpowers/plans/2026-08-24-ws2-change-feed-live-refresh.md
 
 ## WS3 — Presence UI: sessions, Follow, page guard, live dashboard
 
-Plan: _not yet written_
+Plan: docs/superpowers/plans/2026-08-25-ws3-presence-ui.md
 
-- [ ] Online list rebuilt: per-user rows expandable to per-session (device label + readable location); own sessions visible
-- [ ] Triplicated `collapseSessions()` deleted (UserPresenceOverlay, CanvasView, PdfCanvas)
-- [ ] App-wide Follow (session-scoped): auto-navigation, Stop pill, stops on manual nav/disconnect; canvas cursor-follow still works
-- [ ] Page-view guard: `/api/pages/active` + 5s poll deleted; live viewer avatars on page list; rename guard actually works
-- [ ] Live dashboard cards + streaming activity feed
-- [ ] Playwright: Follow navigation proof; RTL: session grouping/labels
-- [ ] Full test suite passing
+- [x] Online list rebuilt: per-user rows expandable to per-session (device label + readable location); own sessions visible (`49e72f6`, `41465c3`)
+- [x] Triplicated `collapseSessions()` deleted (UserPresenceOverlay, CanvasView, PdfCanvas) (`41465c3`, `fe0651e`)
+- [x] App-wide Follow (session-scoped): auto-navigation, Stop pill, stops on manual nav/disconnect (`9434997`, `cdb6cdb`; e2e proof `e2e/collab-follow.spec.ts`). Ruled deviation: no viewport/cursor-follow on canvas was built — it never existed pre-WS3, and the spec's "continues to work" clause referred to a behavior exploration that was disproved (see plan's Global Constraints / task-9 self-review notes)
+- [x] Page-view guard: `/api/pages/active` + 5s poll deleted; live viewer avatars on page list; rename guard actually works (`db24c3e`)
+- [x] Live dashboard cards + streaming activity feed (`a14b585`)
+- [x] Playwright: Follow navigation proof (`e2e/collab-follow.spec.ts`); RTL: session grouping/labels (`41465c3`)
+- [x] Full test suite passing (unit: 1131/1131; e2e: 51/51 incl. two-context `e2e/collab-follow.spec.ts`)
 
 ## WS4 — Canvas hardening
 
