@@ -1,5 +1,5 @@
 // src/pages/Dashboard.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity as ActivityIcon, Calendar, Clock, FolderKanban, Plus } from 'lucide-react';
 import {
@@ -12,6 +12,7 @@ import {
 } from '../components/ui';
 import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { GROUP_DEFS } from './ProjectsPage';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 const DAY = 86_400_000;
 
@@ -57,12 +58,13 @@ export const Dashboard: React.FC = () => {
   const [taskScope, setTaskScope] = useState<'mine' | 'all'>('mine');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  useEffect(() => {
+  const load = () => {
     getProjectsSummary().then(setSummaries).catch(() => setSummaries([]));
     getActivity(10).then(setActivity).catch(() => setActivity([]));
     getMyTimeEntries().then(e => setHours(hoursThisWeek(e))).catch(() => setHours(0));
     getTasks().then(setTasks).catch(() => setTasks([]));
-  }, []);
+  };
+  useLiveQuery(load, { types: ['project', 'task', 'issue', 'rfi', 'punch', 'invoice', 'changeOrder', 'payment', 'timeEntry', 'customer', 'file'] });
 
   const visible = (summaries ?? []).filter(s => !s.archived);
   const upcoming = visible
