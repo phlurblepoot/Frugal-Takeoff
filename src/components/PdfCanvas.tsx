@@ -2300,21 +2300,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             {renderLegend()}
           </Layer>
           <Layer>
-            {/* Remote Cursors. Hide anonymous sessions, and when one user has
-                multiple sockets here only show the cursor for whichever
-                session is most recently active. */}
-            {(() => {
-              const visible = remoteUsers
-                .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId);
-              const byUser: Record<string, any> = {};
-              visible.forEach((u: any) => {
-                const existing = byUser[u.userId];
-                if (!existing || (u.lastActive ?? 0) > (existing.lastActive ?? 0)) {
-                  byUser[u.userId] = u;
-                }
-              });
-              return Object.values(byUser);
-            })()
+            {/* Remote Cursors. Hide anonymous sessions; each session gets its
+                own cursor (a user with two open tabs on this page shows two). */}
+            {remoteUsers
+              .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId)
               .map((u: any) => (
                 <Group key={u.id} x={u.cursor!.x} y={u.cursor!.y}>
                   <Line

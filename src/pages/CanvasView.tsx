@@ -52,7 +52,7 @@ const CanvasViewInner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   
-  const { socket, users, globalUsers, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
+  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
   // Socket rooms are keyed by full URL path; page UUIDs alone don't match.
   const pageRoom = (pId: string) => `/project/${projectId}/page/${pId}`;
 
@@ -1731,8 +1731,8 @@ const CanvasViewInner: React.FC = () => {
           )}
 
           {(() => {
-            const otherUsers = collapseSessions(globalUsers.filter(u => u.id !== socket?.id));
-            if (otherUsers.length === 0) return null;
+            const otherSessions = sessions.filter(s => s.sessionId !== mySessionId);
+            if (otherSessions.length === 0) return null;
             return (
             <div className="mt-4 pt-4 border-t border-slate-100">
               <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Collaboration</h3>
@@ -1755,24 +1755,28 @@ const CanvasViewInner: React.FC = () => {
                 <div className="pt-2">
                   <p className="text-xs text-slate-500 mb-2">Other Users:</p>
                   <div className="space-y-2">
-                    {otherUsers.map(user => (
-                      <div key={user.id} className="flex items-center justify-between gap-2 text-sm">
+                    {otherSessions.map(session => (
+                      <div key={session.sessionId} className="flex items-center justify-between gap-2 text-sm">
                         <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: user.color }}></div>
-                          <div className="min-w-0 cursor-pointer hover:text-accent-600 transition-colors" onClick={() => navigate(user.pageId)}>
-                            <p className="text-slate-700 truncate font-medium" title={user.displayName}>{user.displayName}</p>
-                            {user.pageId !== location.pathname && (
+                          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: session.color }}></div>
+                          <div
+                            className="min-w-0 cursor-pointer hover:text-accent-600 transition-colors"
+                            onClick={() => session.location?.path && navigate(session.location.path)}
+                          >
+                            <p className="text-slate-700 truncate font-medium" title={session.name}>{session.name}</p>
+                            <p className="text-[10px] text-slate-400 truncate">{session.device}</p>
+                            {session.location?.pageId !== pageId && (
                               <p className="text-[10px] text-slate-400 truncate">
-                                {user.pageName || 'Unknown'}
+                                {session.location?.label || 'another page'}
                               </p>
                             )}
                           </div>
                         </div>
                         <label className="flex items-center gap-1 cursor-pointer group">
-                          <input 
+                          <input
                             type="checkbox"
-                            checked={followedUserId === user.id}
-                            onChange={(e) => setFollowedUserId(e.target.checked ? user.id : null)}
+                            checked={followedUserId === session.sessionId}
+                            onChange={(e) => setFollowedUserId(e.target.checked ? session.sessionId : null)}
                             className="w-3.5 h-3.5 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                           />
                           <span className="text-[10px] font-medium text-slate-400 group-hover:text-accent-600 transition-colors">Follow</span>
@@ -2563,26 +2567,6 @@ const CanvasViewInner: React.FC = () => {
     </div>
   );
 };
-
-interface CollabUser { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number; }
-
-// Hide anonymous (not-logged-in) sessions, then collapse all sessions belonging
-// to the same authenticated user into a single entry. The collapsed entry's
-// page/cursor come from the most recently active session.
-function collapseSessions(users: CollabUser[]): (CollabUser & { displayName: string })[] {
-  const authed = users.filter(u => u.userId);
-  const byUser: Record<string, CollabUser[]> = {};
-  authed.forEach(u => {
-    const key = u.userId!;
-    (byUser[key] = byUser[key] || []).push(u);
-  });
-  return Object.values(byUser).map(sessions => {
-    const active = sessions.reduce((best, s) =>
-      (s.lastActive ?? 0) > (best.lastActive ?? 0) ? s : best
-    , sessions[0]);
-    return { ...active, displayName: active.name };
-  });
-}
 
 export const CanvasView: React.FC = () => {
   const { pageId } = useParams<{ pageId: string }>();
