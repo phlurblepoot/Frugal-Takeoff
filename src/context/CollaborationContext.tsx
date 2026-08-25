@@ -132,10 +132,13 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     };
   }, [authEpoch]);
 
-  // Report structured location on every route change (and page-label change)
+  // Report structured location on every route change (and page-label change).
+  // Label is only meaningful on canvas routes — off-canvas it would carry a
+  // stale page name from whatever canvas page was last visited.
   useEffect(() => {
     if (!socket) return;
-    const payload = locationFromPath(location.pathname, location.search, currentPageName);
+    const isCanvas = location.pathname.includes('/page/');
+    const payload = locationFromPath(location.pathname, location.search, isCanvas ? currentPageName : undefined);
     latestLocationRef.current = payload;
     socket.emit('set-location', payload);
   }, [socket, location.pathname, location.search, currentPageName]);
@@ -153,14 +156,30 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   }));
   const users: User[] = globalUsers.filter(u => u.pageId === location.pathname);
 
-  // Following (unchanged semantics: followedUserId holds a session id)
+  // Follow: navigate to wherever the followed session goes; clear when it vanishes.
+  const followNavRef = useRef<string | null>(null);
   useEffect(() => {
-    if (followedUserId && sessions.length > 0) {
-      const followed = sessions.find(s => s.sessionId === followedUserId);
-      const path = followed?.location?.path;
-      if (path && path !== location.pathname) navigate(path);
+    if (!followedUserId) return;
+    const followed = sessions.find(s => s.sessionId === followedUserId);
+    if (!followed) { setFollowedUserId(null); followNavRef.current = null; return; }
+    const path = followed.location?.path;
+    if (path && path !== location.pathname) {
+      followNavRef.current = path;
+      navigate(path);
     }
   }, [followedUserId, sessions, location.pathname, navigate]);
+
+  // Manual navigation (anywhere that isn't the followed path or our own auto-nav) stops following.
+  useEffect(() => {
+    if (!followedUserId) return;
+    const followedPath = sessions.find(s => s.sessionId === followedUserId)?.location?.path;
+    if (location.pathname !== followedPath && location.pathname !== followNavRef.current) {
+      setFollowedUserId(null);
+      followNavRef.current = null;
+    }
+    // deliberately keyed on pathname only: this is a "did the URL move under us" check
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   const sendCursor = (x: number, y: number) => { socket?.emit('cursor-move', { x, y }); };
   const sendMeasurementUpdate = (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => {

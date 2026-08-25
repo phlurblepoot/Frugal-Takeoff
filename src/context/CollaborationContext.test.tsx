@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 
@@ -18,6 +18,12 @@ const { fakeSocket, ioMock } = vi.hoisted(() => {
   return { fakeSocket, ioMock: vi.fn((_opts?: any) => fakeSocket) };
 });
 vi.mock('socket.io-client', () => ({ io: ioMock }));
+
+const navigateSpy = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useNavigate: () => navigateSpy,
+}));
 
 import { CollaborationProvider, useCollaboration } from './CollaborationContext';
 
@@ -39,17 +45,33 @@ function Probe() {
   );
 }
 
+function FollowProbe() {
+  const { sessions, followedUserId, setFollowedUserId } = useCollaboration();
+  return (
+    <div>
+      <span data-testid="followed">{followedUserId ?? 'none'}</span>
+      <button data-testid="follow-sB" onClick={() => setFollowedUserId('sB')}>follow</button>
+      <span data-testid="count">{sessions.length}</span>
+    </div>
+  );
+}
+
+const OTHER = {
+  ...SESSION, sessionId: 'sB', userId: 'u2', name: 'sam',
+  location: { path: '/project/p1/billing', projectId: 'p1', section: 'billing' },
+};
+
 describe('CollaborationContext', () => {
   beforeEach(() => {
     localStorage.setItem('token', 'tok123');
     localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan' }));
-    ioMock.mockClear(); fakeSocket.emit.mockClear();
+    ioMock.mockClear(); fakeSocket.emit.mockClear(); navigateSpy.mockClear();
     for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
   });
 
-  function mount() {
+  function mount(initialEntries: string[] = ['/dashboard']) {
     return render(
-      <MemoryRouter initialEntries={['/dashboard']}>
+      <MemoryRouter initialEntries={initialEntries}>
         <CollaborationProvider><Probe /></CollaborationProvider>
       </MemoryRouter>
     );
@@ -99,5 +121,37 @@ describe('CollaborationContext', () => {
     act(() => fakeSocket.fire('connect'));
     expect(fakeSocket.emit).toHaveBeenCalledWith('set-location',
       expect.objectContaining({ path: '/dashboard' }));
+  });
+
+  it('navigates to the followed session path and clears follow when the session disconnects', async () => {
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <CollaborationProvider><FollowProbe /></CollaborationProvider>
+      </MemoryRouter>
+    );
+    act(() => fakeSocket.fire('sessions-snapshot', { selfId: 'sA', sessions: [SESSION, OTHER] }));
+    act(() => { screen.getByTestId('follow-sB').click(); });
+    await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/project/p1/billing'));
+    act(() => fakeSocket.fire('session-left', { sessionId: 'sB' }));
+    await waitFor(() => expect(screen.getByTestId('followed').textContent).toBe('none'));
+  });
+
+  // Stop-on-manual-navigation is deliberately NOT covered here: jsdom + MemoryRouter
+  // makes simulating a real user-driven URL change (as opposed to our own navigate()
+  // call) awkward inside this provider-only test. It's covered by the FollowPill RTL
+  // test (Task 4) and the e2e suite (Task 9).
+
+  it('sends label only on canvas routes', () => {
+    const { unmount } = mount(['/project/p1/page/pg1']);
+    const canvasCalls = fakeSocket.emit.mock.calls.filter(c => c[0] === 'set-location');
+    expect(canvasCalls.length).toBeGreaterThan(0);
+    expect(canvasCalls[canvasCalls.length - 1][1].label).toBe('Projects');
+    unmount();
+
+    fakeSocket.emit.mockClear();
+    mount(['/project/p1/billing']);
+    const nonCanvasCalls = fakeSocket.emit.mock.calls.filter(c => c[0] === 'set-location');
+    expect(nonCanvasCalls.length).toBeGreaterThan(0);
+    expect(nonCanvasCalls[nonCanvasCalls.length - 1][1].label).toBeUndefined();
   });
 });
