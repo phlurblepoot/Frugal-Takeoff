@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
 import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveBinaryFile, getFile, getTemplates, getActivePages, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
+import { getProject, saveProject, getImageUrl, saveImage, saveBinaryFile, getFile, getTemplates, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator } from '../utils/pdf';
@@ -54,7 +54,7 @@ type ProjectTab = (typeof PROJECT_TAB_VALUES)[number];
 
 export const ProjectView: React.FC = () => {
   const { openNotes } = useNotes();
-  const { setPageName } = useCollaboration();
+  const { setPageName, sessions, mySessionId } = useCollaboration();
   const { toast } = useToast();
   const confirm = useConfirm();
   const shareLink = useShareLink();
@@ -287,7 +287,6 @@ export const ProjectView: React.FC = () => {
   })();
   const [isOptimizingThumbnails, setIsOptimizingThumbnails] = useState(false);
   const [optimizeProgress, setOptimizeProgress] = useState({ current: 0, total: 0 });
-  const [activePages, setActivePages] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
@@ -343,20 +342,6 @@ export const ProjectView: React.FC = () => {
 
   useEffect(() => {
     loadTemplates();
-
-    // Poll for active pages
-    const fetchActivePages = async () => {
-      try {
-        const pages = await getActivePages();
-        setActivePages(pages);
-      } catch (error) {
-        console.error('Failed to fetch active pages:', error);
-      }
-    };
-
-    fetchActivePages();
-    const interval = setInterval(fetchActivePages, 5000);
-    return () => clearInterval(interval);
   }, [projectId]);
 
   // Live refresh: reloads the project on mount, on projectId change, and on
@@ -638,8 +623,9 @@ export const ProjectView: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     
-    if (activePages.includes(page.id)) {
-      toast('This page is currently being viewed by another user and cannot be renamed.', { type: 'warning' });
+    const viewers = sessions.filter(s => s.sessionId !== mySessionId && s.location?.pageId === page.id);
+    if (viewers.length) {
+      toast(`"${page.name}" is being viewed by ${viewers[0].name} — try again when they leave`, { type: 'warning' });
       return;
     }
     

@@ -390,19 +390,6 @@ async function startServer() {
     }
   });
 
-  // Active pages endpoint
-  app.get("/api/pages/active", authenticateToken, (req, res) => {
-    try {
-      const activePageIds = Array.from(new Set(
-        realtime.registry.all().map(s => s.location?.path).filter((p): p is string => Boolean(p))
-      ));
-      res.json(activePageIds);
-    } catch (error) {
-      console.error("Error in /api/pages/active route:", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   // Settings API — public endpoint, excludes any key that could contain secrets
   // (jwt.secret, smtp.*, email.* credentials). Those are fetched via their own
   // authenticated endpoints.

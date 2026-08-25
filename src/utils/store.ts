@@ -318,22 +318,6 @@ export const deleteTemplate = async (id: string): Promise<void> => {
   await handleResponse(res);
 };
 
-export const getActivePages = async (): Promise<string[]> => {
-  try {
-    const res = await fetch('/api/pages/active', { headers: getAuthHeaders() });
-    if (!res.ok) {
-      console.error(`Active pages fetch failed with status: ${res.status}`);
-      const text = await res.text();
-      console.error('Response body:', text.substring(0, 100));
-      throw new Error(`Request failed with status ${res.status}`);
-    }
-    return await res.json();
-  } catch (error) {
-    console.error('Network error or server crash in getActivePages:', error);
-    throw error;
-  }
-};
-
 // Email / SMTP functions
 export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
   const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });

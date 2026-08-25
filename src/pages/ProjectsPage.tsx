@@ -7,9 +7,10 @@ import {
 } from 'lucide-react';
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
-  getActivePages, getRecentProjects, ConflictError,
+  getRecentProjects, ConflictError,
   getUserPreferences, saveUserPreferences, getCustomers,
 } from '../utils/store';
+import { useCollaboration } from '../context/CollaborationContext';
 import { formatMoney } from '../utils/money';
 import { useToast } from '../components/Toast';
 import {
@@ -234,6 +235,7 @@ const ProjectRow: React.FC<{
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { sessions, mySessionId } = useCollaboration();
   const [searchParams, setSearchParams] = useSearchParams();
   const setStage = (id: TabId) => {
     const next = new URLSearchParams(searchParams);
@@ -335,14 +337,12 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
-  const handleDeleteClick = async (p: ProjectSummary) => {
-    try {
-      const active = await getActivePages();
-      if (p.pageIds.some(id => active.includes(id))) {
-        toast('This project has pages currently being viewed by other users and cannot be deleted.', { type: 'warning' });
-        return;
-      }
-    } catch { /* active-pages check is best-effort */ }
+  const handleDeleteClick = (p: ProjectSummary) => {
+    const hasViewer = sessions.some(s => s.sessionId !== mySessionId && s.location?.projectId === p.id);
+    if (hasViewer) {
+      toast('This project has pages currently being viewed by other users and cannot be deleted.', { type: 'warning' });
+      return;
+    }
     setDeleteText('');
     setDeleteTarget(p);
   };

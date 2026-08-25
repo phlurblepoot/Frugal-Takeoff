@@ -16,6 +16,7 @@ import { Project, ProjectPage } from '../../types';
 import { getImageUrl } from '../../utils/store';
 import { effectiveSheetId } from '../../utils/planSets';
 import { RevisionModel } from '../../utils/planSets';
+import { PageViewerDots } from '../../components/PageViewerDots';
 
 type PagesSortMode = 'pageNumber' | 'description' | 'highlightsDesc';
 type PagesViewMode = 'grid' | 'list';
@@ -406,9 +407,12 @@ export function ProjectPagesTab({
                         ) : (
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
-                              <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
-                                <HighlightedText text={page.name} term={searchTerm} />
-                              </h3>
+                              <div className="flex items-center gap-1.5">
+                                <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+                                  <HighlightedText text={page.name} term={searchTerm} />
+                                </h3>
+                                <PageViewerDots pageId={page.id} />
+                              </div>
                               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                                 {page.measurements.length} highlights
                                 {page.pageNumber && page.name !== page.pageNumber && (
@@ -592,23 +596,28 @@ export function ProjectPagesTab({
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1">
+                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1 min-w-0">
                               <HighlightedText text={page.name} term={searchTerm} />
                             </h3>
-                            <div className="flex items-center gap-0.5 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                              <button
-                                onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
-                                title="Copy share link"
-                              >
-                                <LinkIcon size={14} />
-                              </button>
-                              <button
-                                onClick={(e) => handleStartRenamePage(e, page)}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
-                              >
-                                <Edit2 size={14} />
-                              </button>
+                            {/* Wraps the dots with the action buttons (not the h3) so the
+                                pages.spec.ts `h3 + div button` selector keeps resolving. */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <PageViewerDots pageId={page.id} />
+                              <div className="flex items-center gap-0.5 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                                <button
+                                  onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
+                                  className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                  title="Copy share link"
+                                >
+                                  <LinkIcon size={14} />
+                                </button>
+                                <button
+                                  onClick={(e) => handleStartRenamePage(e, page)}
+                                  className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                              </div>
                             </div>
                           </div>
                         )}
