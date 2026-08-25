@@ -80,6 +80,8 @@ Plan: _not yet written_
 - [ ] Server rejects ops on superseded plan-set pages
 - [ ] Dead `project-update`/`project-sync` wire deleted; WS1 compat shim removed
 - [ ] Carried from WS1 final review: cross-page measurement emits (CanvasView emits to a `pageRoom(sourcePageId)` the sender may not be in) are silently dropped by the WS1 membership check — WS4's server-side op application must accept ops for any page in a project the sender's `project:` room covers
+- [ ] Carried from WS3 final review: rename `followedUserId` → `followedSessionId` AND merge the two follow effects in `CollaborationContext.tsx:157-182` (manual-nav check BEFORE updating `followNavRef`) — fixes a fails-safe race where a followed session moving twice in one batched commit silently drops the follow
+- [ ] Carried from WS3 (wording nits, fix opportunistically): CanvasView sidebar shows "another page" for label-less locations (use describeLocation or "elsewhere in the app"); ProjectsPage delete-guard toast still says "has pages currently being viewed" though it now fires project-wide; canvas entry briefly broadcasts label "Projects" before setPageName lands
 - [ ] Two-browser-context Playwright click-drag sync proof (+ screenshots)
 - [ ] Full test suite passing
 
