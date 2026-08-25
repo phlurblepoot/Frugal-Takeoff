@@ -94,6 +94,7 @@ export const ProjectSettings: React.FC = () => {
     id: projectId ?? '',
     isDirty: () => dirty,
     onFresh: reload,
+    enabled: admin,
   });
 
   // Admins only: never load or expose project data otherwise.

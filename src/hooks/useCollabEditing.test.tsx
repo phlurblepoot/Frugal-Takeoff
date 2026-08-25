@@ -32,8 +32,8 @@ vi.mock('../context/CollaborationContext', () => ({
 import { useCollabEditing, type CollabEditingState } from './useCollabEditing';
 
 let latest: CollabEditingState | null = null;
-function Harness({ type, id, isDirty, onFresh }: { type: any; id: string; isDirty: () => boolean; onFresh: () => void }) {
-  latest = useCollabEditing({ type, id, isDirty, onFresh });
+function Harness({ type, id, isDirty, onFresh, enabled }: { type: any; id: string; isDirty: () => boolean; onFresh: () => void; enabled?: boolean }) {
+  latest = useCollabEditing({ type, id, isDirty, onFresh, enabled });
   return null;
 }
 
@@ -115,5 +115,17 @@ describe('useCollabEditing', () => {
     act(() => { fakeSocket.fire('entity-changed', changeEvt({ bySessionId: CLIENT_SESSION_ID })); });
     expect(onFresh).not.toHaveBeenCalled();
     expect(latest?.remoteChange).toBeNull();
+  });
+
+  it('enabled: false — no set-editing emit on mount or unmount, no onFresh on events', () => {
+    const onFresh = vi.fn();
+    const { unmount } = render(
+      <Harness type="task" id="t1" isDirty={() => false} onFresh={onFresh} enabled={false} />
+    );
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('set-editing', { type: 'task', id: 't1' });
+    act(() => { fakeSocket.fire('entity-changed', changeEvt()); });
+    expect(onFresh).not.toHaveBeenCalled();
+    unmount();
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('set-editing', null);
   });
 });

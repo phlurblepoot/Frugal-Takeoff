@@ -1,5 +1,5 @@
-import type { Browser } from '@playwright/test';
 import { test, expect, login, seedProjectWithPage } from './fixtures/test';
+import { openAuthedContext } from './fixtures/collab';
 
 // WS1 acceptance proof: two independently-authenticated browser contexts
 // (two real socket connections, same JWT — mirrors two tabs/devices for the
@@ -14,19 +14,6 @@ import { test, expect, login, seedProjectWithPage } from './fixtures/test';
 // element is `absolute`, not `fixed`), so all assertions are scoped inside it
 // to avoid colliding with "admin" text rendered elsewhere in the shell (e.g.
 // the logged-in-user indicator).
-
-async function openAuthedContext(browser: Browser, token: string, user: unknown) {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.addInitScript(
-    ([tok, userJson]) => {
-      localStorage.setItem('token', tok);
-      localStorage.setItem('user', userJson);
-    },
-    [token, JSON.stringify(user)] as const,
-  );
-  return { context, page };
-}
 
 test('two live sessions see each other in the presence overlay, and departure is reflected live', async ({ browser, request }) => {
   const { token, user } = await login(request);

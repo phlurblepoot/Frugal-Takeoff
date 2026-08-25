@@ -1,5 +1,5 @@
-import type { Browser } from '@playwright/test';
 import { test, expect, login, seedProjectWithPage } from './fixtures/test';
+import { openAuthedContext } from './fixtures/collab';
 
 // WS2 acceptance proof: two independently-authenticated browser contexts (two
 // real socket connections, same JWT — mirrors two tabs/devices for the
@@ -8,19 +8,6 @@ import { test, expect, login, seedProjectWithPage } from './fixtures/test';
 // click opens IssueEditor modal). Single worker (playwright.config's
 // `fullyParallel: false` / workers: 1) — see collab-presence.spec.ts for the
 // same two-context pattern used for WS1.
-
-async function openAuthedContext(browser: Browser, token: string, user: unknown) {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.addInitScript(
-    ([tok, userJson]) => {
-      localStorage.setItem('token', tok);
-      localStorage.setItem('user', userJson);
-    },
-    [token, JSON.stringify(user)] as const,
-  );
-  return { context, page };
-}
 
 test('live list refresh, edit-presence banner, and foreign-save refresh across two sessions', async ({ browser, request }) => {
   const { token, user } = await login(request);

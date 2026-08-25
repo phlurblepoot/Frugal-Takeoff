@@ -1,5 +1,6 @@
-import type { Browser, Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { test, expect, login, seedProjectWithPage } from './fixtures/test';
+import { openAuthedContext } from './fixtures/collab';
 
 // WS2 fix-wave proof (Fix C1): a canvas 409-conflict refresh must not leave a
 // stale local copy that a later save would silently overwrite.
@@ -21,24 +22,6 @@ import { test, expect, login, seedProjectWithPage } from './fixtures/test';
 // channel both contexts would otherwise share by being on the same canvas
 // page/room (CanvasView's onMeasurementSync already handles that path; it is
 // NOT what Fix C1 is about).
-
-async function openAuthedContext(
-  browser: Browser, token: string, user: unknown, opts: { blockSocket?: boolean } = {},
-) {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  if (opts.blockSocket) {
-    await page.route('**/socket.io/**', route => route.abort());
-  }
-  await page.addInitScript(
-    ([tok, userJson]) => {
-      localStorage.setItem('token', tok);
-      localStorage.setItem('user', userJson);
-    },
-    [token, JSON.stringify(user)] as const,
-  );
-  return { context, page };
-}
 
 interface Box { x: number; y: number; width: number; height: number; }
 

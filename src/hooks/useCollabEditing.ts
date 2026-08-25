@@ -16,6 +16,7 @@ export function useCollabEditing(args: {
   id: string;
   isDirty: () => boolean;
   onFresh: () => void;    // parent's refetch — editors are remounted via key={id:version}
+  enabled?: boolean;      // default true; false skips declaring/subscribing (e.g. non-admin viewers)
 }): CollabEditingState {
   // useCollaboration() throws outside a CollaborationProvider. The call
   // itself (a single useContext under the hood) always runs unconditionally
@@ -35,7 +36,7 @@ export function useCollabEditing(args: {
   argsRef.current = args;
 
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || args.enabled === false) return;
     const declare = () => socket.emit('set-editing', { type: args.type, id: args.id });
     declare();
     socket.on('connect', declare); // reconnect wipes server session state
@@ -62,7 +63,7 @@ export function useCollabEditing(args: {
       socket.off('entity-changed', onEvent);
       socket.emit('set-editing', null);
     };
-  }, [socket, args.type, args.id]);
+  }, [socket, args.type, args.id, args.enabled]);
 
   const othersEditing = sessions.filter(s =>
     s.sessionId !== mySessionId && s.editing?.type === args.type && s.editing.id === args.id);

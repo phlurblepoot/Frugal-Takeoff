@@ -126,6 +126,12 @@ Screens converted (each is a checklist item): tasks (global + project), issues, 
 ### 409 hard-reload replacement
 Delete the full-page reload in `ProjectConflictListener`. On project 409: refetch project via existing `latestVersions` healing, dispatch in-place `project-refreshed`; mounted live screens re-render naturally. Canvas-specific handling in WS4.
 
+### Accepted deviations & risks (WS1-WS2 as-built)
+- `broadcastChange` uses a global `io.emit` for `entity-changed` rather than always scoping to `project:<projectId>` — non-admin sockets can receive billing-entity change metadata (ids/types/versions only, never payloads); REST refetches stay permission-checked, so no data actually leaks.
+- `bySessionId` is a client-chosen per-tab id, spoofable on the trusted LAN — it's used only for self-echo suppression, never as a security boundary.
+- `sessionId` is `socket.id`, so it changes on every reconnect (edit-presence and Follow both re-key naturally, but any assumption of a stable per-tab id across reconnects would be wrong).
+- `ProjectSettings` and the proposal editor share the same `{type: 'project'}` editing-presence namespace, so editing one shows as "editing this too" while someone edits the other — an accepted cross-show, not a bug.
+
 ---
 
 ## 5. WS3 — Presence UI: sessions, Follow, page guard, live dashboard
