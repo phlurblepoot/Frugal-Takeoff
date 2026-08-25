@@ -28,6 +28,7 @@ import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
+import { FollowPill } from './components/FollowPill';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -51,6 +52,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
               {!isLoginPage && <CommandPalette />}
               <AppShell>
                 <UserPresenceOverlay />
+                <FollowPill />
                 <NotesOverlay />
                 <Outlet context={{ appName, logoUrl }} />
               </AppShell>
