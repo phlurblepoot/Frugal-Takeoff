@@ -426,7 +426,11 @@ export async function workbookToFortuneSheets(xlsxBytes: ArrayBuffer | Buffer): 
 // the SAME sheet (matched by id) rather than being treated as delete+add, so
 // sheet-level artifacts (images, data validation, charts) on a renamed sheet
 // survive — a strictly better outcome than name-matching, which is why id is
-// used as the primary key here.
+// used as the primary key here. An incoming sheet with NO id at all (not
+// producible by this bridge's own importer today, but explicitly called out
+// as a scenario to handle) falls back to an exact NAME match against an
+// unmatched original sheet, rather than always being treated as a brand-new
+// sheet — see the fallback in patchWorkbookFromFortuneSheets below.
 //
 // Grid-clear strategy: rather than `worksheet.spliceRows` (which mutates row
 // indices/structure, a much bigger hammer), every EXISTING cell is iterated
@@ -622,8 +626,12 @@ export async function patchWorkbookFromFortuneSheets(
   // Recompute the same id scheme workbookToFortuneSheets used at import time.
   const originalWorksheets = wb.worksheets;
   const idToOriginal = new Map<string, ExcelJS.Worksheet>();
-  originalWorksheets.forEach((ws, i) => idToOriginal.set(`sheet_${i}_${ws.name}`, ws));
-  const matchedIds = new Set<string>();
+  const nameToOriginal = new Map<string, ExcelJS.Worksheet>();
+  originalWorksheets.forEach((ws, i) => {
+    idToOriginal.set(`sheet_${i}_${ws.name}`, ws);
+    nameToOriginal.set(ws.name, ws);
+  });
+  const matchedOriginals = new Set<ExcelJS.Worksheet>();
 
   // New sheets are appended in the incoming state's relative order; existing
   // (matched) sheets keep their original position in the workbook — this
@@ -633,17 +641,28 @@ export async function patchWorkbookFromFortuneSheets(
   const orderedIncoming = [...sheets].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   for (const incoming of orderedIncoming) {
-    const original = incoming.id ? idToOriginal.get(incoming.id) : undefined;
+    let original = incoming.id ? idToOriginal.get(incoming.id) : undefined;
+    // An incoming sheet with NO id at all (unreachable via Task 1's own
+    // importer today, which always mints one, but explicitly flagged by the
+    // brief as a scenario to handle) falls back to an exact NAME match
+    // against an as-yet-unmatched original sheet, so its non-grid artifacts
+    // (images, validation) aren't silently dropped as delete+add. A sheet
+    // that DOES carry an id but simply doesn't match any recomputed original
+    // id is a genuinely new sheet — never falls back to name-matching.
+    if (!original && !incoming.id) {
+      const byName = nameToOriginal.get(incoming.name);
+      if (byName && !matchedOriginals.has(byName)) original = byName;
+    }
     const worksheet = original ?? wb.addWorksheet(incoming.name);
-    if (original && incoming.id) matchedIds.add(incoming.id);
+    if (original) matchedOriginals.add(original);
     if (worksheet.name !== incoming.name) worksheet.name = incoming.name;
 
     rebuildWorksheetGrid(worksheet, incoming);
   }
 
-  // Remove original sheets with no matching id in the incoming state.
-  for (const [id, ws] of idToOriginal) {
-    if (!matchedIds.has(id)) wb.removeWorksheet(ws.name);
+  // Remove original sheets that were matched to nothing in the incoming state.
+  for (const ws of originalWorksheets) {
+    if (!matchedOriginals.has(ws)) wb.removeWorksheet(ws.name);
   }
 
   const out = await wb.xlsx.writeBuffer();

@@ -206,6 +206,41 @@ describe('patchWorkbookFromFortuneSheets', () => {
     expect(cell.font?.bold).toBe(true);
   });
 
+  it('structural: an id-less incoming sheet falls back to matching an original by name, preserving its image', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    const ws = wb.addWorksheet('Data');
+    ws.getCell('A1').value = 'Hello';
+
+    const onePxPngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const imageId = wb.addImage({ base64: `data:image/png;base64,${onePxPngBase64}`, extension: 'png' });
+    ws.addImage(imageId, 'E5:F6');
+
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+    const { sheets } = await workbookToFortuneSheets(buffer);
+
+    // Strip the id entirely (simulates state that never carried one) and
+    // change one unrelated cell.
+    const sheet = sheets[0];
+    delete sheet.id;
+    const a1cd = sheet.celldata!.find((cd) => cd.r === 0 && cd.c === 0)!;
+    a1cd.v!.v = 'Changed';
+    a1cd.v!.m = 'Changed';
+
+    const outBytes = await patchWorkbookFromFortuneSheets(buffer, sheets);
+    const outWb = await reload(outBytes);
+    const outWs = outWb.worksheets[0];
+
+    // Matched the original "Data" sheet by name (not id) — no duplicate sheet.
+    expect(outWb.worksheets).toHaveLength(1);
+    expect(outWs.name).toBe('Data');
+    expect(outWs.getCell('A1').value).toBe('Changed');
+    // The image survived because the id-less sheet was matched to the
+    // original by name instead of being treated as a brand-new sheet.
+    expect(outWs.getImages().length).toBeGreaterThan(0);
+  });
+
   it('case 5: removed merge in state is unmerged in output; new merge is merged', async () => {
     const { buffer } = await buildFixtureWorkbook();
     const { sheets } = await workbookToFortuneSheets(buffer);
