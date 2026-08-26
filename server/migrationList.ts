@@ -1182,4 +1182,31 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 26,
+    name: 'sheet-sessions',
+    // ADDITIVE. Backs the shared spreadsheet session store (WS5): one row per
+    // file holding the latest authoritative state plus a journal of op
+    // batches appended since that state was folded. sheet_ops is the durable
+    // journal — SQLite IS the crash-recovery log (see sheetSessions.ts).
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE sheet_sessions (
+          fileId TEXT PRIMARY KEY,
+          state TEXT,
+          stateSeq INTEGER NOT NULL DEFAULT 0,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          sessionOpen INTEGER NOT NULL DEFAULT 0,
+          snapshotDone INTEGER NOT NULL DEFAULT 0,
+          updatedAt INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE sheet_ops (
+          fileId TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          ops TEXT NOT NULL,
+          PRIMARY KEY (fileId, seq)
+        );
+      `);
+    },
+  },
 ];
