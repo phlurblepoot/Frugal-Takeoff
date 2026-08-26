@@ -49,3 +49,7 @@ export function waitFor<T = unknown>(socket: Socket, event: string): Promise<T> 
 export function waitForConnectError(socket: Socket): Promise<Error> {
   return new Promise((resolve) => socket.once('connect_error', resolve));
 }
+
+export function emitWithAck<T = any>(socket: Socket, event: string, payload: unknown): Promise<T> {
+  return new Promise((resolve) => socket.emit(event, payload, resolve));
+}

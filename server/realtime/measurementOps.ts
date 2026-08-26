@@ -66,6 +66,30 @@ const upsertMeasurement = (
   );
 };
 
+// Inverse of upsertMeasurement's attrs split — same shape loadProject
+// reassembles a measurement row into (server/projectStore.ts): id/takeoffId/
+// type/name/color as named columns, points parsed from JSON, everything else
+// spread from the attrs JSON blob. Used by canvas-join to hydrate a page's
+// measurements without loading the whole project.
+export function hydrateMeasurementRow(row: {
+  id: string;
+  takeoffId: string | null;
+  type: string | null;
+  name: string | null;
+  color: string | null;
+  points: string | null;
+  attrs: string | null;
+}): Record<string, unknown> {
+  const obj: Record<string, unknown> = { id: row.id };
+  if (row.takeoffId != null) obj.takeoffId = row.takeoffId;
+  if (row.type != null) obj.type = row.type;
+  if (row.name != null) obj.name = row.name;
+  if (row.color != null) obj.color = row.color;
+  obj.points = row.points ? JSON.parse(row.points) : [];
+  if (row.attrs) Object.assign(obj, JSON.parse(row.attrs));
+  return obj;
+}
+
 // Applies the op to the measurements table and bumps projects.version, all in
 // one transaction. Ordering = call order (better-sqlite3 is sync). Throws
 // OpRejectedError on validation failure; never partially applies.

@@ -2,14 +2,19 @@
 // server.ts. Identity comes ONLY from the verified JWT — never from
 // client-supplied fields (the old code trusted a client-asserted userId).
 import type { Server, Socket } from 'socket.io';
+import type Database from 'better-sqlite3';
 import { PresenceRegistry } from './presenceRegistry';
 import { deviceLabel } from './deviceLabel';
 import type { SessionInfo } from './types';
+import { applyMeasurementOp, OpRejectedError, hydrateMeasurementRow, type MeasurementOpAction } from './measurementOps';
+import type { BroadcastChange } from './changeFeed';
 
 export interface RealtimeOptions {
   verifyToken: (token: string) => { id: string; username: string; role: string } | null;
   sweepIntervalMs?: number;
   staleAfterMs?: number;
+  db?: Database.Database;
+  broadcastChange?: BroadcastChange;
 }
 
 export interface RealtimeHandle {
@@ -127,7 +132,7 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
 
     socket.on('heartbeat', () => registry.touch(sessionId));
 
-    // ---- WS1 compat shim (removed in WS4): legacy canvas events ----
+    // permanent: canvas cursor relay
     socket.on('cursor-move', (pos: unknown) => {
       if (!pos || typeof pos !== 'object') return;
       const { x, y } = pos as { x?: unknown; y?: unknown };
@@ -139,16 +144,79 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       }
     });
 
-    socket.on('measurement-update', (payload: unknown) => {
-      if (!payload || typeof payload !== 'object') return;
-      const { pageId, action, measurement } = payload as { pageId?: unknown; action?: unknown; measurement?: unknown };
-      if (typeof pageId !== 'string' || typeof action !== 'string') return;
-      const room = pathRoom(pageId);
-      if (!socket.rooms.has(room)) return; // membership enforced (old code relayed blindly)
-      registry.touch(sessionId);
-      socket.to(room).emit('measurement-sync', { action, measurement });
+    // Canvas measurement mutation: authoritative write path (WS4). Membership
+    // is project-scoped, not page-scoped — a project member may legally op on
+    // any page in that project (e.g. paste-across-pages), so the check is
+    // "somewhere in the project", not "on this exact page".
+    socket.on('measurement-op', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_measurement' });
+      const { pageId, projectId, action, measurement, clientTabId } = payload as {
+        pageId?: unknown; projectId?: unknown; action?: unknown; measurement?: unknown; clientTabId?: unknown;
+      };
+      if (
+        typeof pageId !== 'string' || !pageId ||
+        typeof projectId !== 'string' || !projectId ||
+        (action !== 'add' && action !== 'update' && action !== 'delete') ||
+        !measurement || typeof measurement !== 'object'
+      ) {
+        return respond({ ok: false, error: 'invalid_measurement' });
+      }
+      if (!socket.rooms.has(projectRoom(projectId))) return respond({ ok: false, error: 'not_in_project' });
+      if (!opts.db) return respond({ ok: false, error: 'no_db' });
+
+      const bySessionId = typeof clientTabId === 'string' ? clientTabId : undefined;
+      try {
+        const { version } = applyMeasurementOp(opts.db, {
+          projectId,
+          pageId,
+          action: action as MeasurementOpAction,
+          measurement: measurement as Record<string, unknown> & { id: string },
+        });
+        respond({ ok: true, version });
+        socket.to(projectRoom(projectId)).emit('measurement-applied', {
+          pageId, action, measurement, version, bySessionId,
+        });
+        opts.broadcastChange?.({
+          type: 'project',
+          id: projectId,
+          projectId,
+          version,
+          action: 'updated',
+          byUserId: socket.data.user.id,
+          bySessionId,
+        });
+      } catch (err) {
+        if (err instanceof OpRejectedError) return respond({ ok: false, error: err.reason });
+        throw err;
+      }
     });
-    // ---- end compat shim ----
+
+    // Canvas join: hydrates a page's current measurements + the project's
+    // version for a client opening/reconnecting to the canvas, so it doesn't
+    // need a separate REST round-trip to catch up before accepting local ops.
+    socket.on('canvas-join', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
+      const { pageId, projectId } = payload as { pageId?: unknown; projectId?: unknown };
+      if (typeof pageId !== 'string' || !pageId || typeof projectId !== 'string' || !projectId) {
+        return respond({ ok: false, error: 'invalid_request' });
+      }
+      if (!socket.rooms.has(projectRoom(projectId))) return respond({ ok: false, error: 'not_in_project' });
+      if (!opts.db) return respond({ ok: false, error: 'no_db' });
+
+      const page = opts.db.prepare('SELECT id FROM pages WHERE id = ? AND projectId = ?').get(pageId, projectId);
+      if (!page) return respond({ ok: false, error: 'page_not_found' });
+
+      const rows = opts.db
+        .prepare('SELECT id, takeoffId, type, name, color, points, attrs FROM measurements WHERE pageId = ? ORDER BY sortOrder')
+        .all(pageId) as Parameters<typeof hydrateMeasurementRow>[0][];
+      const measurements = rows.map(hydrateMeasurementRow);
+      const project = opts.db.prepare('SELECT version FROM projects WHERE id = ?').get(projectId) as
+        | { version: number }
+        | undefined;
+      respond({ ok: true, measurements, version: project?.version ?? 0 });
+    });
 
     socket.on('disconnect', () => {
       const removed = registry.remove(sessionId);

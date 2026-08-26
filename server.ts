@@ -127,14 +127,16 @@ async function startServer() {
     }
   }
 
+  const broadcastChange = createChangeFeed(io);
+
   const realtime = registerRealtime(io, {
     verifyToken: (token: string) => {
       try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
       catch { return null; }
     },
+    db,
+    broadcastChange,
   });
-
-  const broadcastChange = createChangeFeed(io);
 
   // Health check
   app.get("/api/health", (req, res) => {
