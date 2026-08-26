@@ -71,15 +71,32 @@ const BORDER_STYLE_CODE: Record<string, number> = {
 const HORIZONTAL_ALIGN_CODE: Record<string, number> = { center: 0, left: 1, right: 2 };
 const VERTICAL_ALIGN_CODE: Record<string, number> = { middle: 0, top: 1, bottom: 2 };
 
+// Inverse lookups, built once, for the patch/export direction.
+const BORDER_STYLE_NAME: Record<number, ExcelJS.BorderStyle> = Object.fromEntries(
+  Object.entries(BORDER_STYLE_CODE).map(([name, code]) => [code, name as ExcelJS.BorderStyle]),
+);
+const HORIZONTAL_ALIGN_NAME: Record<number, NonNullable<ExcelJS.Alignment['horizontal']>> = {
+  0: 'center',
+  1: 'left',
+  2: 'right',
+};
+const VERTICAL_ALIGN_NAME: Record<number, NonNullable<ExcelJS.Alignment['vertical']>> = {
+  0: 'middle',
+  1: 'top',
+  2: 'bottom',
+};
+
 // exceljs column widths are in "characters" (roughly the width of '0' in the
 // default font); there is no exact universal char->px factor, but 7.5px per
 // character-unit is the commonly used approximation for Excel's default
 // Calibri 11 metric (same constant several open-source xlsx viewers use).
 // This is an APPROXIMATION, not a verified exceljs constant.
 const excelWidthToPx = (widthChars: number): number => Math.round(widthChars * 7.5);
+const pxToExcelWidth = (px: number): number => px / 7.5;
 
 // Row heights are stored in points; 1pt = 4/3 px at 96dpi (96/72 = 4/3).
 const excelPointsToPx = (points: number): number => Math.round((points * 4) / 3);
+const pxToExcelPoints = (px: number): number => (px * 3) / 4;
 
 // Mirrors exceljs's own (private, non-exported) date<->serial conversion in
 // node_modules/exceljs/lib/utils/utils.js:55-56
@@ -122,6 +139,15 @@ function argbToHex(argb?: string): string | undefined {
   // exceljs argb is 8 hex chars, AARRGGBB; FortuneSheet wants '#rrggbb'.
   const hex = argb.length === 8 ? argb.slice(2) : argb;
   return `#${hex.toLowerCase()}`;
+}
+
+// Inverse of argbToHex: FortuneSheet '#rrggbb' -> exceljs 8-char AARRGGBB
+// (opaque alpha, matching what every import-side fixture and this codebase's
+// own writes use — exceljs has no concept of a "no alpha" color).
+function hexToArgb(hex?: string): string | undefined {
+  if (!hex) return undefined;
+  const bare = hex.startsWith('#') ? hex.slice(1) : hex;
+  return `FF${bare.toUpperCase()}`;
 }
 
 // ── Value normalization ─────────────────────────────────────────────────────
@@ -377,4 +403,249 @@ export async function workbookToFortuneSheets(xlsxBytes: ArrayBuffer | Buffer): 
   });
 
   return { sheets, warnings };
+}
+
+// ── Patch export (FortuneSheet -> original workbook) ────────────────────────
+//
+// Sheet-identity decision (brief's decide-and-document point): sheets are
+// matched between the ORIGINAL workbook and the incoming FortuneSheet state
+// by `id`, not by `name`. Verified in
+// node_modules/@fortune-sheet/core/dist/index.js:
+//   - `setSheetName()` (~line 76642) mutates ONLY `sheet.name` — `id` is
+//     untouched — so a sheet renamed in the FortuneSheet editor keeps the
+//     same `id` it had at import time.
+//   - `addSheet()` (~line 67150) assigns a brand-new sheet either
+//     `settings.generateSheetId()` or `uuid.v4()` — never anything shaped
+//     like this bridge's own `sheet_${i}_${name}` import-time id scheme.
+// Since `workbookToFortuneSheets` above mints ids as `sheet_${i}_${name}`
+// (i = the ORIGINAL worksheet's index), this function recomputes that same
+// scheme from the original workbook it's patching and matches incoming
+// sheets against it by id. A sheet whose id doesn't match any recomputed
+// original id is a NEW sheet (added in FortuneSheet); an original id with no
+// matching incoming sheet was deleted. This means a rename is recognized as
+// the SAME sheet (matched by id) rather than being treated as delete+add, so
+// sheet-level artifacts (images, data validation, charts) on a renamed sheet
+// survive — a strictly better outcome than name-matching, which is why id is
+// used as the primary key here.
+//
+// Grid-clear strategy: rather than `worksheet.spliceRows` (which mutates row
+// indices/structure, a much bigger hammer), every EXISTING cell is iterated
+// and reset (value + style) before anything from the new state is written.
+// Iterating the sheet's full existing extent this way also naturally clears
+// any rows/columns that lie beyond the new state's occupied range (e.g. the
+// grid shrank) without special-casing that as a separate pass.
+
+function invertMergeRange(m: { r: number; c: number; rs: number; cs: number }): [number, number, number, number] {
+  // 0-based {r,c,rs,cs} -> 1-based [top,left,bottom,right] for exceljs.
+  return [m.r + 1, m.c + 1, m.r + m.rs, m.c + m.cs];
+}
+
+interface BorderInfoEntry {
+  rangeType: string;
+  value: {
+    row_index: number;
+    col_index: number;
+    l: BorderSide | null;
+    r: BorderSide | null;
+    t: BorderSide | null;
+    b: BorderSide | null;
+  };
+}
+
+function borderSideToExcel(side: BorderSide | null | undefined): Partial<ExcelJS.Border> | undefined {
+  if (!side) return undefined;
+  const style = BORDER_STYLE_NAME[side.style];
+  if (!style) return undefined;
+  return { style, color: { argb: hexToArgb(side.color) ?? 'FF000000' } };
+}
+
+function applyBorderInfoEntry(worksheet: ExcelJS.Worksheet, entry: BorderInfoEntry): void {
+  // This bridge only ever produces (and therefore only needs to consume)
+  // the "cell" rangeType — see the import-side borderInfo.push() call above.
+  if (entry.rangeType !== 'cell') return;
+  const { row_index: rowIdx, col_index: colIdx, l, r, t, b } = entry.value;
+  const top = borderSideToExcel(t);
+  const left = borderSideToExcel(l);
+  const bottom = borderSideToExcel(b);
+  const right = borderSideToExcel(r);
+  if (!top && !left && !bottom && !right) return;
+  const cell = worksheet.getCell(rowIdx + 1, colIdx + 1);
+  cell.border = {
+    ...(top ? { top } : {}),
+    ...(left ? { left } : {}),
+    ...(bottom ? { bottom } : {}),
+    ...(right ? { right } : {}),
+  };
+}
+
+function applyCellValue(cell: ExcelJS.Cell, c: FortuneSheetCell): void {
+  const numFmt = c.ct?.t === 'n' && c.ct.fa ? c.ct.fa : undefined;
+  if (c.f) {
+    // Leading '=' stripped for exceljs's {formula} shape (mirror image of
+    // the import side's `out.f = '=' + cell.formula`).
+    const formula = c.f.replace(/^=/, '');
+    cell.value = (c.v !== undefined ? { formula, result: c.v } : { formula }) as ExcelJS.CellValue;
+  } else if (c.v !== undefined) {
+    cell.value = c.v;
+  }
+  if (numFmt) cell.numFmt = numFmt;
+}
+
+function applyCellFont(cell: ExcelJS.Cell, c: FortuneSheetCell): void {
+  if (c.bl == null && c.it == null && c.fs == null && c.ff == null && c.fc == null) return;
+  const font: Partial<ExcelJS.Font> = {};
+  if (c.bl === 1) font.bold = true;
+  if (c.it === 1) font.italic = true;
+  if (c.fs != null) font.size = c.fs;
+  if (c.ff != null) font.name = String(c.ff);
+  const argb = hexToArgb(c.fc);
+  if (argb) font.color = { argb };
+  cell.font = font;
+}
+
+function applyCellFill(cell: ExcelJS.Cell, c: FortuneSheetCell): void {
+  const argb = hexToArgb(c.bg);
+  if (!argb) return;
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+}
+
+function applyCellAlignment(cell: ExcelJS.Cell, c: FortuneSheetCell): void {
+  const alignment: Partial<ExcelJS.Alignment> = {};
+  let any = false;
+  if (c.ht != null && HORIZONTAL_ALIGN_NAME[c.ht]) {
+    alignment.horizontal = HORIZONTAL_ALIGN_NAME[c.ht];
+    any = true;
+  }
+  if (c.vt != null && VERTICAL_ALIGN_NAME[c.vt]) {
+    alignment.vertical = VERTICAL_ALIGN_NAME[c.vt];
+    any = true;
+  }
+  if (c.tb === '2') {
+    alignment.wrapText = true;
+    any = true;
+  }
+  if (any) cell.alignment = alignment;
+}
+
+function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneSheetData): void {
+  // 1. Unmerge every existing merge FIRST — a merged non-anchor cell can't
+  //    have its value/style touched directly (exceljs throws / no-ops), so
+  //    this must happen before any clearing or rewriting below.
+  for (const range of [...(worksheet.model.merges ?? [])]) {
+    worksheet.unMergeCells(range);
+  }
+
+  // 2. Clear every existing cell (value + style) and explicit row height /
+  //    column width — see the grid-clear strategy note above.
+  worksheet.eachRow({ includeEmpty: true }, (row) => {
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.value = null;
+      cell.style = {};
+    });
+    row.height = undefined;
+  });
+  worksheet.columns?.forEach((col) => {
+    if (col) col.width = undefined;
+  });
+
+  // 3. Rebuild cell content + per-cell style from FortuneSheet celldata.
+  for (const cd of incoming.celldata ?? []) {
+    if (!cd.v) continue;
+    const cell = worksheet.getCell(cd.r + 1, cd.c + 1);
+    applyCellValue(cell, cd.v);
+    applyCellFont(cell, cd.v);
+    applyCellFill(cell, cd.v);
+    applyCellAlignment(cell, cd.v);
+  }
+
+  // 4. Borders live in config.borderInfo, not on the cell entries themselves
+  //    (mirrors the import-side split).
+  for (const entry of (incoming.config?.borderInfo ?? []) as BorderInfoEntry[]) {
+    applyBorderInfoEntry(worksheet, entry);
+  }
+
+  // 5. Merges: config.merge is the canonical source (matches the import
+  //    side, which builds `merge` from `mergeByAnchor` and only ever mirrors
+  //    it onto the anchor cell's `mc` as a convenience).
+  for (const m of Object.values(incoming.config?.merge ?? {})) {
+    worksheet.mergeCells(...invertMergeRange(m));
+  }
+
+  // 6. Column widths / row heights (inverse of the 7.5 / 4/3 factors).
+  for (const [colKey, px] of Object.entries(incoming.config?.columnlen ?? {})) {
+    worksheet.getColumn(Number(colKey) + 1).width = pxToExcelWidth(px);
+  }
+  for (const [rowKey, px] of Object.entries(incoming.config?.rowlen ?? {})) {
+    worksheet.getRow(Number(rowKey) + 1).height = pxToExcelPoints(px);
+  }
+
+  // 7. Frozen panes (inverse of the row_focus/column_focus mapping above).
+  //    'rangeRow'/'rangeColumn'/'rangeBoth' are out of scope: the import
+  //    side never produces them either (see the frozen-mapping block above).
+  if (incoming.frozen?.type && (incoming.frozen.type === 'row' || incoming.frozen.type === 'column' || incoming.frozen.type === 'both')) {
+    const rowFocus = incoming.frozen.range?.row_focus ?? -1;
+    const columnFocus = incoming.frozen.range?.column_focus ?? -1;
+    const type = incoming.frozen.type;
+    worksheet.views = [
+      {
+        state: 'frozen',
+        xSplit: type === 'column' || type === 'both' ? columnFocus + 1 : 0,
+        ySplit: type === 'row' || type === 'both' ? rowFocus + 1 : 0,
+      },
+    ];
+  } else {
+    worksheet.views = [];
+  }
+}
+
+// Patches the ORIGINAL workbook bytes with the FortuneSheet state and returns
+// new xlsx bytes. Per sheet (matched by id — see decision note above): the
+// cell grid (values, formulas, styles, merges, widths/heights, frozen) is
+// REBUILT from the FortuneSheet state — including structural changes
+// (rows/cols/sheets added or removed), because the state already reflects
+// them. Workbook- and sheet-level artifacts the grid doesn't own (charts,
+// images, pivots, defined names, validation) survive because we never
+// recreate the workbook, only mutate the loaded one in place.
+// LIMITATION (documented): cell-anchored artifacts (images, validation
+// ranges) do not shift when rows/cols are inserted/removed/moved — this
+// bridge has no way to know which artifacts should move, since exceljs
+// exposes no read model for e.g. charts and this bridge does not attempt
+// structural diffing of row/col insertions.
+export async function patchWorkbookFromFortuneSheets(
+  originalXlsxBytes: ArrayBuffer | Buffer,
+  sheets: FortuneSheetData[],
+): Promise<Uint8Array> {
+  const { default: ExcelJSlib } = await import('exceljs');
+  const wb = new ExcelJSlib.Workbook();
+  await wb.xlsx.load(originalXlsxBytes);
+
+  // Recompute the same id scheme workbookToFortuneSheets used at import time.
+  const originalWorksheets = wb.worksheets;
+  const idToOriginal = new Map<string, ExcelJS.Worksheet>();
+  originalWorksheets.forEach((ws, i) => idToOriginal.set(`sheet_${i}_${ws.name}`, ws));
+  const matchedIds = new Set<string>();
+
+  // New sheets are appended in the incoming state's relative order; existing
+  // (matched) sheets keep their original position in the workbook — this
+  // bridge does not attempt to re-order pre-existing sheets (out of scope:
+  // not part of the behavior contract, and exceljs has no first-class
+  // "move worksheet" API to do it safely).
+  const orderedIncoming = [...sheets].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  for (const incoming of orderedIncoming) {
+    const original = incoming.id ? idToOriginal.get(incoming.id) : undefined;
+    const worksheet = original ?? wb.addWorksheet(incoming.name);
+    if (original && incoming.id) matchedIds.add(incoming.id);
+    if (worksheet.name !== incoming.name) worksheet.name = incoming.name;
+
+    rebuildWorksheetGrid(worksheet, incoming);
+  }
+
+  // Remove original sheets with no matching id in the incoming state.
+  for (const [id, ws] of idToOriginal) {
+    if (!matchedIds.has(id)) wb.removeWorksheet(ws.name);
+  }
+
+  const out = await wb.xlsx.writeBuffer();
+  return new Uint8Array(out as ArrayBuffer);
 }
