@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Measurement } from '../types';
 import { locationFromPath } from '../utils/locationInfo';
+import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 interface User {
   id: string;
@@ -42,12 +42,15 @@ interface CollaborationContextType {
   followedUserId: string | null;
   setFollowedUserId: (id: string | null) => void;
   sendCursor: (x: number, y: number) => void;
-  sendMeasurementUpdate: (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => void;
-  sendProjectUpdate: (projectId: string) => void;
+  sendMeasurementOp: (op: { projectId: string; pageId: string; action: 'add' | 'update' | 'delete';
+    measurement: Record<string, unknown> & { id: string } }) =>
+    Promise<{ ok: true; version: number } | { ok: false; error: string }>;
+  joinCanvas: (projectId: string, pageId: string) =>
+    Promise<{ ok: true; measurements: any[]; version: number } | { ok: false; error: string }>;
   updateUser: (name: string, color: string) => void;
   setPageName: (name: string) => void;
-  onMeasurementSync: (callback: (data: { action: 'add' | 'update' | 'delete', measurement: Measurement }) => void) => () => void;
-  onProjectSync: (callback: (data: { projectId: string }) => void) => () => void;
+  onMeasurementApplied: (cb: (ev: { pageId: string; action: 'add' | 'update' | 'delete';
+    measurement: any; version: number; bySessionId?: string }) => void) => () => void;
 }
 
 const CollaborationContext = createContext<CollaborationContextType | undefined>(undefined);
@@ -60,8 +63,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [currentPageName, setCurrentPageName] = useState('Projects');
   // authEpoch bumps when a login happens so the connect effect re-runs
   const [authEpoch, setAuthEpoch] = useState(0);
-  const measurementCallbacks = useRef<((data: any) => void)[]>([]);
-  const projectCallbacks = useRef<((data: any) => void)[]>([]);
+  const measurementAppliedCallbacks = useRef<((data: any) => void)[]>([]);
   // Latest location payload, re-emitted on every (re)connect. socket.io-client
   // reuses the same socket object across auto-reconnects, so the set-location
   // effect below (keyed on socket/path/search/pageName) doesn't re-fire just
@@ -111,11 +113,8 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
       const now = Date.now();
       setSessions(prev => prev.map(p => (p.sessionId === id ? { ...p, cursor, lastActive: now } : p)));
     });
-    newSocket.on('measurement-sync', (data) => {
-      measurementCallbacks.current.forEach(cb => cb(data));
-    });
-    newSocket.on('project-sync', (data) => {  // dead wire, kept until WS4
-      projectCallbacks.current.forEach(cb => cb(data));
+    newSocket.on('measurement-applied', (data) => {
+      measurementAppliedCallbacks.current.forEach(cb => cb(data));
     });
     newSocket.on('connect', () => {
       if (latestLocationRef.current) newSocket.emit('set-location', latestLocationRef.current);
@@ -182,29 +181,34 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [location.pathname]);
 
   const sendCursor = (x: number, y: number) => { socket?.emit('cursor-move', { x, y }); };
-  const sendMeasurementUpdate = (pageId: string, action: 'add' | 'update' | 'delete', measurement: Measurement) => {
-    socket?.emit('measurement-update', { pageId, action, measurement });
+  const sendMeasurementOp = (op: { projectId: string; pageId: string; action: 'add' | 'update' | 'delete';
+    measurement: Record<string, unknown> & { id: string } }): Promise<{ ok: true; version: number } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('measurement-op', { ...op, clientTabId: CLIENT_SESSION_ID }, (res: { ok: true; version: number } | { ok: false; error: string }) => resolve(res));
+    });
   };
-  const sendProjectUpdate = (projectId: string) => { socket?.emit('project-update', { projectId }); };
+  const joinCanvas = (projectId: string, pageId: string): Promise<{ ok: true; measurements: any[]; version: number } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('canvas-join', { projectId, pageId }, (res: { ok: true; measurements: any[]; version: number } | { ok: false; error: string }) => resolve(res));
+    });
+  };
   const updateUser = (name: string, color: string) => {
     localStorage.setItem('userColor', color);
     socket?.emit('update-user', { name, color });
   };
-  const onMeasurementSync = (callback: (data: any) => void) => {
-    measurementCallbacks.current.push(callback);
-    return () => { measurementCallbacks.current = measurementCallbacks.current.filter(cb => cb !== callback); };
-  };
-  const onProjectSync = (callback: (data: any) => void) => {
-    projectCallbacks.current.push(callback);
-    return () => { projectCallbacks.current = projectCallbacks.current.filter(cb => cb !== callback); };
+  const onMeasurementApplied = (callback: (data: any) => void) => {
+    measurementAppliedCallbacks.current.push(callback);
+    return () => { measurementAppliedCallbacks.current = measurementAppliedCallbacks.current.filter(cb => cb !== callback); };
   };
 
   return (
     <CollaborationContext.Provider value={{
       socket, users, globalUsers, sessions, mySessionId,
       followedUserId, setFollowedUserId,
-      sendCursor, sendMeasurementUpdate, sendProjectUpdate, updateUser,
-      setPageName: setCurrentPageName, onMeasurementSync, onProjectSync,
+      sendCursor, sendMeasurementOp, joinCanvas, updateUser,
+      setPageName: setCurrentPageName, onMeasurementApplied,
     }}>
       {children}
     </CollaborationContext.Provider>

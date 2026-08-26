@@ -52,9 +52,7 @@ const CanvasViewInner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   
-  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementUpdate, sendProjectUpdate, onMeasurementSync, onProjectSync, updateUser, setPageName } = useCollaboration();
-  // Socket rooms are keyed by full URL path; page UUIDs alone don't match.
-  const pageRoom = (pId: string) => `/project/${projectId}/page/${pId}`;
+  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementOp, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -235,7 +233,7 @@ const CanvasViewInner: React.FC = () => {
       };
       pushToHistory({ type: 'add', measurement: newMeasurement });
       savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-      sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
+      void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } });
       setSelectedMeasurementId(newMeasurement.id);
       toast('Measurement pasted', { type: 'success', duration: 1500 });
     } catch (err) {
@@ -312,7 +310,9 @@ const CanvasViewInner: React.FC = () => {
   }, [projectId, pageId]);
 
   useEffect(() => {
-    const unsubscribeMeasurement = onMeasurementSync(({ action, measurement }) => {
+    const unsubscribeMeasurement = onMeasurementApplied((ev) => {
+      if (ev.pageId !== pageId) return;
+      const { action, measurement } = ev;
       setPage(prev => {
         if (!prev) return prev;
         let newMeasurements = [...prev.measurements];
@@ -351,17 +351,10 @@ const CanvasViewInner: React.FC = () => {
       });
     });
 
-    const unsubscribeProject = onProjectSync(({ projectId: syncProjectId }) => {
-      if (syncProjectId === projectId) {
-        loadData(syncProjectId, pageId!);
-      }
-    });
-
     return () => {
       unsubscribeMeasurement();
-      unsubscribeProject();
     };
-  }, [projectId, pageId, onMeasurementSync, onProjectSync]);
+  }, [projectId, pageId, onMeasurementApplied]);
 
   // A 409 conflict on this tab resolves by refetching in place (see
   // ProjectConflictListener); once that refetch lands, pick it up the same
@@ -732,7 +725,7 @@ const CanvasViewInner: React.FC = () => {
       measurements: [...page.measurements, newMeasurement]
     });
 
-    sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
+    void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement });
 
     const takeoff = project?.takeoffs.find(t => t.id === selectedTakeoffId);
     if (takeoff?.type === 'area' && measurement.type === 'length') {
@@ -811,7 +804,7 @@ const CanvasViewInner: React.FC = () => {
 
     pushToHistory({ type: 'add', measurement: newMeasurement });
     await savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-    sendMeasurementUpdate(pageRoom(page.id), 'add', newMeasurement);
+    void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } });
 
     setSelectedTakeoffId(takeoff.id);
     setSelectedColor(takeoff.color);
@@ -872,7 +865,7 @@ const CanvasViewInner: React.FC = () => {
     saveProject(updatedProject);
     setPage(updatedProject.pages.find(p => p.id === page.id) || page);
 
-    sendMeasurementUpdate(pageRoom(sourcePageId), 'update', updatedMeasurement);
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement });
   };
 
   const deleteMeasurement = (id: string, targetPageId?: string) => {
@@ -927,7 +920,7 @@ const CanvasViewInner: React.FC = () => {
     setShowDeleteConfirm(false);
     setMeasurementToDelete(null);
 
-    sendMeasurementUpdate(pageRoom(sourcePageId), 'delete', mToDelete);
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'delete', measurement: mToDelete as unknown as Record<string, unknown> & { id: string } });
   };
 
   const deleteSegment = async (measurementId: string, segmentIdx: number) => {
@@ -1011,7 +1004,7 @@ const CanvasViewInner: React.FC = () => {
     saveProject(updatedProject);
     setPage(updatedProject.pages.find(p => p.id === page.id) || page);
     setSelectedSegmentIdx(null);
-    sendMeasurementUpdate(pageRoom(sourcePageId), 'update', updatedMeasurement);
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement as unknown as Record<string, unknown> & { id: string } });
   };
 
   const confirmDeleteTakeoff = async () => {

@@ -4,18 +4,26 @@ import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 
 // Fake socket: an event-emitter with spies. hoisted so the module mock sees it.
-const { fakeSocket, ioMock } = vi.hoisted(() => {
+// ackResponders lets a test register a canned ack for an acked event (e.g.
+// 'measurement-op', 'canvas-join'): when emit() is called with a callback as
+// the 3rd arg, it's invoked synchronously with the responder's return value.
+const { fakeSocket, ioMock, ackResponders } = vi.hoisted(() => {
   const handlers: Record<string, ((...a: any[]) => void)[]> = {};
+  const ackResponders: Record<string, (payload: any) => any> = {};
   const fakeSocket = {
     handlers,
     connected: true,
     on: vi.fn((evt: string, cb: any) => { (handlers[evt] ??= []).push(cb); return fakeSocket; }),
-    emit: vi.fn(),
+    emit: vi.fn((evt: string, payload?: any, cb?: any) => {
+      if (typeof cb === 'function' && ackResponders[evt]) {
+        cb(ackResponders[evt](payload));
+      }
+    }),
     close: vi.fn(),
     connect: vi.fn(),
     fire: (evt: string, ...args: any[]) => (handlers[evt] ?? []).forEach(cb => cb(...args)),
   };
-  return { fakeSocket, ioMock: vi.fn((_opts?: any) => fakeSocket) };
+  return { fakeSocket, ioMock: vi.fn((_opts?: any) => fakeSocket), ackResponders };
 });
 vi.mock('socket.io-client', () => ({ io: ioMock }));
 
@@ -26,6 +34,7 @@ vi.mock('react-router-dom', async (importOriginal) => ({
 }));
 
 import { CollaborationProvider, useCollaboration } from './CollaborationContext';
+import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 const SESSION = {
   sessionId: 'sA', userId: 'u1', name: 'nathan', role: 'admin', color: '#3b82f6',
@@ -56,6 +65,14 @@ function FollowProbe() {
   );
 }
 
+// Exposes the raw context value to the test body (rather than rendering it),
+// so async op/subscribe calls can be driven and awaited directly.
+function ContextCapture({ onReady }: { onReady: (ctx: ReturnType<typeof useCollaboration>) => void }) {
+  const ctx = useCollaboration();
+  onReady(ctx);
+  return null;
+}
+
 const OTHER = {
   ...SESSION, sessionId: 'sB', userId: 'u2', name: 'sam',
   location: { path: '/project/p1/billing', projectId: 'p1', section: 'billing' },
@@ -67,6 +84,7 @@ describe('CollaborationContext', () => {
     localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan' }));
     ioMock.mockClear(); fakeSocket.emit.mockClear(); navigateSpy.mockClear();
     for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
+    for (const k of Object.keys(ackResponders)) delete ackResponders[k];
   });
 
   function mount(initialEntries: string[] = ['/dashboard']) {
@@ -153,5 +171,60 @@ describe('CollaborationContext', () => {
     const nonCanvasCalls = fakeSocket.emit.mock.calls.filter(c => c[0] === 'set-location');
     expect(nonCanvasCalls.length).toBeGreaterThan(0);
     expect(nonCanvasCalls[nonCanvasCalls.length - 1][1].label).toBeUndefined();
+  });
+
+  function mountCtx(initialEntries: string[] = ['/dashboard']) {
+    let ctx!: ReturnType<typeof useCollaboration>;
+    render(
+      <MemoryRouter initialEntries={initialEntries}>
+        <CollaborationProvider><ContextCapture onReady={(c) => { ctx = c; }} /></CollaborationProvider>
+      </MemoryRouter>
+    );
+    return () => ctx;
+  }
+
+  it('sendMeasurementOp emits measurement-op with clientTabId and resolves the ack', async () => {
+    ackResponders['measurement-op'] = () => ({ ok: true, version: 7 });
+    const getCtx = mountCtx();
+    const op = {
+      projectId: 'p1', pageId: 'pg1', action: 'add' as const,
+      measurement: { id: 'm1', type: 'line' },
+    };
+    const result = await getCtx().sendMeasurementOp(op);
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'measurement-op',
+      expect.objectContaining({ ...op, clientTabId: CLIENT_SESSION_ID }),
+      expect.any(Function)
+    );
+    expect(result).toEqual({ ok: true, version: 7 });
+  });
+
+  it('sendMeasurementOp resolves {ok:false, error:"offline"} with no socket', async () => {
+    localStorage.removeItem('token');
+    const getCtx = mountCtx();
+    const result = await getCtx().sendMeasurementOp({
+      projectId: 'p1', pageId: 'pg1', action: 'add', measurement: { id: 'm1' },
+    });
+    expect(result).toEqual({ ok: false, error: 'offline' });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('measurement-op', expect.anything(), expect.anything());
+  });
+
+  it('onMeasurementApplied fires on measurement-applied events and unsubscribes cleanly', () => {
+    const getCtx = mountCtx();
+    const cb = vi.fn();
+    const unsubscribe = getCtx().onMeasurementApplied(cb);
+    const event = { pageId: 'pg1', action: 'add' as const, measurement: { id: 'm1' }, version: 2, bySessionId: 'other-tab' };
+    act(() => fakeSocket.fire('measurement-applied', event));
+    expect(cb).toHaveBeenCalledWith(event);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    act(() => fakeSocket.fire('measurement-applied', event));
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('no longer registers a project-sync listener', () => {
+    mountCtx();
+    expect(fakeSocket.handlers['project-sync']).toBeUndefined();
   });
 });

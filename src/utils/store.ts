@@ -129,6 +129,15 @@ const saveQueues = new Map<string, Promise<void>>();
 // TAB still 409s (the other tab's bumps are never in this map).
 const latestVersions = new Map<string, number>();
 
+// Lets non-saveProject callers (the realtime layer) feed the same
+// only-raise-ever guard: e.g. a measurement-op ack or a canvas-join backfill
+// bumping the known version without going through a save.
+export function noteProjectVersion(projectId: string, version: number): void {
+  if (version > (latestVersions.get(projectId) ?? 0)) {
+    latestVersions.set(projectId, version);
+  }
+}
+
 export const saveProject = (project: Project): Promise<void> => {
   const prev = saveQueues.get(project.id) ?? Promise.resolve();
   const run = prev.catch(() => {}).then(() => doSaveProject(project));
