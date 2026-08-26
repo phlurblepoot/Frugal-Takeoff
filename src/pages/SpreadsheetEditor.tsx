@@ -187,6 +187,17 @@ export const SpreadsheetEditor: React.FC = () => {
   // autosave chip + item 7's participant count read these).
   const [collabJoining, setCollabJoining] = useState(false);
   const [collabLive, setCollabLive] = useState(false);
+  // Bumped on every successful (re)join for a fileId tab. Folded into the
+  // Workbook's `key` below so a rehydrate — including a reconnect-triggered
+  // one, where `activeTab.id` alone doesn't change — always forces a fresh
+  // mount. Required because FortuneSheet only seeds its internal document
+  // from the `data` prop while that internal state is still empty (see the
+  // applyOp-echo/tab-switch finding in the report); an already-mounted
+  // instance silently ignores a new `data` prop, so setting `currentSheets`
+  // alone on a live reconnect would leave the visible document stale while
+  // the journal-tail replay landed on top of it — non-idempotent for
+  // structural ops (row/col insert/delete, sheet add/remove).
+  const [hydrationEpoch, setHydrationEpoch] = useState(0);
 
   const idbRef = useRef<IDBDatabase | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -489,15 +500,34 @@ export const SpreadsheetEditor: React.FC = () => {
           }
         } else {
           // First writer — no one has ever synced state for this file yet.
-          // Seed it from what's already imported/shown for this tab.
+          // Seed it from what's already imported/shown for this tab. Awaited
+          // (with one retry) rather than fire-and-forget: if this silently
+          // never reaches the server, every other joiner keeps seeing
+          // state:null and re-seeds independently from their OWN possibly-
+          // different copy — exactly the divergence this seed exists to
+          // prevent. Doesn't block hydration on a second failure — we still
+          // render locally, just warn that the shared session may be stale.
           sheets = seed;
-          sendSheetState(fileId, JSON.stringify(sheets)).catch(() => {});
+          const seedJson = JSON.stringify(sheets);
+          let seedRes = await sendSheetState(fileId, seedJson);
+          if (cancelled || joinAbortRef.current !== fileId) return;
+          if ('error' in seedRes) {
+            seedRes = await sendSheetState(fileId, seedJson);
+            if (cancelled || joinAbortRef.current !== fileId) return;
+          }
+          if ('error' in seedRes) {
+            toast('Live collaboration may be out of sync — edits still save to this tab', { type: 'warning' });
+          }
         }
         pendingTailOpsRef.current = res.ops.map((s) => {
           try { return JSON.parse(s) as Op[]; } catch { return []; }
         });
         currentSheetsRef.current = sheets;
         setCurrentSheets(sheets);
+        // Always a fresh mount on a successful (re)join — see the
+        // hydrationEpoch declaration for why this must not be skipped even
+        // when `activeTab.id` itself hasn't changed (the reconnect path).
+        setHydrationEpoch((e) => e + 1);
         setCollabLive(true);
         setCollabJoining(false);
         return;
@@ -944,7 +974,7 @@ export const SpreadsheetEditor: React.FC = () => {
           </div>
         ) : currentSheets.length > 0 ? (
           <Workbook
-            key={activeTab?.id}
+            key={activeTab ? `${activeTab.id}:${hydrationEpoch}` : undefined}
             ref={workbookRef}
             data={currentSheets}
             onChange={handleChange}
