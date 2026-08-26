@@ -51,6 +51,19 @@ interface CollaborationContextType {
   setPageName: (name: string) => void;
   onMeasurementApplied: (cb: (ev: { pageId: string; action: 'add' | 'update' | 'delete';
     measurement: any; version: number; bySessionId?: string }) => void) => () => void;
+  joinSheet: (fileId: string) =>
+    Promise<{ ok: true; state: string | null; ops: string[]; seq: number; participants: number } | { ok: false; error: string }>;
+  sendSheetOp: (fileId: string, opsJson: string) =>
+    Promise<{ ok: true; seq: number } | { ok: false; error: string }>;
+  sendSheetState: (fileId: string, stateJson: string) =>
+    Promise<{ ok: true } | { ok: false; error: string }>;
+  requestSheetSnapshot: (fileId: string) =>
+    Promise<{ ok: true; version?: number } | { ok: false; error: string }>;
+  sendSheetPresence: (fileId: string, presence: { sheetId: string; r: number; c: number }) => void;
+  onSheetEvent: (cb: (ev:
+    | { kind: 'op'; fileId: string; ops: string; seq: number; bySessionId?: string }
+    | { kind: 'presence'; fileId: string; sessionId: string; name: string; color: string; presence: { sheetId: string; r: number; c: number } }
+  ) => void) => () => void;
 }
 
 const CollaborationContext = createContext<CollaborationContextType | undefined>(undefined);
@@ -67,6 +80,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   // authEpoch bumps when a login happens so the connect effect re-runs
   const [authEpoch, setAuthEpoch] = useState(0);
   const measurementAppliedCallbacks = useRef<((data: any) => void)[]>([]);
+  const sheetEventCallbacks = useRef<((ev: any) => void)[]>([]);
   // Latest location payload, re-emitted on every (re)connect. socket.io-client
   // reuses the same socket object across auto-reconnects, so the set-location
   // effect below (keyed on socket/path/search/pageName) doesn't re-fire just
@@ -118,6 +132,12 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     });
     newSocket.on('measurement-applied', (data) => {
       measurementAppliedCallbacks.current.forEach(cb => cb(data));
+    });
+    newSocket.on('sheet-op-applied', (data: { fileId: string; ops: string; seq: number; bySessionId?: string }) => {
+      sheetEventCallbacks.current.forEach(cb => cb({ kind: 'op', ...data }));
+    });
+    newSocket.on('sheet-presence', (data: { fileId: string; sessionId: string; name: string; color: string; presence: { sheetId: string; r: number; c: number } }) => {
+      sheetEventCallbacks.current.forEach(cb => cb({ kind: 'presence', ...data }));
     });
     newSocket.on('connect', () => {
       if (latestLocationRef.current) newSocket.emit('set-location', latestLocationRef.current);
@@ -251,6 +271,37 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     measurementAppliedCallbacks.current.push(callback);
     return () => { measurementAppliedCallbacks.current = measurementAppliedCallbacks.current.filter(cb => cb !== callback); };
   };
+  const joinSheet = (fileId: string): Promise<{ ok: true; state: string | null; ops: string[]; seq: number; participants: number } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('sheet-join', { fileId }, (res: { ok: true; state: string | null; ops: string[]; seq: number; participants: number } | { ok: false; error: string }) => resolve(res));
+    });
+  };
+  const sendSheetOp = (fileId: string, opsJson: string): Promise<{ ok: true; seq: number } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('sheet-op', { fileId, ops: opsJson, clientTabId: CLIENT_SESSION_ID }, (res: { ok: true; seq: number } | { ok: false; error: string }) => resolve(res));
+    });
+  };
+  const sendSheetState = (fileId: string, stateJson: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('sheet-state-sync', { fileId, state: stateJson, clientTabId: CLIENT_SESSION_ID }, (res: { ok: true } | { ok: false; error: string }) => resolve(res));
+    });
+  };
+  const requestSheetSnapshot = (fileId: string): Promise<{ ok: true; version?: number } | { ok: false; error: string }> => {
+    if (!socket || !socket.connected) return Promise.resolve({ ok: false, error: 'offline' });
+    return new Promise((resolve) => {
+      socket.emit('sheet-snapshot', { fileId }, (res: { ok: true; version?: number } | { ok: false; error: string }) => resolve(res));
+    });
+  };
+  const sendSheetPresence = (fileId: string, presence: { sheetId: string; r: number; c: number }) => {
+    socket?.emit('sheet-presence', { fileId, presence, clientTabId: CLIENT_SESSION_ID });
+  };
+  const onSheetEvent = (callback: (ev: any) => void) => {
+    sheetEventCallbacks.current.push(callback);
+    return () => { sheetEventCallbacks.current = sheetEventCallbacks.current.filter(cb => cb !== callback); };
+  };
 
   return (
     <CollaborationContext.Provider value={{
@@ -258,6 +309,8 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
       followedSessionId, setFollowedSessionId,
       sendCursor, sendMeasurementOp, joinCanvas, updateUser,
       setPageName: setCurrentPageName, onMeasurementApplied,
+      joinSheet, sendSheetOp, sendSheetState, requestSheetSnapshot,
+      sendSheetPresence, onSheetEvent,
     }}>
       {children}
     </CollaborationContext.Provider>

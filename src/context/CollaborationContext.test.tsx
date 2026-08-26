@@ -278,4 +278,117 @@ describe('CollaborationContext', () => {
     mountCtx();
     expect(fakeSocket.handlers['project-sync']).toBeUndefined();
   });
+
+  it('joinSheet emits sheet-join with fileId and resolves the ack', async () => {
+    ackResponders['sheet-join'] = () => ({ ok: true, state: '{"a":1}', ops: ['op1'], seq: 3, participants: 2 });
+    const getCtx = mountCtx();
+    const result = await getCtx().joinSheet('f1');
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'sheet-join',
+      { fileId: 'f1' },
+      expect.any(Function)
+    );
+    expect(result).toEqual({ ok: true, state: '{"a":1}', ops: ['op1'], seq: 3, participants: 2 });
+  });
+
+  it('joinSheet resolves {ok:false, error:"offline"} with no socket', async () => {
+    localStorage.removeItem('token');
+    const getCtx = mountCtx();
+    const result = await getCtx().joinSheet('f1');
+    expect(result).toEqual({ ok: false, error: 'offline' });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('sheet-join', expect.anything(), expect.anything());
+  });
+
+  it('sendSheetOp emits sheet-op with fileId/ops/clientTabId and resolves the ack', async () => {
+    ackResponders['sheet-op'] = () => ({ ok: true, seq: 5 });
+    const getCtx = mountCtx();
+    const result = await getCtx().sendSheetOp('f1', 'opsJson');
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'sheet-op',
+      { fileId: 'f1', ops: 'opsJson', clientTabId: CLIENT_SESSION_ID },
+      expect.any(Function)
+    );
+    expect(result).toEqual({ ok: true, seq: 5 });
+  });
+
+  it('sendSheetOp resolves {ok:false, error:"offline"} with no socket', async () => {
+    localStorage.removeItem('token');
+    const getCtx = mountCtx();
+    const result = await getCtx().sendSheetOp('f1', 'opsJson');
+    expect(result).toEqual({ ok: false, error: 'offline' });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('sheet-op', expect.anything(), expect.anything());
+  });
+
+  it('sendSheetState emits sheet-state-sync with fileId/state/clientTabId and resolves the ack', async () => {
+    ackResponders['sheet-state-sync'] = () => ({ ok: true });
+    const getCtx = mountCtx();
+    const result = await getCtx().sendSheetState('f1', 'stateJson');
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'sheet-state-sync',
+      { fileId: 'f1', state: 'stateJson', clientTabId: CLIENT_SESSION_ID },
+      expect.any(Function)
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('sendSheetState resolves {ok:false, error:"offline"} with no socket', async () => {
+    localStorage.removeItem('token');
+    const getCtx = mountCtx();
+    const result = await getCtx().sendSheetState('f1', 'stateJson');
+    expect(result).toEqual({ ok: false, error: 'offline' });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('sheet-state-sync', expect.anything(), expect.anything());
+  });
+
+  it('requestSheetSnapshot emits sheet-snapshot with fileId and resolves the ack', async () => {
+    ackResponders['sheet-snapshot'] = () => ({ ok: true, version: 9 });
+    const getCtx = mountCtx();
+    const result = await getCtx().requestSheetSnapshot('f1');
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'sheet-snapshot',
+      { fileId: 'f1' },
+      expect.any(Function)
+    );
+    expect(result).toEqual({ ok: true, version: 9 });
+  });
+
+  it('requestSheetSnapshot resolves {ok:false, error:"offline"} with no socket', async () => {
+    localStorage.removeItem('token');
+    const getCtx = mountCtx();
+    const result = await getCtx().requestSheetSnapshot('f1');
+    expect(result).toEqual({ ok: false, error: 'offline' });
+    expect(fakeSocket.emit).not.toHaveBeenCalledWith('sheet-snapshot', expect.anything(), expect.anything());
+  });
+
+  it('sendSheetPresence emits sheet-presence with fileId/presence/clientTabId, fire-and-forget (no ack fn)', () => {
+    const getCtx = mountCtx();
+    getCtx().sendSheetPresence('f1', { sheetId: 'sh1', r: 2, c: 3 });
+    expect(fakeSocket.emit).toHaveBeenCalledWith(
+      'sheet-presence',
+      { fileId: 'f1', presence: { sheetId: 'sh1', r: 2, c: 3 }, clientTabId: CLIENT_SESSION_ID }
+    );
+    // fire-and-forget: no third (ack callback) argument
+    const call = fakeSocket.emit.mock.calls.find(c => c[0] === 'sheet-presence');
+    expect(call?.length).toBe(2);
+  });
+
+  it('onSheetEvent maps sheet-op-applied and sheet-presence into the discriminated union, and unsubscribes cleanly', () => {
+    const getCtx = mountCtx();
+    const cb = vi.fn();
+    const unsubscribe = getCtx().onSheetEvent(cb);
+
+    const opEvent = { fileId: 'f1', ops: 'opsJson', seq: 4, bySessionId: 'other-tab' };
+    act(() => fakeSocket.fire('sheet-op-applied', opEvent));
+    expect(cb).toHaveBeenCalledWith({ kind: 'op', ...opEvent });
+
+    const presenceEvent = { fileId: 'f1', sessionId: 'sB', name: 'sam', color: '#000', presence: { sheetId: 'sh1', r: 1, c: 1 } };
+    act(() => fakeSocket.fire('sheet-presence', presenceEvent));
+    expect(cb).toHaveBeenCalledWith({ kind: 'presence', ...presenceEvent });
+
+    expect(cb).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    act(() => fakeSocket.fire('sheet-op-applied', opEvent));
+    act(() => fakeSocket.fire('sheet-presence', presenceEvent));
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
 });
