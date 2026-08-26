@@ -102,9 +102,18 @@ export class SheetFlushEngine {
 
     const run = this.doFlushFile(fileId);
     this.inflight.set(fileId, run);
-    void run.finally(() => {
+    const clear = () => {
       if (this.inflight.get(fileId) === run) this.inflight.delete(fileId);
-    });
+    };
+    // NOT `run.finally(clear)`: .finally() re-throws whatever `run` settled
+    // with into the promise IT returns, so that derived promise still needs
+    // its own rejection handler — `void`-ing it away doesn't attach one, and
+    // an unhandled rejection there crashes the process under Node's default
+    // --unhandled-rejections=throw even though the caller handles `run` (the
+    // one we actually returned) correctly. `.then(clear, clear)` handles
+    // both outcomes right here, so the derived promise it returns always
+    // fulfills and never needs further handling.
+    void run.then(clear, clear);
     return run;
   }
 
@@ -172,9 +181,13 @@ export class SheetFlushEngine {
 
     const run = this.doSnapshotNow(fileId);
     this.inflight.set(fileId, run);
-    void run.finally(() => {
+    const clear = () => {
       if (this.inflight.get(fileId) === run) this.inflight.delete(fileId);
-    });
+    };
+    // See the matching comment in flushFile: `.then(clear, clear)` rather
+    // than `.finally(clear)`, so the derived cleanup promise always fulfills
+    // and can't become an unhandled rejection.
+    void run.then(clear, clear);
     return run;
   }
 
