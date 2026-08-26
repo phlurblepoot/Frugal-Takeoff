@@ -64,6 +64,14 @@ interface PdfCanvasProps {
   sourcePdfUrl?: string;
   sourcePdfPageNum?: number;
   /**
+   * Thumbnail image for this page, shown (stretched to imageWidth/Height, at
+   * reduced opacity) as a placeholder while the source PDF is still
+   * downloading/rendering — otherwise a vector page is blank white for
+   * however long the source PDF takes to fetch (can be 60s+ on a slow LAN
+   * for a large plan-set sheet).
+   */
+  thumbnailUrl?: string;
+  /**
    * Other pages in the same project that this page can link to. Any text on
    * the current page whose string matches one of these page numbers becomes
    * a clickable hotspot in pan mode. Vector-only — legacy raster pages have
@@ -140,6 +148,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   searchTerm,
   sourcePdfUrl,
   sourcePdfPageNum,
+  thumbnailUrl,
   linkablePages,
   onPageReferenceClick,
   onUndo,
@@ -167,6 +176,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [legacyImage] = useImage(imageUrl);
   const [pdfImage, setPdfImage] = useState<HTMLCanvasElement | null>(null);
   const image = pdfImage ?? legacyImage;
+  // Placeholder shown in the KonvaImage slot while `pdfImage` is still
+  // rendering — see `thumbnailUrl` prop doc.
+  const [thumbImage] = useImage(thumbnailUrl || '');
+  const [pdfLoadProgress, setPdfLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
 
   // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
   // rendered on demand into an offscreen canvas at a resolution that tracks
@@ -371,13 +384,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         pdfProxyRef.current = null;
       }
       setPdfImage(null);
+      setPdfLoadProgress(null);
       lastRenderScaleRef.current = 0;
       return;
     }
     let cancelled = false;
+    setPdfLoadProgress({ loaded: 0, total: 0 });
     (async () => {
       try {
-        const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
+        // onProgress reports byte counts of the PDF download itself (total
+        // is 0/unknown until the server sends Content-Length) — surfaced as
+        // the "Loading sheet…" overlay below while pdfImage is still null.
+        const loadingTask = pdfjsLib.getDocument({ url: sourcePdfUrl });
+        loadingTask.onProgress = ({ loaded, total }: { loaded: number; total: number }) => {
+          if (!cancelled) setPdfLoadProgress({ loaded, total });
+        };
+        const proxy = await loadingTask.promise;
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
         const page = await proxy.getPage(sourcePdfPageNum);
         if (cancelled) { proxy.destroy().catch(() => {}); return; }
@@ -396,10 +418,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         if (cancelled) return;
         lastRenderScaleRef.current = 2.0;
         setPdfImage(canvas);
+        setPdfLoadProgress(null);
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
           console.error('Failed to load source PDF', err);
         }
+        if (!cancelled) setPdfLoadProgress(null);
       }
     })();
     return () => {
@@ -2207,6 +2231,21 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           <span className="text-sm font-medium text-slate-700">Searching...</span>
         </div>
       )}
+      {!!sourcePdfUrl && !pdfImage && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+          <div
+            data-testid="pdf-loading-overlay"
+            className="flex items-center gap-2 rounded-full bg-raised px-4 py-2 text-sm font-medium text-ink-soft shadow-lg"
+          >
+            <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
+            <span>
+              {pdfLoadProgress && pdfLoadProgress.total
+                ? `Loading sheet… ${Math.round((pdfLoadProgress.loaded / pdfLoadProgress.total) * 100)}%`
+                : 'Loading sheet…'}
+            </span>
+          </div>
+        </div>
+      )}
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
@@ -2293,12 +2332,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           className={currentTool === 'pan' || isMiddleMouseDown ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}
         >
           <Layer>
-            {image && (
+            {image ? (
               <KonvaImage
                 image={image}
                 name="backgroundImage"
                 width={imageWidth}
                 height={imageHeight}
+              />
+            ) : thumbImage && (
+              // Vector page still fetching/rendering its source PDF — show
+              // the (already-cached, much smaller) thumbnail in its place so
+              // the sheet isn't a blank white rectangle for the duration.
+              <KonvaImage
+                image={thumbImage}
+                name="backgroundImage"
+                width={imageWidth}
+                height={imageHeight}
+                opacity={0.6}
+                listening={false}
               />
             )}
             {searchHighlights.map((bbox, i) => (

@@ -436,7 +436,25 @@ const CanvasViewInner: React.FC = () => {
     // to have landed server-side; backfill alone only re-hydrates the
     // CURRENT page's measurements, leaving this tab's project.pages (and any
     // other open page) at a healed version but stale cross-page data.
+    //
+    // WS4 regression fix: this handler used to fire on the socket's very
+    // FIRST connection too (it hadn't finished connecting yet at mount, so
+    // 'connect' lands ~1s later) — that ran loadData a second time on every
+    // page open, which for vector pages restarts the source-PDF /raw fetch
+    // and aborts the first in-flight one. Aborted downloads never populate
+    // the HTTP cache, so large plan-set PDFs that used to load instantly
+    // from cache re-downloaded in full on every visit. sawConnect tracks
+    // whether we've already observed a connection; only a TRUE reconnect
+    // (sawConnect already true) re-runs loadData. The very first connection
+    // still needs a backfill, since the mount-path backfill above may have
+    // run while the socket was still connecting and resolved {ok:false}.
+    let sawConnect = socket.connected;
     const onConnect = () => {
+      if (!sawConnect) {
+        sawConnect = true;
+        backfillMeasurements(projectId, pageId);
+        return;
+      }
       loadData(projectId, pageId).then(ok => {
         if (ok) backfillMeasurements(projectId, pageId);
       });
@@ -2221,6 +2239,7 @@ const CanvasViewInner: React.FC = () => {
             imageHeight={page.imageHeight}
             sourcePdfUrl={page.sourcePdfFileId ? getImageUrl(page.sourcePdfFileId) : undefined}
             sourcePdfPageNum={page.sourcePdfPageNum}
+            thumbnailUrl={page.thumbnailId ? getImageUrl(page.thumbnailId) : undefined}
             linkablePages={linkablePages}
             onPageReferenceClick={handlePageReferenceClick}
             currentTool={currentTool}

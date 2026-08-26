@@ -2,6 +2,7 @@ import { test as base, expect, request as apiRequest, type Page } from '@playwri
 import {
   login,
   seedProjectWithPage,
+  seedProjectWithVectorPage,
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
@@ -52,6 +53,7 @@ export {
   expect,
   login,
   seedProjectWithPage,
+  seedProjectWithVectorPage,
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,

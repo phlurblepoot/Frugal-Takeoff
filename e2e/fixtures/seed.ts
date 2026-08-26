@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
@@ -109,6 +109,104 @@ export async function seedProjectWithPage(
   }
 
   return { projectId, pageId, imageId, name };
+}
+
+export interface SeedVectorPageResult {
+  projectId: string;
+  pageId: string;
+  sourcePdfFileId: string;
+  thumbnailId: string;
+  name: string;
+}
+
+/**
+ * Seed a project with ONE VECTOR page — `sourcePdfFileId` + `sourcePdfPageNum`
+ * set, `imageId` empty — the canvas render path that fetches its source PDF
+ * on demand via pdf.js instead of loading a pre-rasterized image. Used by
+ * e2e/canvas-vector-load.spec.ts to prove the source PDF is fetched exactly
+ * ONCE per canvas visit: the WS4 regression was an unguarded reload on the
+ * socket's very first ('initial') connect event that re-ran loadData a
+ * second time on every mount, restarting the source-PDF /raw fetch and
+ * aborting the first in-flight one — which defeats the browser HTTP cache
+ * (aborted downloads never get cached) so large plan-set PDFs re-downloaded
+ * in full on every visit instead of loading instantly from cache.
+ *
+ * The PDF is a real 2-page pdf-lib document with a filled rectangle + text on
+ * page 1 (visible content, not a blank page) — same idiom as
+ * seedDocumentsPortfolio's printout fixture. A thumbnail PNG is also seeded
+ * (thumbnailId, reusing the existing test-page.png fixture) so the
+ * loading-placeholder UI can be asserted too.
+ */
+export async function seedProjectWithVectorPage(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedVectorPageResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const projectId = randomUUID();
+  const pageId = randomUUID();
+  const pdfFileId = randomUUID();
+  const thumbnailId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Vector Page Project ${short}`;
+
+  // Letter-size (850×1100pt) PDF; PdfCanvas renders at a base scale of 2.0×,
+  // so imageWidth/imageHeight below (1700×2200) match what the real add-pages
+  // flow computes for a page at this size.
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const page1 = pdfDoc.addPage([850, 1100]);
+  page1.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.2, 0.4, 0.8) });
+  page1.drawText('E2E VECTOR SHEET', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  pdfDoc.addPage([850, 1100]);
+  const pdfBytes = await pdfDoc.save();
+
+  const pdfUploadRes = await request.post(
+    `/api/files/${pdfFileId}?projectId=${projectId}&kind=plan-source&sourceType=plan-set&sourceId=${projectId}` +
+    `&name=${encodeURIComponent('e2e-vector-sheet.pdf')}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(pdfBytes) },
+  );
+  if (!pdfUploadRes.ok()) throw new Error(`pdf upload failed: ${pdfUploadRes.status()} ${await pdfUploadRes.text()}`);
+
+  // Thumbnail — same data-URL upload idiom as seedProjectWithPage's page image.
+  const thumbBase64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const thumbDataUrl = `data:image/png;base64,${thumbBase64}`;
+  const thumbRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: thumbnailId, data: thumbDataUrl },
+  });
+  if (!thumbRes.ok()) throw new Error(`thumbnail upload failed: ${thumbRes.status()} ${await thumbRes.text()}`);
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [],
+    pages: [
+      {
+        id: pageId,
+        name: 'Sheet 1',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 1,
+        measurements: [],
+        scaleConfig: null,
+      },
+    ],
+    version: 1,
+    status: 'bidding',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, pageId, sourcePdfFileId: pdfFileId, thumbnailId, name };
 }
 
 export interface SeedWithTakeoffResult extends SeedResult {
