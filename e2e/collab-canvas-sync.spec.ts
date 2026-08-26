@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { io as ioClient } from 'socket.io-client';
 import type { Page } from '@playwright/test';
 import { test, expect, login, seedProjectWithPage, seedProjectWithSupersededRevision } from './fixtures/test';
@@ -236,6 +237,92 @@ test.describe('WS4 two-context canvas sync', () => {
 // involved) — the cleanest way to assert a wire-level ack contract without
 // contorting a Playwright page interaction around it.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C1 regression (fix-wave, WS4 final review): a cross-page measurement-applied
+// event must splice the drawn measurement into the RECEIVING tab's
+// project.pages for the FOREIGN page it landed on — not just adopt the bumped
+// version. Before the fix, a tab open on page Y adopted the version for a
+// draw that happened on page X without ever updating its local page-X
+// measurements; any later full-project PUT from that tab (any of the ~20
+// surviving save sites — scale, takeoffs, regions...) then serialized its
+// stale (measurement-less) copy of page X, and decomposeProject's
+// delete-and-reinsert silently deleted the other user's cross-page work.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('C1 regression: a foreign cross-page draw survives a same-project full-PUT save from another open page', async ({
+  browser, request,
+}) => {
+  test.setTimeout(60_000);
+  const { token, user } = await login(request);
+  const { projectId, pageId: pageXId } = await seedProjectWithPage(request, token, { withScale: true });
+  const auth = { Authorization: `Bearer ${token}` };
+
+  // Add a second page (Y) to the same project, with no scale yet — B will
+  // recalibrate it via the canvas UI, exercising the full-project-PUT save
+  // path (not a measurement-op) that C1 is about.
+  const getRes = await request.get(`/api/projects/${projectId}`, { headers: auth });
+  expect(getRes.ok()).toBe(true);
+  const proj = await getRes.json();
+  const pageX = proj.pages.find((p: { id: string }) => p.id === pageXId);
+  const pageYId = randomUUID();
+  proj.pages.push({
+    id: pageYId,
+    name: 'Sheet 2',
+    imageId: pageX.imageId,
+    imageWidth: pageX.imageWidth,
+    imageHeight: pageX.imageHeight,
+    measurements: [],
+    scaleConfig: null,
+  });
+  const addPageRes = await request.put(`/api/projects/${projectId}`, { headers: auth, data: proj });
+  expect(addPageRes.ok()).toBe(true);
+
+  const a = await openAuthedContext(browser, token, user);
+  const b = await openAuthedContext(browser, token, user);
+
+  try {
+    // B opens page Y FIRST, before A ever draws — B's initial REST load of
+    // the project has zero measurements on page X, matching reality at that
+    // moment. B stays on page Y for the rest of the test.
+    await gotoCanvas(b.page, projectId, pageYId);
+
+    // A opens page X and draws a length measurement — a cross-page op
+    // relative to B's open canvas (same project room, different page).
+    await gotoCanvas(a.page, projectId, pageXId);
+    await createTakeoff(a.page, 'Linear', 'length');
+    const boxA = await surfaceBox(a.page);
+    const cyA = boxA.height / 2;
+    const xA1 = boxA.width / 2 - 150;
+    await a.page.getByTestId('tool-length').click();
+    await clickCanvas(a.page, boxA, xA1, cyA);
+    await clickCanvas(a.page, boxA, xA1 + 150, cyA);
+    await a.page.keyboard.press('Enter');
+    await expect(a.page.getByTestId('measurement-row')).toHaveCount(1);
+
+    // Give B's socket time to receive + adopt the cross-page
+    // measurement-applied broadcast. The fix requires this to splice A's
+    // measurement into B's local project.pages entry for page X, even though
+    // B's own canvas/page state (page Y) is untouched.
+    await b.page.waitForTimeout(1000);
+
+    // B recalibrates scale on page Y — a full project PUT serialized from
+    // B's local project state (the one the fix must have kept in sync).
+    const boxB = await surfaceBox(b.page);
+    const cyB = boxB.height / 2;
+    await calibrate(b.page, boxB, [boxB.width / 2 - 100, cyB], [boxB.width / 2 + 100, cyB], '5');
+
+    // A's page-X measurement must have survived B's save.
+    const afterRes = await request.get(`/api/projects/${projectId}`, { headers: auth });
+    expect(afterRes.ok()).toBe(true);
+    const afterProj = await afterRes.json();
+    const afterPageX = afterProj.pages.find((p: { id: string }) => p.id === pageXId);
+    expect(afterPageX.measurements).toHaveLength(1);
+  } finally {
+    await a.context.close().catch(() => {});
+    await b.context.close().catch(() => {});
+  }
+});
 
 test('server rejects a measurement op on a superseded plan-set page', async ({ request, baseURL }) => {
   const { token } = await login(request);

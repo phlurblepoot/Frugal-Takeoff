@@ -1530,9 +1530,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onDragStart={(e) => segmentDragStart(e, -1)}
               onDragMove={(e) => segmentDragMove(e, -1)}
               onDragEnd={(e) => {
+                // I2 fix: clear the drag flag BEFORE the readOnly check — if
+                // readOnly flips mid-drag (phone breakpoint, revision goes
+                // superseded), an early return above this line would leave
+                // draggingPoint/draggingSegment stuck non-null forever,
+                // permanently blocking the mid-gesture reload/backfill guard.
+                setDraggingSegment(null);
                 if (readOnly) return;
                 e.cancelBubble = true;
-                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: [{ x: e.target.x(), y: e.target.y() }] });
               }}
             >
@@ -1573,6 +1578,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
+                // I2 fix: see the count-marker onDragEnd above — clear the
+                // drag flag before any early return so it can never stick.
+                setDraggingSegment(null);
                 if (readOnly) return;
                 // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                 if (e.target !== e.currentTarget) return;
@@ -1582,7 +1590,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 e.target.x(0);
                 e.target.y(0);
                 const newPoints = m.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: newPoints });
               }}
             >
@@ -1646,6 +1653,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     setDraggingPoint({ mId: m.id, idx: i, x: e.target.x(), y: e.target.y() });
                   }}
                   onDragEnd={(e) => {
+                    // I2 fix: clear before the readOnly early return (see above).
+                    setDraggingPoint(null);
                     if (readOnly) return;
                     e.cancelBubble = true;
                     const newPoints = [...m.points];
@@ -1655,7 +1664,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     e.target.x(p.x);
                     e.target.y(p.y);
 
-                    setDraggingPoint(null);
                     onUpdateMeasurement(m.id, { points: newPoints });
                   }}
                   hitStrokeWidth={10 / stageScale}
@@ -1702,6 +1710,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
+                  // I2 fix: clear before the readOnly early return (see above).
+                  setDraggingSegment(null);
                   if (readOnly) return;
                   // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                   if (e.target !== e.currentTarget) return;
@@ -1715,7 +1725,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
                       : s
                   );
-                  setDraggingSegment(null);
                   onUpdateMeasurement(m.id, { segments: newSegments });
                 }}
               >
@@ -1788,6 +1797,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: e.target.x(), y: e.target.y() });
                     }}
                     onDragEnd={(e) => {
+                      // I2 fix: clear before the readOnly early return (see above).
+                      setDraggingPoint(null);
                       if (readOnly) return;
                       e.cancelBubble = true;
                       const newX = e.target.x();
@@ -1803,7 +1814,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       e.target.x(p.x);
                       e.target.y(p.y);
 
-                      setDraggingPoint(null);
                       onUpdateMeasurement(m.id, { segments: newSegments });
                     }}
                     hitStrokeWidth={10 / stageScale}

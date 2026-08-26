@@ -148,9 +148,23 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
     // is project-scoped, not page-scoped — a project member may legally op on
     // any page in that project (e.g. paste-across-pages), so the check is
     // "somewhere in the project", not "on this exact page".
+    //
+    // Full ack error enum for measurement-op / canvas-join:
+    //   not_in_project    — sender's socket isn't in this project's room
+    //   page_not_found    — pageId doesn't exist under projectId
+    //   page_superseded   — target page is a frozen older plan-set revision
+    //   invalid_measurement — applyMeasurementOp rejected the measurement's
+    //                         own shape/id (bad type/points, cross-page id
+    //                         collision) — thrown from inside applyMeasurementOp
+    //   invalid_request   — the envelope itself is malformed (missing/wrong-typed
+    //                       pageId/projectId/action, or payload isn't an object)
+    //   no_db             — server has no database wired (should not happen in prod)
+    //   internal          — an unexpected (non-OpRejectedError) exception was
+    //                       caught; logged server-side, never rethrown, so a
+    //                       transient DB error can't crash the whole process
     socket.on('measurement-op', (payload: unknown, ack?: (res: unknown) => void) => {
       const respond = typeof ack === 'function' ? ack : () => {};
-      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_measurement' });
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
       const { pageId, projectId, action, measurement, clientTabId } = payload as {
         pageId?: unknown; projectId?: unknown; action?: unknown; measurement?: unknown; clientTabId?: unknown;
       };
@@ -160,7 +174,7 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
         (action !== 'add' && action !== 'update' && action !== 'delete') ||
         !measurement || typeof measurement !== 'object'
       ) {
-        return respond({ ok: false, error: 'invalid_measurement' });
+        return respond({ ok: false, error: 'invalid_request' });
       }
       if (!socket.rooms.has(projectRoom(projectId))) return respond({ ok: false, error: 'not_in_project' });
       if (!opts.db) return respond({ ok: false, error: 'no_db' });
@@ -188,7 +202,13 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
         });
       } catch (err) {
         if (err instanceof OpRejectedError) return respond({ ok: false, error: err.reason });
-        throw err;
+        // I1 fix: this handler runs inside a socket event listener, so an
+        // uncaught exception here is NOT scoped to the request — it escapes
+        // as an uncaught exception on the process and kills the whole
+        // (single-process) server. A transient DB error must degrade to a
+        // failed ack, never a crash.
+        console.error('measurement-op failed', err);
+        return respond({ ok: false, error: 'internal' });
       }
     });
 
@@ -205,17 +225,24 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       if (!socket.rooms.has(projectRoom(projectId))) return respond({ ok: false, error: 'not_in_project' });
       if (!opts.db) return respond({ ok: false, error: 'no_db' });
 
-      const page = opts.db.prepare('SELECT id FROM pages WHERE id = ? AND projectId = ?').get(pageId, projectId);
-      if (!page) return respond({ ok: false, error: 'page_not_found' });
+      // I1 fix: same catch-all as measurement-op — an unexpected DB error
+      // here must not escape this listener uncaught and crash the process.
+      try {
+        const page = opts.db.prepare('SELECT id FROM pages WHERE id = ? AND projectId = ?').get(pageId, projectId);
+        if (!page) return respond({ ok: false, error: 'page_not_found' });
 
-      const rows = opts.db
-        .prepare('SELECT id, takeoffId, type, name, color, points, attrs FROM measurements WHERE pageId = ? ORDER BY sortOrder')
-        .all(pageId) as Parameters<typeof hydrateMeasurementRow>[0][];
-      const measurements = rows.map(hydrateMeasurementRow);
-      const project = opts.db.prepare('SELECT version FROM projects WHERE id = ?').get(projectId) as
-        | { version: number }
-        | undefined;
-      respond({ ok: true, measurements, version: project?.version ?? 0 });
+        const rows = opts.db
+          .prepare('SELECT id, takeoffId, type, name, color, points, attrs FROM measurements WHERE pageId = ? ORDER BY sortOrder')
+          .all(pageId) as Parameters<typeof hydrateMeasurementRow>[0][];
+        const measurements = rows.map(hydrateMeasurementRow);
+        const project = opts.db.prepare('SELECT version FROM projects WHERE id = ?').get(projectId) as
+          | { version: number }
+          | undefined;
+        respond({ ok: true, measurements, version: project?.version ?? 0 });
+      } catch (err) {
+        console.error('canvas-join failed', err);
+        respond({ ok: false, error: 'internal' });
+      }
     });
 
     socket.on('disconnect', () => {

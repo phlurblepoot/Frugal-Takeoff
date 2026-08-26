@@ -107,6 +107,29 @@ describe('canvas socket layer: measurement-op + canvas-join', () => {
     a.c.close();
   });
 
+  it('case 2b: malformed envelope (missing pageId) — ack invalid_request, distinct from applyMeasurementOp\'s invalid_measurement', async () => {
+    const a = await joinedClient('a');
+    const ack = await emitWithAck<any>(a.c, 'measurement-op', {
+      projectId: 'pr1',
+      action: 'add',
+      measurement: { id: 'm2b', type: 'area', points: [{ x: 1, y: 1 }] },
+    });
+    expect(ack).toEqual({ ok: false, error: 'invalid_request' });
+    a.c.close();
+  });
+
+  it('case 2c: well-formed envelope but invalid measurement shape — ack invalid_measurement (from applyMeasurementOp)', async () => {
+    const a = await joinedClient('a');
+    const ack = await emitWithAck<any>(a.c, 'measurement-op', {
+      pageId: 'pg1',
+      projectId: 'pr1',
+      action: 'add',
+      measurement: { id: 'm2c' /* missing type/points */ },
+    });
+    expect(ack).toEqual({ ok: false, error: 'invalid_measurement' });
+    a.c.close();
+  });
+
   it('case 3: sender not in the project — ack not_in_project, no broadcast, no row', async () => {
     const outsider = connectClient(srv.port, makeToken({ id: 'x', username: 'x' }));
     await waitFor(outsider, 'sessions-snapshot');

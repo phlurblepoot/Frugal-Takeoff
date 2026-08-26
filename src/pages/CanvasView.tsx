@@ -103,6 +103,10 @@ const CanvasViewInner: React.FC = () => {
   const projectRef = useRef<Project | null>(null);
   useEffect(() => { projectRef.current = project; }, [project]);
 
+  // I3 fix: throttles the offline-op warning toast to at most once per 30s,
+  // so a burst of ops queued while disconnected doesn't spam a toast per op.
+  const lastOfflineToastRef = useRef(0);
+
   // Fix round 1 (F2): every version-adopting update goes through this so
   // projectRef.current is updated SYNCHRONOUSLY, not just via the passive
   // mirroring effect above. Without this, a measurement op's ack and its
@@ -352,35 +356,39 @@ const CanvasViewInner: React.FC = () => {
       // fresh synchronously for the entity-changed gate.
       if (projectId) noteProjectVersion(projectId, ev.version);
 
-      if (ev.pageId !== pageId) {
-        if (projectId) {
-          applyProjectUpdate(prev => ({ ...prev, version: Math.max(prev.version ?? 0, ev.version) }));
-        }
-        return;
-      }
-
       const { action, measurement } = ev;
-      setPage(prev => {
-        if (!prev) return prev;
-        let newMeasurements = [...prev.measurements];
-        if (action === 'add') {
-          // Prevent duplicates
-          if (!newMeasurements.find(m => m.id === measurement.id)) {
-            newMeasurements.push(measurement);
+
+      // C1 fix: the project-level splice below must target ev.pageId for
+      // EVERY event, not just same-page ones — otherwise a cross-page op
+      // adopts the new version WITHOUT the measurement ever landing in
+      // project.pages, so this tab's next full-project PUT (scale, takeoffs,
+      // regions, ...) round-trips through decomposeProject with a stale
+      // page.measurements array and deletes the other page's measurement.
+      // The setPage splice stays gated to the currently-open page — its
+      // measurements array is a different page's data otherwise.
+      if (ev.pageId === pageId) {
+        setPage(prev => {
+          if (!prev) return prev;
+          let newMeasurements = [...prev.measurements];
+          if (action === 'add') {
+            // Prevent duplicates
+            if (!newMeasurements.find(m => m.id === measurement.id)) {
+              newMeasurements.push(measurement);
+            }
+          } else if (action === 'update') {
+            newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
+          } else if (action === 'delete') {
+            newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
           }
-        } else if (action === 'update') {
-          newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
-        } else if (action === 'delete') {
-          newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
-        }
-        return { ...prev, measurements: newMeasurements };
-      });
+          return { ...prev, measurements: newMeasurements };
+        });
+      }
 
       applyProjectUpdate(prev => ({
         ...prev,
         version: Math.max(prev.version ?? 0, ev.version),
         pages: prev.pages.map(p => {
-          if (p.id !== pageId) return p;
+          if (p.id !== ev.pageId) return p;
           let newMeasurements = [...p.measurements];
           if (action === 'add') {
             if (!newMeasurements.find(m => m.id === measurement.id)) {
@@ -423,7 +431,16 @@ const CanvasViewInner: React.FC = () => {
 
   useEffect(() => {
     if (!socket || !projectId || !pageId) return;
-    const onConnect = () => { backfillMeasurements(projectId, pageId); };
+    // C1 fix: match the initial-mount order (loadData THEN backfill). A
+    // reconnect can follow a disconnect gap long enough for cross-page ops
+    // to have landed server-side; backfill alone only re-hydrates the
+    // CURRENT page's measurements, leaving this tab's project.pages (and any
+    // other open page) at a healed version but stale cross-page data.
+    const onConnect = () => {
+      loadData(projectId, pageId).then(ok => {
+        if (ok) backfillMeasurements(projectId, pageId);
+      });
+    };
     socket.on('connect', onConnect);
     return () => { socket.off('connect', onConnect); };
   }, [socket, projectId, pageId]);
@@ -447,7 +464,10 @@ const CanvasViewInner: React.FC = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        if (isDrawingActiveRef.current) return; // same mid-draw guard as backfill
+        // Pre-fetch guard (cheap early exit); loadData ALSO re-checks this
+        // ref after its own await resolves (I2 fix), since a gesture can
+        // start after this check passes but before the fetch completes.
+        if (isDrawingActiveRef.current) return;
         loadData(projectId, pageId);
       }, 300);
     };
@@ -507,8 +527,10 @@ const CanvasViewInner: React.FC = () => {
 
   // Shared ack handler for every sendMeasurementOp call site (contract item 1)
   // plus undo/redo (item 4). Adopts the version on success; on failure,
-  // surfaces a toast unless the failure is a transient 'offline' blip (the op
-  // just never left the client — nothing to warn about beyond normal retry).
+  // surfaces a toast — including for 'offline' (I3 fix): reconnect backfill
+  // silently replaces local-only work with server truth, so the user needs a
+  // warning that unsynced edits can be lost on reload, throttled to at most
+  // once per 30s so a burst of offline ops doesn't spam toasts.
   const handleMeasurementOpResult = (res: { ok: true; version: number } | { ok: false; error: string }) => {
     // `'error' in res` (rather than `if (res.ok)` / `if (!res.ok)`) because this
     // project builds without strictNullChecks, under which plain truthiness
@@ -517,7 +539,13 @@ const CanvasViewInner: React.FC = () => {
     if ('error' in res) {
       if (res.error === 'page_superseded') {
         toast('This revision is read-only — reload to see the current one', { type: 'warning' });
-      } else if (res.error !== 'offline') {
+      } else if (res.error === 'offline') {
+        const now = Date.now();
+        if (now - lastOfflineToastRef.current > 30_000) {
+          lastOfflineToastRef.current = now;
+          toast('Not syncing — reconnecting. Recent changes may be lost if you reload.', { type: 'warning' });
+        }
+      } else {
         toast('Sync failed — your change is local only until the next full save', { type: 'warning' });
       }
       return;
@@ -692,6 +720,18 @@ const CanvasViewInner: React.FC = () => {
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
       navigate(`/project/${pId}/takeoff`);
+      return false;
+    }
+
+    // I2 fix: re-check the mid-gesture guard AFTER the await (mirrors
+    // backfillMeasurements' own post-await re-check). loadData is shared by
+    // several call sites (initial mount, the entity-changed debounce, the
+    // project-refreshed listener); a gesture that started while this fetch
+    // was in flight must not be clobbered by applying stale-relative-to-local
+    // reloaded state. Skip and let a later reload (or the gesture's own op
+    // ack) converge this tab instead.
+    if (isDrawingActiveRef.current) {
+      setIsLoading(false);
       return false;
     }
 
