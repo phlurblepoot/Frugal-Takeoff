@@ -18,7 +18,11 @@ export default defineConfig({
     // dev-only artifact), which makes any test asserting "fetched once on
     // mount" flaky/wrong for reasons that have nothing to do with real
     // app behavior — see e2e/canvas-vector-load.spec.ts.
-    command: 'npm run build && NODE_ENV=production STORAGE_PATH=.e2e-data PORT=3000 npx tsx server.ts',
+    // SHEET_FLUSH_INTERVAL_MS=2000: sheets-editor.spec.ts/collab-sheets.spec.ts
+    // assert the autosave engine actually lands edits on disk (the
+    // data-loss-regression proof) — waiting out the real 15s production
+    // cadence per assertion would make those specs unbearably slow.
+    command: 'npm run build && NODE_ENV=production STORAGE_PATH=.e2e-data PORT=3000 SHEET_FLUSH_INTERVAL_MS=2000 npx tsx server.ts',
     url: 'http://localhost:3000',
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

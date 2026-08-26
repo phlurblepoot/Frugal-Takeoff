@@ -9,7 +9,7 @@ import {
   FolderOpen, Save, Download, X, Plus, FileSpreadsheet, Loader2, History, Users, Info,
 } from 'lucide-react';
 import { getFileMeta, fetchFileBlob } from '../utils/store';
-import { workbookToFortuneSheets } from '../utils/sheetBridge';
+import { workbookToFortuneSheets, ensureSheetCelldata } from '../utils/sheetBridge';
 import { useToast } from '../components/Toast';
 import { useCollaboration } from '../context/CollaborationContext';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
@@ -522,6 +522,13 @@ export const SpreadsheetEditor: React.FC = () => {
         pendingTailOpsRef.current = res.ops.map((s) => {
           try { return JSON.parse(s) as Op[]; } catch { return []; }
         });
+        // A rejoin's `res.state` may be `data`-shaped (a prior live edit's
+        // onChange payload, round-tripped through the server as opaque
+        // JSON) — FortuneSheet's own fresh-mount import only trusts
+        // `celldata` and silently blanks a sheet that lacks it (see
+        // ensureSheetCelldata's comment). Cheap no-op for the celldata-
+        // shaped `seed` branch above.
+        sheets = sheets.map(ensureSheetCelldata);
         currentSheetsRef.current = sheets;
         setCurrentSheets(sheets);
         // Always a fresh mount on a successful (re)join — see the

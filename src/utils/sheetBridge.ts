@@ -531,6 +531,53 @@ function applyCellAlignment(cell: ExcelJS.Cell, c: FortuneSheetCell): void {
   if (any) cell.alignment = alignment;
 }
 
+// FortuneSheet's own `onChange` payload for a LIVE-EDITED sheet carries the
+// dense 2D `data` matrix (context.luckysheetfile's shape once a document has
+// been edited in-app), not the sparse `celldata` list this bridge's importer
+// produces on initial import — both are valid Sheet shapes FortuneSheet
+// round-trips internally (confirmed against @fortune-sheet/core's own
+// `Sheet` type: `data?: CellMatrix` / `celldata?: CellWithRowAndCol[]`, both
+// optional, either can be the one actually populated). Every real edit
+// synced through the live collab session (WS5 Task 4/7's autosave path) is
+// therefore `data`-shaped, but rebuildWorksheetGrid's step 3 below only ever
+// read `celldata` — found nothing, and (per step 2's clear-everything-first
+// pass) silently wiped every cell it had just cleared with nothing to write
+// back. cellsOf() normalizes either shape into the same
+// `celldata`-entry shape step 3 already knows how to apply, so a live edit's
+// autosave flush stops blanking the sheet.
+function cellsOf(incoming: FortuneSheetData): NonNullable<FortuneSheetData['celldata']> {
+  if (incoming.celldata?.length) return incoming.celldata;
+  if (!incoming.data) return [];
+  const out: NonNullable<FortuneSheetData['celldata']> = [];
+  incoming.data.forEach((row, r) => {
+    row?.forEach((cell, c) => {
+      if (cell) out.push({ r, c, v: cell });
+    });
+  });
+  return out;
+}
+
+// Client-side counterpart of the cellsOf() finding above, for the OTHER
+// direction: feeding a session's live state BACK INTO a fresh FortuneSheet
+// mount (SpreadsheetEditor.tsx's collab rejoin — WS5 Task 9's "reload
+// re-hydration" scenario). Traced in node_modules/@fortune-sheet/core/dist/
+// index.esm.js's `initSheetData` (called from the Workbook component's
+// mount effect whenever its internal `luckysheetfile` starts empty, which is
+// always true on a fresh mount): it destructures ONLY `newData.celldata`,
+// builds its internal cell matrix by walking that list, and unconditionally
+// OVERWRITES `newData.data` with the result (defaulting every cell to null
+// when celldata is absent) — so a sheet carrying `data` but no `celldata`
+// has its `data` silently discarded and replaced with an all-null grid on
+// the very next fresh mount. A live-edited session's onChange payload is
+// `data`-shaped (see cellsOf's comment), so re-feeding that same payload
+// into a fresh mount after a page reload wiped the sheet blank before this
+// fix. Cheap no-op when celldata is already present (the normal
+// fresh-import case via workbookToFortuneSheets).
+export function ensureSheetCelldata(sheet: FortuneSheetData): FortuneSheetData {
+  if (sheet.celldata?.length) return sheet;
+  return { ...sheet, celldata: cellsOf(sheet) };
+}
+
 function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneSheetData): void {
   // 1. Unmerge every existing merge FIRST — a merged non-anchor cell can't
   //    have its value/style touched directly (exceljs throws / no-ops), so
@@ -552,8 +599,9 @@ function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneShe
     if (col) col.width = undefined;
   });
 
-  // 3. Rebuild cell content + per-cell style from FortuneSheet celldata.
-  for (const cd of incoming.celldata ?? []) {
+  // 3. Rebuild cell content + per-cell style from FortuneSheet celldata (or
+  //    the data matrix, normalized above — see cellsOf's comment).
+  for (const cd of cellsOf(incoming)) {
     if (!cd.v) continue;
     const cell = worksheet.getCell(cd.r + 1, cd.c + 1);
     applyCellValue(cell, cd.v);

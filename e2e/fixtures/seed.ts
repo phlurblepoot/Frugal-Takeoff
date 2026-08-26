@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import ExcelJS from 'exceljs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
@@ -1028,5 +1029,83 @@ export async function seedDocumentsPortfolio(
     printoutFileId,
     printoutFileName,
     printoutPageCount,
+  };
+}
+
+export interface SeedSpreadsheetResult {
+  /** The id the /tools/sheets?fileId= editor should be opened with. */
+  fileId: string;
+  fileName: string;
+  /** The styled, untouched cell — used to prove formatting survives an edit
+   *  elsewhere on the sheet. */
+  styledCell: { address: string; value: string };
+  /** The plain cell the specs edit — starts with this known value so a
+   *  render assertion has something deterministic to look for. */
+  editableCell: { address: string; value: string };
+  sheetName: string;
+}
+
+/**
+ * Builds a small STYLED xlsx in-process with exceljs (not the app's
+ * sheetBridge — a spec verifying round-trip fidelity must build its fixture
+ * independently of the code path it's checking) and uploads it via the raw
+ * file API, `kind=spreadsheet`, the same route real spreadsheet uploads use.
+ * Mirrors sheetBridge.patch.test.ts's proven-safe style shape (bold font +
+ * solid green fill survive the ExcelJS<->FortuneSheet bridge already) so a
+ * round-trip regression here means something actually broke, not that this
+ * fixture picked an unsupported style.
+ *
+ * A1 is bold-on-green and is never edited by the specs (the "did formatting
+ * survive" probe); B1 starts as a plain string and IS the cell specs edit
+ * (the "did the new value survive" probe). A2 carries a plain number so the
+ * single-user render assertion has more than one visible value to anchor on.
+ *
+ * Per files.ts's putBuffer/store contract, POSTing a fresh random id returns
+ * that same id (versioned: false) since no sourceType/sourceId is given here
+ * — but the route's response is still the source of truth per the task
+ * brief, so callers must use the RETURNED fileId, not the id passed in the
+ * URL.
+ */
+export async function seedSpreadsheetFile(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedSpreadsheetResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const short = randomUUID().slice(0, 8);
+  const fileName = `E2E Sheet ${short}.xlsx`;
+  const sheetName = 'Data';
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(sheetName);
+  const a1 = ws.getCell('A1');
+  a1.value = 'Styled Header';
+  a1.font = { bold: true };
+  a1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FF00' } };
+  ws.getCell('A2').value = 4242;
+  ws.getCell('B1').value = 'Original Value';
+
+  const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+  const uploadId = randomUUID();
+  const res = await request.post(
+    `/api/files/${uploadId}?kind=spreadsheet&name=${encodeURIComponent(fileName)}`,
+    {
+      headers: {
+        ...auth,
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      data: Buffer.from(buffer),
+    },
+  );
+  if (!res.ok()) throw new Error(`spreadsheet upload failed: ${res.status()} ${await res.text()}`);
+  const body = await res.json();
+  const fileId = body.fileId as string;
+  if (!fileId) throw new Error(`spreadsheet upload response missing fileId: ${JSON.stringify(body)}`);
+
+  return {
+    fileId,
+    fileName,
+    styledCell: { address: 'A1', value: 'Styled Header' },
+    editableCell: { address: 'B1', value: 'Original Value' },
+    sheetName,
   };
 }

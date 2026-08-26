@@ -87,22 +87,22 @@ Plan: docs/superpowers/plans/2026-08-25-ws4-canvas-hardening.md
 
 ## WS5 — Spreadsheet editor rebuild
 
-Plan: _not yet written_
+Plan: docs/superpowers/plans/2026-08-26-ws5-spreadsheet-rebuild.md
 
-- [ ] `sheetBridge` import: exceljs → FortuneSheet with styles/merges/widths/formats/frozen panes/formulas (SheetJS removed from editor path)
-- [ ] Server collab session per `sheet:<fileId>`: working copy, op apply + rebroadcast, late-joiner snapshot
-- [ ] Cell-level presence (colored selections + names)
-- [ ] Op journal to disk + replay-on-restart
-- [ ] Autosave flush (~15s active / last-leave / shutdown) via exceljs patch onto original bytes; non-representable content preserved
-- [ ] Structural ops (row/col/sheet add-delete-rename) via exceljs
-- [ ] Per-editing-session version snapshot (pre-session bytes archived) + manual "Snapshot version" button
-- [ ] Journal/working-copy storage decided (drafts marker vs small additive table) and implemented
-- [ ] Per-user IndexedDB/draft path replaced for spreadsheets; Documents "being edited" chip wired
-- [ ] csv plain path kept; xls → "convert to xlsx" message
-- [ ] Round-trip fidelity tests (styled fixture; charts/images/merges survive single-cell edit)
-- [ ] Journal-replay-after-kill test
-- [ ] Two-context Playwright collab test
-- [ ] Full test suite passing
+- [x] `sheetBridge` import: exceljs → FortuneSheet with styles/merges/widths/formats/frozen panes/formulas (SheetJS removed from editor path) (`cb28c3a`, `df7a0cc`, `f643f13`)
+- [x] Server collab session per `sheet:<fileId>`: working copy, op apply + rebroadcast, late-joiner snapshot (`95a676a`, `dd05f3d`)
+- [x] Cell-level presence (colored selections + names) (`dd05f3d`, `d3835fe`)
+- [x] Op journal to disk + replay-on-restart (`95a676a`; replay proof `server/realtime/registerRealtime.sheets.test.ts`, this task's commit)
+- [x] Autosave flush (~15s active / last-leave / shutdown) via exceljs patch onto original bytes; non-representable content preserved (`5af1a10`, `d193676`, `851315d`, `dd05f3d`)
+- [x] Structural ops (row/col/sheet add-delete-rename) via exceljs (`df7a0cc`)
+- [x] Per-editing-session version snapshot (pre-session bytes archived) + manual "Snapshot version" button (`5af1a10`, `d193676`, `851315d`, `dd05f3d`)
+- [x] Journal/working-copy storage decided (drafts marker vs small additive table) and implemented — two additive tables (`sheet_sessions` + `sheet_ops`, migration 26) (`95a676a`)
+- [x] Per-user IndexedDB/draft path replaced for spreadsheets; Documents "being edited" chip wired (`d3835fe`, `ed8adc2`)
+- [x] csv plain path kept; xls → "convert to xlsx" message (`d3835fe`)
+- [x] Round-trip fidelity tests (styled fixture; charts/images/merges survive single-cell edit) (`cb28c3a`, `df7a0cc`, `f643f13`; this task's commit fixed a live-edit round-trip regression these e2e specs caught — see below)
+- [x] Journal-replay-after-kill test — `server/realtime/registerRealtime.sheets.test.ts` "journal survives a simulated server restart" (this task's commit)
+- [x] Two-context Playwright collab test — `e2e/collab-sheets.spec.ts` (this task's commit)
+- [x] Full test suite passing (unit: 1247/1247; e2e: 60/60 incl. new `e2e/sheets-editor.spec.ts` + `e2e/collab-sheets.spec.ts`, each run 3x stable) (this task's commit)
 
 ## Post-project
 

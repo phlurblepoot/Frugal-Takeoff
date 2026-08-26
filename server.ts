@@ -137,7 +137,12 @@ async function startServer() {
   const broadcastChange = createChangeFeed(io);
 
   const sheetStore = new SheetSessionStore(db);
-  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR);
+  // SHEET_FLUSH_INTERVAL_MS: e2e-only override (playwright.config.ts sets it
+  // low) so autosave tests don't have to wait out the real 15s production
+  // cadence; unset in normal/production runs, which keep SheetFlushEngine's
+  // own DEFAULT_INTERVAL_MS.
+  const flushIntervalMs = process.env.SHEET_FLUSH_INTERVAL_MS ? Number(process.env.SHEET_FLUSH_INTERVAL_MS) : undefined;
+  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, { intervalMs: flushIntervalMs });
   sheetFlush.start();
 
   const realtime = registerRealtime(io, {

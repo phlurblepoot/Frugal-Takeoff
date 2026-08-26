@@ -9,6 +9,7 @@ import {
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
   seedDocumentsPortfolio,
+  seedSpreadsheetFile,
   type LoginResult,
 } from './seed';
 
@@ -61,4 +62,5 @@ export {
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
   seedDocumentsPortfolio,
+  seedSpreadsheetFile,
 };
