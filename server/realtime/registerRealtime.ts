@@ -8,6 +8,9 @@ import { deviceLabel } from './deviceLabel';
 import type { SessionInfo } from './types';
 import { applyMeasurementOp, OpRejectedError, hydrateMeasurementRow, type MeasurementOpAction } from './measurementOps';
 import type { BroadcastChange } from './changeFeed';
+import { getMeta } from '../files';
+import type { SheetSessionStore } from './sheetSessions';
+import type { SheetFlushEngine } from './sheetFlush';
 
 export interface RealtimeOptions {
   verifyToken: (token: string) => { id: string; username: string; role: string } | null;
@@ -15,7 +18,25 @@ export interface RealtimeOptions {
   staleAfterMs?: number;
   db?: Database.Database;
   broadcastChange?: BroadcastChange;
+  sheetStore?: SheetSessionStore;
+  sheetFlush?: SheetFlushEngine;
 }
+
+// Duplicated (deliberately) from src/pages/documents/openTarget.ts's
+// SHEET_MIMES rather than imported: that module lives under src/pages, a
+// client-route directory, and the server has no reason to reach into it for
+// two mime strings. Keep both lists in sync if either changes.
+const SHEET_MIMES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+]);
+
+function isSpreadsheetFile(meta: { kind: string; mime: string }): boolean {
+  return meta.kind === 'spreadsheet' || SHEET_MIMES.has(meta.mime);
+}
+
+const MAX_SHEET_OP_BYTES = 1 * 1024 * 1024; // 1MB
+const MAX_SHEET_STATE_BYTES = 25 * 1024 * 1024; // 25MB
 
 export interface RealtimeHandle {
   registry: PresenceRegistry;
@@ -87,6 +108,32 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
     });
     socket.broadcast.emit('session-joined', publicSession(session));
 
+    // Sheet (spreadsheet collab) session bookkeeping. Tracked separately from
+    // room membership (socket.rooms) because a socket can be IN sheetRoom(id)
+    // via set-location without ever having actually joined a collab session
+    // (e.g. it navigated there but 'sheet-join' hasn't fired/succeeded yet) —
+    // leaves must only fire for fileIds this socket really registered with
+    // SheetSessionStore, or store.leave()'s participant count goes negative
+    // relative to reality.
+    const sheetSessions = new Set<string>();
+    socket.data.sheetSessions = sheetSessions;
+
+    // Runs the shared last-participant-leaves sequence for one fileId:
+    // store.leave() first (per SheetSessionStore's carried contract — it does
+    // not check participants itself), then — only if that was the last
+    // participant — flush the pending state to disk and close the session so
+    // the next joiner re-arms the first-flush snapshot. Never throws: flush
+    // failures are already logged+swallowed inside SheetFlushEngine.
+    async function leaveSheetSession(fileId: string): Promise<void> {
+      if (!sheetSessions.has(fileId)) return;
+      sheetSessions.delete(fileId);
+      if (!opts.sheetStore) return;
+      const { lastParticipant } = opts.sheetStore.leave(fileId, sessionId);
+      if (!lastParticipant) return;
+      if (opts.sheetFlush) await opts.sheetFlush.flushFile(fileId);
+      opts.sheetStore.closeSession(fileId);
+    }
+
     socket.on('set-location', (loc: unknown) => {
       if (!loc || typeof loc !== 'object' || typeof (loc as any).path !== 'string') return;
       const l = loc as { path: string; projectId?: string; section?: string; pageId?: string; fileId?: string; label?: string };
@@ -104,6 +151,12 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       registry.setLocation(sessionId, next);
       const s = registry.get(sessionId);
       if (s) io.emit('session-updated', publicSession(s));
+
+      // Moving away from a joined sheet session (including to `undefined`,
+      // e.g. back to the dashboard) triggers the leave/flush sequence.
+      if (prev?.fileId && prev.fileId !== next.fileId) {
+        void leaveSheetSession(prev.fileId);
+      }
     });
 
     socket.on('update-user', (patch: unknown) => {
@@ -245,9 +298,137 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       }
     });
 
+    // Shared spreadsheet-editing session (WS5): a client on /tools/sheets
+    // joins sheetRoom(fileId) via set-location, then opens a collab session
+    // with 'sheet-join'. Ops/state after that are OPAQUE to the server — it
+    // never parses them, just journals/relays/folds them (SheetSessionStore)
+    // and periodically patches them into the live xlsx bytes (SheetFlushEngine).
+    //
+    // Full ack error enum for the sheet-* handlers:
+    //   not_in_sheet     — sender's socket isn't in this file's sheet room
+    //                      (set-location hasn't targeted /tools/sheets?fileId=
+    //                      for this fileId)
+    //   file_not_found   — fileId doesn't exist in the files table
+    //   not_spreadsheet  — file exists but isn't a spreadsheet (kind/mime)
+    //   invalid_request  — the envelope is malformed, OR an ops/state payload
+    //                      exceeds its size guard (1MB ops / 25MB state)
+    //   no_db            — server has no database (or session store/flush
+    //                      engine) wired (should not happen in prod)
+    //   internal         — an unexpected exception was caught; logged
+    //                      server-side, never rethrown
+    socket.on('sheet-join', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
+      const { fileId } = payload as { fileId?: unknown };
+      if (typeof fileId !== 'string' || !fileId) return respond({ ok: false, error: 'invalid_request' });
+      if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
+      if (!opts.db || !opts.sheetStore) return respond({ ok: false, error: 'no_db' });
+
+      try {
+        const meta = getMeta(opts.db, fileId);
+        if (!meta) return respond({ ok: false, error: 'file_not_found' });
+        if (!isSpreadsheetFile(meta)) return respond({ ok: false, error: 'not_spreadsheet' });
+
+        const snapshot = opts.sheetStore.join(fileId, sessionId);
+        sheetSessions.add(fileId);
+        respond({
+          ok: true,
+          state: snapshot.state,
+          ops: snapshot.ops,
+          seq: snapshot.seq,
+          participants: opts.sheetStore.participants(fileId).length,
+        });
+      } catch (err) {
+        console.error('sheet-join failed', err);
+        respond({ ok: false, error: 'internal' });
+      }
+    });
+
+    socket.on('sheet-op', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
+      const { fileId, ops, clientTabId } = payload as { fileId?: unknown; ops?: unknown; clientTabId?: unknown };
+      if (typeof fileId !== 'string' || !fileId || typeof ops !== 'string' || !ops) {
+        return respond({ ok: false, error: 'invalid_request' });
+      }
+      if (Buffer.byteLength(ops, 'utf8') > MAX_SHEET_OP_BYTES) return respond({ ok: false, error: 'invalid_request' });
+      if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
+      if (!opts.sheetStore) return respond({ ok: false, error: 'no_db' });
+
+      try {
+        const seq = opts.sheetStore.appendOps(fileId, ops);
+        respond({ ok: true, seq });
+        const bySessionId = typeof clientTabId === 'string' ? clientTabId : undefined;
+        socket.to(sheetRoom(fileId)).emit('sheet-op-applied', { fileId, ops, seq, bySessionId });
+      } catch (err) {
+        console.error('sheet-op failed', err);
+        respond({ ok: false, error: 'internal' });
+      }
+    });
+
+    // Debounced-authoritative full state from a client: folds the journal on
+    // the server. No broadcast here — peers already applied the individual
+    // ops as they arrived via 'sheet-op-applied'; this is purely a server-side
+    // compaction so late joiners don't replay a long tail.
+    socket.on('sheet-state-sync', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
+      const { fileId, state } = payload as { fileId?: unknown; state?: unknown };
+      if (typeof fileId !== 'string' || !fileId || typeof state !== 'string') {
+        return respond({ ok: false, error: 'invalid_request' });
+      }
+      if (Buffer.byteLength(state, 'utf8') > MAX_SHEET_STATE_BYTES) return respond({ ok: false, error: 'invalid_request' });
+      if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
+      if (!opts.sheetStore) return respond({ ok: false, error: 'no_db' });
+
+      try {
+        opts.sheetStore.setState(fileId, state);
+        respond({ ok: true });
+      } catch (err) {
+        console.error('sheet-state-sync failed', err);
+        respond({ ok: false, error: 'internal' });
+      }
+    });
+
+    socket.on('sheet-snapshot', (payload: unknown, ack?: (res: unknown) => void) => {
+      const respond = typeof ack === 'function' ? ack : () => {};
+      if (!payload || typeof payload !== 'object') return respond({ ok: false, error: 'invalid_request' });
+      const { fileId } = payload as { fileId?: unknown };
+      if (typeof fileId !== 'string' || !fileId) return respond({ ok: false, error: 'invalid_request' });
+      if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
+      if (!opts.sheetFlush) return respond({ ok: false, error: 'no_db' });
+
+      opts.sheetFlush.snapshotNow(fileId)
+        .then((result) => {
+          if (!result.ok) return respond({ ok: false, error: 'internal' });
+          respond({ ok: true, version: result.version });
+        })
+        .catch((err) => {
+          console.error('sheet-snapshot failed', err);
+          respond({ ok: false, error: 'internal' });
+        });
+    });
+
+    // Cursor/selection presence within a sheet — relay-only, no ack, no
+    // persistence (mirrors 'cursor-move'). name/color come from the sender's
+    // OWN session registry entry, never from the client payload.
+    socket.on('sheet-presence', (payload: unknown) => {
+      if (!payload || typeof payload !== 'object') return;
+      const { fileId, presence } = payload as { fileId?: unknown; presence?: unknown };
+      if (typeof fileId !== 'string' || !fileId || !presence || typeof presence !== 'object') return;
+      if (!socket.rooms.has(sheetRoom(fileId))) return;
+      const s = registry.get(sessionId);
+      socket.to(sheetRoom(fileId)).emit('sheet-presence', {
+        fileId, sessionId, name: s?.name, color: s?.color, presence,
+      });
+    });
+
     socket.on('disconnect', () => {
       const removed = registry.remove(sessionId);
       if (removed) io.emit('session-left', { sessionId });
+      for (const fileId of Array.from(sheetSessions)) {
+        void leaveSheetSession(fileId);
+      }
     });
   });
 

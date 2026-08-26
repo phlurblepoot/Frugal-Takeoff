@@ -22,6 +22,8 @@ import { getAiRunner } from './server/ai';
 import { registerRealtime } from './server/realtime/registerRealtime';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
+import { SheetSessionStore } from './server/realtime/sheetSessions';
+import { SheetFlushEngine } from './server/realtime/sheetFlush';
 
 dotenv.config();
 
@@ -106,6 +108,11 @@ async function startServer() {
     cors: {
       origin: "*",
     },
+    // Default (1e6 bytes) is smaller than the sheet-state-sync size guard
+    // (25MB, see registerRealtime.ts) — without raising this, a legitimately
+    // large-but-under-guard state payload would be killed by the transport
+    // before ever reaching our handler's own size check, with no ack sent.
+    maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
   app.use(express.json({ limit: "50mb" }));
@@ -129,6 +136,10 @@ async function startServer() {
 
   const broadcastChange = createChangeFeed(io);
 
+  const sheetStore = new SheetSessionStore(db);
+  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR);
+  sheetFlush.start();
+
   const realtime = registerRealtime(io, {
     verifyToken: (token: string) => {
       try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
@@ -136,7 +147,25 @@ async function startServer() {
     },
     db,
     broadcastChange,
+    sheetStore,
+    sheetFlush,
   });
+
+  // Best-effort flush-on-shutdown: a container stop (SIGTERM) or Ctrl-C
+  // (SIGINT) should not lose edits sitting in a dirty sheet session's journal
+  // waiting for the next autosave tick. Guarded against double-registration
+  // (each signal only ever fires this handler once per process) and skipped
+  // entirely in tests, which construct their own harness instead of calling
+  // startServer().
+  let shuttingDown = false;
+  const flushAndExit = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
+    sheetFlush.flushAll().finally(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => flushAndExit('SIGTERM'));
+  process.once('SIGINT', () => flushAndExit('SIGINT'));
 
   // Health check
   app.get("/api/health", (req, res) => {
