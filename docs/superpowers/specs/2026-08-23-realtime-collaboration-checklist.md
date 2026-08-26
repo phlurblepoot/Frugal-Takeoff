@@ -71,19 +71,19 @@ Plan: docs/superpowers/plans/2026-08-25-ws3-presence-ui.md
 
 ## WS4 — Canvas hardening
 
-Plan: _not yet written_
+Plan: docs/superpowers/plans/2026-08-25-ws4-canvas-hardening.md
 
-- [ ] Measurement ops require joined `page:<id>` room + JWT identity
-- [ ] Server-side op application to `measurements` table + version bump included in broadcast; drawing decoupled from full-project PUT
-- [ ] Join-time backfill (measurement set + version in join ack)
-- [ ] Cursor + mid-drag throttling (rAF + min-distance; drag-end always sent)
-- [ ] Server rejects ops on superseded plan-set pages
-- [ ] Dead `project-update`/`project-sync` wire deleted; WS1 compat shim removed
-- [ ] Carried from WS1 final review: cross-page measurement emits (CanvasView emits to a `pageRoom(sourcePageId)` the sender may not be in) are silently dropped by the WS1 membership check — WS4's server-side op application must accept ops for any page in a project the sender's `project:` room covers
-- [ ] Carried from WS3 final review: rename `followedUserId` → `followedSessionId` AND merge the two follow effects in `CollaborationContext.tsx:157-182` (manual-nav check BEFORE updating `followNavRef`) — fixes a fails-safe race where a followed session moving twice in one batched commit silently drops the follow
-- [ ] Carried from WS3 (wording nits, fix opportunistically): CanvasView sidebar shows "another page" for label-less locations (use describeLocation or "elsewhere in the app"); ProjectsPage delete-guard toast still says "has pages currently being viewed" though it now fires project-wide; canvas entry briefly broadcasts label "Projects" before setPageName lands
-- [ ] Two-browser-context Playwright click-drag sync proof (+ screenshots)
-- [ ] Full test suite passing
+- [x] Measurement ops require joined `page:<id>` room + JWT identity (`990cfe1`)
+- [x] Server-side op application to `measurements` table + version bump included in broadcast; drawing decoupled from full-project PUT (`b4ae81b`, `ec5855a`, `990cfe1`, `50bb329`)
+- [x] Join-time backfill (measurement set + version in join ack) (`990cfe1`, `50bb329`)
+- [x] Cursor + mid-drag throttling (rAF + min-distance; drag-end always sent) (`d21163d`)
+- [x] Server rejects ops on superseded plan-set pages (`f761027`, `0ced746`, `b4ae81b`)
+- [x] Dead `project-update`/`project-sync` wire deleted; WS1 compat shim removed (`990cfe1`, `de1584e`)
+- [x] Carried from WS1 final review: cross-page measurement emits (CanvasView emits to a `pageRoom(sourcePageId)` the sender may not be in) are silently dropped by the WS1 membership check — WS4's server-side op application must accept ops for any page in a project the sender's `project:` room covers (`990cfe1`)
+- [x] Carried from WS3 final review: rename `followedUserId` → `followedSessionId` AND merge the two follow effects in `CollaborationContext.tsx:157-182` (manual-nav check BEFORE updating `followNavRef`) — fixes a fails-safe race where a followed session moving twice in one batched commit silently drops the follow (`d21163d`)
+- [x] Carried from WS3 (wording nits, fix opportunistically): CanvasView sidebar shows "another page" for label-less locations (use describeLocation or "elsewhere in the app"); ProjectsPage delete-guard toast still says "has pages currently being viewed" though it now fires project-wide; canvas entry briefly broadcasts label "Projects" before setPageName lands (`d21163d`)
+- [x] Two-browser-context Playwright click-drag sync proof (+ screenshots) — `e2e/collab-canvas-sync.spec.ts` (scenarios 1-4b: live draw sync, persistence without PUT, late-join backfill, drag sync, foreign scale/takeoff live-refresh); scenario 5 (superseded rejection) proven via a raw socket.io-client connection in the same spec, backed by unit coverage in `server/realtime/registerRealtime.canvas.test.ts` case 4
+- [x] Full test suite passing (unit: 1161/1161; e2e: 54/54 incl. two-context `e2e/collab-canvas-sync.spec.ts`)
 
 ## WS5 — Spreadsheet editor rebuild
 
