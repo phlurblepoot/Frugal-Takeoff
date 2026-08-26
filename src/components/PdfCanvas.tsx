@@ -239,11 +239,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     }
   }, [resumeMeasurement, resumeSegmentIdx, onMeasurementResumed]);
 
-  // Single choke point for the mid-draw signal (Task 5) rather than
-  // instrumenting every setActivePoints/setArcMode call site individually.
+  // Single choke point for the mid-GESTURE signal (Task 5, widened in fix
+  // round 1): covers not just new-shape drawing (activePoints/arcMode) but
+  // every other in-flight interaction a foreign reload/backfill could
+  // clobber mid-gesture — dragging an existing vertex (draggingPoint),
+  // dragging a whole segment (draggingSegment), and having started a resume
+  // of an existing measurement's drawing (resumeMeasurementId; note a fresh
+  // blank measurement from confirmNewMeasurement starts with points: [], so
+  // activePoints alone wouldn't catch that case — the resume id must be
+  // checked independently, not folded into "activePoints.length > 0").
   useEffect(() => {
-    onDrawingActiveChange?.(activePoints.length > 0 || arcMode !== 'inactive');
-  }, [activePoints, arcMode, onDrawingActiveChange]);
+    onDrawingActiveChange?.(
+      activePoints.length > 0 ||
+      arcMode !== 'inactive' ||
+      draggingPoint !== null ||
+      draggingSegment !== null ||
+      resumeMeasurementId !== null
+    );
+  }, [activePoints, arcMode, draggingPoint, draggingSegment, resumeMeasurementId, onDrawingActiveChange]);
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);

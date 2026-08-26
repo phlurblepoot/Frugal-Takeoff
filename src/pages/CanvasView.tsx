@@ -103,6 +103,20 @@ const CanvasViewInner: React.FC = () => {
   const projectRef = useRef<Project | null>(null);
   useEffect(() => { projectRef.current = project; }, [project]);
 
+  // Fix round 1 (F2): every version-adopting update goes through this so
+  // projectRef.current is updated SYNCHRONOUSLY, not just via the passive
+  // mirroring effect above. Without this, a measurement op's ack and its
+  // paired entity-changed broadcast can both process within the same JS
+  // turn (before React re-renders and the effect fires) — the entity-changed
+  // gate would then read a stale projectRef.current and schedule a redundant
+  // reload. `updater` uses Math.max on version fields itself (callers pass
+  // the bump inline) so an out-of-order/duplicate event can never regress
+  // the adopted version.
+  const applyProjectUpdate = (updater: (prev: Project) => Project) => {
+    if (projectRef.current) projectRef.current = updater(projectRef.current);
+    setProject(prev => (prev ? updater(prev) : prev));
+  };
+
   // Superseded-revision read-only gate (Plan Set rework Task 8). When the opened
   // page is an OLDER revision of its sheet, it is frozen history: drawing/editing
   // is disabled (mirrors the phone read-only gate), but pan/zoom/view and the
@@ -334,10 +348,14 @@ const CanvasViewInner: React.FC = () => {
       // Contract item 2: ALWAYS adopt the version, even for a cross-page op —
       // it still bumped the shared project version, and skipping adoption
       // here would make this tab's next full-project PUT 409 unnecessarily.
+      // Goes through applyProjectUpdate (F2 fix) so projectRef.current is
+      // fresh synchronously for the entity-changed gate.
       if (projectId) noteProjectVersion(projectId, ev.version);
 
       if (ev.pageId !== pageId) {
-        if (projectId) setProject(prev => (prev ? { ...prev, version: ev.version } : prev));
+        if (projectId) {
+          applyProjectUpdate(prev => ({ ...prev, version: Math.max(prev.version ?? 0, ev.version) }));
+        }
         return;
       }
 
@@ -358,27 +376,24 @@ const CanvasViewInner: React.FC = () => {
         return { ...prev, measurements: newMeasurements };
       });
 
-      setProject(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          version: ev.version,
-          pages: prev.pages.map(p => {
-            if (p.id !== pageId) return p;
-            let newMeasurements = [...p.measurements];
-            if (action === 'add') {
-              if (!newMeasurements.find(m => m.id === measurement.id)) {
-                newMeasurements.push(measurement);
-              }
-            } else if (action === 'update') {
-              newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
-            } else if (action === 'delete') {
-              newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
+      applyProjectUpdate(prev => ({
+        ...prev,
+        version: Math.max(prev.version ?? 0, ev.version),
+        pages: prev.pages.map(p => {
+          if (p.id !== pageId) return p;
+          let newMeasurements = [...p.measurements];
+          if (action === 'add') {
+            if (!newMeasurements.find(m => m.id === measurement.id)) {
+              newMeasurements.push(measurement);
             }
-            return { ...p, measurements: newMeasurements };
-          })
-        };
-      });
+          } else if (action === 'update') {
+            newMeasurements = newMeasurements.map(m => m.id === measurement.id ? measurement : m);
+          } else if (action === 'delete') {
+            newMeasurements = newMeasurements.filter(m => m.id !== measurement.id);
+          }
+          return { ...p, measurements: newMeasurements };
+        })
+      }));
     });
 
     return () => {
@@ -399,9 +414,11 @@ const CanvasViewInner: React.FC = () => {
     if (isDrawingActiveRef.current) return; // re-check: drawing may have started while awaiting
     noteProjectVersion(pId, res.version);
     setPage(prev => (prev && prev.id === pgId) ? { ...prev, measurements: res.measurements } : prev);
-    setProject(prev => prev
-      ? { ...prev, version: res.version, pages: prev.pages.map(p => p.id === pgId ? { ...p, measurements: res.measurements } : p) }
-      : prev);
+    applyProjectUpdate(prev => ({
+      ...prev,
+      version: Math.max(prev.version ?? 0, res.version),
+      pages: prev.pages.map(p => p.id === pgId ? { ...p, measurements: res.measurements } : p),
+    }));
   };
 
   useEffect(() => {
@@ -506,7 +523,7 @@ const CanvasViewInner: React.FC = () => {
       return;
     }
     if (projectId) noteProjectVersion(projectId, res.version);
-    setProject(prev => (prev ? { ...prev, version: res.version } : prev));
+    applyProjectUpdate(prev => ({ ...prev, version: Math.max(prev.version ?? 0, res.version) }));
   };
 
   const { history, redoStack, pushToHistory, undo, redo, reset: resetHistory } = useMeasurementHistory({
