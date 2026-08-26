@@ -43,6 +43,17 @@ const DEFAULT_INTERVAL_MS = 15_000;
 export class SheetFlushEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly intervalMs: number;
+  // Per-fileId in-flight guard: flushFile and snapshotNow both read-then-write
+  // the same on-disk bytes for a file with an await in between (the bridge
+  // patch call), so two concurrent runs for the SAME file can interleave —
+  // whichever read the (now-stale) original bytes last would win the write,
+  // silently reverting the other run's change with dirty cleared and no
+  // retry. This map serializes per-file access: flushFile joins whatever is
+  // already running for that id instead of racing it; snapshotNow always
+  // waits for anything in-flight to settle first (so its archive captures
+  // settled bytes), then performs its own guaranteed archive. See flushFile/
+  // snapshotNow below for the exact join rules.
+  private inflight = new Map<string, Promise<FlushResult>>();
 
   constructor(
     private db: Database.Database,
@@ -79,7 +90,25 @@ export class SheetFlushEngine {
     }
   }
 
-  async flushFile(fileId: string): Promise<FlushResult> {
+  // Public entry point: joins an already-running flush/snapshot for this
+  // fileId instead of racing it (see the `inflight` field comment above).
+  // Deliberately NOT declared `async` — an async function wraps its return
+  // value in a fresh promise even when returning an existing one, which
+  // would defeat the join (callers could no longer tell they got the same
+  // in-flight run). Returning the stored promise directly keeps it identical.
+  flushFile(fileId: string): Promise<FlushResult> {
+    const existing = this.inflight.get(fileId);
+    if (existing) return existing;
+
+    const run = this.doFlushFile(fileId);
+    this.inflight.set(fileId, run);
+    void run.finally(() => {
+      if (this.inflight.get(fileId) === run) this.inflight.delete(fileId);
+    });
+    return run;
+  }
+
+  private async doFlushFile(fileId: string): Promise<FlushResult> {
     const stateJson = this.store.getState(fileId);
     if (stateJson === null) {
       // Dirty with no folded state yet means there's nothing to flush (the
@@ -128,7 +157,28 @@ export class SheetFlushEngine {
   // needsSessionSnapshot/snapshotDone. Folds in whatever state is pending
   // (same as flushFile); with no pending state, archives the file's current
   // live bytes as-is (a plain checkpoint of what's already saved).
+  //
+  // Join ordering: unlike flushFile (which joins an in-flight run outright),
+  // a snapshot must always perform its OWN archive — joining someone else's
+  // result could return a stale/no-op version. So if a flush (or another
+  // snapshot) is already running for this fileId, we AWAIT it first (letting
+  // its write settle onto disk), then start our own — never overlapping the
+  // disk read/write with the other run. We still register ourselves in the
+  // same `inflight` map for the duration, so a flushFile call that arrives
+  // while we're mid-snapshot joins us instead of racing.
   async snapshotNow(fileId: string): Promise<SnapshotResult> {
+    const racingRun = this.inflight.get(fileId);
+    if (racingRun) await racingRun;
+
+    const run = this.doSnapshotNow(fileId);
+    this.inflight.set(fileId, run);
+    void run.finally(() => {
+      if (this.inflight.get(fileId) === run) this.inflight.delete(fileId);
+    });
+    return run;
+  }
+
+  private async doSnapshotNow(fileId: string): Promise<SnapshotResult> {
     const meta = getMeta(this.db, fileId);
     if (!meta) {
       const error = `unknown file ${fileId}`;

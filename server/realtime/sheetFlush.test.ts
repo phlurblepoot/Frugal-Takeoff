@@ -183,6 +183,62 @@ describe('SheetFlushEngine', () => {
     expect(store.dirtyFiles()).toContain('missing-file');
   });
 
+  it('concurrent flushFile calls for the same file join instead of racing', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const engine = new SheetFlushEngine(db, store, dir);
+
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+
+    // Called back-to-back, neither awaited yet: the second call must join
+    // the first's in-flight promise rather than starting its own run (which
+    // would read the same not-yet-updated bytes and could win the write
+    // last, silently reverting the flush with dirty cleared).
+    const p1 = engine.flushFile(fileId);
+    const p2 = engine.flushFile(fileId);
+    expect(p2).toBe(p1); // literally the same in-flight promise — proof of joining, not racing
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toEqual({ ok: true });
+    expect(r2).toBe(r1);
+
+    const outWb = await reload(readFileContent(dir, fileId)!);
+    expect(outWb.worksheets[0].getCell('A2').value).toBe(9999);
+    // Only one archive happened even though flushFile was "called twice".
+    expect(listVersions(db, fileId)).toHaveLength(2);
+  });
+
+  it('snapshotNow joins a racing flush by waiting for it, then performs its own archive exactly once', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const engine = new SheetFlushEngine(db, store, dir);
+
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+    await engine.flushFile(fileId); // consumes the session snapshot slot
+    expect(store.needsSessionSnapshot(fileId)).toBe(false);
+    const versionsBefore = listVersions(db, fileId).length;
+
+    // A second edit dirties the file again. This flush will be a plain write
+    // (no archive) since the session snapshot slot is already spent.
+    const { sheets: secondSheets } = await workbookToFortuneSheets(readFileContent(dir, fileId)!);
+    secondSheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!.v!.v = 42;
+    store.setState(fileId, JSON.stringify(secondSheets));
+
+    const pFlush = engine.flushFile(fileId); // starts running, not yet awaited
+    const pSnap = engine.snapshotNow(fileId); // must wait for pFlush to settle, then archive
+    const [flushResult, snapResult] = await Promise.all([pFlush, pSnap]);
+
+    expect(flushResult.ok).toBe(true);
+    expect(snapResult.ok).toBe(true);
+    expect(snapResult.version).toBeDefined();
+
+    // Exactly one NEW archive: the racing flush contributed none (session
+    // slot already spent), snapshotNow contributed exactly one forced archive.
+    expect(listVersions(db, fileId)).toHaveLength(versionsBefore + 1);
+  });
+
   it('start/stop schedules flushAll on an interval and can be stopped', async () => {
     const fileId = await seedFile();
     const store = new SheetSessionStore(db);
