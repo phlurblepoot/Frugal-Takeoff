@@ -18,6 +18,40 @@ const normalizePageNumber = (pageNumber: string | null | undefined): string | nu
   return n ? n : null;
 };
 
+// A plan set's date/createdAt, read out of its attrs JSON (decomposeProject's
+// `{id, name, ...rest}` destructure puts everything else — including date and
+// createdAt — there). Missing/malformed attrs degrade to no date + createdAt 0.
+interface PlanSetOrderFields { date?: string; createdAt: number }
+
+const parsePlanSetOrderFields = (attrsJson: string | null): PlanSetOrderFields => {
+  let date: string | undefined;
+  let createdAt = 0;
+  if (attrsJson) {
+    try {
+      const parsed = JSON.parse(attrsJson);
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.date === 'string' && parsed.date) date = parsed.date;
+        if (typeof parsed.createdAt === 'number') createdAt = parsed.createdAt;
+      }
+    } catch {
+      // malformed attrs JSON — fall through to the date-less/createdAt-0 default
+    }
+  }
+  return { date, createdAt };
+};
+
+// Same comparator as src/utils/planSets.ts comparePlanSets: order by ISO date
+// when both sets have one and they differ, else by createdAt. This must be
+// re-derived live from attrs rather than read off the persisted sortOrder
+// column: PlanSetManager lets a set's date be edited in place without moving
+// it within the array (see ProjectView's plan-set update handler), so after
+// such an edit sortOrder alone would go stale relative to the client, which
+// re-sorts by this comparator on every read.
+const comparePlanSetOrderFields = (a: PlanSetOrderFields, b: PlanSetOrderFields): number => {
+  if (a.date && b.date && a.date !== b.date) return a.date < b.date ? -1 : 1;
+  return a.createdAt - b.createdAt;
+};
+
 // Durable logical-sheet identity, ported from planSets.ts effectiveSheetId.
 // Prefers the explicit sheetId (migration 15 backfill, carried in the page's
 // attrs JSON); falls back to a stable key derived from the normalized page
@@ -48,11 +82,19 @@ export function effectiveSheetIdFromRow(row: PageRow): string {
 // top reproduces the client's tie-break exactly. The last page in that
 // ordering is the current/living revision; every earlier one is superseded.
 export function isPageSuperseded(db: Database.Database, projectId: string, pageId: string): boolean {
+  // Rank plan sets the same way orderedPlanSets/comparePlanSets does on the
+  // client: sort by date/createdAt, falling back to the persisted sortOrder
+  // (the DB load order, same role as the client's un-sorted planSets array)
+  // as the stable tie-break.
   const planSetRows = db
-    .prepare('SELECT id FROM plan_sets WHERE projectId = ? ORDER BY sortOrder')
-    .all(projectId) as { id: string }[];
+    .prepare('SELECT id, attrs FROM plan_sets WHERE projectId = ? ORDER BY sortOrder')
+    .all(projectId) as { id: string; attrs: string | null }[];
+  const orderedPlanSetIds = planSetRows
+    .map(ps => ({ id: ps.id, ...parsePlanSetOrderFields(ps.attrs) }))
+    .sort(comparePlanSetOrderFields)
+    .map(ps => ps.id);
   const rankByPlanSetId = new Map<string, number>();
-  planSetRows.forEach((ps, i) => rankByPlanSetId.set(ps.id, i));
+  orderedPlanSetIds.forEach((id, i) => rankByPlanSetId.set(id, i));
 
   const pageRows = db
     .prepare('SELECT id, planSetId, pageNumber, attrs FROM pages WHERE projectId = ? ORDER BY sortOrder')

@@ -69,6 +69,46 @@ describe('isPageSuperseded', () => {
   });
 });
 
+// Mirrors what PlanSetManager's re-date feature does server-side: patch just
+// the `date` field inside a plan set's attrs JSON, in place, without touching
+// its sortOrder/array position.
+const setPlanSetDate = (planSetId: string, date: string) => {
+  const row = db.prepare('SELECT attrs FROM plan_sets WHERE id = ?').get(planSetId) as { attrs: string | null };
+  const attrs = row.attrs ? JSON.parse(row.attrs) : {};
+  attrs.date = date;
+  db.prepare('UPDATE plan_sets SET attrs = ? WHERE id = ?').run(JSON.stringify(attrs), planSetId);
+};
+
+describe('isPageSuperseded — plan-set date re-ranking', () => {
+  it('case 7: ranks plan sets by date live (like the client comparator), not by frozen sortOrder', () => {
+    createProject(db, {
+      id: 'pr2', name: 'P2', createdAt: 1,
+      planSets: [
+        { id: 'sA', name: 'Set A', createdAt: 1 }, // created first -> sortOrder 0
+        { id: 'sB', name: 'Set B', createdAt: 2 }, // created second -> sortOrder 1
+      ],
+      takeoffs: [],
+      pages: [
+        { id: 'pA', pageNumber: 'D-400', planSetId: 'sA', sheetId: 'SH-D', measurements: [] },
+        { id: 'pB', pageNumber: 'D-400', planSetId: 'sB', sheetId: 'SH-D', measurements: [] },
+      ],
+    });
+
+    // Pre-edit: no dates set, so createdAt decides — B (created later) is current.
+    expect(isPageSuperseded(db, 'pr2', 'pA')).toBe(true);
+    expect(isPageSuperseded(db, 'pr2', 'pB')).toBe(false);
+
+    // Re-date A to be LATER than B, in place — array position/sortOrder is
+    // untouched, exactly like PlanSetManager's edit-in-place update.
+    setPlanSetDate('sA', '2026-09-01');
+    setPlanSetDate('sB', '2026-01-01');
+
+    // Ranking must flip to follow the dates, not the now-stale sortOrder.
+    expect(isPageSuperseded(db, 'pr2', 'pA')).toBe(false);
+    expect(isPageSuperseded(db, 'pr2', 'pB')).toBe(true);
+  });
+});
+
 describe('effectiveSheetIdFromRow', () => {
   it('case 6: attrs.sheetId beats pageNumber beats id', () => {
     const withSheetId: PageRow = { id: 'x', planSetId: null, pageNumber: 'A-101', attrs: JSON.stringify({ sheetId: 'S' }) };
