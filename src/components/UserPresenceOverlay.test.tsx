@@ -36,10 +36,10 @@ const sess = (over: Partial<SessionView>): SessionView => ({
   ...over,
 });
 
-const setup = (sessions: SessionView[], followedUserId: string | null = null) => {
-  const setFollowedUserId = vi.fn();
-  mockCollab.mockReturnValue({ sessions, mySessionId: 'me', followedUserId, setFollowedUserId, socket: fakeSocket });
-  return { setFollowedUserId };
+const setup = (sessions: SessionView[], followedSessionId: string | null = null) => {
+  const setFollowedSessionId = vi.fn();
+  mockCollab.mockReturnValue({ sessions, mySessionId: 'me', followedSessionId, setFollowedSessionId, socket: fakeSocket });
+  return { setFollowedSessionId };
 };
 
 const renderOverlay = (path = '/dashboard') =>
@@ -108,8 +108,8 @@ describe('UserPresenceOverlay', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
-  it('follow checkbox toggles setFollowedUserId with the session id', () => {
-    const { setFollowedUserId } = setup([
+  it('follow checkbox toggles setFollowedSessionId with the session id', () => {
+    const { setFollowedSessionId } = setup([
       sess({ sessionId: 'me', userId: 'u1', name: 'nathan' }),
       sess({ sessionId: 'a1', userId: 'u2', name: 'amy' }),
     ]);
@@ -118,7 +118,7 @@ describe('UserPresenceOverlay', () => {
 
     const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
     fireEvent.click(checkbox);
-    expect(setFollowedUserId).toHaveBeenCalledWith('a1');
+    expect(setFollowedSessionId).toHaveBeenCalledWith('a1');
   });
 
   it("shows 'No other users online' when only my own single session is present", () => {

@@ -28,10 +28,25 @@ const { fakeSocket, ioMock, ackResponders } = vi.hoisted(() => {
 vi.mock('socket.io-client', () => ({ io: ioMock }));
 
 const navigateSpy = vi.hoisted(() => vi.fn());
-vi.mock('react-router-dom', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  useNavigate: () => navigateSpy,
-}));
+// locationOverrideRef lets a test force location.pathname to a specific value
+// on the next render, layered on top of the real (MemoryRouter-derived)
+// location — used to construct a single commit where both `sessions` and
+// `location.pathname` change together, without depending on react-router's
+// own navigation timing (Link/navigate defer their location update via
+// React.startTransition, landing in a separate, later commit — no good for
+// forcing a genuinely simultaneous change).
+const locationOverrideRef = vi.hoisted(() => ({ current: null as { pathname: string } | null }));
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return {
+    ...actual,
+    useNavigate: () => navigateSpy,
+    useLocation: () => {
+      const real = actual.useLocation();
+      return locationOverrideRef.current ? { ...real, ...locationOverrideRef.current } : real;
+    },
+  };
+});
 
 import { CollaborationProvider, useCollaboration } from './CollaborationContext';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
@@ -55,11 +70,11 @@ function Probe() {
 }
 
 function FollowProbe() {
-  const { sessions, followedUserId, setFollowedUserId } = useCollaboration();
+  const { sessions, followedSessionId, setFollowedSessionId } = useCollaboration();
   return (
     <div>
-      <span data-testid="followed">{followedUserId ?? 'none'}</span>
-      <button data-testid="follow-sB" onClick={() => setFollowedUserId('sB')}>follow</button>
+      <span data-testid="followed">{followedSessionId ?? 'none'}</span>
+      <button data-testid="follow-sB" onClick={() => setFollowedSessionId('sB')}>follow</button>
       <span data-testid="count">{sessions.length}</span>
     </div>
   );
@@ -83,6 +98,7 @@ describe('CollaborationContext', () => {
     localStorage.setItem('token', 'tok123');
     localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan' }));
     ioMock.mockClear(); fakeSocket.emit.mockClear(); navigateSpy.mockClear();
+    locationOverrideRef.current = null;
     for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
     for (const k of Object.keys(ackResponders)) delete ackResponders[k];
   });
@@ -158,6 +174,41 @@ describe('CollaborationContext', () => {
   // makes simulating a real user-driven URL change (as opposed to our own navigate()
   // call) awkward inside this provider-only test. It's covered by the FollowPill RTL
   // test (Task 4) and the e2e suite (Task 9).
+
+  it('clears follow when a manual nav and a followed-session move land in the same commit (race regression)', () => {
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <CollaborationProvider><FollowProbe /></CollaborationProvider>
+      </MemoryRouter>
+    );
+    // OTHER starts at our own path so following it doesn't itself trigger an
+    // auto-nav (keeps followNavRef.current at its baseline, '/dashboard').
+    act(() => fakeSocket.fire('sessions-snapshot', {
+      selfId: 'sA', sessions: [SESSION, { ...OTHER, location: { path: '/dashboard' } }],
+    }));
+    act(() => { screen.getByTestId('follow-sB').click(); });
+    expect(screen.getByTestId('followed').textContent).toBe('sB');
+    navigateSpy.mockClear();
+
+    // Force the pathname change and the followed-session move into the same
+    // commit: react-router's own navigate()/Link defer their location update
+    // via React.startTransition, which lands in a separate, later commit —
+    // no good for constructing a genuinely simultaneous change. Overriding
+    // useLocation's return value directly (see the module mock above) and
+    // then firing the session update in one act() guarantees the merged
+    // effect sees both changes in a single execution — this is what makes
+    // the ordering fix's determinism actually testable. Pre-merge, whether
+    // the manual-nav check or the auto-nav ran "first" for such a commit
+    // depended on effect declaration order; the merge makes the manual
+    // check run first unconditionally.
+    locationOverrideRef.current = { pathname: '/somewhere-else' };
+    act(() => {
+      fakeSocket.fire('session-updated', { ...OTHER, location: { path: '/project/p1/billing' } });
+    });
+
+    expect(screen.getByTestId('followed').textContent).toBe('none');
+    expect(navigateSpy).not.toHaveBeenCalledWith('/project/p1/billing');
+  });
 
   it('sends label only on canvas routes', () => {
     const { unmount } = mount(['/project/p1/page/pg1']);

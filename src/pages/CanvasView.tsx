@@ -53,7 +53,7 @@ const CanvasViewInner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   
-  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementOp, joinCanvas, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
+  const { socket, users, globalUsers, sessions, mySessionId, followedSessionId, setFollowedSessionId, sendCursor, sendMeasurementOp, joinCanvas, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -1890,7 +1890,7 @@ const CanvasViewInner: React.FC = () => {
                             <p className="text-[10px] text-slate-400 truncate">{session.device}</p>
                             {session.location?.pageId !== pageId && (
                               <p className="text-[10px] text-slate-400 truncate">
-                                {session.location?.label || 'another page'}
+                                {session.location?.pageId ? (session.location?.label || 'another page') : 'elsewhere in the app'}
                               </p>
                             )}
                           </div>
@@ -1898,8 +1898,8 @@ const CanvasViewInner: React.FC = () => {
                         <label className="flex items-center gap-1 cursor-pointer group">
                           <input
                             type="checkbox"
-                            checked={followedUserId === session.sessionId}
-                            onChange={(e) => setFollowedUserId(e.target.checked ? session.sessionId : null)}
+                            checked={followedSessionId === session.sessionId}
+                            onChange={(e) => setFollowedSessionId(e.target.checked ? session.sessionId : null)}
                             className="w-3.5 h-3.5 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
                           />
                           <span className="text-[10px] font-medium text-slate-400 group-hover:text-accent-600 transition-colors">Follow</span>

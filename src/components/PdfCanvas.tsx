@@ -202,6 +202,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const isMiddleMouseDownRef = useRef(false);
   const lastMousePosRef = useRef<{x: number, y: number} | null>(null);
 
+  // Cursor-move throttle: coalesce to one onCursorMove per animation frame,
+  // and skip frames where the pointer barely moved (min-distance gate).
+  // Without this, fast mouse movement floods the collab socket with a
+  // cursor-move emit per native mousemove event. latestCursorPosRef is
+  // updated on every mousemove (multiple can fire before a frame elapses),
+  // so the rAF callback always reads the freshest position rather than
+  // closing over whichever event happened to schedule the frame.
+  const cursorRafRef = useRef<number | null>(null);
+  const lastCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const latestCursorPosRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    return () => {
+      if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
+    };
+  }, []);
+
   const [arcMode, setArcMode] = useState<'inactive' | 'waiting_mid' | 'waiting_end'>('inactive');
   const [arcMidPoint, setArcMidPoint] = useState<Point | null>(null);
   const [activeArcMidIndices, setActiveArcMidIndices] = useState<number[]>([]);
@@ -732,7 +748,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const pos = getRelativePointerPosition(stage.getLayers()[0]);
     if (pos) {
       setMousePos(pos);
-      onCursorMove?.(pos.x, pos.y);
+      latestCursorPosRef.current = pos;
+      if (onCursorMove && cursorRafRef.current === null) {
+        cursorRafRef.current = requestAnimationFrame(() => {
+          cursorRafRef.current = null;
+          const p = latestCursorPosRef.current;
+          if (!p) return;
+          const last = lastCursorRef.current;
+          if (!last || Math.abs(p.x - last.x) + Math.abs(p.y - last.y) >= 2) {
+            lastCursorRef.current = { x: p.x, y: p.y };
+            onCursorMove(p.x, p.y);
+          }
+        });
+      }
     }
 
     if (isMiddleMouseDown && lastMousePosRef.current) {

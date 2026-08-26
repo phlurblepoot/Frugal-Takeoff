@@ -2,10 +2,10 @@ import React from 'react';
 import { useCollaboration } from '../context/CollaborationContext';
 
 export const FollowPill: React.FC = () => {
-  const { sessions, followedUserId, setFollowedUserId } = useCollaboration();
+  const { sessions, followedSessionId, setFollowedSessionId } = useCollaboration();
 
-  if (!followedUserId) return null;
-  const followed = sessions.find(s => s.sessionId === followedUserId);
+  if (!followedSessionId) return null;
+  const followed = sessions.find(s => s.sessionId === followedSessionId);
   if (!followed) return null;
 
   return (
@@ -15,7 +15,7 @@ export const FollowPill: React.FC = () => {
           Following {followed.name} ({followed.device})
         </span>
         <button
-          onClick={() => setFollowedUserId(null)}
+          onClick={() => setFollowedSessionId(null)}
           className="rounded-full px-2 py-0.5 text-xs font-semibold text-ink-soft hover:bg-hover hover:text-ink"
         >
           Stop

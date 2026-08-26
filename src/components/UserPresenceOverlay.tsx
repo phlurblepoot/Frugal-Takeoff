@@ -9,7 +9,7 @@ import { useLiveQuery } from '../hooks/useLiveQuery';
 import { getProjectsSummary } from '../utils/store';
 
 export const UserPresenceOverlay: React.FC = () => {
-  const { sessions, mySessionId, followedUserId, setFollowedUserId } = useCollaboration();
+  const { sessions, mySessionId, followedSessionId, setFollowedSessionId } = useCollaboration();
   const [isOpen, setIsOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
@@ -50,8 +50,8 @@ export const UserPresenceOverlay: React.FC = () => {
     >
       <input
         type="checkbox"
-        checked={followedUserId === session.sessionId}
-        onChange={(e) => setFollowedUserId(e.target.checked ? session.sessionId : null)}
+        checked={followedSessionId === session.sessionId}
+        onChange={(e) => setFollowedSessionId(e.target.checked ? session.sessionId : null)}
         className="size-3.5 rounded border-edge-strong accent-accent-600"
       />
       Follow

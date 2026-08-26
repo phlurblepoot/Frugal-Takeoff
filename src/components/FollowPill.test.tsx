@@ -16,10 +16,10 @@ const sess = (over: Partial<SessionView>): SessionView => ({
   ...over,
 });
 
-const setup = (sessions: SessionView[], followedUserId: string | null) => {
-  const setFollowedUserId = vi.fn();
-  mockCollab.mockReturnValue({ sessions, followedUserId, setFollowedUserId });
-  return { setFollowedUserId };
+const setup = (sessions: SessionView[], followedSessionId: string | null) => {
+  const setFollowedSessionId = vi.fn();
+  mockCollab.mockReturnValue({ sessions, followedSessionId, setFollowedSessionId });
+  return { setFollowedSessionId };
 };
 
 describe('FollowPill', () => {
@@ -30,7 +30,7 @@ describe('FollowPill', () => {
   });
 
   it('shows the followed session and stops on click', () => {
-    const { setFollowedUserId } = setup(
+    const { setFollowedSessionId } = setup(
       [sess({ sessionId: 'a1', name: 'sam', device: 'Mac · Safari' })],
       'a1'
     );
@@ -38,7 +38,7 @@ describe('FollowPill', () => {
     expect(screen.getByText('Following sam (Mac · Safari)')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(setFollowedUserId).toHaveBeenCalledWith(null);
+    expect(setFollowedSessionId).toHaveBeenCalledWith(null);
   });
 
   it('renders nothing when the followed session id has no live match', () => {

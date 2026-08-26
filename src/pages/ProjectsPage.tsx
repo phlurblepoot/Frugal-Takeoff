@@ -340,7 +340,7 @@ export const ProjectsPage: React.FC = () => {
   const handleDeleteClick = (p: ProjectSummary) => {
     const hasViewer = sessions.some(s => s.sessionId !== mySessionId && s.location?.projectId === p.id);
     if (hasViewer) {
-      toast('This project has pages currently being viewed by other users and cannot be deleted.', { type: 'warning' });
+      toast('Someone is currently working in this project — it cannot be deleted right now.', { type: 'warning' });
       return;
     }
     setDeleteText('');

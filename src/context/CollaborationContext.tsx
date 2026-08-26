@@ -39,8 +39,8 @@ interface CollaborationContextType {
   globalUsers: User[];
   sessions: SessionView[];
   mySessionId: string | null;
-  followedUserId: string | null;
-  setFollowedUserId: (id: string | null) => void;
+  followedSessionId: string | null;
+  setFollowedSessionId: (id: string | null) => void;
   sendCursor: (x: number, y: number) => void;
   sendMeasurementOp: (op: { projectId: string; pageId: string; action: 'add' | 'update' | 'delete';
     measurement: Record<string, unknown> & { id: string } }) =>
@@ -59,7 +59,10 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   const [socket, setSocket] = useState<Socket | null>(null);
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [mySessionId, setMySessionId] = useState<string | null>(null);
-  const [followedUserId, setFollowedUserId] = useState<string | null>(null);
+  const [followedSessionId, setFollowedSessionId] = useState<string | null>(null);
+  // Defaults to 'Projects' — on canvas entry this briefly flashes as the page
+  // label before the location-sync effect below sets the real page name from
+  // the route; cosmetic only, behavior unchanged.
   const [currentPageName, setCurrentPageName] = useState('Projects');
   // authEpoch bumps when a login happens so the connect effect re-runs
   const [authEpoch, setAuthEpoch] = useState(0);
@@ -155,30 +158,76 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   }));
   const users: User[] = globalUsers.filter(u => u.pageId === location.pathname);
 
-  // Follow: navigate to wherever the followed session goes; clear when it vanishes.
+  // Follow: navigate to wherever the followed session goes; clear when it
+  // vanishes or when the user manually navigates away. Merged into one
+  // effect (was two, one keyed on [followedUserId, sessions, pathname,
+  // navigate] for auto-nav and one keyed on [pathname] alone for the
+  // manual-nav check) so the manual check always runs — deterministically,
+  // before any auto-nav in the same commit can overwrite the ref — instead
+  // of racing effect declaration order: a batched session-update (new
+  // followed path) landing in the same commit as a pathname change used to
+  // let the auto-nav effect re-arm followNavRef and fire an errant
+  // navigate() before the manual-nav effect's check ran, since both effects
+  // shared that commit but only the auto-nav one was declared first.
   const followNavRef = useRef<string | null>(null);
+  // Tracks the followedSessionId as of the last run so a fresh follow
+  // (null->id, or switching directly from one followed session to another)
+  // can seed followNavRef with the current pathname as a baseline — without
+  // this, the manual-nav check below would immediately misfire on the very
+  // first run (nothing has auto-navigated yet, so the ref wouldn't match
+  // the followed path OR the current pathname).
+  const prevFollowedSessionIdRef = useRef<string | null>(null);
+  // Tracks location.pathname as of the last run. react-router defers a
+  // navigate()'s actual location update via React.startTransition, so there's
+  // a window — sometimes spanning several renders triggered by unrelated
+  // `sessions` updates (e.g. a presence heartbeat) — where followNavRef
+  // already points at our own pending auto-nav target but location.pathname
+  // hasn't caught up yet. Gating the manual-nav check on "did the pathname
+  // itself actually change since we last checked" (mirroring the pre-merge
+  // effect's pathname-only dependency array) is what keeps that window from
+  // being misread as the user having navigated away.
+  const prevPathnameRef = useRef(location.pathname);
   useEffect(() => {
-    if (!followedUserId) return;
-    const followed = sessions.find(s => s.sessionId === followedUserId);
-    if (!followed) { setFollowedUserId(null); followNavRef.current = null; return; }
-    const path = followed.location?.path;
-    if (path && path !== location.pathname) {
-      followNavRef.current = path;
-      navigate(path);
-    }
-  }, [followedUserId, sessions, location.pathname, navigate]);
-
-  // Manual navigation (anywhere that isn't the followed path or our own auto-nav) stops following.
-  useEffect(() => {
-    if (!followedUserId) return;
-    const followedPath = sessions.find(s => s.sessionId === followedUserId)?.location?.path;
-    if (location.pathname !== followedPath && location.pathname !== followNavRef.current) {
-      setFollowedUserId(null);
+    if (!followedSessionId) {
       followNavRef.current = null;
+      prevFollowedSessionIdRef.current = null;
+      prevPathnameRef.current = location.pathname;
+      return;
     }
-    // deliberately keyed on pathname only: this is a "did the URL move under us" check
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+    const isNewFollow = prevFollowedSessionIdRef.current !== followedSessionId;
+    if (isNewFollow) {
+      prevFollowedSessionIdRef.current = followedSessionId;
+      followNavRef.current = location.pathname;
+    }
+    const followed = sessions.find(s => s.sessionId === followedSessionId);
+    if (!followed) {
+      setFollowedSessionId(null);
+      followNavRef.current = null;
+      prevPathnameRef.current = location.pathname;
+      return;
+    }
+    const followedPath = followed.location?.path;
+    const pathnameChanged = prevPathnameRef.current !== location.pathname;
+    prevPathnameRef.current = location.pathname;
+
+    // Manual-nav check first: only meaningful on a run where the URL itself
+    // just moved (see prevPathnameRef comment above) and never on the same
+    // run that just started following. If the URL moved somewhere that is
+    // neither the followed session's path nor our own last auto-nav target,
+    // the user navigated manually — stop following.
+    if (!isNewFollow && pathnameChanged &&
+        location.pathname !== followedPath && location.pathname !== followNavRef.current) {
+      setFollowedSessionId(null);
+      followNavRef.current = null;
+      return;
+    }
+
+    // Auto-nav: the followed session moved to a new path — follow it there.
+    if (followedPath && followedPath !== location.pathname) {
+      followNavRef.current = followedPath;
+      navigate(followedPath);
+    }
+  }, [followedSessionId, sessions, location.pathname, navigate]);
 
   const sendCursor = (x: number, y: number) => { socket?.emit('cursor-move', { x, y }); };
   const sendMeasurementOp = (op: { projectId: string; pageId: string; action: 'add' | 'update' | 'delete';
@@ -206,7 +255,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
   return (
     <CollaborationContext.Provider value={{
       socket, users, globalUsers, sessions, mySessionId,
-      followedUserId, setFollowedUserId,
+      followedSessionId, setFollowedSessionId,
       sendCursor, sendMeasurementOp, joinCanvas, updateUser,
       setPageName: setCurrentPageName, onMeasurementApplied,
     }}>
