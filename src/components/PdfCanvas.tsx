@@ -11,8 +11,18 @@ import { useToast } from './Toast';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+import { getCachedPdfDocument, getCachedPageBitmap, putCachedPageBitmap } from '../utils/pdfDocCache';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
+// Records the render scale a cached bitmap was produced at, keyed the same
+// way as pdfDocCache's bitmap cache (`${sourcePdfUrl}#${sourcePdfPageNum}`).
+// A page flip that hits the bitmap cache needs this to seed `lastRenderScaleRef`
+// correctly so the zoom re-render path doesn't mistake an already-current-zoom
+// bitmap for a stale one. This is a PdfCanvas-local pairing (not part of the
+// cache module's public contract), so it lives here rather than in
+// pdfDocCache.ts.
+const bitmapRenderScaleByKey = new Map<string, number>();
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -180,6 +190,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   // rendering — see `thumbnailUrl` prop doc.
   const [thumbImage] = useImage(thumbnailUrl || '');
   const [pdfLoadProgress, setPdfLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
+  // Bumped whenever `pdfPageRef.current` is (re)assigned. On a bitmap-cache
+  // hit `pdfImage` is set instantly while the page proxy is still resolving
+  // in the background — effects that read `pdfPageRef.current` (zoom
+  // re-render, page-reference detection, search) key off `pdfImage`/other
+  // state changes to know when to re-check, and would otherwise fire once,
+  // find the ref still null, and never retry once it's actually populated.
+  // Including this tick in their dependency arrays closes that gap.
+  const [pdfPageReadyTick, setPdfPageReadyTick] = useState(0);
 
   // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
   // rendered on demand into an offscreen canvas at a resolution that tracks
@@ -373,38 +391,78 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   }, [image, dimensions, imageWidth, imageHeight]);
 
   // ── Vector PDF page loading + on-demand rendering ────────────────────────────
-  // Load the source PDF & target page once per (url, pageNum). The proxy lives
-  // for the lifetime of this PdfCanvas instance — the parent remounts via
-  // `key={page.id}` on navigation, so cleanup is bounded.
+  // Load the source PDF & target page once per (url, pageNum). The parent
+  // remounts this component via `key={page.id}` on navigation, so this effect
+  // runs fresh on every page flip — but the parsed document and rendered
+  // bitmap are cached at module scope (src/utils/pdfDocCache.ts) across those
+  // remounts, so a flip back to a recently-viewed page is instant instead of
+  // re-parsing the PDF and re-rendering the page from scratch. The bitmap
+  // cache is keyed by `${sourcePdfUrl}#${sourcePdfPageNum}` — the only stable
+  // page identity available to this component (it isn't handed the page id
+  // itself, only its vector source + page number).
   useEffect(() => {
     if (!sourcePdfUrl || !sourcePdfPageNum) {
       pdfPageRef.current = null;
-      if (pdfProxyRef.current) {
-        pdfProxyRef.current.destroy().catch(() => {});
-        pdfProxyRef.current = null;
-      }
+      pdfProxyRef.current = null;
       setPdfImage(null);
       setPdfLoadProgress(null);
       lastRenderScaleRef.current = 0;
       return;
     }
     let cancelled = false;
-    setPdfLoadProgress({ loaded: 0, total: 0 });
-    (async () => {
+    const bitmapKey = `${sourcePdfUrl}#${sourcePdfPageNum}`;
+
+    // Resolves the (possibly cached) document + target page and populates
+    // pdfProxyRef/pdfPageRef. Needed on BOTH the hit and miss paths — the
+    // zoom re-render path, text search, and cross-page-reference detection
+    // all key off the live page proxy, not just the displayed bitmap.
+    const loadProxyAndPage = async (): Promise<any | null> => {
       try {
         // onProgress reports byte counts of the PDF download itself (total
         // is 0/unknown until the server sends Content-Length) — surfaced as
-        // the "Loading sheet…" overlay below while pdfImage is still null.
-        const loadingTask = pdfjsLib.getDocument({ url: sourcePdfUrl });
-        loadingTask.onProgress = ({ loaded, total }: { loaded: number; total: number }) => {
+        // the "Loading sheet…" overlay while pdfImage is still null. On a
+        // shared cache hit (another caller already triggered the load, or it
+        // already resolved) this fires rarely-to-never, which is correct: a
+        // cache hit has nothing new to report progress on.
+        const proxy = await getCachedPdfDocument(sourcePdfUrl, ({ loaded, total }) => {
           if (!cancelled) setPdfLoadProgress({ loaded, total });
-        };
-        const proxy = await loadingTask.promise;
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        });
+        if (cancelled) return null;
         const page = await proxy.getPage(sourcePdfPageNum);
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        if (cancelled) return null;
         pdfProxyRef.current = proxy;
         pdfPageRef.current = page;
+        setPdfPageReadyTick(t => t + 1);
+        return page;
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error('Failed to load source PDF', err);
+        }
+        return null;
+      }
+    };
+
+    const cachedBitmap = getCachedPageBitmap(bitmapKey);
+    if (cachedBitmap) {
+      // Cache hit: display immediately, no progress overlay. The proxy/page
+      // still resolve in the background (via loadProxyAndPage below) but
+      // must never block or replace this image with a blank frame meanwhile.
+      setPdfLoadProgress(null);
+      lastRenderScaleRef.current = bitmapRenderScaleByKey.get(bitmapKey) ?? 2.0;
+      setPdfImage(cachedBitmap);
+      void loadProxyAndPage();
+      return () => { cancelled = true; };
+    }
+
+    // Cache miss: full load + render, same pipeline as before, then populate
+    // both caches so the next visit to this page (or others sharing this
+    // source PDF) is fast.
+    setPdfLoadProgress({ loaded: 0, total: 0 });
+    (async () => {
+      const page = await loadProxyAndPage();
+      if (cancelled) return;
+      if (!page) { setPdfLoadProgress(null); return; }
+      try {
         // Initial render at base scale (2.0× matches imageWidth/imageHeight).
         const canvas = document.createElement('canvas');
         const viewport = page.getViewport({ scale: 2.0 });
@@ -417,11 +475,13 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         await renderTaskRef.current.promise;
         if (cancelled) return;
         lastRenderScaleRef.current = 2.0;
+        bitmapRenderScaleByKey.set(bitmapKey, 2.0);
+        putCachedPageBitmap(bitmapKey, canvas);
         setPdfImage(canvas);
         setPdfLoadProgress(null);
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
-          console.error('Failed to load source PDF', err);
+          console.error('Failed to render source PDF page', err);
         }
         if (!cancelled) setPdfLoadProgress(null);
       }
@@ -447,9 +507,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   }, [linkablePages]);
 
   // Detect cross-page references on this page. Runs once the page proxy is
-  // loaded (signalled by pdfImage becoming non-null) and whenever the set of
-  // linkable pages changes. Reuses the cached pdfPageRef — no extra PDF
-  // round-trip. Vector pages only; legacy raster pages skip silently.
+  // loaded (signalled by pdfImage becoming non-null, OR — on a bitmap-cache
+  // hit, where pdfImage is set before the proxy resolves — by
+  // pdfPageReadyTick ticking once it does) and whenever the set of linkable
+  // pages changes. Reuses the cached pdfPageRef — no extra PDF round-trip.
+  // Vector pages only; legacy raster pages skip silently.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current || normalizedPageMap.size === 0) {
       setPageRefs([]);
@@ -489,7 +551,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [pdfImage, normalizedPageMap]);
+  }, [pdfImage, pdfPageReadyTick, normalizedPageMap]);
 
   // Render the page into a fresh canvas sized for the *current* zoom and swap
   // it in atomically — we never mutate the canvas that's on screen, otherwise
@@ -567,7 +629,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   // Debounced so a single drag through many zoom levels only kicks off once the
   // user pauses. The renderer itself reads the live scale, so a render queued
-  // here always targets wherever the zoom ended up.
+  // here always targets wherever the zoom ended up. `pdfPageReadyTick` is in
+  // the deps so that a bitmap-cache-hit page flip (where `pdfImage` is set
+  // before `pdfPageRef.current` has resolved) gets a chance to re-check once
+  // the page proxy actually arrives — otherwise a zoom that happens in that
+  // window would bail on the ref-not-ready guard below and never retry.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current) return;
     if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
@@ -575,15 +641,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => {
       if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     };
-  }, [stageScale, pdfImage, renderPdfAtCurrentScale]);
+  }, [stageScale, pdfImage, pdfPageReadyTick, renderPdfAtCurrentScale]);
 
-  // Cleanup on unmount.
+  // Cleanup on unmount. The document proxy is NOT destroyed here — it's owned
+  // by the module-level document cache (pdfDocCache.ts) now, shared across
+  // PdfCanvas remounts, and destroyed only on its own LRU eviction.
   useEffect(() => () => {
     if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
-    if (pdfProxyRef.current) {
-      pdfProxyRef.current.destroy().catch(() => {});
-      pdfProxyRef.current = null;
-    }
+    pdfProxyRef.current = null;
     pdfPageRef.current = null;
   }, []);
 
@@ -679,7 +744,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => {
       isActive = false;
     };
-  }, [searchTerm, imageUrl, pdfImage]);
+  }, [searchTerm, imageUrl, pdfImage, pdfPageReadyTick]);
 
   const handleWheel = (e: any) => {
     e.evt.preventDefault();

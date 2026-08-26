@@ -209,6 +209,114 @@ export async function seedProjectWithVectorPage(
   return { projectId, pageId, sourcePdfFileId: pdfFileId, thumbnailId, name };
 }
 
+export interface SeedVectorPagesResult {
+  projectId: string;
+  page1Id: string;
+  page2Id: string;
+  sourcePdfFileId: string;
+  thumbnailId: string;
+  name: string;
+}
+
+/**
+ * Variant of seedProjectWithVectorPage with TWO project pages
+ * (sourcePdfPageNum 1 and 2) both backed by the SAME source PDF file — used by
+ * e2e/canvas-vector-flip.spec.ts to prove the module-level PDF document +
+ * rendered-bitmap caches (src/utils/pdfDocCache.ts) make page flips between
+ * vector pages instant instead of re-parsing/re-rendering on every visit:
+ * across a page-1 -> page-2 -> page-1 round trip, the source PDF's /raw URL
+ * should be requested only ONCE for the whole session (the doc cache + HTTP
+ * cache both help here), and the return to page 1 should paint near-instantly
+ * from the rendered-bitmap cache rather than waiting on a fresh pdf.js parse
+ * + render.
+ */
+export async function seedProjectWithVectorPages(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedVectorPagesResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const projectId = randomUUID();
+  const page1Id = randomUUID();
+  const page2Id = randomUUID();
+  const pdfFileId = randomUUID();
+  const thumbnailId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Vector Pages Project ${short}`;
+
+  // Letter-size (850×1100pt) PDF; PdfCanvas renders at a base scale of 2.0×,
+  // so imageWidth/imageHeight below (1700×2200) match what the real add-pages
+  // flow computes for a page at this size.
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const page1 = pdfDoc.addPage([850, 1100]);
+  page1.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.2, 0.4, 0.8) });
+  page1.drawText('E2E VECTOR SHEET 1', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  const page2 = pdfDoc.addPage([850, 1100]);
+  page2.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.8, 0.3, 0.2) });
+  page2.drawText('E2E VECTOR SHEET 2', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  const pdfBytes = await pdfDoc.save();
+
+  const pdfUploadRes = await request.post(
+    `/api/files/${pdfFileId}?projectId=${projectId}&kind=plan-source&sourceType=plan-set&sourceId=${projectId}` +
+    `&name=${encodeURIComponent('e2e-vector-sheet.pdf')}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(pdfBytes) },
+  );
+  if (!pdfUploadRes.ok()) throw new Error(`pdf upload failed: ${pdfUploadRes.status()} ${await pdfUploadRes.text()}`);
+
+  // Thumbnail — same data-URL upload idiom as seedProjectWithPage's page image.
+  const thumbBase64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const thumbDataUrl = `data:image/png;base64,${thumbBase64}`;
+  const thumbRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: thumbnailId, data: thumbDataUrl },
+  });
+  if (!thumbRes.ok()) throw new Error(`thumbnail upload failed: ${thumbRes.status()} ${await thumbRes.text()}`);
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [],
+    pages: [
+      {
+        id: page1Id,
+        name: 'Sheet 1',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 1,
+        measurements: [],
+        scaleConfig: null,
+      },
+      {
+        id: page2Id,
+        name: 'Sheet 2',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 2,
+        measurements: [],
+        scaleConfig: null,
+      },
+    ],
+    version: 1,
+    status: 'bidding',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, page1Id, page2Id, sourcePdfFileId: pdfFileId, thumbnailId, name };
+}
+
 export interface SeedWithTakeoffResult extends SeedResult {
   takeoffId: string;
   takeoffName: string;
