@@ -34,6 +34,9 @@ const upsertMeasurement = (
   measurement: Record<string, unknown> & { id: string }
 ): void => {
   const { id, takeoffId, type, name, color, points, ...rest } = measurement;
+  // id-keyed (not pageId-scoped): applyMeasurementOp's cross-page collision
+  // check already guarantees that if a row with this id exists, it's on this
+  // same page — see the pageId/projectId check before this is called.
   const existing = db.prepare('SELECT sortOrder FROM measurements WHERE id = ?').get(id) as
     | { sortOrder: number }
     | undefined;
@@ -76,8 +79,17 @@ export function applyMeasurementOp(db: Database.Database, op: MeasurementOp): { 
 
   if (action === 'delete') {
     if (typeof measurement.id !== 'string' || !measurement.id) throw new OpRejectedError('invalid_measurement');
-  } else if (!isValidForWrite(measurement)) {
-    throw new OpRejectedError('invalid_measurement');
+  } else {
+    if (!isValidForWrite(measurement)) throw new OpRejectedError('invalid_measurement');
+    // Ops never legitimately move a measurement across pages/projects — an add
+    // or update whose id collides with a row that lives elsewhere is rejected
+    // rather than silently relocating that row onto op.pageId/op.projectId.
+    const existing = db.prepare('SELECT pageId, projectId FROM measurements WHERE id = ?').get(measurement.id) as
+      | { pageId: string; projectId: string }
+      | undefined;
+    if (existing && (existing.pageId !== pageId || existing.projectId !== projectId)) {
+      throw new OpRejectedError('invalid_measurement');
+    }
   }
 
   let version = 0;

@@ -162,6 +162,35 @@ describe('applyMeasurementOp', () => {
     expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt ?? 0);
   });
 
+  it('rejects add/update ops whose id already exists on a different page (no silent cross-page relocation)', () => {
+    // Second page in the same project.
+    db.prepare('INSERT INTO pages (id, projectId, pageNumber, sortOrder) VALUES (?, ?, ?, ?)').run('pg2', 'pr1', 'A-2', 1);
+
+    applyMeasurementOp(db, baseOp({ pageId: 'pg1', measurement: { id: 'm1', type: 'area', points: [{ x: 0, y: 0 }] } }));
+    const before = (db.prepare('SELECT version FROM projects WHERE id = ?').get('pr1') as any).version;
+
+    expect(() =>
+      applyMeasurementOp(
+        db,
+        baseOp({ action: 'add', pageId: 'pg2', measurement: { id: 'm1', type: 'count', points: [{ x: 1, y: 1 }] } })
+      )
+    ).toThrowError(expect.objectContaining({ reason: 'invalid_measurement' }));
+    expect(() =>
+      applyMeasurementOp(
+        db,
+        baseOp({ action: 'update', pageId: 'pg2', measurement: { id: 'm1', type: 'count', points: [{ x: 1, y: 1 }] } })
+      )
+    ).toThrowError(expect.objectContaining({ reason: 'invalid_measurement' }));
+
+    // row is still on the original page, untouched
+    const row = db.prepare('SELECT pageId, type FROM measurements WHERE id = ?').get('m1') as any;
+    expect(row.pageId).toBe('pg1');
+    expect(row.type).toBe('area');
+    // version was not bumped by either rejected op
+    const after = (db.prepare('SELECT version FROM projects WHERE id = ?').get('pr1') as any).version;
+    expect(after).toBe(before);
+  });
+
   it('case 8: round-trips add fields through loadProject (attrs split matches decomposeProject/loadProject)', () => {
     applyMeasurementOp(
       db,
