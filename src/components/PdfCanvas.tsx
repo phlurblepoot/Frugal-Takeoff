@@ -87,6 +87,13 @@ interface PdfCanvasProps {
    * select-to-view stay fully functional. Threaded from CanvasView's `readOnly`.
    */
   readOnly?: boolean;
+  /**
+   * Fires whenever the in-progress click-by-click drawing buffer transitions
+   * between empty and non-empty (including mid-arc). CanvasView uses this to
+   * gate live backfill/reload (Task 5) so a foreign refresh never clobbers an
+   * unfinished shape the user is mid-draw on.
+   */
+  onDrawingActiveChange?: (active: boolean) => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -145,6 +152,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onClearMultiSelect,
   isMultiSelectMode = false,
   readOnly = false,
+  onDrawingActiveChange,
 }) => {
   const { toast } = useToast();
   // The subtract (cutout) tool draws exactly like the area tool — same clicks,
@@ -230,6 +238,12 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       onMeasurementResumed?.();
     }
   }, [resumeMeasurement, resumeSegmentIdx, onMeasurementResumed]);
+
+  // Single choke point for the mid-draw signal (Task 5) rather than
+  // instrumenting every setActivePoints/setArcMode call site individually.
+  useEffect(() => {
+    onDrawingActiveChange?.(activePoints.length > 0 || arcMode !== 'inactive');
+  }, [activePoints, arcMode, onDrawingActiveChange]);
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);

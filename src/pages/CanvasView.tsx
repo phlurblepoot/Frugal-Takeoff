@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Hand, Ruler, Square, SquareMinus, Settings, Trash2, Download, ArrowLeft, Layers, Plus, Hash, Undo, Redo, ChevronLeft, ChevronRight, Menu, StickyNote, HelpCircle, BoxSelect, AlignStartVertical, AlignEndVertical, History } from 'lucide-react';
 import { useToast } from '../components/Toast';
@@ -11,12 +11,13 @@ import { ToolDisabledModal } from '../components/canvas/ToolDisabledModal';
 import { MeasurementSidebar } from '../components/canvas/MeasurementSidebar';
 import { Measurement, MeasurementSegment, ScaleConfig, Tool, Project, ProjectPage, MeasurementTakeoff, TakeoffTemplate, CustomCost } from '../types';
 import { calculatePolylineLength, measurementAreaPx, calculateRealValue, parseFeetAndInches, calculateSurfaceAreaPx, convertUnit, evaluateMathExpression, UNIT_LABELS, isPointInPolygon, expandArcPoints } from '../utils/math';
-import { getProject, saveProject, getImage, getImageUrl, getTemplates } from '../utils/store';
+import { getProject, saveProject, getImage, getImageUrl, getTemplates, noteProjectVersion } from '../utils/store';
 import { CollaborationProvider, useCollaboration } from '../context/CollaborationContext';
 import { useNotes } from '../context/NotesContext';
 import { CustomCostRow } from '../components/CustomCostRow';
 import { useMeasurementHistory } from '../hooks/useMeasurementHistory';
 import { computeRevisionModel, effectiveSheetId } from '../utils/planSets';
+import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 const STANDARD_SCALES = [
   { label: '1/32" = 1\'-0"', pixelDistance: 144, realWorldDistance: 32, unit: 'ft' },
@@ -52,7 +53,7 @@ const CanvasViewInner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   
-  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementOp, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
+  const { socket, users, globalUsers, sessions, mySessionId, followedUserId, setFollowedUserId, sendCursor, sendMeasurementOp, joinCanvas, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -87,6 +88,20 @@ const CanvasViewInner: React.FC = () => {
     return () => mq.removeEventListener('change', handler);
   }, []);
   const [readOnlyBannerDismissed, setReadOnlyBannerDismissed] = useState(false);
+
+  // Task 5: mirrors PdfCanvas's in-progress drawing buffer (activePoints /
+  // arc sub-state). Read via a ref (not just the state) so async callbacks
+  // (backfill, the entity-changed reload) always see the CURRENT value
+  // instead of whatever was captured when the effect/closure was created.
+  const [isDrawingActive, setIsDrawingActive] = useState(false);
+  const isDrawingActiveRef = useRef(false);
+  useEffect(() => { isDrawingActiveRef.current = isDrawingActive; }, [isDrawingActive]);
+
+  // Mirrors `project` for the same stale-closure reason — the entity-changed
+  // socket listener (item 6) needs the CURRENT project.version to decide
+  // whether an incoming change is foreign or self-echo from our own op traffic.
+  const projectRef = useRef<Project | null>(null);
+  useEffect(() => { projectRef.current = project; }, [project]);
 
   // Superseded-revision read-only gate (Plan Set rework Task 8). When the opened
   // page is an OLDER revision of its sheet, it is frozen history: drawing/editing
@@ -232,8 +247,11 @@ const CanvasViewInner: React.FC = () => {
         regionId,
       };
       pushToHistory({ type: 'add', measurement: newMeasurement });
-      savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-      void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } });
+      // Measurement-only mutation — no other page/takeoff state changes, so
+      // the project PUT is dropped in favor of the op (contract item 1).
+      applyLocalMeasurements(page.id, [...page.measurements, newMeasurement]);
+      void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } })
+        .then(handleMeasurementOpResult);
       setSelectedMeasurementId(newMeasurement.id);
       toast('Measurement pasted', { type: 'success', duration: 1500 });
     } catch (err) {
@@ -304,14 +322,25 @@ const CanvasViewInner: React.FC = () => {
 
   useEffect(() => {
     if (projectId && pageId) {
-      loadData(projectId, pageId);
+      loadData(projectId, pageId).then(ok => {
+        if (ok) backfillMeasurements(projectId, pageId);
+      });
     }
     loadTemplates();
   }, [projectId, pageId]);
 
   useEffect(() => {
     const unsubscribeMeasurement = onMeasurementApplied((ev) => {
-      if (ev.pageId !== pageId) return;
+      // Contract item 2: ALWAYS adopt the version, even for a cross-page op —
+      // it still bumped the shared project version, and skipping adoption
+      // here would make this tab's next full-project PUT 409 unnecessarily.
+      if (projectId) noteProjectVersion(projectId, ev.version);
+
+      if (ev.pageId !== pageId) {
+        if (projectId) setProject(prev => (prev ? { ...prev, version: ev.version } : prev));
+        return;
+      }
+
       const { action, measurement } = ev;
       setPage(prev => {
         if (!prev) return prev;
@@ -328,11 +357,12 @@ const CanvasViewInner: React.FC = () => {
         }
         return { ...prev, measurements: newMeasurements };
       });
-      
+
       setProject(prev => {
         if (!prev) return prev;
         return {
           ...prev,
+          version: ev.version,
           pages: prev.pages.map(p => {
             if (p.id !== pageId) return p;
             let newMeasurements = [...p.measurements];
@@ -355,6 +385,61 @@ const CanvasViewInner: React.FC = () => {
       unsubscribeMeasurement();
     };
   }, [projectId, pageId, onMeasurementApplied]);
+
+  // Contract item 3 (backfill): hydrates this page's measurements from the
+  // server on initial load and on every socket reconnect, so a client that
+  // missed live ops while disconnected (or just navigated in) converges on
+  // the authoritative measurement set. Guarded against clobbering an
+  // in-flight local drawing — read via the ref so a stale closure from an
+  // earlier render can't skip a guard that's since become true.
+  const backfillMeasurements = async (pId: string, pgId: string) => {
+    if (isDrawingActiveRef.current) return;
+    const res = await joinCanvas(pId, pgId);
+    if (!res.ok) return;
+    if (isDrawingActiveRef.current) return; // re-check: drawing may have started while awaiting
+    noteProjectVersion(pId, res.version);
+    setPage(prev => (prev && prev.id === pgId) ? { ...prev, measurements: res.measurements } : prev);
+    setProject(prev => prev
+      ? { ...prev, version: res.version, pages: prev.pages.map(p => p.id === pgId ? { ...p, measurements: res.measurements } : p) }
+      : prev);
+  };
+
+  useEffect(() => {
+    if (!socket || !projectId || !pageId) return;
+    const onConnect = () => { backfillMeasurements(projectId, pageId); };
+    socket.on('connect', onConnect);
+    return () => { socket.off('connect', onConnect); };
+  }, [socket, projectId, pageId]);
+
+  // Contract item 6 (Nathan-requested addition): foreign, non-measurement
+  // project changes (scale recalibration, takeoff add/rename, page rename)
+  // still go through the full project PUT, so they don't arrive via
+  // onMeasurementApplied. Subscribe to the raw entity-changed change feed and
+  // debounce a reload — but skip self-echo AND any version we've already
+  // adopted, since measurement ops adopt their version via the ack/
+  // measurement-applied handler BEFORE the paired entity-changed broadcast
+  // arrives; without this check every own-op would trigger a redundant reload.
+  useEffect(() => {
+    if (!socket || !projectId || !pageId) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const onEntityChanged = (ev: { type: string; id: string; projectId?: string; version?: number;
+      action?: string; byUserId?: string; bySessionId?: string }) => {
+      if (ev.type !== 'project' || ev.id !== projectId) return;
+      if (ev.bySessionId === CLIENT_SESSION_ID) return;
+      if (typeof ev.version === 'number' && ev.version <= (projectRef.current?.version ?? 0)) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (isDrawingActiveRef.current) return; // same mid-draw guard as backfill
+        loadData(projectId, pageId);
+      }, 300);
+    };
+    socket.on('entity-changed', onEntityChanged);
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      socket.off('entity-changed', onEntityChanged);
+    };
+  }, [socket, projectId, pageId]);
 
   // A 409 conflict on this tab resolves by refetching in place (see
   // ProjectConflictListener); once that refetch lands, pick it up the same
@@ -390,12 +475,49 @@ const CanvasViewInner: React.FC = () => {
     await saveProject(updatedProject);
   };
 
+  // Task 5: replaces a single page's measurements array in LOCAL state only —
+  // no project PUT. Every measurement-only mutation site below uses this
+  // instead of savePageUpdates/saveProject; the op's ack (handleMeasurementOpResult)
+  // is what makes the change durable and adopts the resulting project version.
+  // sourcePageId lets callers target a measurement living on a different page
+  // than the one currently open (cross-page update/delete already supported).
+  const applyLocalMeasurements = (sourcePageId: string, measurements: Measurement[]) => {
+    setProject(prev => prev
+      ? { ...prev, pages: prev.pages.map(p => p.id === sourcePageId ? { ...p, measurements } : p) }
+      : prev);
+    setPage(prev => (prev && prev.id === sourcePageId) ? { ...prev, measurements } : prev);
+  };
+
+  // Shared ack handler for every sendMeasurementOp call site (contract item 1)
+  // plus undo/redo (item 4). Adopts the version on success; on failure,
+  // surfaces a toast unless the failure is a transient 'offline' blip (the op
+  // just never left the client — nothing to warn about beyond normal retry).
+  const handleMeasurementOpResult = (res: { ok: true; version: number } | { ok: false; error: string }) => {
+    // `'error' in res` (rather than `if (res.ok)` / `if (!res.ok)`) because this
+    // project builds without strictNullChecks, under which plain truthiness
+    // narrowing on a boolean-literal discriminant silently fails to narrow the
+    // other branch — verified empirically against this exact tsconfig.
+    if ('error' in res) {
+      if (res.error === 'page_superseded') {
+        toast('This revision is read-only — reload to see the current one', { type: 'warning' });
+      } else if (res.error !== 'offline') {
+        toast('Sync failed — your change is local only until the next full save', { type: 'warning' });
+      }
+      return;
+    }
+    if (projectId) noteProjectVersion(projectId, res.version);
+    setProject(prev => (prev ? { ...prev, version: res.version } : prev));
+  };
+
   const { history, redoStack, pushToHistory, undo, redo, reset: resetHistory } = useMeasurementHistory({
     page,
     selectedMeasurementId,
     setSelectedMeasurementId,
-    savePageUpdates,
+    applyMeasurements: (measurements) => { if (page) applyLocalMeasurements(page.id, measurements); },
     toast,
+    sendMeasurementOp,
+    onMeasurementOpResult: handleMeasurementOpResult,
+    projectId,
   });
 
   useEffect(() => {
@@ -542,18 +664,18 @@ const CanvasViewInner: React.FC = () => {
     return () => clearTimeout(t);
   }, [selectedMeasurementId, project]);
 
-  const loadData = async (pId: string, pgId: string) => {
+  const loadData = async (pId: string, pgId: string): Promise<boolean> => {
     setIsLoading(true);
     const proj = await getProject(pId);
     if (!proj) {
       navigate('/projects');
-      return;
+      return false;
     }
 
     const pg = proj.pages.find(p => p.id === pgId);
     if (!pg) {
       navigate(`/project/${pId}/takeoff`);
-      return;
+      return false;
     }
 
     // Vector pages reference the source PDF and have no rasterized imageId;
@@ -566,15 +688,16 @@ const CanvasViewInner: React.FC = () => {
     setImageUrl(imgUrl);
     setSelectedMeasurementId(null);
     resetHistory();
-    
+
     // Set default takeoff if available
     if (proj.takeoffs.length > 0) {
       const firstTakeoff = proj.takeoffs[0];
       setSelectedTakeoffId(firstTakeoff.id);
       setSelectedColor(firstTakeoff.color);
     }
-    
+
     setIsLoading(false);
+    return true;
   };
 
   // Other pages in the project that this page can reference. Filters out
@@ -721,11 +844,14 @@ const CanvasViewInner: React.FC = () => {
     
     pushToHistory({ type: 'add', measurement: newMeasurement });
 
-    savePageUpdates({
-      measurements: [...page.measurements, newMeasurement]
-    });
+    // Measurement-only mutation (no takeoff/page state change here) — drop
+    // the PUT in favor of the op (contract item 1). This is the hot path for
+    // every drawn shape, so decoupling it from a full project PUT is the
+    // whole point of Task 5.
+    applyLocalMeasurements(page.id, [...page.measurements, newMeasurement]);
 
-    void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement });
+    void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement })
+      .then(handleMeasurementOpResult);
 
     const takeoff = project?.takeoffs.find(t => t.id === selectedTakeoffId);
     if (takeoff?.type === 'area' && measurement.type === 'length') {
@@ -803,8 +929,11 @@ const CanvasViewInner: React.FC = () => {
     };
 
     pushToHistory({ type: 'add', measurement: newMeasurement });
-    await savePageUpdates({ measurements: [...page.measurements, newMeasurement] });
-    void sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } });
+    // Measurement-only mutation — the new measurement is already associated
+    // to an existing takeoff (no takeoff-list change), so drop the PUT.
+    applyLocalMeasurements(page.id, [...page.measurements, newMeasurement]);
+    const res = await sendMeasurementOp({ projectId: projectId!, pageId: page.id, action: 'add', measurement: newMeasurement as unknown as Record<string, unknown> & { id: string } });
+    handleMeasurementOpResult(res);
 
     setSelectedTakeoffId(takeoff.id);
     setSelectedColor(takeoff.color);
@@ -852,20 +981,15 @@ const CanvasViewInner: React.FC = () => {
       planSetId: sourcePageId === page.id ? page.planSetId : existingMeasurement.planSetId,
     };
 
-    const updatedProject = {
-      ...project,
-      pages: project.pages.map(p =>
-        p.id === sourcePageId
-          ? { ...p, measurements: p.measurements.map(m => m.id === id ? updatedMeasurement : m) }
-          : p
-      ),
-    };
+    // Measurement-only mutation — no takeoff/page state changes here, so
+    // drop the PUT in favor of the op (contract item 1). This is the drag/
+    // resize/heights-edit hot path.
+    const sourceMeasurements = project.pages.find(p => p.id === sourcePageId)!.measurements
+      .map(m => m.id === id ? updatedMeasurement : m);
+    applyLocalMeasurements(sourcePageId, sourceMeasurements);
 
-    setProject(updatedProject);
-    saveProject(updatedProject);
-    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
-
-    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement });
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement })
+      .then(handleMeasurementOpResult);
   };
 
   const deleteMeasurement = (id: string, targetPageId?: string) => {
@@ -900,18 +1024,10 @@ const CanvasViewInner: React.FC = () => {
 
     pushToHistory({ type: 'delete', measurement: mToDelete });
 
-    const updatedProject = {
-      ...project,
-      pages: project.pages.map(p => 
-        p.id === sourcePageId 
-          ? { ...p, measurements: p.measurements.filter(m => m.id !== id) }
-          : p
-      )
-    };
-    
-    setProject(updatedProject);
-    saveProject(updatedProject);
-    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+    // Measurement-only mutation — drop the PUT in favor of the op (contract item 1).
+    const sourceMeasurements = project.pages.find(p => p.id === sourcePageId)!.measurements
+      .filter(m => m.id !== id);
+    applyLocalMeasurements(sourcePageId, sourceMeasurements);
 
     if (selectedMeasurementId === id) {
       setSelectedMeasurementId(null);
@@ -920,7 +1036,8 @@ const CanvasViewInner: React.FC = () => {
     setShowDeleteConfirm(false);
     setMeasurementToDelete(null);
 
-    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'delete', measurement: mToDelete as unknown as Record<string, unknown> & { id: string } });
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'delete', measurement: mToDelete as unknown as Record<string, unknown> & { id: string } })
+      .then(handleMeasurementOpResult);
   };
 
   const deleteSegment = async (measurementId: string, segmentIdx: number) => {
@@ -991,20 +1108,16 @@ const CanvasViewInner: React.FC = () => {
       };
     }
 
-    const updatedProject = {
-      ...project,
-      pages: project.pages.map(p =>
-        p.id === sourcePageId
-          ? { ...p, measurements: p.measurements.map(m => m.id === measurementId ? updatedMeasurement : m) }
-          : p
-      ),
-    };
-
-    setProject(updatedProject);
-    saveProject(updatedProject);
-    setPage(updatedProject.pages.find(p => p.id === page.id) || page);
+    // Measurement-only mutation (this is the 6th sendMeasurementOp site — the
+    // brief's contract lists 5, but deleteSegment already had an op call from
+    // Task 4's mechanical swap alongside its own full-project save). Drop the
+    // PUT here too.
+    const sourceMeasurements = project.pages.find(p => p.id === sourcePageId)!.measurements
+      .map(m => m.id === measurementId ? updatedMeasurement : m);
+    applyLocalMeasurements(sourcePageId, sourceMeasurements);
     setSelectedSegmentIdx(null);
-    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement as unknown as Record<string, unknown> & { id: string } });
+    void sendMeasurementOp({ projectId: projectId!, pageId: sourcePageId, action: 'update', measurement: updatedMeasurement as unknown as Record<string, unknown> & { id: string } })
+      .then(handleMeasurementOpResult);
   };
 
   const confirmDeleteTakeoff = async () => {
@@ -2045,6 +2158,7 @@ const CanvasViewInner: React.FC = () => {
           <PdfCanvas
             key={page.id}
             readOnly={readOnly}
+            onDrawingActiveChange={setIsDrawingActive}
             imageUrl={imageUrl || ''}
             imageWidth={page.imageWidth}
             imageHeight={page.imageHeight}
