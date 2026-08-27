@@ -71,8 +71,9 @@ function hourLabel(h: number): string {
 
 export async function fetchDailyWeather(lat: number, lon: number, date: string): Promise<DailyWeatherResult> {
   const daysAgo = Math.floor((Date.now() - new Date(date + 'T12:00:00').getTime()) / 86_400_000);
-  const host = daysAgo >= 8 ? 'https://archive-api.open-meteo.com/v1/archive' : 'https://api.open-meteo.com/v1/forecast';
-  const pastDays = host.includes('api.open-meteo.com') ? '&past_days=7' : '';
+  const isArchive = daysAgo >= 8;
+  const host = isArchive ? 'https://archive-api.open-meteo.com/v1/archive' : 'https://api.open-meteo.com/v1/forecast';
+  const pastDays = isArchive ? '' : '&past_days=7';
   const url = `${host}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto&start_date=${date}&end_date=${date}${pastDays}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });

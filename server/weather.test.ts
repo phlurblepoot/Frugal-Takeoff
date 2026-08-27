@@ -138,25 +138,24 @@ describe('fetchDailyWeather', () => {
     expect(result.hourly[0].condition).toBe('Clear');
   });
 
-  it('picks the archive host for a date >= 8 days ago', async () => {
+  it('picks the archive host for a date >= 8 days ago, with no past_days param', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => mockMeteoPayload() });
     vi.stubGlobal('fetch', fetchMock);
     const old = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
     await fetchDailyWeather(26.05, -80.14, old);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('archive-api.open-meteo.com'),
-      expect.anything(),
-    );
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('archive-api.open-meteo.com');
+    expect(calledUrl).not.toContain('past_days');
   });
 
-  it('picks the forecast host for a recent date', async () => {
+  it('picks the forecast host for a recent date, with a past_days param', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => mockMeteoPayload() });
     vi.stubGlobal('fetch', fetchMock);
     const recent = new Date().toISOString().slice(0, 10);
     await fetchDailyWeather(26.05, -80.14, recent);
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('api.open-meteo.com'),
-      expect.anything(),
-    );
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('api.open-meteo.com');
+    expect(calledUrl).not.toContain('archive-api');
+    expect(calledUrl).toContain('past_days=7');
   });
 });
