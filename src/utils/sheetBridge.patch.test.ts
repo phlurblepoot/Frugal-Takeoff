@@ -341,6 +341,128 @@ describe('patchWorkbookFromFortuneSheets', () => {
     expect(outWs.getCell('B1').value).toBe(42);
   });
 
+  // C1 regression: a second flush of the SAME client state must not throw.
+  // patchWorkbookFromFortuneSheets recomputes sheet ids as `sheet_${i}_${name}`
+  // from the bytes it's patching every time, but the client's incoming state
+  // carries ids minted once at import — after the FIRST flush applies a
+  // rename or a delete (which shifts later sheets' indices), those recomputed
+  // ids no longer match. Before the fix, an id-carrying sheet that missed by
+  // id never fell back to name-matching, so it hit `wb.addWorksheet` while
+  // the same-named sheet still existed — exceljs's name setter throws
+  // "Worksheet name already exists".
+  it('C1: double-patching a rename does not throw (id no longer matches post-rename bytes)', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    const ws = wb.addWorksheet('Original');
+    ws.getCell('A1').value = 'stays';
+    ws.getCell('A1').font = { bold: true };
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    // Simulates a UI rename: id unchanged (FortuneSheet's setSheetName only
+    // mutates `.name`), same state object re-sent on every flush.
+    const renamed = sheets.map((s) => ({ ...s, name: 'Renamed' }));
+
+    const out1 = await patchWorkbookFromFortuneSheets(buffer, renamed);
+    // Flush 2: the SAME incoming state (still carrying the pre-rename id),
+    // now patched against bytes that already reflect the rename. Must not
+    // throw.
+    const out2 = await patchWorkbookFromFortuneSheets(out1, renamed);
+
+    const outWb = await reload(out2);
+    expect(outWb.worksheets.map((w) => w.name)).toEqual(['Renamed']);
+    const cell = outWb.getWorksheet('Renamed')!.getCell('A1');
+    expect(cell.value).toBe('stays');
+    expect(cell.font?.bold).toBe(true);
+  });
+
+  it('C1: double-patching a delete of sheet 1 of 2 does not throw (index shift breaks the recomputed id)', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('A').getCell('A1').value = 'a';
+    wb.addWorksheet('B').getCell('A1').value = 'b';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    // Delete sheet 1 of 2 ("A"), keep "B" — but "B"'s id was minted as
+    // `sheet_1_B` (its ORIGINAL index). Once "A" is gone, "B" becomes index 0
+    // in the output bytes, so a second flush recomputes `sheet_0_B` — a miss
+    // against the incoming state's still-`sheet_1_B` id.
+    const kept = sheets.filter((s) => s.name === 'B');
+
+    const out1 = await patchWorkbookFromFortuneSheets(buffer, kept);
+    const out2 = await patchWorkbookFromFortuneSheets(out1, kept); // must not throw
+
+    const outWb = await reload(out2);
+    expect(outWb.worksheets.map((w) => w.name)).toEqual(['B']);
+    expect(outWb.getWorksheet('B')!.getCell('A1').value).toBe('b');
+  });
+
+  // M2 regression: a matched EXISTING sheet's non-frozen view settings (zoom,
+  // gridlines, rtl) must survive a rebuild untouched — previously every
+  // rebuild unconditionally set `views = []` for a non-frozen sheet, wiping
+  // them even though nothing about them changed.
+  it('M2: a non-frozen sheet keeps its zoom/gridline/rtl view settings across a patch', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    const ws = wb.addWorksheet('Data');
+    ws.getCell('A1').value = 'Hello';
+    ws.views = [{ state: 'normal', zoomScale: 85, showGridLines: false, rightToLeft: true }];
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const a1cd = sheets[0].celldata!.find((cd) => cd.r === 0 && cd.c === 0)!;
+    a1cd.v!.v = 'Changed';
+    a1cd.v!.m = 'Changed';
+
+    const outBytes = await patchWorkbookFromFortuneSheets(buffer, sheets);
+    const outWb = await reload(outBytes);
+    const view = outWb.worksheets[0].views?.[0] as unknown as
+      { zoomScale?: number; showGridLines?: boolean; rightToLeft?: boolean } | undefined;
+
+    expect(view?.zoomScale).toBe(85);
+    expect(view?.showGridLines).toBe(false);
+    expect(view?.rightToLeft).toBe(true);
+  });
+
+  // M2 regression, other direction: un-freezing an existing sheet must
+  // actually drop the frozen-pane state (not get stuck forever by blindly
+  // restoring the sheet's prior view wholesale).
+  it('M2: un-freezing an existing sheet drops the frozen pane state', async () => {
+    const { buffer } = await buildFixtureWorkbook(); // frozen at xSplit:1/ySplit:1
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const sheet = sheets[0];
+    expect(sheet.frozen).toBeDefined();
+    delete sheet.frozen; // simulate the user un-freezing in the FortuneSheet UI
+
+    const outBytes = await patchWorkbookFromFortuneSheets(buffer, sheets);
+    const outWb = await reload(outBytes);
+    const view = outWb.worksheets[0].views?.[0] as unknown as { state?: string } | undefined;
+    expect(view?.state).toBe('normal');
+  });
+
+  // M1 regression: rich text and hyperlink cells are flattened on import
+  // (normalizeValue), and the bridge must tell the user via its warnings —
+  // the same mechanism already used for images/data-validation.
+  it('M1: rich text and hyperlink cells produce import warnings', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    const ws = wb.addWorksheet('Data');
+    ws.getCell('A1').value = { richText: [{ text: 'Hello ' }, { text: 'World', font: { bold: true } }] };
+    ws.getCell('A2').value = { text: 'Anthropic', hyperlink: 'https://anthropic.com' };
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets, warnings } = await workbookToFortuneSheets(buffer);
+
+    expect(warnings.some((w) => /rich text/i.test(w))).toBe(true);
+    expect(warnings.some((w) => /hyperlink/i.test(w))).toBe(true);
+    // Still flattened to plain text for display, as before.
+    const a1 = sheets[0].celldata!.find((cd) => cd.r === 0 && cd.c === 0)!;
+    expect(a1.v!.v).toBe('Hello World');
+    const a2 = sheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!;
+    expect(a2.v!.v).toBe('Anthropic');
+  });
+
   it('ensureSheetCelldata converts a data-shaped sheet to celldata with correct r/c/v entries, and leaves celldata-shaped input untouched', () => {
     const dataSheet = buildDataShapedSheet('sheet_0_Data', 'Data');
     const normalized = ensureSheetCelldata(dataSheet);

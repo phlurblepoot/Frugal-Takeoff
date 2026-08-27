@@ -263,6 +263,8 @@ export async function workbookToFortuneSheets(xlsxBytes: ArrayBuffer | Buffer): 
     const celldata: NonNullable<FortuneSheetData['celldata']> = [];
     const borderInfo: NonNullable<FortuneSheetData['config']>['borderInfo'] = [];
     let sawImage = false;
+    let sawRichText = false;
+    let sawHyperlink = false;
     // Data validation rules survive an xlsx round-trip at the *worksheet*
     // level (worksheet.model.dataValidations, an XML-wide map), not per
     // touched cell — a validation on an otherwise-blank cell leaves that
@@ -308,6 +310,17 @@ export async function workbookToFortuneSheets(xlsxBytes: ArrayBuffer | Buffer): 
         if (!hasValue && !hasFormula && !mc && !cellHasStyle(cell.style)) return;
 
         const out: FortuneSheetCell = {};
+
+        // M1: rich text / hyperlink cells are flattened to plain text below
+        // (normalizeValue) — flagged here (before flattening) so the import
+        // warnings can tell the user, the same way images/validation already
+        // do. Checked on the raw value, not the flattened NormalizedValue,
+        // since that shape has already lost the distinction.
+        const rawForFlagging = hasFormula ? cell.result : cell.value;
+        if (rawForFlagging && typeof rawForFlagging === 'object') {
+          if ('richText' in rawForFlagging) sawRichText = true;
+          else if ('text' in rawForFlagging && 'hyperlink' in rawForFlagging) sawHyperlink = true;
+        }
 
         if (hasFormula) {
           out.f = `=${cell.formula}`;
@@ -355,6 +368,12 @@ export async function workbookToFortuneSheets(xlsxBytes: ArrayBuffer | Buffer): 
     if (sawImage) warnings.push(`Sheet "${worksheet.name}": images are preserved on save, not shown.`);
     if (sawValidation) {
       warnings.push(`Sheet "${worksheet.name}": data validation rules are preserved on save, not shown.`);
+    }
+    if (sawRichText) {
+      warnings.push(`Sheet "${worksheet.name}": rich text formatting is flattened to plain text.`);
+    }
+    if (sawHyperlink) {
+      warnings.push(`Sheet "${worksheet.name}": hyperlinks are flattened to plain text.`);
     }
     // exceljs's public API has no read model for charts or pivot tables at
     // all (no `chart`/`pivotTable` members on Worksheet in
@@ -578,7 +597,7 @@ export function ensureSheetCelldata(sheet: FortuneSheetData): FortuneSheetData {
   return { ...sheet, celldata: cellsOf(sheet) };
 }
 
-function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneSheetData): void {
+function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneSheetData, isNewSheet: boolean): void {
   // 1. Unmerge every existing merge FIRST — a merged non-anchor cell can't
   //    have its value/style touched directly (exceljs throws / no-ops), so
   //    this must happen before any clearing or rewriting below.
@@ -634,17 +653,35 @@ function rebuildWorksheetGrid(worksheet: ExcelJS.Worksheet, incoming: FortuneShe
   // 7. Frozen panes (inverse of the row_focus/column_focus mapping above).
   //    'rangeRow'/'rangeColumn'/'rangeBoth' are out of scope: the import
   //    side never produces them either (see the frozen-mapping block above).
+  //
+  // M2 fix: a MATCHED existing sheet's other view settings (zoom, gridlines,
+  // rightToLeft, ...) are preserved by spreading the worksheet's own
+  // pre-rebuild view over the frozen-pane fields we actually mean to change
+  // — verified against exceljs's own writer (SheetViewXform.render,
+  // node_modules/exceljs/lib/xlsx/xform/sheet/sheet-view-xform.js): it reads
+  // state/xSplit/ySplit independently of the other view attributes, and only
+  // emits xSplit/ySplit into the XML when state is 'frozen'/'split' — so a
+  // leftover xSplit/ySplit on a 'normal'-state view is inert, not a latent
+  // bug. `worksheet.views = []` is reserved for genuinely NEW sheets, which
+  // have no prior view to preserve.
+  const prevView = isNewSheet ? undefined : worksheet.views?.[0];
   if (incoming.frozen?.type && (incoming.frozen.type === 'row' || incoming.frozen.type === 'column' || incoming.frozen.type === 'both')) {
     const rowFocus = incoming.frozen.range?.row_focus ?? -1;
     const columnFocus = incoming.frozen.range?.column_focus ?? -1;
     const type = incoming.frozen.type;
     worksheet.views = [
       {
+        ...prevView,
         state: 'frozen',
         xSplit: type === 'column' || type === 'both' ? columnFocus + 1 : 0,
         ySplit: type === 'row' || type === 'both' ? rowFocus + 1 : 0,
-      },
+      } as ExcelJS.WorksheetView,
     ];
+  } else if (prevView) {
+    // Incoming state has no frozen config — drop the frozen-pane state (an
+    // un-freeze must actually take effect) but keep everything else about
+    // the sheet's prior view.
+    worksheet.views = [{ ...prevView, state: 'normal' } as ExcelJS.WorksheetView];
   } else {
     worksheet.views = [];
   }
@@ -690,14 +727,25 @@ export async function patchWorkbookFromFortuneSheets(
 
   for (const incoming of orderedIncoming) {
     let original = incoming.id ? idToOriginal.get(incoming.id) : undefined;
-    // An incoming sheet with NO id at all (unreachable via Task 1's own
-    // importer today, which always mints one, but explicitly flagged by the
-    // brief as a scenario to handle) falls back to an exact NAME match
-    // against an as-yet-unmatched original sheet, so its non-grid artifacts
-    // (images, validation) aren't silently dropped as delete+add. A sheet
-    // that DOES carry an id but simply doesn't match any recomputed original
-    // id is a genuinely new sheet — never falls back to name-matching.
-    if (!original && !incoming.id) {
+    // C1 fix: an id miss ALSO falls back to an exact NAME match against an
+    // as-yet-unmatched original sheet — not just when incoming.id is absent.
+    // This matters across a second flush of the SAME client state: the
+    // client's ids are minted once at import and never change, but this
+    // function recomputes `sheet_${i}_${name}` from THIS flush's on-disk
+    // bytes every time, which already reflect the FIRST flush's rename/
+    // delete. A rename shifts nothing (same index, new name) so the id
+    // recomputed from the post-rename bytes no longer matches the state's
+    // pre-rename id; a delete shifts every LATER sheet's index, so even an
+    // untouched sheet's recomputed id no longer matches. Previously an
+    // id-carrying sheet that missed by id NEVER fell back to name-matching,
+    // so it hit `wb.addWorksheet(incoming.name)` below while the
+    // same-named sheet still existed — exceljs's name setter throws
+    // "Worksheet name already exists". Since sheet names are unique in both
+    // Excel and FortuneSheet, name-matching an unmatched original on any id
+    // miss is deterministic and safe, and (like the original id-less
+    // fallback) preserves sheet-level artifacts (images/validation) instead
+    // of a spurious delete+add.
+    if (!original) {
       const byName = nameToOriginal.get(incoming.name);
       if (byName && !matchedOriginals.has(byName)) original = byName;
     }
@@ -705,7 +753,7 @@ export async function patchWorkbookFromFortuneSheets(
     if (original) matchedOriginals.add(original);
     if (worksheet.name !== incoming.name) worksheet.name = incoming.name;
 
-    rebuildWorksheetGrid(worksheet, incoming);
+    rebuildWorksheetGrid(worksheet, incoming, !original);
   }
 
   // Remove original sheets that were matched to nothing in the incoming state.
