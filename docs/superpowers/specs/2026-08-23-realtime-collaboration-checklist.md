@@ -103,9 +103,11 @@ Plan: docs/superpowers/plans/2026-08-26-ws5-spreadsheet-rebuild.md
 - [x] Journal-replay-after-kill test — `server/realtime/registerRealtime.sheets.test.ts` "journal survives a simulated server restart" (this task's commit)
 - [x] Two-context Playwright collab test — `e2e/collab-sheets.spec.ts` (this task's commit)
 - [x] Full test suite passing (unit: 1247/1247; e2e: 60/60 incl. new `e2e/sheets-editor.spec.ts` + `e2e/collab-sheets.spec.ts`, each run 3x stable) (this task's commit)
+- [x] Final whole-branch review (0bec9b6..aae6574) + fix wave: 1 Critical (sheet rename/delete wedged autosave — id-matching vs recomputed disk ids) + 7 Important (offline-edit loss on reconnect, dropped foreign ops during remount, flush dirty-tracking race, invisible flush failures, no session invalidation on file replace/delete, ungated state-sync/snapshot, dirty-reconnect never re-joining) + minors (rich-text/hyperlink flatten warnings, view-settings preservation) all fixed; three follow-on defects found in verification (order-dependent sheet matching, bare-setState generation race, rename-chain/swap collisions) fixed via deterministic 3-pass matching + temp-name renames + in-memory flush generations (`e91540d`..`38d041c`; unit 1272/1272, e2e green)
+- [x] Spec §7 "Known windows & limits" documented (fold-race window, 25MB state / 1MB op limits, Documents download lag during live sessions) (`75f0fe4`)
 
 ## Post-project
 
 - [ ] Manual multi-device smoke with Nathan (two computers + tablet)
-- [ ] Changelog entry + version bump
-- [ ] Memory file updated (`phaseN-…-complete.md` style) per workstream
+- [x] Changelog entry + version bump (v2.7, `src/pages/Settings.tsx`)
+- [x] Memory file updated (`phaseN-…-complete.md` style) per workstream (single consolidated realtime-collab memory)

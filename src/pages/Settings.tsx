@@ -21,6 +21,18 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.7',
+    date: 'August 26, 2026',
+    changes: [
+      'Real-time collaboration, app-wide: changes other users make (projects, pages, takeoffs, billing, issues, tasks, documents, and more) now appear on your screen live — no refresh needed — and the app warns you when someone else is editing the same thing so you never silently overwrite each other.',
+      'Online users list now shows every session per user (each computer/tablet/phone, with an automatic device label), and a Follow button lets you follow a teammate to whatever page they are on.',
+      'Canvas drawing rebuilt on server-applied operations: measurements sync live between users, late joiners catch up automatically, page scale and takeoff changes update open canvases in real time, and superseded plan revisions are fully read-only.',
+      'Spreadsheet editor rebuilt Google-Sheets-style: opens the real file from Documents with full formatting, edits together live (shared cursors and cell presence), autosaves straight to the file about every 15 seconds (no Save button), and archives a version snapshot of the file as it was before each editing session. Renaming, adding, deleting, and reordering sheets are all safe, and the autosave chip tells you honestly if saving ever fails.',
+      'Plan pages you have already viewed are cached in the browser — flipping back and forth between pages is now instant, with a thumbnail preview and download progress while a page loads.',
+      'Note for self-hosters: this update adds two new database tables for live spreadsheet sessions (migration 26, additive — existing data untouched).',
+    ],
+  },
+  {
     version: '2.6.1',
     date: 'August 19, 2026',
     changes: [
