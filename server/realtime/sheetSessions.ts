@@ -119,8 +119,27 @@ export class SheetSessionStore {
       .map(r => r.fileId);
   }
 
-  markFlushed(fileId: string): void {
-    this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ?').run(fileId);
+  // I4 fix: `expectedStateSeq`, when given, makes this a compare-and-clear —
+  // dirty is only cleared if stateSeq is STILL what it was when the caller
+  // started its (awaited) flush. A `setState` landing mid-flush bumps
+  // stateSeq (see setState above), so this correctly leaves dirty=1 for a
+  // state that arrived after the in-flight flush already read its snapshot,
+  // instead of the flush's unconditional clear silently discarding it.
+  // Omitted (existing behavior, kept for callers/tests that don't care about
+  // the race) clears unconditionally.
+  markFlushed(fileId: string, expectedStateSeq?: number): void {
+    if (expectedStateSeq === undefined) {
+      this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ?').run(fileId);
+      return;
+    }
+    this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ? AND stateSeq = ?').run(fileId, expectedStateSeq);
+  }
+
+  // I4: lets a flush capture stateSeq BEFORE its (awaited) bridge patch, so
+  // it can later compare-and-clear via markFlushed instead of clearing dirty
+  // unconditionally after an arbitrarily long await.
+  getStateSeq(fileId: string): number {
+    return this.getRow(fileId)?.stateSeq ?? 0;
   }
 
   needsSessionSnapshot(fileId: string): boolean {
@@ -140,5 +159,19 @@ export class SheetSessionStore {
 
   getState(fileId: string): string | null {
     return this.getRow(fileId)?.state ?? null;
+  }
+
+  // I6 fix: invalidates a persisted session for a file whose on-disk bytes
+  // changed OUTSIDE the flush engine — a version-replace POST or a file
+  // delete. Without this: (a) the next sheet-join would hydrate the OLD
+  // working copy over the replaced bytes, and the first flush would revert
+  // the replacement; (b) a deleted file's dirty row would error-loop the
+  // flush engine every 15s forever (persisted across restarts, since dirty
+  // rows are durable). Also drops in-memory participant tracking so a stale
+  // participant set can't linger for a fileId whose session no longer exists.
+  clearSession(fileId: string): void {
+    this.db.prepare('DELETE FROM sheet_ops WHERE fileId = ?').run(fileId);
+    this.db.prepare('DELETE FROM sheet_sessions WHERE fileId = ?').run(fileId);
+    this.participantsByFile.delete(fileId);
   }
 }

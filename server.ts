@@ -19,7 +19,7 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
-import { registerRealtime } from './server/realtime/registerRealtime';
+import { registerRealtime, sheetRoom } from './server/realtime/registerRealtime';
 import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { SheetSessionStore } from './server/realtime/sheetSessions';
@@ -142,7 +142,15 @@ async function startServer() {
   // cadence; unset in normal/production runs, which keep SheetFlushEngine's
   // own DEFAULT_INTERVAL_MS.
   const flushIntervalMs = process.env.SHEET_FLUSH_INTERVAL_MS ? Number(process.env.SHEET_FLUSH_INTERVAL_MS) : undefined;
-  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, { intervalMs: flushIntervalMs });
+  // I5: surfaces flush failures/recoveries to the sheet's live participants
+  // (SpreadsheetEditor's autosave chip) — every failure path was previously
+  // console-only.
+  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, {
+    intervalMs: flushIntervalMs,
+    notify: (fileId, event) => {
+      io.to(sheetRoom(fileId)).emit(event === 'failed' ? 'sheet-flush-failed' : 'sheet-flush-recovered', { fileId });
+    },
+  });
   sheetFlush.start();
 
   const realtime = registerRealtime(io, {
@@ -212,6 +220,7 @@ async function startServer() {
       try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); } catch { return null; }
     },
     broadcastChange,
+    sheetStore,
   });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +

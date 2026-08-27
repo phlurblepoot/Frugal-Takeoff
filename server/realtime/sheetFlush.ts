@@ -33,7 +33,16 @@ import { readFileContent, writeFileContent } from '../fileStore';
 import { getMeta, saveNewVersion } from '../files';
 import type { SheetSessionStore } from './sheetSessions';
 
-export interface SheetFlushOptions { intervalMs?: number }
+export interface SheetFlushOptions {
+  intervalMs?: number;
+  // I5: the engine's only way to surface a flush failure/recovery to a
+  // user — every failure path below was previously console-only, so the
+  // client's autosave chip had no way to ever show "autosave is failing".
+  // Deliberately a plain callback (not an `io: Server` dependency) so this
+  // module stays decoupled from socket.io and easy to unit-test; server.ts
+  // wires it to `io.to(sheetRoom(fileId)).emit(...)`.
+  notify?: (fileId: string, event: 'failed' | 'recovered') => void;
+}
 
 export interface FlushResult { ok: boolean; error?: string }
 export interface SnapshotResult { ok: boolean; version?: number; error?: string }
@@ -54,6 +63,10 @@ export class SheetFlushEngine {
   // settled bytes), then performs its own guaranteed archive. See flushFile/
   // snapshotNow below for the exact join rules.
   private inflight = new Map<string, Promise<FlushResult>>();
+  // I5: fileIds currently in a failing streak, so a later success can be
+  // reported as a "recovered" transition (not just silence).
+  private readonly failingFiles = new Set<string>();
+  private readonly notify?: (fileId: string, event: 'failed' | 'recovered') => void;
 
   constructor(
     private db: Database.Database,
@@ -62,6 +75,17 @@ export class SheetFlushEngine {
     opts: SheetFlushOptions = {}
   ) {
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
+    this.notify = opts.notify;
+  }
+
+  private reportFailure(fileId: string): void {
+    if (this.failingFiles.has(fileId)) return; // already reported — only the edge fires
+    this.failingFiles.add(fileId);
+    this.notify?.(fileId, 'failed');
+  }
+
+  private reportRecoveryIfNeeded(fileId: string): void {
+    if (this.failingFiles.delete(fileId)) this.notify?.(fileId, 'recovered');
   }
 
   start(): void {
@@ -118,12 +142,18 @@ export class SheetFlushEngine {
   }
 
   private async doFlushFile(fileId: string): Promise<FlushResult> {
+    // I4: captured BEFORE the await below (patchWorkbookFromFortuneSheets can
+    // take hundreds of ms) so markFlushed can compare-and-clear instead of
+    // clearing dirty unconditionally after a `setState` may have landed
+    // mid-flush and advanced it.
+    const stateSeqAtStart = this.store.getStateSeq(fileId);
     const stateJson = this.store.getState(fileId);
     if (stateJson === null) {
       // Dirty with no folded state yet means there's nothing to flush (the
       // client hasn't pushed a state-sync) — a dirty flag in that shape is
       // meaningless, so clear it rather than retry-looping forever.
-      this.store.markFlushed(fileId);
+      this.store.markFlushed(fileId, stateSeqAtStart);
+      this.reportRecoveryIfNeeded(fileId);
       return { ok: true };
     }
 
@@ -131,6 +161,7 @@ export class SheetFlushEngine {
     if (!meta) {
       const error = `unknown file ${fileId}`;
       console.error(`[sheetFlush] flushFile: ${error}`);
+      this.reportFailure(fileId);
       return { ok: false, error };
     }
 
@@ -138,6 +169,7 @@ export class SheetFlushEngine {
     if (!original) {
       const error = `no on-disk content for ${fileId}`;
       console.error(`[sheetFlush] flushFile: ${error}`);
+      this.reportFailure(fileId);
       return { ok: false, error };
     }
 
@@ -148,6 +180,7 @@ export class SheetFlushEngine {
     } catch (e) {
       const error = (e as Error).message;
       console.error(`[sheetFlush] flushFile: ${error}`);
+      this.reportFailure(fileId);
       return { ok: false, error };
     }
 
@@ -158,7 +191,8 @@ export class SheetFlushEngine {
       writeFileContent(this.dataDir, fileId, buf);
     }
 
-    this.store.markFlushed(fileId);
+    this.store.markFlushed(fileId, stateSeqAtStart);
+    this.reportRecoveryIfNeeded(fileId);
     return { ok: true };
   }
 
@@ -206,6 +240,9 @@ export class SheetFlushEngine {
       return { ok: false, error };
     }
 
+    // I4: same compare-and-clear reasoning as doFlushFile — captured before
+    // the same kind of long-running await below.
+    const stateSeqAtStart = this.store.getStateSeq(fileId);
     const stateJson = this.store.getState(fileId);
     let buf: Buffer;
     try {
@@ -220,7 +257,7 @@ export class SheetFlushEngine {
 
     const { versionNumber } = saveNewVersion(this.db, this.dataDir, fileId, buf, meta.mime);
     this.store.markSessionSnapshotDone(fileId);
-    if (stateJson !== null) this.store.markFlushed(fileId);
+    if (stateJson !== null) this.store.markFlushed(fileId, stateSeqAtStart);
     return { ok: true, version: versionNumber };
   }
 

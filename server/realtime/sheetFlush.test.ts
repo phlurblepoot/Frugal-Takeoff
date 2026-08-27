@@ -1,5 +1,5 @@
 // server/realtime/sheetFlush.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
@@ -10,9 +10,18 @@ import { runMigrations } from '../migrations';
 import { migrations } from '../migrationList';
 import { putBuffer, getMeta, listVersions } from '../files';
 import { readFileContent } from '../fileStore';
-import { workbookToFortuneSheets } from '../../src/utils/sheetBridge';
+import { workbookToFortuneSheets, patchWorkbookFromFortuneSheets } from '../../src/utils/sheetBridge';
 import { SheetSessionStore } from './sheetSessions';
 import { SheetFlushEngine } from './sheetFlush';
+
+// I4's test below needs to delay the bridge patch call so it can mutate
+// session state WHILE a flush is in flight — vi.mock (with the real module
+// passed through for everything else) is the cleanest way to gate just that
+// one call without touching production code.
+vi.mock('../../src/utils/sheetBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/sheetBridge')>();
+  return { ...actual, patchWorkbookFromFortuneSheets: vi.fn(actual.patchWorkbookFromFortuneSheets) };
+});
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -252,5 +261,122 @@ describe('SheetFlushEngine', () => {
     engine.stop();
 
     expect(store.dirtyFiles()).not.toContain(fileId);
+  });
+
+  // I4: a setState landing WHILE a flush's bridge-patch call is in flight
+  // must not have its dirty flag wiped by that flush's (stale) markFlushed —
+  // it needs to survive for the NEXT flush to pick up.
+  it('a setState arriving during an in-flight flush keeps dirty set for the next flush to pick up', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const engine = new SheetFlushEngine(db, store, dir);
+
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+
+    const mocked = vi.mocked(patchWorkbookFromFortuneSheets);
+    const realImpl = mocked.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mocked.mockImplementationOnce(async (...args) => {
+      await gate;
+      return realImpl(...args);
+    });
+
+    const flushPromise = engine.flushFile(fileId);
+    // Let the flush read its state snapshot and reach the (now-gated) patch call.
+    await new Promise((r) => setImmediate(r));
+
+    // A newer edit's state-sync "arrives" while the flush above is still
+    // awaiting the gated patch call. An op must land first: setState's
+    // stateSeq is sourced from MAX(seq) in sheet_ops (see setState), so two
+    // setStates with no op in between leave stateSeq unchanged — exactly
+    // what a real client does (state-sync only ever follows a local op; see
+    // localDirtyRef in SpreadsheetEditor.tsx), and exactly what's needed
+    // here to actually advance stateSeq past what the flush captured.
+    store.appendOps(fileId, '[{"op":"noop"}]');
+    const { sheets } = await workbookToFortuneSheets(readFileContent(dir, fileId)!);
+    sheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!.v!.v = 5555;
+    sheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!.v!.m = '5555';
+    store.setState(fileId, JSON.stringify(sheets));
+
+    release();
+    const result = await flushPromise;
+    expect(result.ok).toBe(true);
+
+    // The in-flight flush's own markFlushed must NOT have cleared the dirty
+    // flag the mid-flush setState just set.
+    expect(store.dirtyFiles()).toContain(fileId);
+
+    // The next flush picks up the newer (5555) state.
+    await engine.flushFile(fileId);
+    expect(store.dirtyFiles()).not.toContain(fileId);
+    const outWb = await reload(readFileContent(dir, fileId)!);
+    expect(outWb.worksheets[0].getCell('A2').value).toBe(5555);
+  });
+
+  // I5: flush failures must be observable via the `notify` callback —
+  // previously every failure path was console-only. Repeated failures for
+  // the same file only report the initial "failed" edge, not every retry.
+  it('notify fires "failed" once for a flush error, not again on a repeated failure', async () => {
+    const store = new SheetSessionStore(db);
+    const events: { fileId: string; event: 'failed' | 'recovered' }[] = [];
+    const engine = new SheetFlushEngine(db, store, dir, {
+      notify: (fileId, event) => events.push({ fileId, event }),
+    });
+
+    store.setState('missing-file', '[]'); // no such file — flush will fail
+    const failResult = await engine.flushFile('missing-file');
+    expect(failResult.ok).toBe(false);
+    expect(events).toEqual([{ fileId: 'missing-file', event: 'failed' }]);
+
+    // A second failure for the same file must not re-fire "failed" again —
+    // only the failed->recovered EDGE is reported.
+    store.setState('missing-file', '[]');
+    await engine.flushFile('missing-file');
+    expect(events).toEqual([{ fileId: 'missing-file', event: 'failed' }]);
+  });
+
+  it('a file that never failed produces no notify events on a normal successful flush', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const events: { fileId: string; event: 'failed' | 'recovered' }[] = [];
+    const engine = new SheetFlushEngine(db, store, dir, {
+      notify: (fid, event) => events.push({ fileId: fid, event }),
+    });
+
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+    const result = await engine.flushFile(fileId);
+    expect(result.ok).toBe(true);
+    expect(events).toEqual([]);
+  });
+
+  it('notify reports recovery specifically for a fileId that had previously failed', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const events: { fileId: string; event: 'failed' | 'recovered' }[] = [];
+    const engine = new SheetFlushEngine(db, store, dir, {
+      notify: (fid, event) => events.push({ fileId: fid, event }),
+    });
+
+    // Force a failure for this fileId: dirty with a state, but no on-disk
+    // content (simulate by clearing the file's bytes via a mocked parse error).
+    const mocked = vi.mocked(patchWorkbookFromFortuneSheets);
+    mocked.mockImplementationOnce(async () => { throw new Error('boom'); });
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+    const failResult = await engine.flushFile(fileId);
+    expect(failResult.ok).toBe(false);
+    expect(events).toEqual([{ fileId, event: 'failed' }]);
+
+    // Next flush succeeds (mock no longer throws) — must report "recovered".
+    store.setState(fileId, await stateWithA2Changed(fileId));
+    const okResult = await engine.flushFile(fileId);
+    expect(okResult.ok).toBe(true);
+    expect(events).toEqual([
+      { fileId, event: 'failed' },
+      { fileId, event: 'recovered' },
+    ]);
   });
 });
