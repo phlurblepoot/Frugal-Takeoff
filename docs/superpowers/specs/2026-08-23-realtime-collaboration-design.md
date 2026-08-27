@@ -173,7 +173,12 @@ xlsx → FortuneSheet with styles: fonts (family/size/bold/italic/color), fills,
 - Documents list shows "being edited" chip (from WS3 presence) while a session is live.
 
 ### Scope guardrails
-Editable: values, formulas, the style set above, merges, row/col/sheet add-delete-rename, widths/heights. Preserved read-only: charts, images, pivots, conditional formatting, validation. csv keeps the plain path; xls legacy → "convert to xlsx first" message.
+Editable: values, formulas, the style set above, merges, row/col/sheet add-delete-rename, widths/heights. Preserved read-only: charts, images, pivots, conditional formatting, validation. Rich text and hyperlinks are NOT preserved — they're flattened to plain text on import (flagged in the same import-warnings mechanism as images/validation). csv keeps the plain path; xls legacy → "convert to xlsx first" message.
+
+### Known windows & limits (final-fix-wave note, 2026-08-26)
+- **Residual fold race:** peer B's debounced state-sync can fold the op journal at the exact moment peer A has an op in flight that the server hasn't recorded yet — A's op is then absent from B's authoritative state. This heals itself via A's own next debounced sync (≤2s) or its unmount-flush push; real data loss requires A to hard-crash within that ~2s window. Accepted as a documented residual risk, not fixed — the alternative (a full op-vector-clock reconciliation) is out of scope for this rebuild.
+- **Size ceilings:** a session's folded state over ~25MB makes autosave fail for that file (client shows a throttled toast, no retry loop); an individual op batch over ~1MB is rejected server-side but still applied to the sender's own local document, so peers diverge until the next rejoin re-hydrates them.
+- **Documents-page staleness:** the Documents list's download/preview of a live-being-edited file lags the actual working copy by up to (flush interval + debounce), i.e. up to ~17s behind the editor during an active session.
 
 ---
 
