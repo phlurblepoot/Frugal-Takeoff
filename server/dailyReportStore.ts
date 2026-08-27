@@ -123,5 +123,6 @@ export function addPhoto(db: Database.Database, dailyReportId: string, fileId: s
 }
 
 export function removePhoto(db: Database.Database, dailyReportId: string, fileId: string): void {
+  if (!db.prepare('SELECT id FROM daily_reports WHERE id = ?').get(dailyReportId)) throw new NotFoundError('Daily report not found');
   db.prepare('DELETE FROM daily_report_photos WHERE dailyReportId = ? AND fileId = ?').run(dailyReportId, fileId);
 }

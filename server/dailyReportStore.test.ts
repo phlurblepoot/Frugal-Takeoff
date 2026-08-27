@@ -109,6 +109,9 @@ describe('photos', () => {
     expect(row.photos.map((p: any) => p.fileId)).toEqual(['f2']);
     expect(row.version).toBe(1);
   });
+  it('removePhoto throws NotFoundError for a missing report id', () => {
+    expect(() => removePhoto(db, 'nope', 'f1')).toThrow(NotFoundError);
+  });
 });
 
 describe('deleteDailyReport', () => {

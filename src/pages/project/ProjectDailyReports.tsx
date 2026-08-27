@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Plus, Trash2, ImageIcon } from 'lucide-react';
 import {
-  DailyReport, DailyReportListItem, ManCountLine, DateTakenError,
+  DailyReport, DailyReportListItem, DateTakenError,
   getDailyReports, getDailyReport, createDailyReport, deleteDailyReport,
   getProject, getSettings,
 } from '../../utils/store';
@@ -16,16 +16,11 @@ import {
 } from '../../components/ui';
 import { EditingChip } from '../../components/EditingChip';
 import { DailyReportEditor } from './daily/DailyReportEditor';
-
-export const manCountTotal = (lines: ManCountLine[]): number =>
-  lines.reduce((s, l) => s + (Number.isFinite(l.count) && l.count > 0 ? l.count : 0), 0);
-
-export const formatReportDate = (d: string): string => {
-  const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return d;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-    .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-};
+// Owned by dailyReportForm.ts (a leaf module) so DailyReportEditor/dailyReportPdf
+// can import them without a cycle back through this file. Re-exported here for
+// existing callers of this module (including this file's own test).
+import { manCountTotal, formatReportDate } from './daily/dailyReportForm';
+export { manCountTotal, formatReportDate };
 
 export const ProjectDailyReports: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();

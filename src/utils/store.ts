@@ -1224,7 +1224,9 @@ export const sendDailyReport = async (id: string, payload: { to: string; cc?: st
   const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res);
 };
 export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
-  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } });
+  // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
+  // rather than the user waiting through ~4 retried upstream calls.
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
   if (res.status === 400) {
     const b = await res.json().catch(() => ({} as any));
     if (b?.error === 'no_address') throw new Error('no_address');

@@ -1451,6 +1451,25 @@ describe('email send routes', () => {
     expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Photo.jpg']);
   });
 
+  it('daily report send: default subject + date-only filename when jobName is blank', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body;
+    const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Daily Report — 2026-08-20');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-2026-08-20.pdf']);
+  });
+
+  it('daily report send: sanitizes jobName into the attachment filename', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports')
+      .send({ reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
+    const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Dania Beach: "Unit 4"');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
+  });
+
   it('rfi send: marks rfi sent with sentAt set after send', async () => {
     const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
     expect((await request(app).get(`/api/rfis/${rfi.id}`)).body.status).toBe('open');

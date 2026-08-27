@@ -14,8 +14,7 @@ import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
-import { formatReportDate, manCountTotal } from '../ProjectDailyReports';
-import { normalizeManCounts } from './dailyReportForm';
+import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
@@ -26,7 +25,7 @@ export const DailyReportEditor: React.FC<{
   contractor?: string | null;
   onClose: () => void;
   onSaved: () => void;
-}> = ({ report, projectId, projectName, contractor, onClose, onSaved }) => {
+}> = ({ report, projectId, projectName, onClose, onSaved }) => {
   const { toast } = useToast();
   const [reportDate, setReportDate] = useState(report.reportDate);
   const [jobName, setJobName] = useState(report.jobName ?? '');
@@ -180,7 +179,6 @@ export const DailyReportEditor: React.FC<{
     }
     return buildDailyReportPdf({
       report,
-      projectName,
       photoDataUrls,
       letterhead: {
         brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
@@ -204,7 +202,7 @@ export const DailyReportEditor: React.FC<{
     try {
       const bytes = await buildBytes();
       const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = dailyReportFileName(report);
+      const fileName = dailyReportFileName(report, projectName);
       // Keep a copy in Documents, but never let that failure block the download.
       try {
         await persistGeneratedDocument(blob, { projectId, kind: 'daily-report', name: fileName, sourceType: 'dailyReport', sourceId: report.id });
@@ -229,6 +227,10 @@ export const DailyReportEditor: React.FC<{
 
   const handleSave = async () => {
     setDateError(null);
+    if (!reportDate) {
+      setDateError('Enter a date for this report.');
+      return;
+    }
     setSaving(true);
     try {
       await saveDailyReport(report.id, {
@@ -359,7 +361,7 @@ export const DailyReportEditor: React.FC<{
         onClose={() => setComposing(false)}
         projectId={projectId}
         title="Send daily report"
-        primaryAttachmentName={dailyReportFileName(report)}
+        primaryAttachmentName={dailyReportFileName(report, projectName)}
         defaultTo={emailDefaults.defaultTo || undefined}
         defaultCc={emailDefaults.defaultCc || undefined}
         defaultBcc={emailDefaults.defaultBcc || undefined}
@@ -371,7 +373,7 @@ export const DailyReportEditor: React.FC<{
           // Always regenerate with the chosen header email so the PDF contact matches.
           const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
           const bytes = await buildBytes(effectiveHeaderEmail);
-          const fileName = dailyReportFileName(report);
+          const fileName = dailyReportFileName(report, projectName);
           const file = new File([bytes], fileName, { type: 'application/pdf' });
           // Uploaded as a project document before sending; the source triple makes the
           // server version this report's one document rather than pile up copies, so a

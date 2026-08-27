@@ -5,18 +5,25 @@ import {
   drawLetterheadHeader,
   drawLetterheadFooter,
 } from '../../../utils/documentLetterhead';
-import { manCountLabel, weatherLine } from './dailyReportForm';
-import { formatReportDate, manCountTotal } from '../ProjectDailyReports';
+import { manCountLabel, weatherLine, formatReportDate, manCountTotal } from './dailyReportForm';
 
 export const dailyReportHeading = (r: { reportDate: string; jobName: string }): string =>
   `Daily Report — ${formatReportDate(r.reportDate)}${r.jobName ? ' · ' + r.jobName : ''}`;
 
-export const dailyReportFileName = (r: { reportDate: string }): string =>
-  `DailyReport-${r.reportDate}.pdf`;
+// Strips characters illegal in filenames and collapses whitespace, so a
+// project/job name can drop straight into a filename.
+const sanitizeForFileName = (s: string): string =>
+  s.replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+
+// Spec letter: `DailyReport-<project>-<date>.pdf`. `name` is optional so a
+// blank/missing project name falls back to the pre-existing date-only form.
+export const dailyReportFileName = (r: { reportDate: string }, name?: string): string => {
+  const sanitized = name ? sanitizeForFileName(name) : '';
+  return sanitized ? `DailyReport-${sanitized}-${r.reportDate}.pdf` : `DailyReport-${r.reportDate}.pdf`;
+};
 
 export interface DailyReportPdfContext {
   report: DailyReport;
-  projectName: string;
   photoDataUrls: string[]; // pre-fetched (caller resolves each fileId → dataURL)
   letterhead: LetterheadContext;
   headerEmail?: string;
@@ -74,7 +81,8 @@ export function buildDailyReportPdf(ctx: DailyReportPdfContext): ArrayBuffer {
 
   // 1. Title + rule
   doc.setFont('helvetica', 'bold').setFontSize(16).setTextColor(ar, ag, ab);
-  doc.text(dailyReportHeading(report), M, y); y += 10;
+  const titleLine = doc.splitTextToSize(dailyReportHeading(report), W - 2 * M)[0] ?? '';
+  doc.text(titleLine, M, y); y += 10;
   doc.setDrawColor(ar, ag, ab).setLineWidth(1).line(M, y, W - M, y); y += 20;
 
   // 2. Fields block
@@ -84,11 +92,12 @@ export function buildDailyReportPdf(ctx: DailyReportPdfContext): ArrayBuffer {
     ['Date:', formatReportDate(report.reportDate)],
   ];
   doc.setFontSize(11);
+  const fieldValueW = W - M - (M + 90);
   for (const [label, value] of fieldRows) {
     doc.setFont('helvetica', 'bold').setTextColor(120, 120, 120);
     doc.text(label, M, y);
     doc.setFont('helvetica', 'normal').setTextColor(30, 30, 30);
-    doc.text(value, M + 90, y);
+    doc.text(doc.splitTextToSize(value, fieldValueW)[0] ?? '', M + 90, y);
     y += 16;
   }
   y += 8;

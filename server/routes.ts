@@ -1873,11 +1873,16 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       if (!report) return res.status(404).json({ error: 'Daily report not found' });
       const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
       if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
+      // (client can't be imported server-side) — falls back to date-only when
+      // jobName is blank.
+      const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+      const attachmentName = sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`;
       await send((req as any).user.id, {
         to, cc, bcc,
         subject: subject?.trim() || `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
         text: body ?? message ?? 'Please find the attached daily report.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: `DailyReport-${report.reportDate}.pdf` }, attachmentFileIds),
+        attachments: buildSendAttachments(db, { fileId, attachmentName }, attachmentFileIds),
       });
       logActivity(db, { projectId: report.projectId, userId: (req as any).user?.id, type: 'daily_report_sent', message: `Daily report ${report.reportDate} emailed to ${to}` });
       res.json({ success: true });
