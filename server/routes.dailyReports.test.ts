@@ -159,3 +159,21 @@ describe('daily reports routes', () => {
     expect(getAfterRemove.body.photos).toHaveLength(0);
   });
 });
+
+describe('GET /api/projects/:id/daily-weather', () => {
+  it('returns 400 no_address when the project has no address', async () => {
+    const res = await request(app).get('/api/projects/p1/daily-weather').query({ date: '2026-08-20' });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'no_address' });
+  });
+
+  it('returns 400 bad_date for a missing or malformed date', async () => {
+    const missing = await request(app).get('/api/projects/p1/daily-weather');
+    expect(missing.status).toBe(400);
+    expect(missing.body).toEqual({ error: 'bad_date' });
+
+    const malformed = await request(app).get('/api/projects/p1/daily-weather').query({ date: 'not-a-date' });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toEqual({ error: 'bad_date' });
+  });
+});
