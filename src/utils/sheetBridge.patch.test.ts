@@ -450,6 +450,97 @@ describe('patchWorkbookFromFortuneSheets', () => {
     assertBothSheetsSurvive(await reload(outB));
   });
 
+  // N3 regression (micro-fix round #2 — found by the re-review of the N1
+  // fix): removal of unmatched originals used to run AFTER pass 3's
+  // renames, so a rename targeting a name still held by a
+  // soon-to-be-deleted-but-not-yet original collided with it and exceljs
+  // threw "Worksheet name already exists". Delete sheet B + rename A to the
+  // name B just freed, in the same flush, double-patched (mirrors the C1
+  // double-patch protocol — ids are minted once and never change).
+  it('N3: delete sheet B + rename A to the freed name "B" does not throw, double-patched', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('A').getCell('A1').value = 'a-data';
+    wb.addWorksheet('B').getCell('A1').value = 'b-data';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const aSheet = sheets.find((s) => s.name === 'A')!;
+    // Keep only A (renamed to "B") — B is deleted (absent from the state).
+    const state: FortuneSheetData[] = [{ ...aSheet, name: 'B' }];
+
+    const assertCorrect = (outWb: ExcelJS.Workbook) => {
+      expect(outWb.worksheets.map((w) => w.name)).toEqual(['B']);
+      expect(outWb.getWorksheet('B')!.getCell('A1').value).toBe('a-data');
+    };
+
+    const out1 = await patchWorkbookFromFortuneSheets(buffer, state);
+    assertCorrect(await reload(out1));
+
+    const out2 = await patchWorkbookFromFortuneSheets(out1, state); // must not throw
+    assertCorrect(await reload(out2));
+  });
+
+  // N3 regression: a rename CHAIN among surviving matched originals (B's
+  // name is freed by B->C at the same time A wants that exact name) is a
+  // strictly harder case than a delete — both conflicting names belong to
+  // sheets that survive this flush, so it can't be fixed by reordering
+  // removal alone. Both `.order` orderings must resolve correctly.
+  it('N3: a rename chain (A->B, B->C) resolves correctly regardless of order', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('A').getCell('A1').value = 'a-data';
+    wb.addWorksheet('B').getCell('A1').value = 'b-data';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const aSheet = sheets.find((s) => s.name === 'A')!;
+    const bSheet = sheets.find((s) => s.name === 'B')!;
+
+    const buildState = (aOrder: number, bOrder: number): FortuneSheetData[] => [
+      { ...aSheet, name: 'B', order: aOrder },
+      { ...bSheet, name: 'C', order: bOrder },
+    ];
+
+    const assertChainCorrect = (outWb: ExcelJS.Workbook) => {
+      expect(outWb.worksheets.map((w) => w.name).sort()).toEqual(['B', 'C']);
+      expect(outWb.getWorksheet('B')!.getCell('A1').value).toBe('a-data');
+      expect(outWb.getWorksheet('C')!.getCell('A1').value).toBe('b-data');
+    };
+
+    const outA = await patchWorkbookFromFortuneSheets(buffer, buildState(0, 1));
+    assertChainCorrect(await reload(outA));
+
+    const outB = await patchWorkbookFromFortuneSheets(buffer, buildState(1, 0));
+    assertChainCorrect(await reload(outB));
+  });
+
+  // N3 regression: a full name SWAP is the chain's limit case — both names
+  // are simultaneously "wanted" and "held", so neither a straight rename
+  // pass nor a simple reorder can resolve it without the temp-name
+  // indirection.
+  it('N3: a full name swap (A<->B) resolves correctly, not a collision', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('A').getCell('A1').value = 'a-data';
+    wb.addWorksheet('B').getCell('A1').value = 'b-data';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const aSheet = sheets.find((s) => s.name === 'A')!;
+    const bSheet = sheets.find((s) => s.name === 'B')!;
+    const swapped: FortuneSheetData[] = [
+      { ...aSheet, name: 'B' },
+      { ...bSheet, name: 'A' },
+    ];
+
+    const outBytes = await patchWorkbookFromFortuneSheets(buffer, swapped);
+    const outWb = await reload(outBytes);
+    expect(outWb.worksheets.map((w) => w.name).sort()).toEqual(['A', 'B']);
+    expect(outWb.getWorksheet('B')!.getCell('A1').value).toBe('a-data');
+    expect(outWb.getWorksheet('A')!.getCell('A1').value).toBe('b-data');
+  });
+
   // M2 regression: a matched EXISTING sheet's non-frozen view settings (zoom,
   // gridlines, rtl) must survive a rebuild untouched — previously every
   // rebuild unconditionally set `views = []` for a non-frozen sheet, wiping

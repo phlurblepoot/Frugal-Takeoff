@@ -775,31 +775,88 @@ export async function patchWorkbookFromFortuneSheets(
     }
   }
 
-  // Pass 3: mutate, now that every incoming sheet's original (or lack of
-  // one) is fully and deterministically resolved — nothing here depends on
-  // iteration order anymore EXCEPT one thing: renaming a matched original
-  // must happen before any NEW sheet's `addWorksheet` call, because a new
-  // sheet can legitimately reuse a name a rename is about to free — if the
-  // new sheet's `addWorksheet(name)` ran first, it would collide with the
-  // still-original-named worksheet that hasn't been renamed away yet (its
-  // rename is a separate incoming entry, resolved but not yet applied).
-  // Splitting into two sub-passes (rename matched originals, THEN add new
-  // sheets) sidesteps this regardless of `orderedIncoming`'s order.
+  // N3 fix (micro-fix round #2, re-review defect): removal of unmatched
+  // originals must run BEFORE pass 3's renames, not after — matchedOriginals
+  // is already fully and deterministically settled by passes 1-2 above, so
+  // moving removal earlier doesn't change WHICH sheets get removed, only
+  // WHEN. Without this, a rename targeting a name still held by a
+  // soon-to-be-deleted (but not yet deleted) original collided with it and
+  // exceljs threw "Worksheet name already exists" — e.g. delete sheet B,
+  // rename A to "B", in the same flush: B still existed when A's rename ran.
+  for (const ws of originalWorksheets) {
+    if (!matchedOriginals.has(ws)) wb.removeWorksheet(ws.name);
+  }
+
+  // Pass 3: mutate every matched original's name + content, then add
+  // genuinely new sheets.
+  //
+  // N3 fix continued: even with unmatched originals already gone, a RENAME
+  // CHAIN or SWAP among the SURVIVING matched originals can still collide —
+  // e.g. B renamed to "C" and A renamed to "B" in the same flush (or a full
+  // A<->B swap): whichever original's rename is applied first targets a
+  // name the OTHER original currently still holds (or, for a swap, both
+  // targets are simultaneously live), so a single "rename in
+  // orderedIncoming order" pass throws depending on order. This is a
+  // strictly harder case than the earlier new-sheet-vs-not-yet-renamed-
+  // original collision (already handled by the rename-then-add split
+  // below): here BOTH conflicting names belong to matched originals renamed
+  // within this same pass, so splitting matched-vs-new isn't enough on its
+  // own.
+  //
+  // Fixed with a temp-name indirection, in two rounds: round 1 renames
+  // EVERY matched original whose name is actually changing to a unique
+  // placeholder (`__fs_tmp_<n>`, verified unique against every currently-
+  // alive worksheet name AND every incoming target name before use — no
+  // crypto.randomUUID, per this app's plain-HTTP-LAN convention) — since
+  // every placeholder is freshly minted and never reused, no rename in this
+  // round can ever collide. Only once every changing original has vacated
+  // its OLD name does round 2 apply the real target names — by then every
+  // name a rename could want is guaranteed free (either an untouched
+  // survivor never held it, or its former holder already moved to a
+  // placeholder).
+  const changingOriginals = orderedIncoming
+    .map((incoming) => ({ incoming, original: resolvedOriginal.get(incoming) }))
+    .filter(
+      (e): e is { incoming: FortuneSheetData; original: ExcelJS.Worksheet } =>
+        !!e.original && e.original.name !== e.incoming.name,
+    );
+
+  if (changingOriginals.length > 0) {
+    const reservedNames = new Set<string>([
+      ...wb.worksheets.map((ws) => ws.name),
+      ...orderedIncoming.map((s) => s.name), // also avoid every FUTURE target name
+    ]);
+    let tmpCounter = 0;
+    const nextTmpName = (): string => {
+      let name: string;
+      do {
+        tmpCounter += 1;
+        name = `__fs_tmp_${tmpCounter}`;
+      } while (reservedNames.has(name));
+      reservedNames.add(name);
+      return name;
+    };
+    for (const { original } of changingOriginals) {
+      original.name = nextTmpName();
+    }
+    for (const { incoming, original } of changingOriginals) {
+      original.name = incoming.name;
+    }
+  }
+
   for (const incoming of orderedIncoming) {
     const original = resolvedOriginal.get(incoming);
     if (!original) continue;
-    if (original.name !== incoming.name) original.name = incoming.name;
     rebuildWorksheetGrid(original, incoming, false);
   }
+  // New sheets are added ONLY after every matched original has already
+  // reached its final name — a new sheet can legitimately reuse a name a
+  // rename just freed, so adding it any earlier could still collide with a
+  // matched original that hadn't renamed away from that name yet.
   for (const incoming of orderedIncoming) {
     if (resolvedOriginal.has(incoming)) continue;
     const worksheet = wb.addWorksheet(incoming.name);
     rebuildWorksheetGrid(worksheet, incoming, true);
-  }
-
-  // Remove original sheets that were matched to nothing in the incoming state.
-  for (const ws of originalWorksheets) {
-    if (!matchedOriginals.has(ws)) wb.removeWorksheet(ws.name);
   }
 
   const out = await wb.xlsx.writeBuffer();
