@@ -1182,4 +1182,70 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 26,
+    name: 'sheet-sessions',
+    // ADDITIVE. Backs the shared spreadsheet session store (WS5): one row per
+    // file holding the latest authoritative state plus a journal of op
+    // batches appended since that state was folded. sheet_ops is the durable
+    // journal — SQLite IS the crash-recovery log (see sheetSessions.ts).
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE sheet_sessions (
+          fileId TEXT PRIMARY KEY,
+          state TEXT,
+          stateSeq INTEGER NOT NULL DEFAULT 0,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          sessionOpen INTEGER NOT NULL DEFAULT 0,
+          snapshotDone INTEGER NOT NULL DEFAULT 0,
+          updatedAt INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE sheet_ops (
+          fileId TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          ops TEXT NOT NULL,
+          PRIMARY KEY (fileId, seq)
+        );
+      `);
+    },
+  },
+  {
+    version: 27,
+    name: 'daily-reports',
+    // ADDITIVE. Daily field reports: one row per project per calendar date
+    // (UNIQUE below is the identity rule), plus an RFI-style photo join table.
+    // weatherHourly/manCounts are JSON text columns (display-only lists, never
+    // queried by content).
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE daily_reports (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          reportDate TEXT NOT NULL,
+          jobName TEXT NOT NULL DEFAULT '',
+          contractorName TEXT NOT NULL DEFAULT '',
+          weatherSummary TEXT NOT NULL DEFAULT '',
+          temperature TEXT NOT NULL DEFAULT '',
+          weatherHourly TEXT NOT NULL DEFAULT '[]',
+          manCounts TEXT NOT NULL DEFAULT '[]',
+          fieldNotes TEXT NOT NULL DEFAULT '',
+          issues TEXT NOT NULL DEFAULT '',
+          createdBy TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(projectId, reportDate)
+        );
+        CREATE INDEX idx_daily_reports_project ON daily_reports(projectId);
+        CREATE TABLE daily_report_photos (
+          id TEXT PRIMARY KEY,
+          dailyReportId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX idx_daily_report_photos_report ON daily_report_photos(dailyReportId);
+      `);
+    },
+  },
 ];

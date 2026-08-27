@@ -29,6 +29,13 @@ import {
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
 } from './rfiStore';
 import {
+  getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
+  addPhoto as addDailyPhoto, removePhoto as removeDailyPhoto,
+  ValidationError as DailyValidationError, ConflictError as DailyConflictError,
+  NotFoundError as DailyNotFoundError, DateTakenError as DailyDateTakenError,
+} from './dailyReportStore';
+import { geocodeAddress, fetchDailyWeather } from './weather';
+import {
   getPunchItem, listPunchItems, createPunchItem, savePunchItem,
   setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
   ValidationError as PunchValidationError,
@@ -42,7 +49,7 @@ import {
   NotFoundError as TaskNotFoundError,
 } from './taskStore';
 import {
-  listSovLines, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders,
+  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders,
   listPayApps, createPayApp, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702,
   ValidationError as AiaValidationError,
@@ -54,6 +61,8 @@ import {
   customerSummaries, customerOverview,
 } from './customerStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
+import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
+import type { SheetSessionStore } from './realtime/sheetSessions';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -64,6 +73,14 @@ export interface RouteDeps {
   // Verifies a JWT from a query parameter (for streaming URLs that can't set
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
+  broadcastChange: BroadcastChange;
+  // I6: optional so existing tests that construct RouteDeps by hand (no
+  // sheet-collab wiring) keep working untouched. When present, a version-
+  // replace or a file delete invalidates that fileId's persisted collab
+  // session (see the call sites below) — without it, a replaced file's next
+  // sheet-join would hydrate the OLD working copy over the new bytes, or a
+  // deleted file's dirty row would error-loop the flush engine forever.
+  sheetStore?: SheetSessionStore;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -122,6 +139,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         projectId: req.body?.id, userId: (req as any).user?.id,
         type: 'project_created', message: `Project "${req.body?.name ?? 'Untitled'}" created`,
       });
+      deps.broadcastChange({
+        type: 'project', id: req.body?.id, projectId: req.body?.id,
+        version: result.version, action: 'created', ...requestMeta(req),
+      });
       res.json({ success: true, version: result.version });
     } catch (e) {
       if (e instanceof ValidationError) return res.status(400).json({ error: e.message });
@@ -133,6 +154,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.put('/api/projects/:id', authenticateToken, (req, res) => {
     try {
       const result = saveProject(db, req.params.id, req.body, dataDir);
+      deps.broadcastChange({
+        type: 'project', id: req.params.id, projectId: req.params.id,
+        version: result.version, action: 'updated', ...requestMeta(req),
+      });
       res.json({ success: true, version: result.version });
     } catch (e) {
       if (e instanceof ConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
@@ -151,6 +176,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           type: 'status_changed', message: `Stage changed to ${req.body.status}`,
         });
       }
+      deps.broadcastChange({
+        type: 'project', id: req.params.id, projectId: req.params.id,
+        version: result.version, action: 'updated', ...requestMeta(req),
+      });
       res.json({ success: true, ...result });
     } catch (e) {
       if (e instanceof NotFoundError) return res.status(404).json({ error: e.message });
@@ -168,6 +197,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       logActivity(db, {
         userId: (req as any).user?.id,
         type: 'project_deleted', message: `Project "${name ?? 'Untitled'}" deleted`,
+      });
+      deps.broadcastChange({
+        type: 'project', id: req.params.id, projectId: req.params.id,
+        action: 'deleted', ...requestMeta(req),
       });
       res.json({ success: true });
     } catch (e) {
@@ -227,6 +260,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = createInvoice(db, req.params.id, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'invoice_created', message: `Invoice ${req.body?.number ?? ''} created` });
+      deps.broadcastChange({ type: 'invoice', id: r.id, projectId: req.params.id, version: r.version, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { billingErr(e, res); }
   });
@@ -234,17 +268,29 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { const inv = getInvoice(db, req.params.id); if (!inv) return res.status(404).json({ error: 'Invoice not found' }); res.json(inv); } catch (e) { billingErr(e, res); }
   });
   app.put('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json({ success: true, ...saveInvoice(db, req.params.id, req.body) }); } catch (e) { billingErr(e, res); }
+    try {
+      const result = saveInvoice(db, req.params.id, req.body);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...result });
+    } catch (e) { billingErr(e, res); }
   });
   app.patch('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
     try {
       if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
       const r = setInvoiceStatus(db, req.params.id, req.body.status);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: r.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/invoices/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { deleteInvoice(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+    try {
+      const before = getInvoice(db, req.params.id);
+      deleteInvoice(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
   });
 
   app.get('/api/projects/:id/payments', authenticateToken, requireAdmin, (req, res) => {
@@ -254,11 +300,24 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = recordPayment(db, req.body?.targetType, req.body?.targetId, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'payment_recorded', message: `Payment of $${Number(req.body?.amount ?? 0).toFixed(2)} recorded` });
+      deps.broadcastChange({ type: 'payment', id: r.id, projectId: req.params.id, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/payments/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { deletePayment(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+    try {
+      // payments are polymorphic (invoice|payapp) and carry no projectId column
+      // of their own; resolve it via whichever target table the payment points at.
+      const before = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(req.params.id) as
+        { targetType: string; targetId: string } | undefined;
+      deletePayment(db, req.params.id);
+      if (before) {
+        const table = before.targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
+        const target = db.prepare(`SELECT projectId FROM ${table} WHERE id = ?`).get(before.targetId) as { projectId: string } | undefined;
+        if (target) deps.broadcastChange({ type: 'payment', id: req.params.id, projectId: target.projectId, action: 'deleted', ...requestMeta(req) });
+      }
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
   });
 
   app.get('/api/projects/:id/change-orders', authenticateToken, requireAdmin, (req, res) => {
@@ -268,6 +327,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = createChangeOrder(db, req.params.id, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'change_order_created', message: `Change order ${req.body?.number ?? ''} created` });
+      deps.broadcastChange({ type: 'changeOrder', id: r.id, projectId: req.params.id, version: r.version, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { billingErr(e, res); }
   });
@@ -276,6 +336,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
       const r = setChangeOrderStatus(db, req.params.id, req.body.status);
       if (req.body.status === 'approved') logActivity(db, { userId: (req as any).user?.id, type: 'change_order_approved', message: 'Change order approved' });
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: r.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { billingErr(e, res); }
   });
@@ -283,20 +345,37 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { const co = getChangeOrder(db, req.params.id); if (!co) return res.status(404).json({ error: 'Change order not found' }); res.json(co); } catch (e) { billingErr(e, res); }
   });
   app.put('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json({ success: true, ...saveChangeOrder(db, req.params.id, req.body) }); } catch (e) { billingErr(e, res); }
+    try {
+      const result = saveChangeOrder(db, req.params.id, req.body);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...result });
+    } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/change-orders/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { deleteChangeOrder(db, req.params.id); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+    try {
+      const before = getChangeOrder(db, req.params.id);
+      deleteChangeOrder(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
   });
   app.post('/api/change-orders/:id/photos', authenticateToken, requireAdmin, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addChangeOrderPhoto(db, req.params.id, req.body.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });
   app.delete('/api/change-orders/:id/photos/:fileId', authenticateToken, requireAdmin, (req, res) => {
-    try { removeChangeOrderPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { billingErr(e, res); }
+    try {
+      removeChangeOrderPhoto(db, req.params.id, req.params.fileId);
+      const row = getChangeOrder(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
   });
 
   app.get('/api/projects/:id/billing-summary', authenticateToken, requireAdmin, (req, res) => {
@@ -317,19 +396,44 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { res.json(listSovLines(db, req.params.id)); } catch (e) { aiaErr(e, res); }
   });
   app.post('/api/projects/:id/aia/sov', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json(createSovLine(db, req.params.id, req.body)); } catch (e) { aiaErr(e, res); }
+    try {
+      const r = createSovLine(db, req.params.id, req.body);
+      const row = getSovLine(db, r.id);
+      deps.broadcastChange({ type: 'aiaSov', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { aiaErr(e, res); }
   });
   app.put('/api/aia/sov/:lineId', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json({ success: true, ...saveSovLine(db, req.params.lineId, req.body) }); } catch (e) { aiaErr(e, res); }
+    try {
+      const result = saveSovLine(db, req.params.lineId, req.body);
+      const row = getSovLine(db, req.params.lineId);
+      if (row) deps.broadcastChange({ type: 'aiaSov', id: req.params.lineId, projectId: row.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...result });
+    } catch (e) { aiaErr(e, res); }
   });
   app.delete('/api/aia/sov/:lineId', authenticateToken, requireAdmin, (req, res) => {
-    try { deleteSovLine(db, req.params.lineId); res.json({ success: true }); } catch (e) { aiaErr(e, res); }
+    try {
+      const before = getSovLine(db, req.params.lineId);
+      deleteSovLine(db, req.params.lineId);
+      if (before) deps.broadcastChange({ type: 'aiaSov', id: req.params.lineId, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { aiaErr(e, res); }
   });
   app.post('/api/projects/:id/aia/sov/seed', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json(seedSovLines(db, req.params.id, req.body?.lines)); } catch (e) { aiaErr(e, res); }
+    try {
+      const r = seedSovLines(db, req.params.id, req.body?.lines);
+      // Bulk replace of the estimate-derived lines — no single line id to key
+      // on, so the project id itself is the broadcast subject (spec §Task2).
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { aiaErr(e, res); }
   });
   app.post('/api/projects/:id/aia/sov/sync-change-orders', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json(syncChangeOrders(db, req.params.id)); } catch (e) { aiaErr(e, res); }
+    try {
+      const r = syncChangeOrders(db, req.params.id);
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { aiaErr(e, res); }
   });
 
   // Pay applications (G702/G703)
@@ -348,7 +452,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const project = loadProject(db, req.params.id);
       const { storedRetainagePercent: _legacyStoredRetainagePercent, ...settingsDefaults } = (project && project.aiaSettings) || {};
       const input = { ...settingsDefaults, ...req.body };
-      res.json(createPayApp(db, req.params.id, input));
+      const r = createPayApp(db, req.params.id, input);
+      const row = getPayApp(db, r.id);
+      deps.broadcastChange({ type: 'aiaPayApp', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      res.json(r);
     } catch (e) { aiaErr(e, res); }
   });
   app.get('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
@@ -365,13 +472,28 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) { aiaErr(e, res); }
   });
   app.put('/api/aia/pay-apps/:id/lines', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json({ success: true, ...savePayAppLines(db, req.params.id, req.body?.lines, req.body?.version) }); } catch (e) { aiaErr(e, res); }
+    try {
+      const result = savePayAppLines(db, req.params.id, req.body?.lines, req.body?.version);
+      const row = getPayApp(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'aiaPayApp', id: req.params.id, projectId: row.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...result });
+    } catch (e) { aiaErr(e, res); }
   });
   app.patch('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { res.json({ success: true, ...setPayApp(db, req.params.id, req.body) }); } catch (e) { aiaErr(e, res); }
+    try {
+      const result = setPayApp(db, req.params.id, req.body);
+      const row = getPayApp(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'aiaPayApp', id: req.params.id, projectId: row.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...result });
+    } catch (e) { aiaErr(e, res); }
   });
   app.delete('/api/aia/pay-apps/:id', authenticateToken, requireAdmin, (req, res) => {
-    try { deletePayApp(db, req.params.id); res.json({ success: true }); } catch (e) { aiaErr(e, res); }
+    try {
+      const before = getPayApp(db, req.params.id);
+      deletePayApp(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'aiaPayApp', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { aiaErr(e, res); }
   });
 
   // AIA project settings (retainage defaults, architect, etc.) — stored in
@@ -413,6 +535,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = createIssue(db, req.params.id, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'issue_created', message: `Issue ISS-${String(r.number).padStart(3, '0')} opened: ${req.body?.title ?? ''}` });
+      const row = getIssue(db, r.id);
+      deps.broadcastChange({ type: 'issue', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { issueErr(e, res); }
   });
@@ -420,7 +544,15 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { const iss = getIssue(db, req.params.id); if (!iss) return res.status(404).json({ error: 'Issue not found' }); res.json(iss); } catch (e) { issueErr(e, res); }
   });
   app.put('/api/issues/:id', authenticateToken, (req, res) => {
-    try { res.json({ success: true, ...saveIssue(db, req.params.id, req.body) }); } catch (e) { issueErr(e, res); }
+    try {
+      const result = saveIssue(db, req.params.id, req.body);
+      const row = getIssue(db, req.params.id);
+      if (row) deps.broadcastChange({
+        type: 'issue', id: req.params.id, projectId: row.projectId,
+        version: row.version, action: 'updated', ...requestMeta(req),
+      });
+      res.json({ success: true, ...result });
+    } catch (e) { issueErr(e, res); }
   });
   app.patch('/api/issues/:id', authenticateToken, (req, res) => {
     try {
@@ -430,21 +562,43 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.status === 'resolved' && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'issue_resolved', message: `Issue ISS-${String(before.number).padStart(3, '0')} resolved` });
       }
+      // Re-read after the mutation: setIssueStatus bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — a dirty
+      // editor's Keep-mine would then adopt `null` and bounce off the 409
+      // backstop on its next save.
+      const after = getIssue(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { issueErr(e, res); }
   });
   app.delete('/api/issues/:id', authenticateToken, (req, res) => {
-    try { deleteIssue(db, req.params.id); res.json({ success: true }); } catch (e) { issueErr(e, res); }
+    try {
+      const before = getIssue(db, req.params.id);
+      deleteIssue(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
   });
   app.post('/api/issues/:id/photos', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addPhoto(db, req.params.id, req.body.fileId);
+      const row = getIssue(db, req.params.id);
+      // addPhoto/removePhoto don't bump the issue's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { issueErr(e, res); }
   });
   app.delete('/api/issues/:id/photos/:fileId', authenticateToken, (req, res) => {
-    try { removePhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { issueErr(e, res); }
+    try {
+      removePhoto(db, req.params.id, req.params.fileId);
+      const row = getIssue(db, req.params.id);
+      // addPhoto/removePhoto don't bump the issue's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { issueErr(e, res); }
   });
 
   // ── RFIs (any authenticated user — field-created, like issues) ─────────────
@@ -464,6 +618,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = createRfi(db, req.params.id, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'rfi_created', message: `RFI ${rfiNo(r.number)} opened: ${req.body?.title ?? ''}` });
+      const row = getRfi(db, r.id);
+      deps.broadcastChange({ type: 'rfi', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { rfiErr(e, res); }
   });
@@ -471,7 +627,15 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { const rfi = getRfi(db, req.params.id); if (!rfi) return res.status(404).json({ error: 'RFI not found' }); res.json(rfi); } catch (e) { rfiErr(e, res); }
   });
   app.put('/api/rfis/:id', authenticateToken, (req, res) => {
-    try { res.json({ success: true, ...saveRfi(db, req.params.id, req.body) }); } catch (e) { rfiErr(e, res); }
+    try {
+      const result = saveRfi(db, req.params.id, req.body);
+      const row = getRfi(db, req.params.id);
+      if (row) deps.broadcastChange({
+        type: 'rfi', id: req.params.id, projectId: row.projectId,
+        version: row.version, action: 'updated', ...requestMeta(req),
+      });
+      res.json({ success: true, ...result });
+    } catch (e) { rfiErr(e, res); }
   });
   app.patch('/api/rfis/:id', authenticateToken, (req, res) => {
     try {
@@ -481,21 +645,42 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.status === 'closed' && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_closed', message: `RFI ${rfiNo(before.number)} closed` });
       }
+      // Re-read after the mutation: setRfiStatus bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — see the
+      // matching comment on the issue PATCH route above.
+      const after = getRfi(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { rfiErr(e, res); }
   });
   app.delete('/api/rfis/:id', authenticateToken, (req, res) => {
-    try { deleteRfi(db, req.params.id); res.json({ success: true }); } catch (e) { rfiErr(e, res); }
+    try {
+      const before = getRfi(db, req.params.id);
+      deleteRfi(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
   });
   app.post('/api/rfis/:id/photos', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addRfiPhoto(db, req.params.id, req.body.fileId);
+      const row = getRfi(db, req.params.id);
+      // addPhoto/removePhoto don't bump the RFI's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
   });
   app.delete('/api/rfis/:id/photos/:fileId', authenticateToken, (req, res) => {
-    try { removeRfiPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { rfiErr(e, res); }
+    try {
+      removeRfiPhoto(db, req.params.id, req.params.fileId);
+      const row = getRfi(db, req.params.id);
+      // addPhoto/removePhoto don't bump the RFI's version — attaching the
+      // unchanged version would let a client's version-dedupe skip this event.
+      if (row) deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { rfiErr(e, res); }
   });
   // Record the answer — usually an uploaded response PDF, optionally text.
   app.post('/api/rfis/:id/response', authenticateToken, (req, res) => {
@@ -504,9 +689,90 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const r = setRfiResponse(db, req.params.id, { fileId: req.body?.fileId, text: req.body?.text });
       if (before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_answered', message: `RFI ${rfiNo(before.number)} answered` });
+        // Re-read after the mutation: setRfiResponse bumps the version.
+        const after = getRfi(db, req.params.id);
+        deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
       }
       res.json({ success: true, ...r });
     } catch (e) { rfiErr(e, res); }
+  });
+
+  // ── Daily Reports (any authenticated user — field-created, like RFIs) ──────
+  const dailyErr = (e: unknown, res: express.Response) => {
+    if (e instanceof DailyDateTakenError) return res.status(409).json({ error: 'date_taken', existingId: e.existingId });
+    if (e instanceof DailyNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof DailyConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof DailyValidationError) return res.status(400).json({ error: e.message });
+    console.error('Daily report error:', e);
+    return res.status(500).json({ error: 'Daily report operation failed' });
+  };
+
+  app.get('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
+    try { res.json(listDailyReports(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
+    try {
+      const r = createDailyReport(db, req.params.id, req.body, (req as any).user?.username);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${req.body?.reportDate ?? ''} created` });
+      deps.broadcastChange({ type: 'dailyReport', id: r.id, projectId: req.params.id, version: 1, action: 'created', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.get('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const report = getDailyReport(db, req.params.id);
+      if (!report) return res.status(404).json({ error: 'Daily report not found' });
+      res.json(report);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.put('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyReport(db, req.params.id);
+      const result = saveDailyReport(db, req.params.id, req.body);
+      if (before) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: before.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json(result);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyReport(db, req.params.id);
+      deleteDailyReport(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/daily-reports/:id/photos', authenticateToken, (req, res) => {
+    try {
+      addDailyPhoto(db, req.params.id, req.body.fileId);
+      const row = getDailyReport(db, req.params.id);
+      // addPhoto/removePhoto don't bump the daily report's version — attaching
+      // an unbumped version would poison the client's version-dedupe.
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeDailyPhoto(db, req.params.id, req.params.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.get('/api/projects/:id/daily-weather', authenticateToken, async (req, res) => {
+    const date = String(req.query.date ?? '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'bad_date' });
+    const row = db.prepare('SELECT address FROM projects WHERE id = ?').get(req.params.id) as any;
+    if (!row) return res.status(404).json({ error: 'Project not found' });
+    if (!row.address) return res.status(400).json({ error: 'no_address' });
+    try {
+      const geo = await geocodeAddress(row.address);
+      if (!geo) return res.status(502).json({ error: 'weather_unavailable' });
+      res.json(await fetchDailyWeather(geo.lat, geo.lon, date));
+    } catch (e) {
+      console.error('Daily weather fetch failed:', e);
+      res.status(502).json({ error: 'weather_unavailable' });
+    }
   });
 
   // ── Punch & Checklists (any authenticated user — field-created, spec §4.2) ──
@@ -525,6 +791,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const r = createPunchItem(db, req.params.id, req.body);
       logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'punch_created', message: `Punch item added${req.body?.area ? ` (${req.body.area})` : ''}: ${req.body?.description ?? ''}` });
+      const row = getPunchItem(db, r.id);
+      deps.broadcastChange({ type: 'punch', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
       res.json(r);
     } catch (e) { punchErr(e, res); }
   });
@@ -532,7 +800,15 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try { const it = getPunchItem(db, req.params.id); if (!it) return res.status(404).json({ error: 'Punch item not found' }); res.json(it); } catch (e) { punchErr(e, res); }
   });
   app.put('/api/punch/:id', authenticateToken, (req, res) => {
-    try { res.json({ success: true, ...savePunchItem(db, req.params.id, req.body) }); } catch (e) { punchErr(e, res); }
+    try {
+      const result = savePunchItem(db, req.params.id, req.body);
+      const row = getPunchItem(db, req.params.id);
+      if (row) deps.broadcastChange({
+        type: 'punch', id: req.params.id, projectId: row.projectId,
+        version: row.version, action: 'updated', ...requestMeta(req),
+      });
+      res.json({ success: true, ...result });
+    } catch (e) { punchErr(e, res); }
   });
   app.patch('/api/punch/:id', authenticateToken, (req, res) => {
     try {
@@ -542,21 +818,44 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       if (req.body.done && before) {
         logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'punch_done', message: `Punch item done${before.area ? ` (${before.area})` : ''}: ${before.description ?? ''}` });
       }
+      // Re-read after the mutation: setPunchDone bumps the version, and
+      // broadcasting the pre-mutation `before` row would omit it — see the
+      // matching comment on the issue PATCH route above.
+      const after = getPunchItem(db, req.params.id);
+      if (after) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: after.projectId, version: after.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true, ...r });
     } catch (e) { punchErr(e, res); }
   });
   app.delete('/api/punch/:id', authenticateToken, (req, res) => {
-    try { deletePunchItem(db, req.params.id); res.json({ success: true }); } catch (e) { punchErr(e, res); }
+    try {
+      const before = getPunchItem(db, req.params.id);
+      deletePunchItem(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { punchErr(e, res); }
   });
   app.post('/api/punch/:id/photos', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addPunchPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
+      const row = getPunchItem(db, req.params.id);
+      // addPunchPhoto/removePunchPhoto don't bump the item's version —
+      // attaching the unchanged version would let a client's version-dedupe
+      // skip this event.
+      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { punchErr(e, res); }
   });
   app.delete('/api/punch/:id/photos/:fileId', authenticateToken, (req, res) => {
-    try { removePunchPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { punchErr(e, res); }
+    try {
+      removePunchPhoto(db, req.params.id, req.params.fileId);
+      const row = getPunchItem(db, req.params.id);
+      // addPunchPhoto/removePunchPhoto don't bump the item's version —
+      // attaching the unchanged version would let a client's version-dedupe
+      // skip this event.
+      if (row) deps.broadcastChange({ type: 'punch', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { punchErr(e, res); }
   });
 
   // ── Users roster (any authenticated user — for assignee pickers) ───────────
@@ -587,32 +886,57 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks', authenticateToken, (req, res) => {
-    try { res.json(createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null })); } catch (e) { taskErr(e, res); }
+    try {
+      const r = createTask(db, { ...req.body, createdBy: (req as any).user?.id ?? null });
+      const projectId = typeof req.body?.projectId === 'string' && req.body.projectId ? req.body.projectId : undefined;
+      deps.broadcastChange({ type: 'task', id: r.id, projectId, action: 'created', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { taskErr(e, res); }
   });
   app.get('/api/tasks/:id', authenticateToken, (req, res) => {
     try { const t = getTask(db, req.params.id); if (!t) return res.status(404).json({ error: 'Task not found' }); res.json(t); } catch (e) { taskErr(e, res); }
   });
   app.put('/api/tasks/:id', authenticateToken, (req, res) => {
-    try { res.json({ success: true, ...saveTask(db, req.params.id, req.body) }); } catch (e) { taskErr(e, res); }
+    try {
+      const r = saveTask(db, req.params.id, req.body);
+      const row = getTask(db, req.params.id);
+      deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: r.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
+    } catch (e) { taskErr(e, res); }
   });
   app.patch('/api/tasks/:id', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.status !== 'string') return res.status(400).json({ error: 'status is required' });
-      res.json({ success: true, ...setTaskStatus(db, req.params.id, req.body.status) });
+      const r = setTaskStatus(db, req.params.id, req.body.status);
+      const row = getTask(db, req.params.id);
+      deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row?.projectId ?? undefined, version: row?.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
     } catch (e) { taskErr(e, res); }
   });
   app.delete('/api/tasks/:id', authenticateToken, (req, res) => {
-    try { deleteTask(db, req.params.id); res.json({ success: true }); } catch (e) { taskErr(e, res); }
+    try {
+      const before = getTask(db, req.params.id);
+      deleteTask(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { taskErr(e, res); }
   });
   app.post('/api/tasks/:id/photos', authenticateToken, (req, res) => {
     try {
       if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
       addTaskPhoto(db, req.params.id, req.body.fileId, req.body?.stage ?? 'before');
+      const row = getTask(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { taskErr(e, res); }
   });
   app.delete('/api/tasks/:id/photos/:fileId', authenticateToken, (req, res) => {
-    try { removeTaskPhoto(db, req.params.id, req.params.fileId); res.json({ success: true }); } catch (e) { taskErr(e, res); }
+    try {
+      removeTaskPhoto(db, req.params.id, req.params.fileId);
+      const row = getTask(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'task', id: req.params.id, projectId: row.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { taskErr(e, res); }
   });
 
   // ── Images (legacy compat) + files ────────────────────────────────────────
@@ -653,7 +977,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       // hides them at upload time too, not just via the NOT-EXISTS fallback.
       const q = req.query;
       const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
-      putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
+      const result = putDataUrl(db, dataDir, id, data, { kind: str(q.kind), projectId: str(q.projectId) });
+      deps.broadcastChange({
+        type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+        action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
+      });
       res.json({ success: true });
     } catch (e) {
       console.error('Error saving image:', e);
@@ -689,6 +1017,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           customerId: str(q.customerId),
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
+        });
+        deps.broadcastChange({
+          type: 'file', id: result.id, projectId: result.projectId ?? undefined,
+          action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
         });
         res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
@@ -756,6 +1088,12 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
+        // I6: this route replaces the LIVE bytes out from under any sheet
+        // session the flush engine doesn't know about — clear it so the next
+        // sheet-join re-imports the new bytes instead of hydrating the stale
+        // working copy over them.
+        deps.sheetStore?.clearSession(req.params.id);
+        deps.broadcastChange({ type: 'file', id: req.params.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
         res.json({ success: true, ...result });
       } catch (e) {
         console.error('Error saving file version:', e);
@@ -838,6 +1176,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const isAdmin = (req as any).user?.role === 'admin';
       const result = patchDocument(db, req.params.id, { archived, kind }, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      deps.broadcastChange({ type: 'file', id: req.params.id, projectId: result.value.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
       const { sha256, legacyFormat, ...slim } = result.value as any;
       res.json({ success: true, ...slim, archived: !!slim.archived });
     } catch (e) {
@@ -849,8 +1188,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.delete('/api/files/:id', authenticateToken, (req, res) => {
     try {
       const isAdmin = (req as any).user?.role === 'admin';
+      const before = getMeta(db, req.params.id);
       const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      // I6: a deleted file's dirty sheet-session row would otherwise
+      // error-loop the flush engine every 15s forever (durable across
+      // restarts) trying to patch bytes that no longer exist.
+      deps.sheetStore?.clearSession(req.params.id);
+      if (before) deps.broadcastChange({ type: 'file', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) {
       console.error('Error deleting file:', e);
@@ -900,7 +1245,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     // walk above reaches. Project-attributed rows are covered by the clause
     // below, but task photos are deliberately project-less (a task outlives the
     // project it merely refers to), so without this pass they read as orphans.
-    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos']) {
+    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos', 'daily_report_photos']) {
       let rows: { fileId: string | null }[] = [];
       try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
       for (const r of rows) if (r.fileId) referenced.add(r.fileId);
@@ -1152,7 +1497,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.post('/api/customers', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
     const id = req.body.id || `customer-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-    res.json(saveCustomer(db, { ...req.body, id }));
+    const saved = saveCustomer(db, { ...req.body, id });
+    deps.broadcastChange({ type: 'customer', id: saved.id, action: 'created', ...requestMeta(req) });
+    res.json(saved);
   });
   app.put('/api/customers/:id', authenticateToken, (req, res) => {
     if (!req.body?.name || !String(req.body.name).trim()) return res.status(400).json({ error: 'name is required' });
@@ -1168,14 +1515,34 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     if (req.params.id !== 'customer-unassigned' && newName !== previousName) {
       db.prepare('UPDATE projects SET contractor = ? WHERE customerId = ?').run(newName, req.params.id);
     }
+    // One event, not one-per-affected-project: the contractor-string backfill
+    // above is a display-string side effect, not something project screens
+    // need to live-refresh on (see task-3 brief — YAGNI).
+    deps.broadcastChange({ type: 'customer', id: req.params.id, action: 'updated', ...requestMeta(req) });
     res.json(saved);
   });
   app.delete('/api/customers/:id', authenticateToken, (req, res) => {
-    try { deleteCustomer(db, req.params.id); res.json({ success: true }); }
+    try {
+      deleteCustomer(db, req.params.id);
+      deps.broadcastChange({ type: 'customer', id: req.params.id, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    }
     catch (e: any) { res.status(409).json({ error: String(e?.message ?? e) }); }
   });
   app.post('/api/customers/merge', authenticateToken, (req, res) => {
-    try { mergeCustomers(db, req.body.targetId, req.body.sourceIds || []); res.json({ success: true }); }
+    try {
+      const targetId = req.body.targetId;
+      const sourceIds: string[] = req.body.sourceIds || [];
+      // Mirror mergeCustomers' own skip rules (self-merge, unknown id) so we only
+      // broadcast a 'deleted' for sources it will actually remove.
+      const mergedIds = sourceIds.filter(sid => sid !== targetId && !!getCustomer(db, sid));
+      mergeCustomers(db, targetId, sourceIds);
+      for (const sid of mergedIds) {
+        deps.broadcastChange({ type: 'customer', id: sid, action: 'deleted', ...requestMeta(req) });
+      }
+      deps.broadcastChange({ type: 'customer', id: targetId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    }
     catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
   });
 }
@@ -1197,6 +1564,7 @@ export interface EmailRouteDeps {
   // Returns the given user's SMTP config (smtp.* keys, prefix stripped). Used
   // for the From header and the per-user config GET route.
   getUserSmtp: (userId: string) => Record<string, string>;
+  broadcastChange: BroadcastChange;
 }
 
 // Sends one or more stored files as attachments via SMTP. Throws on
@@ -1354,7 +1722,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       const fresh = loadProject(db, req.params.id) ?? project;
       const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
       saveProject(db, req.params.id, updatedProject, dataDir);
-      res.json(loadProject(db, req.params.id));
+      const saved = loadProject(db, req.params.id);
+      deps.broadcastChange({
+        type: 'project', id: req.params.id, projectId: req.params.id,
+        version: saved?.version, action: 'updated', ...requestMeta(req),
+      });
+      res.json(saved);
     } catch (error: any) {
       console.error('Error sending project proposal:', error);
       res.status(500).json({ error: error.message || 'Failed to send proposal' });
@@ -1379,6 +1752,8 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       // mark sent (best effort) + log
       try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
       logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
+      const fresh = getInvoice(db, req.params.id);
+      deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: inv.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e: any) {
       console.error('Error sending invoice:', e);
@@ -1407,6 +1782,8 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
       } catch { /* best effort */ }
       logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
+      const fresh = getChangeOrder(db, req.params.id);
+      deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: co.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e: any) {
       console.error('Error sending change order:', e);
@@ -1453,6 +1830,8 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       });
       try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
       logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${padded} emailed to ${to}` });
+      const fresh = getIssue(db, req.params.id);
+      deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: iss.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e: any) {
       console.error('Error sending issue:', e);
@@ -1478,10 +1857,38 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       });
       try { markRfiSent(db, req.params.id); } catch { /* best effort */ }
       logActivity(db, { projectId: rfi.projectId, userId: (req as any).user?.id, type: 'rfi_sent', message: `RFI RFI-${padded} emailed to ${to}` });
+      const fresh = getRfi(db, req.params.id);
+      deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: rfi.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e: any) {
       console.error('Error sending RFI:', e);
       res.status(500).json({ error: e.message || 'Failed to send RFI' });
+    }
+  });
+
+  // Send a daily report PDF via SMTP (any authenticated user — field members file dailies)
+  app.post('/api/daily-reports/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const report = getDailyReport(db, req.params.id);
+      if (!report) return res.status(404).json({ error: 'Daily report not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
+      // (client can't be imported server-side) — falls back to date-only when
+      // jobName is blank.
+      const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+      const attachmentName = sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`;
+      await send((req as any).user.id, {
+        to, cc, bcc,
+        subject: subject?.trim() || `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
+        text: body ?? message ?? 'Please find the attached daily report.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName }, attachmentFileIds),
+      });
+      logActivity(db, { projectId: report.projectId, userId: (req as any).user?.id, type: 'daily_report_sent', message: `Daily report ${report.reportDate} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending daily report:', e);
+      res.status(500).json({ error: e.message || 'Failed to send daily report' });
     }
   });
 }

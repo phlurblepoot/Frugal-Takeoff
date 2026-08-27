@@ -1,19 +1,30 @@
 import { useEffect, useRef } from 'react';
 import { useToast } from './Toast';
+import { getProject } from '../utils/store';
 
-// One global handler for project version conflicts (48 saveProject call
-// sites — centralizing beats wiring every one). A conflict means this tab's
-// copy is stale: tell the user, then reload so they continue from fresh data.
+// Project version conflicts (48 saveProject call sites) once triggered a full
+// page reload. With the live change feed, conflicts are rare races; recover
+// in place: refetch the project, announce it, and let mounted screens re-render.
 export default function ProjectConflictListener() {
   const { toast } = useToast();
-  const reloading = useRef(false);
+  const refreshing = useRef(false);
 
   useEffect(() => {
-    const onConflict = () => {
-      if (reloading.current) return;
-      reloading.current = true;
-      toast('This project was changed elsewhere — reloading to get the latest…', { type: 'error' });
-      setTimeout(() => window.location.reload(), 2000);
+    const onConflict = async (e: Event) => {
+      const projectId = (e as CustomEvent).detail?.projectId as string | undefined;
+      if (!projectId || refreshing.current) return;
+      refreshing.current = true;
+      try {
+        const project = await getProject(projectId);
+        window.dispatchEvent(new CustomEvent('project-refreshed', { detail: { projectId, project } }));
+        toast('This project was changed elsewhere — refreshed with the latest.', { type: 'info' });
+      } catch {
+        // Refetch failed (offline?): fall back to the old behavior rather than leave a stale tab.
+        toast('This project was changed elsewhere — reloading…', { type: 'error' });
+        setTimeout(() => window.location.reload(), 2000);
+      } finally {
+        refreshing.current = false;
+      }
     };
     window.addEventListener('project-conflict', onConflict);
     return () => window.removeEventListener('project-conflict', onConflict);

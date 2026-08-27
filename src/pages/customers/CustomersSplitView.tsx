@@ -3,13 +3,14 @@
 // sidebar (search, New Customer, rows) + right pane (empty state or
 // CustomerPane). Below the `md` breakpoint only one of the two panels is
 // visible at a time — the list, or the pane with a back button.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Users } from 'lucide-react';
 import { Customer } from '../../types';
 import { CustomerSummary, getCustomersSummary } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { EmptyState } from '../../components/ui';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { CustomerSidebar } from './CustomerSidebar';
 import { CustomerPane } from './CustomerPane';
 import { CreateCustomerModal } from './CreateCustomerModal';
@@ -33,7 +34,7 @@ export const CustomersSplitView: React.FC = () => {
       .finally(() => setLoading(false));
   }, [toast]);
 
-  useEffect(() => { load(); }, [load]);
+  useLiveQuery(load, { types: ['customer', 'project', 'invoice', 'payment', 'aiaPayApp', 'task'] });
 
   // The unassigned bucket is a placeholder, not a real customer — it always
   // sorts last (and renders muted in the sidebar) regardless of alpha order.

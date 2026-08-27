@@ -19,6 +19,11 @@ import { migrations } from './server/migrationList';
 import { registerDataRoutes, registerEmailRoutes } from './server/routes';
 import { registerAiRoutes } from './server/aiRoutes';
 import { getAiRunner } from './server/ai';
+import { registerRealtime, sheetRoom } from './server/realtime/registerRealtime';
+import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
+import { normalizeTokenPayload } from './server/realtime/verifyPayload';
+import { SheetSessionStore } from './server/realtime/sheetSessions';
+import { SheetFlushEngine } from './server/realtime/sheetFlush';
 
 dotenv.config();
 
@@ -89,8 +94,6 @@ function initDb() {
   }
 }
 
-const users: Record<string, { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number }> = {};
-
 async function startServer() {
   await ensureDirs();
   initDb();
@@ -105,6 +108,11 @@ async function startServer() {
     cors: {
       origin: "*",
     },
+    // Default (1e6 bytes) is smaller than the sheet-state-sync size guard
+    // (25MB, see registerRealtime.ts) — without raising this, a legitimately
+    // large-but-under-guard state payload would be killed by the transport
+    // before ever reaching our handler's own size check, with no ack sent.
+    maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
   app.use(express.json({ limit: "50mb" }));
@@ -125,6 +133,52 @@ async function startServer() {
       console.log('Generated a new JWT signing secret and saved it to the database.');
     }
   }
+
+  const broadcastChange = createChangeFeed(io);
+
+  const sheetStore = new SheetSessionStore(db);
+  // SHEET_FLUSH_INTERVAL_MS: e2e-only override (playwright.config.ts sets it
+  // low) so autosave tests don't have to wait out the real 15s production
+  // cadence; unset in normal/production runs, which keep SheetFlushEngine's
+  // own DEFAULT_INTERVAL_MS.
+  const flushIntervalMs = process.env.SHEET_FLUSH_INTERVAL_MS ? Number(process.env.SHEET_FLUSH_INTERVAL_MS) : undefined;
+  // I5: surfaces flush failures/recoveries to the sheet's live participants
+  // (SpreadsheetEditor's autosave chip) — every failure path was previously
+  // console-only.
+  const sheetFlush = new SheetFlushEngine(db, sheetStore, DATA_DIR, {
+    intervalMs: flushIntervalMs,
+    notify: (fileId, event) => {
+      io.to(sheetRoom(fileId)).emit(event === 'failed' ? 'sheet-flush-failed' : 'sheet-flush-recovered', { fileId });
+    },
+  });
+  sheetFlush.start();
+
+  const realtime = registerRealtime(io, {
+    verifyToken: (token: string) => {
+      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
+      catch { return null; }
+    },
+    db,
+    broadcastChange,
+    sheetStore,
+    sheetFlush,
+  });
+
+  // Best-effort flush-on-shutdown: a container stop (SIGTERM) or Ctrl-C
+  // (SIGINT) should not lose edits sitting in a dirty sheet session's journal
+  // waiting for the next autosave tick. Guarded against double-registration
+  // (each signal only ever fires this handler once per process) and skipped
+  // entirely in tests, which construct their own harness instead of calling
+  // startServer().
+  let shuttingDown = false;
+  const flushAndExit = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
+    sheetFlush.flushAll().finally(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => flushAndExit('SIGTERM'));
+  process.once('SIGINT', () => flushAndExit('SIGINT'));
 
   // Health check
   app.get("/api/health", (req, res) => {
@@ -163,8 +217,10 @@ async function startServer() {
     authenticateToken,
     requireAdmin,
     verifyToken: (token: string) => {
-      try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); } catch { return null; }
     },
+    broadcastChange,
+    sheetStore,
   });
 
   // The Playwright e2e harness logs in many times per run (per-worker session +
@@ -255,6 +311,7 @@ async function startServer() {
       db.prepare('INSERT INTO users (id, username, password, role) VALUES (?, ?, ?, ?)').run(
         id, username.trim(), hash, assignedRole
       );
+      broadcastChange({ type: 'user', id, action: 'created', ...requestMeta(req as any) });
       res.json({ success: true, user: { id, username: username.trim(), role: assignedRole } });
     } catch (error: any) {
       if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -287,6 +344,7 @@ async function startServer() {
         }
       }
       db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+      broadcastChange({ type: 'user', id: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json({ id: targetUser.id, username: targetUser.username, role });
     } catch (error) {
       res.status(500).json({ error: 'Failed to update user role' });
@@ -306,6 +364,7 @@ async function startServer() {
       
       db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
       db.prepare('DELETE FROM user_preferences WHERE userId = ?').run(req.params.id);
+      broadcastChange({ type: 'user', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete user' });
@@ -328,6 +387,7 @@ async function startServer() {
       const t = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO templates (id, data) VALUES (?, ?)');
       stmt.run(t.id, JSON.stringify(t));
+      broadcastChange({ type: 'template', id: t.id, action: 'updated', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving template:", error);
@@ -339,6 +399,7 @@ async function startServer() {
     try {
       const stmt = db.prepare('DELETE FROM templates WHERE id = ?');
       stmt.run(req.params.id);
+      broadcastChange({ type: 'template', id: req.params.id, action: 'deleted', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting template:", error);
@@ -366,22 +427,11 @@ async function startServer() {
       const note = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO notes (id, projectId, data, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)');
       stmt.run(note.id, req.params.projectId, JSON.stringify(note), note.createdAt || Date.now(), Date.now());
+      broadcastChange({ type: 'note', id: note.id, projectId: req.params.projectId, action: 'updated', ...requestMeta(req as any) });
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving notes:", error);
       res.status(500).json({ error: "Failed to save notes" });
-    }
-  });
-
-  // Active pages endpoint
-  app.get("/api/pages/active", authenticateToken, (req, res) => {
-    try {
-      const activePageIds = Array.from(new Set(Object.values(users).map(u => u?.pageId).filter(Boolean)));
-      console.log(`GET /api/pages/active - current users count: ${Object.keys(users).length}, active page IDs: ${JSON.stringify(activePageIds)}`);
-      res.json(activePageIds);
-    } catch (error) {
-      console.error("Error in /api/pages/active route:", error);
-      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -547,81 +597,13 @@ async function startServer() {
     requireAdmin,
     buildTransporter,
     getUserSmtp,
+    broadcastChange,
   });
 
   registerAiRoutes(app, {
     dataDir: DATA_DIR,
     authenticateToken,
     runner: getAiRunner(),
-  });
-
-  // WebSocket Logic
-
-  io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-
-    socket.on("join-page", ({ pageId, pageName, name, userId, color }) => {
-      // If this socket already had a different page, leave it so we don't
-      // accidentally fan out room messages to stale rooms.
-      const previous = users[socket.id];
-      if (previous && previous.pageId && previous.pageId !== pageId) {
-        socket.leave(previous.pageId);
-      }
-      users[socket.id] = {
-        id: socket.id,
-        userId: userId || undefined,
-        name,
-        pageId,
-        pageName: pageName || '',
-        cursor: null,
-        color,
-        lastActive: Date.now(),
-      };
-      socket.join(pageId);
-
-      // Notify others in the room
-      const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
-      io.to(pageId).emit("room-users", roomUsers);
-
-      // Notify everyone about global users
-      io.emit("global-users", Object.values(users));
-    });
-
-    socket.on("cursor-move", ({ x, y }) => {
-      const user = users[socket.id];
-      if (user) {
-        user.cursor = { x, y };
-        user.lastActive = Date.now();
-        socket.to(user.pageId).emit("user-cursor", { id: socket.id, cursor: { x, y } });
-      }
-    });
-
-    socket.on("measurement-update", ({ pageId, action, measurement }) => {
-      socket.to(pageId).emit("measurement-sync", { action, measurement });
-    });
-
-    socket.on("update-user", ({ name, color }) => {
-      const user = users[socket.id];
-      if (user) {
-        user.name = name;
-        user.color = color;
-        const roomUsers = Object.values(users).filter(u => u.pageId === user.pageId);
-        io.to(user.pageId).emit("room-users", roomUsers);
-        io.emit("global-users", Object.values(users));
-      }
-    });
-
-    socket.on("disconnect", () => {
-      const user = users[socket.id];
-      if (user) {
-        const pageId = user.pageId;
-        delete users[socket.id];
-        const roomUsers = Object.values(users).filter(u => u.pageId === pageId);
-        io.to(pageId).emit("room-users", roomUsers);
-        io.emit("global-users", Object.values(users));
-      }
-      console.log("User disconnected:", socket.id);
-    });
   });
 
   // Time Entry Routes
@@ -683,6 +665,7 @@ async function startServer() {
       db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
       );
+      broadcastChange({ type: 'timeEntry', id: entry.id, action: 'created', ...requestMeta(req) });
       res.json(entry);
     } catch (error) {
       res.status(500).json({ error: 'Failed to clock in' });
@@ -698,6 +681,7 @@ async function startServer() {
       }
       const clockOut = Date.now();
       db.prepare('UPDATE time_entries SET clockOut = ?, description = ? WHERE id = ?').run(clockOut, description ?? existing.description, existing.id);
+      broadcastChange({ type: 'timeEntry', id: existing.id, action: 'updated', ...requestMeta(req) });
       res.json({ ...existing, clockOut, description: description ?? existing.description });
     } catch (error) {
       res.status(500).json({ error: 'Failed to clock out' });
@@ -722,6 +706,7 @@ async function startServer() {
       db.prepare('INSERT INTO time_entries (id, userId, projectId, clockIn, clockOut, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         entry.id, entry.userId, entry.projectId, entry.clockIn, entry.clockOut, entry.description, entry.createdAt
       );
+      broadcastChange({ type: 'timeEntry', id: entry.id, action: 'created', ...requestMeta(req) });
       res.json(entry);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create time entry' });
@@ -738,6 +723,7 @@ async function startServer() {
       db.prepare('UPDATE time_entries SET clockIn = ?, clockOut = ?, description = ? WHERE id = ?').run(
         clockIn ?? existing.clockIn, clockOut ?? existing.clockOut, description ?? existing.description, existing.id
       );
+      broadcastChange({ type: 'timeEntry', id: existing.id, action: 'updated', ...requestMeta(req) });
       res.json({ ...existing, clockIn: clockIn ?? existing.clockIn, clockOut: clockOut ?? existing.clockOut, description: description ?? existing.description });
     } catch (error) {
       res.status(500).json({ error: 'Failed to update time entry' });
@@ -751,6 +737,7 @@ async function startServer() {
         return res.status(404).json({ error: 'Entry not found' });
       }
       db.prepare('DELETE FROM time_entries WHERE id = ?').run(req.params.id);
+      broadcastChange({ type: 'timeEntry', id: req.params.id, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to delete time entry' });

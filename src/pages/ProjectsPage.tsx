@@ -7,15 +7,17 @@ import {
 } from 'lucide-react';
 import {
   ProjectSummary, getProjectsSummary, patchProject, deleteProject,
-  getActivePages, getRecentProjects, ConflictError,
+  getRecentProjects, ConflictError,
   getUserPreferences, saveUserPreferences, getCustomers,
 } from '../utils/store';
+import { useCollaboration } from '../context/CollaborationContext';
 import { formatMoney } from '../utils/money';
 import { useToast } from '../components/Toast';
 import {
   Button, Card, EmptyState, Input, LostBadge, Modal, ProjectStatusPill,
   Select, Skeleton, StatusPill, normalizeProjectStatus,
 } from '../components/ui';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 export type TabId = 'bidding' | 'in_progress' | 'archive';
 
@@ -233,6 +235,7 @@ const ProjectRow: React.FC<{
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { sessions, mySessionId } = useCollaboration();
   const [searchParams, setSearchParams] = useSearchParams();
   const setStage = (id: TabId) => {
     const next = new URLSearchParams(searchParams);
@@ -273,7 +276,7 @@ export const ProjectsPage: React.FC = () => {
       setIsLoading(false);
     }
   };
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['project', 'customer', 'invoice', 'aiaPayApp', 'payment'] });
 
   // Server is the source of truth for the sort preference (cross-device); the
   // localStorage init above is just the instant default. Ignore missing/invalid.
@@ -334,14 +337,12 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
-  const handleDeleteClick = async (p: ProjectSummary) => {
-    try {
-      const active = await getActivePages();
-      if (p.pageIds.some(id => active.includes(id))) {
-        toast('This project has pages currently being viewed by other users and cannot be deleted.', { type: 'warning' });
-        return;
-      }
-    } catch { /* active-pages check is best-effort */ }
+  const handleDeleteClick = (p: ProjectSummary) => {
+    const hasViewer = sessions.some(s => s.sessionId !== mySessionId && s.location?.projectId === p.id);
+    if (hasViewer) {
+      toast('Someone is currently working in this project — it cannot be deleted right now.', { type: 'warning' });
+      return;
+    }
     setDeleteText('');
     setDeleteTarget(p);
   };

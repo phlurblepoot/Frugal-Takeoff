@@ -11,6 +11,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
+import { SheetSessionStore } from './realtime/sheetSessions';
 
 let db: Database.Database;
 let dir: string;
@@ -36,6 +37,7 @@ beforeEach(() => {
     authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
     requireAdmin: (_req: any, _res: any, next: any) => next(),
     verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
+    broadcastChange: () => {},
   });
 });
 
@@ -338,6 +340,7 @@ describe('GET /api/projects/:id/summary', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     const res = await request(memberApp).get('/api/projects/pm/summary');
     expect(res.status).toBe(200);
@@ -368,6 +371,7 @@ describe('GET /api/projects/:id/summary', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u3', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
 
     const res = await request(userApp).get('/api/projects/pp/summary');
@@ -465,6 +469,71 @@ describe('file versions over HTTP', () => {
     expect(cleanup.status).toBe(200);
     const versions = await request(app).get('/api/files/f1/versions');
     expect(versions.body).toHaveLength(2); // history survived
+  });
+});
+
+// I6: version-replace and delete must invalidate any persisted sheet-collab
+// session for that fileId, or (a) the next sheet-join would hydrate the OLD
+// working copy over the replaced bytes and revert them on the next flush, or
+// (b) a deleted file's dirty row would error-loop the flush engine forever.
+describe('sheet-session invalidation on version-replace / delete (I6)', () => {
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  let sheetStore: SheetSessionStore;
+  let sheetApp: express.Express;
+
+  beforeEach(() => {
+    sheetStore = new SheetSessionStore(db);
+    sheetApp = express();
+    sheetApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(sheetApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
+      broadcastChange: () => {},
+      sheetStore,
+    });
+  });
+
+  it('POST /versions clears a pending sheet session for the replaced fileId', async () => {
+    await request(sheetApp).post('/api/files/sheet1?kind=spreadsheet&name=Book.xlsx')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
+
+    sheetStore.join('sheet1', 's1');
+    sheetStore.setState('sheet1', '{"sheets":["stale"]}');
+    expect(sheetStore.getState('sheet1')).not.toBeNull();
+    expect(sheetStore.dirtyFiles()).toContain('sheet1');
+
+    const res = await request(sheetApp).post('/api/files/sheet1/versions')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v2'));
+    expect(res.status).toBe(200);
+
+    expect(sheetStore.getState('sheet1')).toBeNull();
+    expect(sheetStore.dirtyFiles()).not.toContain('sheet1');
+  });
+
+  it('DELETE clears a pending sheet session for the deleted fileId', async () => {
+    await request(sheetApp).post('/api/files/sheet2?kind=spreadsheet&name=Book2.xlsx')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
+
+    sheetStore.join('sheet2', 's1');
+    sheetStore.setState('sheet2', '{"sheets":["stale"]}');
+
+    const res = await request(sheetApp).delete('/api/files/sheet2');
+    expect(res.status).toBe(200);
+
+    expect(sheetStore.getState('sheet2')).toBeNull();
+    expect(sheetStore.dirtyFiles()).not.toContain('sheet2');
+  });
+
+  it('a route registered with no sheetStore (existing test convention) is unaffected', async () => {
+    // `app` (module-level, from the outer beforeEach) never passes sheetStore
+    // — the routes must no-op cleanly rather than throw.
+    await request(app).post('/api/files/plainf1?kind=document&name=Doc.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
+    const res = await request(app).post('/api/files/plainf1/versions')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(res.status).toBe(200);
   });
 });
 
@@ -575,6 +644,7 @@ describe('billing routes', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/invoices')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
@@ -594,6 +664,7 @@ describe('unified project payment routes (admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/payments')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/payments').send({ targetType: 'invoice', targetId: 'x', amount: 1 })).status).toBe(403);
@@ -678,6 +749,7 @@ describe('AIA billing routes (admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
     expect((await request(memberApp).get('/api/projects/p1/aia/sov')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/aia/sov').send({ description: 'X', scheduledValueCents: 1 })).status).toBe(403);
@@ -985,6 +1057,7 @@ describe('punch routes', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
   });
 
@@ -1044,6 +1117,7 @@ describe('users-list + task routes (auth-only, not admin-gated)', () => {
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       verifyToken: () => null,
+      broadcastChange: () => {},
     });
   });
 
@@ -1158,6 +1232,7 @@ describe('email send routes', () => {
       buildTransporter: (_userId: string) => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
       // From header now comes from the SENDING user's per-user SMTP config.
       getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
+      broadcastChange: () => {},
     });
     return a;
   };
@@ -1196,6 +1271,7 @@ describe('email send routes', () => {
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       buildTransporter: (uid: string) => { const c = getUserSmtp(uid); return (c.host && c.username) ? ({ verify: async () => true } as any) : null; },
       getUserSmtp,
+      broadcastChange: () => {},
     });
     return a;
   };
@@ -1373,6 +1449,25 @@ describe('email send routes', () => {
     expect(m.subject).toBe('Custom Subject');
     expect(m.text).toBe('Custom body text');
     expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Photo.jpg']);
+  });
+
+  it('daily report send: default subject + date-only filename when jobName is blank', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body;
+    const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Daily Report — 2026-08-20');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-2026-08-20.pdf']);
+  });
+
+  it('daily report send: sanitizes jobName into the attachment filename', async () => {
+    const dr = (await request(app).post('/api/projects/p1/daily-reports')
+      .send({ reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
+    const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Daily Report — 2026-08-20 — Dania Beach: "Unit 4"');
+    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
   });
 
   it('rfi send: marks rfi sent with sentAt set after send', async () => {
@@ -1579,6 +1674,7 @@ describe('customers routes', () => {
         authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u2', role: 'user' }; next(); },
         requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
         verifyToken: () => null,
+        broadcastChange: () => {},
       });
     });
 

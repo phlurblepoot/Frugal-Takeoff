@@ -11,8 +11,18 @@ import { useToast } from './Toast';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+import { getCachedPdfDocument, getCachedPageBitmap, putCachedPageBitmap } from '../utils/pdfDocCache';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
+// Records the render scale a cached bitmap was produced at, keyed the same
+// way as pdfDocCache's bitmap cache (`${sourcePdfUrl}#${sourcePdfPageNum}`).
+// A page flip that hits the bitmap cache needs this to seed `lastRenderScaleRef`
+// correctly so the zoom re-render path doesn't mistake an already-current-zoom
+// bitmap for a stale one. This is a PdfCanvas-local pairing (not part of the
+// cache module's public contract), so it lives here rather than in
+// pdfDocCache.ts.
+const bitmapRenderScaleByKey = new Map<string, number>();
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -64,6 +74,14 @@ interface PdfCanvasProps {
   sourcePdfUrl?: string;
   sourcePdfPageNum?: number;
   /**
+   * Thumbnail image for this page, shown (stretched to imageWidth/Height, at
+   * reduced opacity) as a placeholder while the source PDF is still
+   * downloading/rendering — otherwise a vector page is blank white for
+   * however long the source PDF takes to fetch (can be 60s+ on a slow LAN
+   * for a large plan-set sheet).
+   */
+  thumbnailUrl?: string;
+  /**
    * Other pages in the same project that this page can link to. Any text on
    * the current page whose string matches one of these page numbers becomes
    * a clickable hotspot in pan mode. Vector-only — legacy raster pages have
@@ -87,6 +105,13 @@ interface PdfCanvasProps {
    * select-to-view stay fully functional. Threaded from CanvasView's `readOnly`.
    */
   readOnly?: boolean;
+  /**
+   * Fires whenever the in-progress click-by-click drawing buffer transitions
+   * between empty and non-empty (including mid-arc). CanvasView uses this to
+   * gate live backfill/reload (Task 5) so a foreign refresh never clobbers an
+   * unfinished shape the user is mid-draw on.
+   */
+  onDrawingActiveChange?: (active: boolean) => void;
 }
 
 export const PdfCanvas: React.FC<PdfCanvasProps> = ({
@@ -133,6 +158,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   searchTerm,
   sourcePdfUrl,
   sourcePdfPageNum,
+  thumbnailUrl,
   linkablePages,
   onPageReferenceClick,
   onUndo,
@@ -145,6 +171,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onClearMultiSelect,
   isMultiSelectMode = false,
   readOnly = false,
+  onDrawingActiveChange,
 }) => {
   const { toast } = useToast();
   // The subtract (cutout) tool draws exactly like the area tool — same clicks,
@@ -159,6 +186,18 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [legacyImage] = useImage(imageUrl);
   const [pdfImage, setPdfImage] = useState<HTMLCanvasElement | null>(null);
   const image = pdfImage ?? legacyImage;
+  // Placeholder shown in the KonvaImage slot while `pdfImage` is still
+  // rendering — see `thumbnailUrl` prop doc.
+  const [thumbImage] = useImage(thumbnailUrl || '');
+  const [pdfLoadProgress, setPdfLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
+  // Bumped whenever `pdfPageRef.current` is (re)assigned. On a bitmap-cache
+  // hit `pdfImage` is set instantly while the page proxy is still resolving
+  // in the background — effects that read `pdfPageRef.current` (zoom
+  // re-render, page-reference detection, search) key off `pdfImage`/other
+  // state changes to know when to re-check, and would otherwise fire once,
+  // find the ref still null, and never retry once it's actually populated.
+  // Including this tick in their dependency arrays closes that gap.
+  const [pdfPageReadyTick, setPdfPageReadyTick] = useState(0);
 
   // Vector PDF rendering pipeline. When `sourcePdfUrl` is set the page is
   // rendered on demand into an offscreen canvas at a resolution that tracks
@@ -193,6 +232,22 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   const [isMiddleMouseDown, setIsMiddleMouseDown] = useState(false);
   const isMiddleMouseDownRef = useRef(false);
   const lastMousePosRef = useRef<{x: number, y: number} | null>(null);
+
+  // Cursor-move throttle: coalesce to one onCursorMove per animation frame,
+  // and skip frames where the pointer barely moved (min-distance gate).
+  // Without this, fast mouse movement floods the collab socket with a
+  // cursor-move emit per native mousemove event. latestCursorPosRef is
+  // updated on every mousemove (multiple can fire before a frame elapses),
+  // so the rAF callback always reads the freshest position rather than
+  // closing over whichever event happened to schedule the frame.
+  const cursorRafRef = useRef<number | null>(null);
+  const lastCursorRef = useRef<{ x: number; y: number } | null>(null);
+  const latestCursorPosRef = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    return () => {
+      if (cursorRafRef.current !== null) cancelAnimationFrame(cursorRafRef.current);
+    };
+  }, []);
 
   const [arcMode, setArcMode] = useState<'inactive' | 'waiting_mid' | 'waiting_end'>('inactive');
   const [arcMidPoint, setArcMidPoint] = useState<Point | null>(null);
@@ -230,6 +285,25 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       onMeasurementResumed?.();
     }
   }, [resumeMeasurement, resumeSegmentIdx, onMeasurementResumed]);
+
+  // Single choke point for the mid-GESTURE signal (Task 5, widened in fix
+  // round 1): covers not just new-shape drawing (activePoints/arcMode) but
+  // every other in-flight interaction a foreign reload/backfill could
+  // clobber mid-gesture — dragging an existing vertex (draggingPoint),
+  // dragging a whole segment (draggingSegment), and having started a resume
+  // of an existing measurement's drawing (resumeMeasurementId; note a fresh
+  // blank measurement from confirmNewMeasurement starts with points: [], so
+  // activePoints alone wouldn't catch that case — the resume id must be
+  // checked independently, not folded into "activePoints.length > 0").
+  useEffect(() => {
+    onDrawingActiveChange?.(
+      activePoints.length > 0 ||
+      arcMode !== 'inactive' ||
+      draggingPoint !== null ||
+      draggingSegment !== null ||
+      resumeMeasurementId !== null
+    );
+  }, [activePoints, arcMode, draggingPoint, draggingSegment, resumeMeasurementId, onDrawingActiveChange]);
 
   const lastDistRef = useRef<number>(0);
   const lastCenterRef = useRef<Point | null>(null);
@@ -317,29 +391,78 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   }, [image, dimensions, imageWidth, imageHeight]);
 
   // ── Vector PDF page loading + on-demand rendering ────────────────────────────
-  // Load the source PDF & target page once per (url, pageNum). The proxy lives
-  // for the lifetime of this PdfCanvas instance — the parent remounts via
-  // `key={page.id}` on navigation, so cleanup is bounded.
+  // Load the source PDF & target page once per (url, pageNum). The parent
+  // remounts this component via `key={page.id}` on navigation, so this effect
+  // runs fresh on every page flip — but the parsed document and rendered
+  // bitmap are cached at module scope (src/utils/pdfDocCache.ts) across those
+  // remounts, so a flip back to a recently-viewed page is instant instead of
+  // re-parsing the PDF and re-rendering the page from scratch. The bitmap
+  // cache is keyed by `${sourcePdfUrl}#${sourcePdfPageNum}` — the only stable
+  // page identity available to this component (it isn't handed the page id
+  // itself, only its vector source + page number).
   useEffect(() => {
     if (!sourcePdfUrl || !sourcePdfPageNum) {
       pdfPageRef.current = null;
-      if (pdfProxyRef.current) {
-        pdfProxyRef.current.destroy().catch(() => {});
-        pdfProxyRef.current = null;
-      }
+      pdfProxyRef.current = null;
       setPdfImage(null);
+      setPdfLoadProgress(null);
       lastRenderScaleRef.current = 0;
       return;
     }
     let cancelled = false;
-    (async () => {
+    const bitmapKey = `${sourcePdfUrl}#${sourcePdfPageNum}`;
+
+    // Resolves the (possibly cached) document + target page and populates
+    // pdfProxyRef/pdfPageRef. Needed on BOTH the hit and miss paths — the
+    // zoom re-render path, text search, and cross-page-reference detection
+    // all key off the live page proxy, not just the displayed bitmap.
+    const loadProxyAndPage = async (): Promise<any | null> => {
       try {
-        const proxy = await pdfjsLib.getDocument({ url: sourcePdfUrl }).promise;
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        // onProgress reports byte counts of the PDF download itself (total
+        // is 0/unknown until the server sends Content-Length) — surfaced as
+        // the "Loading sheet…" overlay while pdfImage is still null. On a
+        // shared cache hit (another caller already triggered the load, or it
+        // already resolved) this fires rarely-to-never, which is correct: a
+        // cache hit has nothing new to report progress on.
+        const proxy = await getCachedPdfDocument(sourcePdfUrl, ({ loaded, total }) => {
+          if (!cancelled) setPdfLoadProgress({ loaded, total });
+        });
+        if (cancelled) return null;
         const page = await proxy.getPage(sourcePdfPageNum);
-        if (cancelled) { proxy.destroy().catch(() => {}); return; }
+        if (cancelled) return null;
         pdfProxyRef.current = proxy;
         pdfPageRef.current = page;
+        setPdfPageReadyTick(t => t + 1);
+        return page;
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error('Failed to load source PDF', err);
+        }
+        return null;
+      }
+    };
+
+    const cachedBitmap = getCachedPageBitmap(bitmapKey);
+    if (cachedBitmap) {
+      // Cache hit: display immediately, no progress overlay. The proxy/page
+      // still resolve in the background (via loadProxyAndPage below) but
+      // must never block or replace this image with a blank frame meanwhile.
+      setPdfLoadProgress(null);
+      lastRenderScaleRef.current = bitmapRenderScaleByKey.get(bitmapKey) ?? 2.0;
+      setPdfImage(cachedBitmap);
+      void loadProxyAndPage();
+      return () => { cancelled = true; };
+    }
+
+    // Cache miss: full load + render, same pipeline as before, then populate
+    // both caches so the next visit to this page (or others sharing this
+    // source PDF) is fast.
+    setPdfLoadProgress({ loaded: 0, total: 0 });
+    (async () => {
+      const page = await loadProxyAndPage();
+      if (cancelled) return;
+      if (!page) { setPdfLoadProgress(null); return; }
+      try {
         // Initial render at base scale (2.0× matches imageWidth/imageHeight).
         const canvas = document.createElement('canvas');
         const viewport = page.getViewport({ scale: 2.0 });
@@ -352,11 +475,15 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         await renderTaskRef.current.promise;
         if (cancelled) return;
         lastRenderScaleRef.current = 2.0;
+        bitmapRenderScaleByKey.set(bitmapKey, 2.0);
+        putCachedPageBitmap(bitmapKey, canvas);
         setPdfImage(canvas);
+        setPdfLoadProgress(null);
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
-          console.error('Failed to load source PDF', err);
+          console.error('Failed to render source PDF page', err);
         }
+        if (!cancelled) setPdfLoadProgress(null);
       }
     })();
     return () => {
@@ -380,9 +507,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   }, [linkablePages]);
 
   // Detect cross-page references on this page. Runs once the page proxy is
-  // loaded (signalled by pdfImage becoming non-null) and whenever the set of
-  // linkable pages changes. Reuses the cached pdfPageRef — no extra PDF
-  // round-trip. Vector pages only; legacy raster pages skip silently.
+  // loaded (signalled by pdfImage becoming non-null, OR — on a bitmap-cache
+  // hit, where pdfImage is set before the proxy resolves — by
+  // pdfPageReadyTick ticking once it does) and whenever the set of linkable
+  // pages changes. Reuses the cached pdfPageRef — no extra PDF round-trip.
+  // Vector pages only; legacy raster pages skip silently.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current || normalizedPageMap.size === 0) {
       setPageRefs([]);
@@ -422,7 +551,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [pdfImage, normalizedPageMap]);
+  }, [pdfImage, pdfPageReadyTick, normalizedPageMap]);
 
   // Render the page into a fresh canvas sized for the *current* zoom and swap
   // it in atomically — we never mutate the canvas that's on screen, otherwise
@@ -500,7 +629,11 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
 
   // Debounced so a single drag through many zoom levels only kicks off once the
   // user pauses. The renderer itself reads the live scale, so a render queued
-  // here always targets wherever the zoom ended up.
+  // here always targets wherever the zoom ended up. `pdfPageReadyTick` is in
+  // the deps so that a bitmap-cache-hit page flip (where `pdfImage` is set
+  // before `pdfPageRef.current` has resolved) gets a chance to re-check once
+  // the page proxy actually arrives — otherwise a zoom that happens in that
+  // window would bail on the ref-not-ready guard below and never retry.
   useEffect(() => {
     if (!pdfImage || !pdfPageRef.current) return;
     if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
@@ -508,15 +641,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => {
       if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     };
-  }, [stageScale, pdfImage, renderPdfAtCurrentScale]);
+  }, [stageScale, pdfImage, pdfPageReadyTick, renderPdfAtCurrentScale]);
 
-  // Cleanup on unmount.
+  // Cleanup on unmount. The document proxy is NOT destroyed here — it's owned
+  // by the module-level document cache (pdfDocCache.ts) now, shared across
+  // PdfCanvas remounts, and destroyed only on its own LRU eviction.
   useEffect(() => () => {
     if (renderTaskRef.current) { try { renderTaskRef.current.cancel(); } catch { /* noop */ } }
-    if (pdfProxyRef.current) {
-      pdfProxyRef.current.destroy().catch(() => {});
-      pdfProxyRef.current = null;
-    }
+    pdfProxyRef.current = null;
     pdfPageRef.current = null;
   }, []);
 
@@ -612,7 +744,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     return () => {
       isActive = false;
     };
-  }, [searchTerm, imageUrl, pdfImage]);
+  }, [searchTerm, imageUrl, pdfImage, pdfPageReadyTick]);
 
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
@@ -705,7 +837,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
     const pos = getRelativePointerPosition(stage.getLayers()[0]);
     if (pos) {
       setMousePos(pos);
-      onCursorMove?.(pos.x, pos.y);
+      latestCursorPosRef.current = pos;
+      if (onCursorMove && cursorRafRef.current === null) {
+        cursorRafRef.current = requestAnimationFrame(() => {
+          cursorRafRef.current = null;
+          const p = latestCursorPosRef.current;
+          if (!p) return;
+          const last = lastCursorRef.current;
+          if (!last || Math.abs(p.x - last.x) + Math.abs(p.y - last.y) >= 2) {
+            lastCursorRef.current = { x: p.x, y: p.y };
+            onCursorMove(p.x, p.y);
+          }
+        });
+      }
     }
 
     if (isMiddleMouseDown && lastMousePosRef.current) {
@@ -1475,9 +1619,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onDragStart={(e) => segmentDragStart(e, -1)}
               onDragMove={(e) => segmentDragMove(e, -1)}
               onDragEnd={(e) => {
+                // I2 fix: clear the drag flag BEFORE the readOnly check — if
+                // readOnly flips mid-drag (phone breakpoint, revision goes
+                // superseded), an early return above this line would leave
+                // draggingPoint/draggingSegment stuck non-null forever,
+                // permanently blocking the mid-gesture reload/backfill guard.
+                setDraggingSegment(null);
                 if (readOnly) return;
                 e.cancelBubble = true;
-                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: [{ x: e.target.x(), y: e.target.y() }] });
               }}
             >
@@ -1518,6 +1667,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               onClick={(e) => handleSegmentClick(e, -1)}
               onTap={(e) => handleSegmentClick(e, -1)}
               onDragEnd={(e) => {
+                // I2 fix: see the count-marker onDragEnd above — clear the
+                // drag flag before any early return so it can never stick.
+                setDraggingSegment(null);
                 if (readOnly) return;
                 // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                 if (e.target !== e.currentTarget) return;
@@ -1527,7 +1679,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 e.target.x(0);
                 e.target.y(0);
                 const newPoints = m.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-                setDraggingSegment(null);
                 onUpdateMeasurement(m.id, { points: newPoints });
               }}
             >
@@ -1591,6 +1742,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     setDraggingPoint({ mId: m.id, idx: i, x: e.target.x(), y: e.target.y() });
                   }}
                   onDragEnd={(e) => {
+                    // I2 fix: clear before the readOnly early return (see above).
+                    setDraggingPoint(null);
                     if (readOnly) return;
                     e.cancelBubble = true;
                     const newPoints = [...m.points];
@@ -1600,7 +1753,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                     e.target.x(p.x);
                     e.target.y(p.y);
 
-                    setDraggingPoint(null);
                     onUpdateMeasurement(m.id, { points: newPoints });
                   }}
                   hitStrokeWidth={10 / stageScale}
@@ -1647,6 +1799,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                 onClick={(e) => handleSegmentClick(e, segIdx)}
                 onTap={(e) => handleSegmentClick(e, segIdx)}
                 onDragEnd={(e) => {
+                  // I2 fix: clear before the readOnly early return (see above).
+                  setDraggingSegment(null);
                   if (readOnly) return;
                   // Ignore drag-ends that bubbled up from a child (e.g. a vertex circle).
                   if (e.target !== e.currentTarget) return;
@@ -1660,7 +1814,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       ? { ...s, points: s.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
                       : s
                   );
-                  setDraggingSegment(null);
                   onUpdateMeasurement(m.id, { segments: newSegments });
                 }}
               >
@@ -1733,6 +1886,8 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       setDraggingPoint({ mId: m.id, idx: pi, segIdx, x: e.target.x(), y: e.target.y() });
                     }}
                     onDragEnd={(e) => {
+                      // I2 fix: clear before the readOnly early return (see above).
+                      setDraggingPoint(null);
                       if (readOnly) return;
                       e.cancelBubble = true;
                       const newX = e.target.x();
@@ -1748,7 +1903,6 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       e.target.x(p.x);
                       e.target.y(p.y);
 
-                      setDraggingPoint(null);
                       onUpdateMeasurement(m.id, { segments: newSegments });
                     }}
                     hitStrokeWidth={10 / stageScale}
@@ -2142,6 +2296,21 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           <span className="text-sm font-medium text-slate-700">Searching...</span>
         </div>
       )}
+      {!!sourcePdfUrl && !pdfImage && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
+          <div
+            data-testid="pdf-loading-overlay"
+            className="flex items-center gap-2 rounded-full bg-raised px-4 py-2 text-sm font-medium text-ink-soft shadow-lg"
+          >
+            <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
+            <span>
+              {pdfLoadProgress && pdfLoadProgress.total
+                ? `Loading sheet… ${Math.round((pdfLoadProgress.loaded / pdfLoadProgress.total) * 100)}%`
+                : 'Loading sheet…'}
+            </span>
+          </div>
+        </div>
+      )}
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
@@ -2228,12 +2397,24 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           className={currentTool === 'pan' || isMiddleMouseDown ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'}
         >
           <Layer>
-            {image && (
+            {image ? (
               <KonvaImage
                 image={image}
                 name="backgroundImage"
                 width={imageWidth}
                 height={imageHeight}
+              />
+            ) : thumbImage && (
+              // Vector page still fetching/rendering its source PDF — show
+              // the (already-cached, much smaller) thumbnail in its place so
+              // the sheet isn't a blank white rectangle for the duration.
+              <KonvaImage
+                image={thumbImage}
+                name="backgroundImage"
+                width={imageWidth}
+                height={imageHeight}
+                opacity={0.6}
+                listening={false}
               />
             )}
             {searchHighlights.map((bbox, i) => (
@@ -2300,21 +2481,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
             {renderLegend()}
           </Layer>
           <Layer>
-            {/* Remote Cursors. Hide anonymous sessions, and when one user has
-                multiple sockets here only show the cursor for whichever
-                session is most recently active. */}
-            {(() => {
-              const visible = remoteUsers
-                .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId);
-              const byUser: Record<string, any> = {};
-              visible.forEach((u: any) => {
-                const existing = byUser[u.userId];
-                if (!existing || (u.lastActive ?? 0) > (existing.lastActive ?? 0)) {
-                  byUser[u.userId] = u;
-                }
-              });
-              return Object.values(byUser);
-            })()
+            {/* Remote Cursors. Hide anonymous sessions; each session gets its
+                own cursor (a user with two open tabs on this page shows two). */}
+            {remoteUsers
+              .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId)
               .map((u: any) => (
                 <Group key={u.id} x={u.cursor!.x} y={u.cursor!.y}>
                   <Line

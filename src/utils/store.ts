@@ -2,10 +2,14 @@ import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '.
 import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
+import { CLIENT_SESSION_ID } from './clientSession';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
-  return token ? { 'Authorization': `Bearer ${token}` } : {};
+  return {
+    'X-Session-Id': CLIENT_SESSION_ID,
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
 };
 
 export const getImageUrl = (id: string) => {
@@ -125,6 +129,15 @@ const saveQueues = new Map<string, Promise<void>>();
 // TAB still 409s (the other tab's bumps are never in this map).
 const latestVersions = new Map<string, number>();
 
+// Lets non-saveProject callers (the realtime layer) feed the same
+// only-raise-ever guard: e.g. a measurement-op ack or a canvas-join backfill
+// bumping the known version without going through a save.
+export function noteProjectVersion(projectId: string, version: number): void {
+  if (version > (latestVersions.get(projectId) ?? 0)) {
+    latestVersions.set(projectId, version);
+  }
+}
+
 export const saveProject = (project: Project): Promise<void> => {
   const prev = saveQueues.get(project.id) ?? Promise.resolve();
   const run = prev.catch(() => {}).then(() => doSaveProject(project));
@@ -171,7 +184,11 @@ export const getProject = async (id: string): Promise<Project | null> => {
   const res = await fetchWithRetry('/api/projects/' + id, { headers: getAuthHeaders() });
   if (res.status === 404) return null;
   await handleResponse(res);
-  return await res.json();
+  const project = await res.json();
+  if (project && typeof project.version === 'number') {
+    latestVersions.set(project.id, project.version);
+  }
+  return project;
 };
 
 export const getAllProjects = async (): Promise<Project[]> => {
@@ -308,22 +325,6 @@ export const getTemplates = async (): Promise<TakeoffTemplate[]> => {
 export const deleteTemplate = async (id: string): Promise<void> => {
   const res = await fetch('/api/templates/' + id, { method: 'DELETE', headers: getAuthHeaders() });
   await handleResponse(res);
-};
-
-export const getActivePages = async (): Promise<string[]> => {
-  try {
-    const res = await fetch('/api/pages/active', { headers: getAuthHeaders() });
-    if (!res.ok) {
-      console.error(`Active pages fetch failed with status: ${res.status}`);
-      const text = await res.text();
-      console.error('Response body:', text.substring(0, 100));
-      throw new Error(`Request failed with status ${res.status}`);
-    }
-    return await res.json();
-  } catch (error) {
-    console.error('Network error or server crash in getActivePages:', error);
-    throw error;
-  }
 };
 
 // Email / SMTP functions
@@ -1156,6 +1157,83 @@ export const setRfiResponse = async (id: string, input: { fileId?: string; text?
 };
 export const sendRfi = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res);
+};
+
+// ── Daily Reports ──────────────────────────────────────────────────────────
+
+export interface DailyReportPhoto { id: string; fileId: string; sortOrder: number; }
+export interface ManCountLine { type: string; count: number; }
+export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
+export interface DailyReport {
+  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  weatherSummary: string; temperature: string; weatherHourly: DailyWeatherHour[];
+  manCounts: ManCountLine[]; fieldNotes: string; issues: string;
+  createdBy: string | null; createdAt: number; updatedAt: number; version: number;
+  photos: DailyReportPhoto[];
+}
+export interface DailyReportListItem {
+  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  weatherSummary: string; temperature: string; manCounts: ManCountLine[];
+  createdBy: string | null; createdAt: number; updatedAt: number; version: number; photoCount: number;
+}
+export class DateTakenError extends Error { constructor(public existingId: string) { super('date taken'); this.name = 'DateTakenError'; } }
+
+const dailyJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getDailyReports = async (projectId: string): Promise<DailyReportListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-reports`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getDailyReport = async (id: string): Promise<DailyReport> => {
+  const res = await fetchWithRetry(`/api/daily-reports/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createDailyReport = async (projectId: string, input: { reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
+  const res = await dailyJson('POST', `/api/projects/${projectId}/daily-reports`, input);
+  if (res.status === 409) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'date_taken' && b.existingId) throw new DateTakenError(b.existingId);
+    throw new ConflictError(projectId);
+  }
+  await handleResponse(res); return res.json();
+};
+export const saveDailyReport = async (id: string, report: Partial<DailyReport> & { version: number }): Promise<{ version: number }> => {
+  const res = await dailyJson('PUT', `/api/daily-reports/${id}`, report);
+  if (res.status === 409) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'date_taken' && b.existingId) throw new DateTakenError(b.existingId);
+    throw new ConflictError(id);
+  }
+  await handleResponse(res); return res.json();
+};
+export const deleteDailyReport = async (id: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}`); await handleResponse(res);
+};
+export const addDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const sendDailyReport = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res);
+};
+export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
+  // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
+  // rather than the user waiting through ~4 retried upstream calls.
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } }, { retries: 0 });
+  if (res.status === 400) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'no_address') throw new Error('no_address');
+    throw new Error('weather_unavailable');
+  }
+  if (!res.ok) throw new Error('weather_unavailable');
+  return res.json();
 };
 
 export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {

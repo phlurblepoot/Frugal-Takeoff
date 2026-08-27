@@ -2,11 +2,14 @@ import { test as base, expect, request as apiRequest, type Page } from '@playwri
 import {
   login,
   seedProjectWithPage,
+  seedProjectWithVectorPage,
+  seedProjectWithVectorPages,
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
   seedDocumentsPortfolio,
+  seedSpreadsheetFile,
   type LoginResult,
 } from './seed';
 
@@ -52,9 +55,12 @@ export {
   expect,
   login,
   seedProjectWithPage,
+  seedProjectWithVectorPage,
+  seedProjectWithVectorPages,
   seedProjectWithTakeoffMeasurement,
   seedProjectWithAreaTakeoffLength,
   seedProjectWithSupersededRevision,
   seedCustomerWithPortfolio,
   seedDocumentsPortfolio,
+  seedSpreadsheetFile,
 };

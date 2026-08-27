@@ -8,6 +8,8 @@ import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
@@ -32,6 +34,20 @@ export const InvoiceEditor: React.FC<{
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
   const [composing, setComposing] = useState(false);
+
+  const initialDate = invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '';
+  const dirty =
+    number !== (invoice.number ?? '') ||
+    terms !== (invoice.terms ?? '') ||
+    date !== initialDate ||
+    JSON.stringify(lines) !== JSON.stringify(invoice.lines.length ? invoice.lines : []);
+
+  const collab = useCollabEditing({
+    type: 'invoice',
+    id: invoice.id,
+    isDirty: () => dirty,
+    onFresh: onSaved,
+  });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
   const [emailDefaults, setEmailDefaults] = useState<{
@@ -93,6 +109,7 @@ export const InvoiceEditor: React.FC<{
     try {
       await saveInvoice(invoice.id, {
         ...invoice,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
         number: number || null,
         terms: terms || null,
         date: date ? new Date(date).getTime() : null,
@@ -177,6 +194,7 @@ export const InvoiceEditor: React.FC<{
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="Number" htmlFor="inv-num"><Input id="inv-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="inv-date"><Input id="inv-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>

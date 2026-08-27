@@ -3,7 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { APIRequestContext } from '@playwright/test';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import ExcelJS from 'exceljs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PAGE_PNG = join(__dirname, 'assets', 'test-page.png');
@@ -109,6 +110,212 @@ export async function seedProjectWithPage(
   }
 
   return { projectId, pageId, imageId, name };
+}
+
+export interface SeedVectorPageResult {
+  projectId: string;
+  pageId: string;
+  sourcePdfFileId: string;
+  thumbnailId: string;
+  name: string;
+}
+
+/**
+ * Seed a project with ONE VECTOR page — `sourcePdfFileId` + `sourcePdfPageNum`
+ * set, `imageId` empty — the canvas render path that fetches its source PDF
+ * on demand via pdf.js instead of loading a pre-rasterized image. Used by
+ * e2e/canvas-vector-load.spec.ts to prove the source PDF is fetched exactly
+ * ONCE per canvas visit: the WS4 regression was an unguarded reload on the
+ * socket's very first ('initial') connect event that re-ran loadData a
+ * second time on every mount, restarting the source-PDF /raw fetch and
+ * aborting the first in-flight one — which defeats the browser HTTP cache
+ * (aborted downloads never get cached) so large plan-set PDFs re-downloaded
+ * in full on every visit instead of loading instantly from cache.
+ *
+ * The PDF is a real 2-page pdf-lib document with a filled rectangle + text on
+ * page 1 (visible content, not a blank page) — same idiom as
+ * seedDocumentsPortfolio's printout fixture. A thumbnail PNG is also seeded
+ * (thumbnailId, reusing the existing test-page.png fixture) so the
+ * loading-placeholder UI can be asserted too.
+ */
+export async function seedProjectWithVectorPage(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedVectorPageResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const projectId = randomUUID();
+  const pageId = randomUUID();
+  const pdfFileId = randomUUID();
+  const thumbnailId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Vector Page Project ${short}`;
+
+  // Letter-size (850×1100pt) PDF; PdfCanvas renders at a base scale of 2.0×,
+  // so imageWidth/imageHeight below (1700×2200) match what the real add-pages
+  // flow computes for a page at this size.
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const page1 = pdfDoc.addPage([850, 1100]);
+  page1.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.2, 0.4, 0.8) });
+  page1.drawText('E2E VECTOR SHEET', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  pdfDoc.addPage([850, 1100]);
+  const pdfBytes = await pdfDoc.save();
+
+  const pdfUploadRes = await request.post(
+    `/api/files/${pdfFileId}?projectId=${projectId}&kind=plan-source&sourceType=plan-set&sourceId=${projectId}` +
+    `&name=${encodeURIComponent('e2e-vector-sheet.pdf')}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(pdfBytes) },
+  );
+  if (!pdfUploadRes.ok()) throw new Error(`pdf upload failed: ${pdfUploadRes.status()} ${await pdfUploadRes.text()}`);
+
+  // Thumbnail — same data-URL upload idiom as seedProjectWithPage's page image.
+  const thumbBase64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const thumbDataUrl = `data:image/png;base64,${thumbBase64}`;
+  const thumbRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: thumbnailId, data: thumbDataUrl },
+  });
+  if (!thumbRes.ok()) throw new Error(`thumbnail upload failed: ${thumbRes.status()} ${await thumbRes.text()}`);
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [],
+    pages: [
+      {
+        id: pageId,
+        name: 'Sheet 1',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 1,
+        measurements: [],
+        scaleConfig: null,
+      },
+    ],
+    version: 1,
+    status: 'bidding',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, pageId, sourcePdfFileId: pdfFileId, thumbnailId, name };
+}
+
+export interface SeedVectorPagesResult {
+  projectId: string;
+  page1Id: string;
+  page2Id: string;
+  sourcePdfFileId: string;
+  thumbnailId: string;
+  name: string;
+}
+
+/**
+ * Variant of seedProjectWithVectorPage with TWO project pages
+ * (sourcePdfPageNum 1 and 2) both backed by the SAME source PDF file — used by
+ * e2e/canvas-vector-flip.spec.ts to prove the module-level PDF document +
+ * rendered-bitmap caches (src/utils/pdfDocCache.ts) make page flips between
+ * vector pages instant instead of re-parsing/re-rendering on every visit:
+ * across a page-1 -> page-2 -> page-1 round trip, the source PDF's /raw URL
+ * should be requested only ONCE for the whole session (the doc cache + HTTP
+ * cache both help here), and the return to page 1 should paint near-instantly
+ * from the rendered-bitmap cache rather than waiting on a fresh pdf.js parse
+ * + render.
+ */
+export async function seedProjectWithVectorPages(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedVectorPagesResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const projectId = randomUUID();
+  const page1Id = randomUUID();
+  const page2Id = randomUUID();
+  const pdfFileId = randomUUID();
+  const thumbnailId = randomUUID();
+  const short = projectId.slice(0, 8);
+  const name = `E2E Vector Pages Project ${short}`;
+
+  // Letter-size (850×1100pt) PDF; PdfCanvas renders at a base scale of 2.0×,
+  // so imageWidth/imageHeight below (1700×2200) match what the real add-pages
+  // flow computes for a page at this size.
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const page1 = pdfDoc.addPage([850, 1100]);
+  page1.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.2, 0.4, 0.8) });
+  page1.drawText('E2E VECTOR SHEET 1', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  const page2 = pdfDoc.addPage([850, 1100]);
+  page2.drawRectangle({ x: 100, y: 800, width: 300, height: 200, color: rgb(0.8, 0.3, 0.2) });
+  page2.drawText('E2E VECTOR SHEET 2', { x: 100, y: 1000, size: 24, font, color: rgb(0, 0, 0) });
+  const pdfBytes = await pdfDoc.save();
+
+  const pdfUploadRes = await request.post(
+    `/api/files/${pdfFileId}?projectId=${projectId}&kind=plan-source&sourceType=plan-set&sourceId=${projectId}` +
+    `&name=${encodeURIComponent('e2e-vector-sheet.pdf')}`,
+    { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(pdfBytes) },
+  );
+  if (!pdfUploadRes.ok()) throw new Error(`pdf upload failed: ${pdfUploadRes.status()} ${await pdfUploadRes.text()}`);
+
+  // Thumbnail — same data-URL upload idiom as seedProjectWithPage's page image.
+  const thumbBase64 = readFileSync(TEST_PAGE_PNG).toString('base64');
+  const thumbDataUrl = `data:image/png;base64,${thumbBase64}`;
+  const thumbRes = await request.post('/api/images', {
+    headers: auth,
+    data: { id: thumbnailId, data: thumbDataUrl },
+  });
+  if (!thumbRes.ok()) throw new Error(`thumbnail upload failed: ${thumbRes.status()} ${await thumbRes.text()}`);
+
+  const project = {
+    id: projectId,
+    name,
+    createdAt: Date.now(),
+    takeoffs: [],
+    pages: [
+      {
+        id: page1Id,
+        name: 'Sheet 1',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 1,
+        measurements: [],
+        scaleConfig: null,
+      },
+      {
+        id: page2Id,
+        name: 'Sheet 2',
+        imageId: '',
+        thumbnailId,
+        imageWidth: 1700,
+        imageHeight: 2200,
+        sourcePdfFileId: pdfFileId,
+        sourcePdfPageNum: 2,
+        measurements: [],
+        scaleConfig: null,
+      },
+    ],
+    version: 1,
+    status: 'bidding',
+  };
+  const projRes = await request.post('/api/projects', {
+    headers: auth,
+    data: project,
+  });
+  if (!projRes.ok()) {
+    throw new Error(`project create failed: ${projRes.status()} ${await projRes.text()}`);
+  }
+
+  return { projectId, page1Id, page2Id, sourcePdfFileId: pdfFileId, thumbnailId, name };
 }
 
 export interface SeedWithTakeoffResult extends SeedResult {
@@ -822,5 +1029,83 @@ export async function seedDocumentsPortfolio(
     printoutFileId,
     printoutFileName,
     printoutPageCount,
+  };
+}
+
+export interface SeedSpreadsheetResult {
+  /** The id the /tools/sheets?fileId= editor should be opened with. */
+  fileId: string;
+  fileName: string;
+  /** The styled, untouched cell — used to prove formatting survives an edit
+   *  elsewhere on the sheet. */
+  styledCell: { address: string; value: string };
+  /** The plain cell the specs edit — starts with this known value so a
+   *  render assertion has something deterministic to look for. */
+  editableCell: { address: string; value: string };
+  sheetName: string;
+}
+
+/**
+ * Builds a small STYLED xlsx in-process with exceljs (not the app's
+ * sheetBridge — a spec verifying round-trip fidelity must build its fixture
+ * independently of the code path it's checking) and uploads it via the raw
+ * file API, `kind=spreadsheet`, the same route real spreadsheet uploads use.
+ * Mirrors sheetBridge.patch.test.ts's proven-safe style shape (bold font +
+ * solid green fill survive the ExcelJS<->FortuneSheet bridge already) so a
+ * round-trip regression here means something actually broke, not that this
+ * fixture picked an unsupported style.
+ *
+ * A1 is bold-on-green and is never edited by the specs (the "did formatting
+ * survive" probe); B1 starts as a plain string and IS the cell specs edit
+ * (the "did the new value survive" probe). A2 carries a plain number so the
+ * single-user render assertion has more than one visible value to anchor on.
+ *
+ * Per files.ts's putBuffer/store contract, POSTing a fresh random id returns
+ * that same id (versioned: false) since no sourceType/sourceId is given here
+ * — but the route's response is still the source of truth per the task
+ * brief, so callers must use the RETURNED fileId, not the id passed in the
+ * URL.
+ */
+export async function seedSpreadsheetFile(
+  request: APIRequestContext,
+  token: string,
+): Promise<SeedSpreadsheetResult> {
+  const auth = { Authorization: `Bearer ${token}` };
+  const short = randomUUID().slice(0, 8);
+  const fileName = `E2E Sheet ${short}.xlsx`;
+  const sheetName = 'Data';
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(sheetName);
+  const a1 = ws.getCell('A1');
+  a1.value = 'Styled Header';
+  a1.font = { bold: true };
+  a1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00FF00' } };
+  ws.getCell('A2').value = 4242;
+  ws.getCell('B1').value = 'Original Value';
+
+  const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+  const uploadId = randomUUID();
+  const res = await request.post(
+    `/api/files/${uploadId}?kind=spreadsheet&name=${encodeURIComponent(fileName)}`,
+    {
+      headers: {
+        ...auth,
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+      data: Buffer.from(buffer),
+    },
+  );
+  if (!res.ok()) throw new Error(`spreadsheet upload failed: ${res.status()} ${await res.text()}`);
+  const body = await res.json();
+  const fileId = body.fileId as string;
+  if (!fileId) throw new Error(`spreadsheet upload response missing fileId: ${JSON.stringify(body)}`);
+
+  return {
+    fileId,
+    fileName,
+    styledCell: { address: 'A1', value: 'Styled Header' },
+    editableCell: { address: 'B1', value: 'Original Value' },
+    sheetName,
   };
 }

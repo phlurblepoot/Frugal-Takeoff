@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { UserPlus, Trash2, Shield, User, Loader2 } from 'lucide-react';
 import { getAuthHeaders } from '../utils/store';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useLiveQuery } from '../hooks/useLiveQuery';
 
 interface UserData {
   id: string;
@@ -41,9 +42,7 @@ export const UsersView: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  useLiveQuery(fetchUsers, { types: ['user'] });
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -8,11 +8,13 @@ import {
 import { useProjectOutlet } from './ProjectLayout';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '../../components/ui';
 import { IssueStatusPill } from '../../components/ui/IssueStatusPill';
 import { IssueEditor } from './issues/IssueEditor';
+import { EditingChip } from '../../components/EditingChip';
 
 export const issueNo = (n: number): string => `ISS-${String(n).padStart(3, '0')}`;
 
@@ -29,7 +31,7 @@ export const ProjectIssues: React.FC = () => {
     if (!projectId) return;
     getIssues(projectId).then(setIssues).catch(() => setIssues([]));
   };
-  useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['issue'], projectId });
 
   // Focus the create-form input when arriving via the command palette's "New issue" action.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -88,7 +90,7 @@ export const ProjectIssues: React.FC = () => {
             {issues.map(iss => (
               <TR key={iss.id} interactive onClick={() => openIssue(iss.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{issueNo(iss.number)}</TD>
-                <TD className="font-medium text-ink">{iss.title || '(untitled)'}</TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{iss.title || '(untitled)'}<EditingChip type="issue" id={iss.id} /></span></TD>
                 <TD><IssueStatusPill status={iss.status} /></TD>
                 <TD className="text-ink-soft">{iss.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{iss.photoCount}</span> : '—'}</TD>
                 <TD onClick={e => e.stopPropagation()}>

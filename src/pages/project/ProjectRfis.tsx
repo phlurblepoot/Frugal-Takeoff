@@ -8,11 +8,13 @@ import {
 import { useProjectOutlet } from './ProjectLayout';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '../../components/ui';
 import { RfiStatusPill } from '../../components/ui/RfiStatusPill';
 import { RfiEditor } from './rfi/RfiEditor';
+import { EditingChip } from '../../components/EditingChip';
 
 export const rfiNo = (n: number): string => `RFI-${String(n).padStart(3, '0')}`;
 
@@ -37,7 +39,7 @@ export const ProjectRfis: React.FC = () => {
     if (!projectId) return;
     getRfis(projectId).then(setRfis).catch(() => setRfis([]));
   };
-  useEffect(load, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(load, { types: ['rfi'], projectId });
 
   // Focus the create-form input when arriving via the command palette's "New RFI" action.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -96,7 +98,7 @@ export const ProjectRfis: React.FC = () => {
             {rfis.map(rfi => (
               <TR key={rfi.id} interactive onClick={() => openRfi(rfi.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{rfiNo(rfi.number)}</TD>
-                <TD className="font-medium text-ink">{rfi.title || '(untitled)'}</TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{rfi.title || '(untitled)'}<EditingChip type="rfi" id={rfi.id} /></span></TD>
                 <TD><RfiStatusPill status={rfi.status} /></TD>
                 <TD className={isRfiOverdue(rfi) ? 'font-medium text-red-600' : 'text-ink-soft'}>
                   {rfi.responseNeededBy ? new Date(`${rfi.responseNeededBy}T00:00:00`).toLocaleDateString() : '—'}

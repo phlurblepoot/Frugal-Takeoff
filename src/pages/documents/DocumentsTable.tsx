@@ -18,6 +18,7 @@ import { History } from 'lucide-react';
 import { DocumentRow, ProjectFile, fetchFileBlob, formatBytes, listFileVersions } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { FileViewerDots } from '../../components/FileViewerDots';
 import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
 import { CustomDocType, kindLabel, kindTone } from './docTypes';
 import { DocumentHoverPreview } from './DocumentHoverPreview';
@@ -280,6 +281,7 @@ export const DocumentsTable: React.FC<{
                     <div className="flex items-center gap-2">
                       <MimeIcon mime={row.mime} />
                       <span className="truncate">{row.name ?? row.id}</span>
+                      <FileViewerDots fileId={row.id} />
                     </div>
                     <div className="ml-[23px] text-xs font-normal text-ink-faint">
                       {formatBytes(row.size)}{row.versionNumber > 1 ? ` · v${row.versionNumber}` : ''}
@@ -332,6 +334,7 @@ export const DocumentsTable: React.FC<{
                   <span className="flex min-w-0 items-center gap-2 font-medium text-ink">
                     <MimeIcon mime={row.mime} />
                     <span className="truncate break-words">{row.name ?? row.id}</span>
+                    <FileViewerDots fileId={row.id} />
                   </span>
                   <StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill>
                 </div>

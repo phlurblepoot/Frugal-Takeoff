@@ -7,6 +7,8 @@ import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { RfiStatusPill, RFI_STATUS_META } from '../../../components/ui/RfiStatusPill';
 import { buildRfiPdf } from './rfiPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -201,6 +203,13 @@ export const RfiEditor: React.FC<{
     (responseNeededBy || '') !== (rfi.responseNeededBy ?? '') ||
     responseDirty;
 
+  const collab = useCollabEditing({
+    type: 'rfi',
+    id: rfi.id,
+    isDirty,
+    onFresh: onSaved,
+  });
+
   // Save-first guard: don't open the composer with unsaved edits.
   const openComposer = () => {
     if (isDirty()) {
@@ -214,7 +223,11 @@ export const RfiEditor: React.FC<{
     if (!title.trim()) { toast('A title is required', { type: 'warning' }); return; }
     setSaving(true);
     try {
-      await saveRfi(rfi.id, { ...rfi, title: title.trim(), question: question || null, specRef: specRef || null, drawingRef: drawingRef || null, attention: attention || null, responseNeededBy: responseNeededBy || null });
+      await saveRfi(rfi.id, {
+        ...rfi,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
+        title: title.trim(), question: question || null, specRef: specRef || null, drawingRef: drawingRef || null, attention: attention || null, responseNeededBy: responseNeededBy || null,
+      });
       // Save also persists a typed-but-unsaved response, so switching status,
       // uploading a photo, etc. right after Save never loses the draft.
       if (responseDirty && responseDraft.trim()) {
@@ -243,6 +256,7 @@ export const RfiEditor: React.FC<{
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="mb-3 flex items-center gap-2">
         <button onClick={cycleStatus} title="Click to advance status"><RfiStatusPill status={rfi.status} /></button>
         <span className="text-xs text-ink-faint">{Object.values(RFI_STATUS_META).map(m => m.label).join(' → ')}</span>

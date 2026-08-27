@@ -1,5 +1,5 @@
 // src/pages/Dashboard.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity as ActivityIcon, Calendar, Clock, FolderKanban, Plus } from 'lucide-react';
 import {
@@ -12,6 +12,8 @@ import {
 } from '../components/ui';
 import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { GROUP_DEFS } from './ProjectsPage';
+import { useLiveQuery } from '../hooks/useLiveQuery';
+import { activityTarget } from '../utils/activityLink';
 
 const DAY = 86_400_000;
 
@@ -50,6 +52,7 @@ const ACTIVE = GROUP_DEFS.find(g => g.id === 'active')!.statuses;
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const isAdmin = (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
   const [summaries, setSummaries] = useState<ProjectSummary[] | null>(null);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [hours, setHours] = useState<number | null>(null);
@@ -57,12 +60,13 @@ export const Dashboard: React.FC = () => {
   const [taskScope, setTaskScope] = useState<'mine' | 'all'>('mine');
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  useEffect(() => {
+  const load = () => {
     getProjectsSummary().then(setSummaries).catch(() => setSummaries([]));
     getActivity(10).then(setActivity).catch(() => setActivity([]));
     getMyTimeEntries().then(e => setHours(hoursThisWeek(e))).catch(() => setHours(0));
     getTasks().then(setTasks).catch(() => setTasks([]));
-  }, []);
+  };
+  useLiveQuery(load, { types: ['project', 'task', 'issue', 'rfi', 'punch', 'invoice', 'changeOrder', 'payment', 'timeEntry', 'customer', 'file'] });
 
   const visible = (summaries ?? []).filter(s => !s.archived);
   const upcoming = visible
@@ -179,14 +183,27 @@ export const Dashboard: React.FC = () => {
               <EmptyState title="No activity yet" description="Project events show up here as your team works." />
             ) : (
               <ul className="divide-y divide-edge">
-                {activity.map(a => (
-                  <li key={a.id} className="px-4 py-2.5">
-                    <p className="text-sm text-ink">{a.message}</p>
-                    <p className="text-xs text-ink-faint">
-                      {a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}
-                    </p>
-                  </li>
-                ))}
+                {activity.map(a => {
+                  const target = activityTarget(a, { admin: isAdmin });
+                  const body = (
+                    <>
+                      <p className="text-sm text-ink">{a.message}</p>
+                      <p className="text-xs text-ink-faint">
+                        {a.projectName && <span className="font-medium text-ink-soft">{a.projectName} · </span>}
+                        {a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}
+                      </p>
+                    </>
+                  );
+                  return (
+                    <li key={a.id}>
+                      {target ? (
+                        <Link to={target} className="block px-4 py-2.5 transition-colors hover:bg-hover">{body}</Link>
+                      ) : (
+                        <div className="px-4 py-2.5">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardBody>

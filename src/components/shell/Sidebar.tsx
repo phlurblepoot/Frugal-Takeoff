@@ -5,7 +5,7 @@ import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
   ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
-  ClipboardCheck, FileText, SlidersHorizontal, Users, MessageCircleQuestion,
+  ClipboardCheck, FileText, SlidersHorizontal, Users, MessageCircleQuestion, CalendarDays,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
@@ -54,6 +54,7 @@ const PROJECT_NAV: {
   { id: 'time',      label: 'Time',               Icon: Clock,       path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
   { id: 'issues',    label: 'Issues',             Icon: AlertCircle, path: '/issues',    match: (p, b) => p.startsWith(`${b}/issues`) },
   { id: 'rfis',      label: 'RFIs',               Icon: MessageCircleQuestion, path: '/rfis', match: (p, b) => p.startsWith(`${b}/rfis`) },
+  { id: 'daily-reports', label: 'Daily Reports',  Icon: CalendarDays, path: '/daily-reports', match: (p, b) => p.startsWith(`${b}/daily-reports`) },
   { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
   { id: 'settings',  label: 'Project Settings',   Icon: SlidersHorizontal, path: '/settings', match: (p, b) => p.startsWith(`${b}/settings`), adminOnly: true },
 ];

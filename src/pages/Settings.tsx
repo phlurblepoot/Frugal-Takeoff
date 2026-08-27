@@ -21,6 +21,34 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.7.2',
+    date: 'August 27, 2026',
+    changes: [
+      'Improved: the recent-activity feeds (Dashboard and project Overview) now show the project name on each entry, and clicking an entry jumps to the page it happened on — an RFI event opens that project’s RFIs, a payment opens Billing, and so on. Billing entries only link for admins, since Billing is an admin-only section.',
+      'Fix: Project Settings no longer saves while you type. Fields kept auto-saving on every change, which briefly disabled the inputs (losing your cursor) and let live-refresh swap the page mid-edit. Details and contacts now commit with an explicit Save button (with a Discard option), and other users’ screens refresh when you save — not on every keystroke.',
+      'Fix: on the daily report form, the man-count description box is now the wide one and the count box the narrow one (they were flipped).',
+    ],
+  },
+  {
+    version: '2.7.1',
+    date: 'August 26, 2026',
+    changes: [
+      'New: Daily Reports tab on every project — one report per work day with crew man-counts, field notes, and issues; weather auto-fills with the actual hourly conditions for the day when the project has an address (editable). Reports print/email on the company letterhead with photos attached, and long sections continue cleanly onto a second page.',
+    ],
+  },
+  {
+    version: '2.7',
+    date: 'August 26, 2026',
+    changes: [
+      'Real-time collaboration, app-wide: changes other users make (projects, pages, takeoffs, billing, issues, tasks, documents, and more) now appear on your screen live — no refresh needed — and the app warns you when someone else is editing the same thing so you never silently overwrite each other.',
+      'Online users list now shows every session per user (each computer/tablet/phone, with an automatic device label), and a Follow button lets you follow a teammate to whatever page they are on.',
+      'Canvas drawing rebuilt on server-applied operations: measurements sync live between users, late joiners catch up automatically, page scale and takeoff changes update open canvases in real time, and superseded plan revisions are fully read-only.',
+      'Spreadsheet editor rebuilt Google-Sheets-style: opens the real file from Documents with full formatting, edits together live (shared cursors and cell presence), autosaves straight to the file about every 15 seconds (no Save button), and archives a version snapshot of the file as it was before each editing session. Renaming, adding, deleting, and reordering sheets are all safe, and the autosave chip tells you honestly if saving ever fails.',
+      'Plan pages you have already viewed are cached in the browser — flipping back and forth between pages is now instant, with a thumbnail preview and download progress while a page loads.',
+      'Note for self-hosters: this update adds two new database tables for live spreadsheet sessions (migration 26, additive — existing data untouched).',
+    ],
+  },
+  {
     version: '2.6.1',
     date: 'August 19, 2026',
     changes: [

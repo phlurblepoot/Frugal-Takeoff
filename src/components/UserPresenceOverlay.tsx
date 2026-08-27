@@ -1,50 +1,82 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Users, X, ExternalLink } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { ChevronDown, ChevronRight, Monitor, Users } from 'lucide-react';
 import { useCollaboration } from '../context/CollaborationContext';
-import { motion, AnimatePresence } from 'motion/react';
-
-interface User { id: string; userId?: string; name: string; pageId: string; pageName: string; cursor: { x: number; y: number } | null; color: string; lastActive?: number; }
-
-// Hide anonymous (not-logged-in) sessions and collapse multiple sessions
-// belonging to the same authenticated user into a single entry. The collapsed
-// entry's page/cursor come from the most recently active session.
-function collapseSessions(users: User[]): (User & { displayName: string })[] {
-  const authed = users.filter(u => u.userId);
-  const byUser: Record<string, User[]> = {};
-  authed.forEach(u => {
-    const key = u.userId!;
-    (byUser[key] = byUser[key] || []).push(u);
-  });
-  return Object.values(byUser).map(sessions => {
-    const active = sessions.reduce((best, s) =>
-      (s.lastActive ?? 0) > (best.lastActive ?? 0) ? s : best
-    , sessions[0]);
-    return { ...active, displayName: active.name };
-  });
-}
+import type { SessionView } from '../context/CollaborationContext';
+import { groupSessionsByUser, describeLocation } from '../utils/presence';
+import { useLiveQuery } from '../hooks/useLiveQuery';
+import { getProjectsSummary } from '../utils/store';
 
 export const UserPresenceOverlay: React.FC = () => {
+  const { sessions, mySessionId, followedSessionId, setFollowedSessionId } = useCollaboration();
   const [isOpen, setIsOpen] = useState(false);
-  const { globalUsers, socket, followedUserId, setFollowedUserId } = useCollaboration();
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  const openedOnceRef = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Don't show on canvas page (it has its own list in sidebar)
+  const loadNames = async () => {
+    if (!openedOnceRef.current) return;
+    try {
+      const list = await getProjectsSummary();
+      setProjectNames(Object.fromEntries(list.map(p => [p.id, p.name])));
+    } catch { /* names are cosmetic — degrade to 'A project' */ }
+  };
+  useLiveQuery(loadNames, { types: ['project'] });
+  useEffect(() => {
+    if (isOpen && !openedOnceRef.current) { openedOnceRef.current = true; void loadNames(); }
+  }, [isOpen]);
+
+  // Don't show on the canvas page (it has its own presence list in the sidebar).
   if (location.pathname.includes('/page/')) return null;
 
-  const otherUsers = collapseSessions(globalUsers.filter(u => u.id !== socket?.id));
+  const groups = groupSessionsByUser(sessions, mySessionId);
+
+  const goTo = (path: string | undefined) => {
+    if (!path) return;
+    navigate(path);
+    setIsOpen(false);
+  };
+
+  const toggleExpanded = (userId: string) =>
+    setExpanded(prev => ({ ...prev, [userId]: !prev[userId] }));
+
+  const followCheckbox = (session: SessionView) => (
+    <label
+      className="flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        type="checkbox"
+        checked={followedSessionId === session.sessionId}
+        onChange={(e) => setFollowedSessionId(e.target.checked ? session.sessionId : null)}
+        className="size-3.5 rounded border-edge-strong accent-accent-600"
+      />
+      Follow
+    </label>
+  );
+
+  const sessionLocation = (session: SessionView) => (
+    <div className="flex min-w-0 items-center gap-1 text-[10px] text-ink-faint">
+      <Monitor size={11} className="shrink-0" />
+      <span className="truncate">{session.device}</span>
+      <span aria-hidden="true">·</span>
+      <span className="truncate">{describeLocation(session.location, projectNames)}</span>
+    </div>
+  );
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-12 h-12 bg-white dark:bg-slate-800 rounded-full shadow-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:border-accent-200 dark:hover:border-accent-600 transition-all active:scale-95 relative"
+        className="relative flex h-12 w-12 items-center justify-center rounded-full border border-edge bg-raised text-ink-soft shadow-lg transition-all hover:text-accent-600 active:scale-95"
       >
-        <Users size={24} />
-        {otherUsers.length > 0 && (
-          <span className="absolute -top-1 -right-1 w-5 h-5 bg-accent-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white dark:border-slate-800">
-            {otherUsers.length}
+        <Users size={22} />
+        {groups.length > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-raised bg-accent-600 text-[10px] font-bold text-white">
+            {groups.length}
           </span>
         )}
       </button>
@@ -55,74 +87,75 @@ export const UserPresenceOverlay: React.FC = () => {
             initial={{ opacity: 0, scale: 0.9, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 10 }}
-            className="absolute bottom-16 right-0 w-72 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+            className="absolute bottom-16 right-0 w-72 overflow-hidden rounded-2xl border border-edge bg-raised shadow-2xl"
           >
-            <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between bg-slate-50/50 dark:bg-slate-900/50">
-              <h3 className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                <Users size={18} className="text-accent-600 dark:text-accent-400" />
+            <div className="border-b border-edge px-4 py-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-ink">
+                <Users size={16} className="text-accent-600" />
                 Active Users
               </h3>
-              <button onClick={() => setIsOpen(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">
-                <X size={18} />
-              </button>
             </div>
 
             <div className="max-h-96 overflow-y-auto p-2">
-              {otherUsers.length === 0 ? (
-                <div className="p-8 text-center">
-                  <p className="text-sm text-slate-500 dark:text-slate-400 italic">No other users online</p>
-                </div>
+              {groups.length === 0 ? (
+                <p className="p-6 text-center text-sm italic text-ink-faint">No other users online</p>
               ) : (
                 <div className="space-y-1">
-                  {otherUsers.map(user => (
-                    <div
-                      key={user.id}
-                      className="group flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      <div
-                        className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
-                        onClick={() => {
-                          navigate(user.pageId);
-                          setIsOpen(false);
-                        }}
-                      >
-                        <div className="relative">
+                  {groups.map(group => {
+                    const multi = group.sessions.length > 1;
+                    const solo = group.sessions[0];
+                    return (
+                      <div key={group.userId}>
+                        <div
+                          className={`flex items-center gap-2 rounded-lg p-2 ${multi ? 'cursor-pointer hover:bg-hover' : 'hover:bg-hover'} ${!multi && solo.location?.path ? 'cursor-pointer' : ''}`}
+                          onClick={multi ? () => toggleExpanded(group.userId) : () => goTo(solo.location?.path)}
+                        >
                           <div
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs"
-                            style={{ backgroundColor: user.color }}
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                            style={{ backgroundColor: group.color }}
                           >
-                            {user.name.charAt(0).toUpperCase()}
+                            {group.name.charAt(0).toUpperCase()}
                           </div>
-                          <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 border-2 border-white dark:border-slate-800 rounded-full"></div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-ink">
+                              <span>{group.name}</span>
+                              {group.isMe && <span className="ml-1.5 text-xs font-normal text-ink-faint">You</span>}
+                            </p>
+                            {multi
+                              ? <p className="text-[10px] text-ink-faint">{group.sessions.length} sessions</p>
+                              : sessionLocation(solo)}
+                          </div>
+                          {multi ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleExpanded(group.userId); }}
+                              className="shrink-0 text-ink-faint hover:text-ink"
+                            >
+                              {expanded[group.userId] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </button>
+                          ) : (
+                            !group.isMe && followCheckbox(solo)
+                          )}
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{user.displayName}</p>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
-                            <ExternalLink size={10} />
-                            {user.pageName || 'Unknown'}
-                          </p>
-                        </div>
-                      </div>
 
-                      <label className="flex items-center gap-1.5 cursor-pointer p-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-600 border border-transparent hover:border-slate-200 dark:hover:border-slate-600 transition-all">
-                        <input
-                          type="checkbox"
-                          checked={followedUserId === user.id}
-                          onChange={(e) => setFollowedUserId(e.target.checked ? user.id : null)}
-                          className="w-4 h-4 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
-                        />
-                        <span className={`text-[10px] font-bold uppercase tracking-wider ${followedUserId === user.id ? 'text-accent-600 dark:text-accent-400' : 'text-slate-400 dark:text-slate-500'}`}>
-                          {followedUserId === user.id ? 'Following' : 'Follow'}
-                        </span>
-                      </label>
-                    </div>
-                  ))}
+                        {multi && expanded[group.userId] && (
+                          <div className="space-y-1">
+                            {group.sessions.map(session => (
+                              <div
+                                key={session.sessionId}
+                                className={`ml-9 flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-hover ${session.location?.path ? 'cursor-pointer' : ''}`}
+                                onClick={() => goTo(session.location?.path)}
+                              >
+                                {sessionLocation(session)}
+                                {!group.isMe && followCheckbox(session)}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-            </div>
-
-            <div className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-100 dark:border-slate-700 text-[10px] text-slate-400 dark:text-slate-500 text-center">
-              Click a user to jump to their page
             </div>
           </motion.div>
         )}

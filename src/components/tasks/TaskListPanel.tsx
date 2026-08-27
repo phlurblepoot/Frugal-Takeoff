@@ -8,6 +8,7 @@ import { ListChecks, ImageIcon } from 'lucide-react';
 import { TaskListItem } from '../../utils/store';
 import { Card, CardBody, EmptyState, Skeleton } from '../ui';
 import { TaskStatusPill } from '../ui/TaskStatusPill';
+import { EditingChip } from '../EditingChip';
 
 type Filter = 'all' | 'mine' | 'todo' | 'in_progress' | 'done' | 'overdue';
 
@@ -120,6 +121,7 @@ export const TaskListPanel: React.FC<{
                           <span className={`flex-1 min-w-0 text-sm ${isDone ? 'text-ink-faint line-through' : 'text-ink'}`}>
                             {t.title || '(untitled)'}
                           </span>
+                          <EditingChip type="task" id={t.id} />
                           <span className={`shrink-0 text-xs ${t.assigneeUsername ? 'text-ink-soft' : 'text-ink-faint'}`}>
                             {t.assigneeUsername || 'Unassigned'}
                           </span>

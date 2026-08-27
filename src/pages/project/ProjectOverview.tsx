@@ -1,11 +1,12 @@
 // src/pages/project/ProjectOverview.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import {
   Activity as ActivityIcon, AlertCircle, Building2, Calendar, ClipboardCheck, Clock, DollarSign, FileText,
   FolderOpen, MapPin, Ruler, Upload,
 } from 'lucide-react';
 import { useProjectOutlet } from './ProjectLayout';
+import { activityTarget } from '../../utils/activityLink';
 import {
   ActivityItem, TimeEntryLite, getActivity, getMyTimeEntries, clockIn,
 } from '../../utils/store';
@@ -16,6 +17,7 @@ import {
 } from '../../components/ui';
 import { timeAgo, hoursThisWeek } from '../Dashboard';
 import { formatMoney } from '../../utils/money';
+import { useLiveQuery } from '../../hooks/useLiveQuery';
 
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 
@@ -28,11 +30,12 @@ export const ProjectOverview: React.FC = () => {
   const [entries, setEntries] = useState<TimeEntryLite[] | null>(null);
 
   const projectId = summary?.id;
-  useEffect(() => {
+  const load = () => {
     if (!projectId) return;
     getActivity(8, projectId).then(setActivity).catch(() => setActivity([]));
     getMyTimeEntries(projectId).then(setEntries).catch(() => setEntries([]));
-  }, [projectId]);
+  };
+  useLiveQuery(load, { types: ['project', 'task', 'issue', 'rfi', 'punch', 'invoice', 'changeOrder', 'payment', 'timeEntry', 'customer', 'file'], projectId });
 
   // Pre-3b bookmarks looked like /project/:id?tab=takeoffs — forward them.
   const legacyTab = searchParams.get('tab');
@@ -136,12 +139,24 @@ export const ProjectOverview: React.FC = () => {
               <EmptyState title="No activity yet" description="Events on this project show up here." />
             ) : (
               <ul className="divide-y divide-edge">
-                {activity.map(a => (
-                  <li key={a.id} className="px-4 py-2.5">
-                    <p className="text-sm text-ink">{a.message}</p>
-                    <p className="text-xs text-ink-faint">{a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}</p>
-                  </li>
-                ))}
+                {activity.map(a => {
+                  const target = activityTarget(a, { admin: isAdmin });
+                  const body = (
+                    <>
+                      <p className="text-sm text-ink">{a.message}</p>
+                      <p className="text-xs text-ink-faint">{a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}</p>
+                    </>
+                  );
+                  return (
+                    <li key={a.id}>
+                      {target ? (
+                        <Link to={target} className="block px-4 py-2.5 transition-colors hover:bg-hover">{body}</Link>
+                      ) : (
+                        <div className="px-4 py-2.5">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardBody>

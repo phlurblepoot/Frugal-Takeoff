@@ -14,6 +14,7 @@ import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectRfis } from './pages/project/ProjectRfis';
+import { ProjectDailyReports } from './pages/project/ProjectDailyReports';
 import { ProjectPunch } from './pages/project/ProjectPunch';
 import { ProjectProposal } from './pages/project/ProjectProposal';
 import { ProjectSettings } from './pages/project/ProjectSettings';
@@ -28,6 +29,7 @@ import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
 import { UserPresenceOverlay } from './components/UserPresenceOverlay';
+import { FollowPill } from './components/FollowPill';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -51,6 +53,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
               {!isLoginPage && <CommandPalette />}
               <AppShell>
                 <UserPresenceOverlay />
+                <FollowPill />
                 <NotesOverlay />
                 <Outlet context={{ appName, logoUrl }} />
               </AppShell>
@@ -122,6 +125,7 @@ export default function App() {
             { path: 'punch', element: <ProjectPunch /> },
             { path: 'issues', element: <ProjectIssues /> },
             { path: 'rfis', element: <ProjectRfis /> },
+            { path: 'daily-reports', element: <ProjectDailyReports /> },
             { path: 'billing', element: <ProjectBilling /> },
             { path: 'settings', element: <ProjectSettings /> },
             { path: 'page/:pageId', element: <CanvasView /> },

@@ -1,5 +1,5 @@
 // src/pages/project/billing/AiaScheduleOfValues.tsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Plus, Trash2, Check, X, Pencil, Upload, HelpCircle, Download } from 'lucide-react';
 import {
@@ -15,6 +15,9 @@ import {
   Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
+import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 
 const isCo = (l: AiaSovLine) => !!l.isChangeOrder;
 
@@ -48,7 +51,18 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
   const reload = () => {
     getSov(projectId).then(setLines).catch(() => setLines([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['aiaSov', 'changeOrder'], projectId });
+
+  // Page-level presence only — SOV events carry per-line ids, not a single
+  // entity id, and Task 6's useLiveQuery above already handles silent live
+  // refresh. isDirty always false means remoteChange can never be set, so
+  // the banner only ever renders its "others editing" half.
+  const collab = useCollabEditing({
+    type: 'aiaSov',
+    id: projectId,
+    isDirty: () => false,
+    onFresh: reload,
+  });
 
   // Zero-charge SOV export — the same G702/G703 workbook (or admin template) a
   // pay-app export produces, with all billing at $0. Lets the SOV be presented
@@ -246,6 +260,9 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
         </p>
       )}
       <CardBody className="p-0">
+        {collab.othersEditing.length > 0 && (
+          <div className="px-4 pt-4"><EditPresenceBanner state={collab} /></div>
+        )}
         {lines === null ? (
           <div className="space-y-2 p-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-9" />)}</div>
         ) : lines.length === 0 ? (

@@ -12,6 +12,8 @@ import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { EmailComposer } from '../../../components/EmailComposer';
+import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { buildChangeOrderPdf } from './changeOrderPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -41,6 +43,25 @@ export const ChangeOrderEditor: React.FC<{
   const [composing, setComposing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+
+  const initialDate = co.date ? new Date(co.date).toISOString().slice(0, 10) : '';
+  const initialScheduleImpactDays =
+    co.scheduleImpactDays === null || co.scheduleImpactDays === undefined ? '' : String(co.scheduleImpactDays);
+  const dirty =
+    number !== (co.number ?? '') ||
+    date !== initialDate ||
+    title !== (co.title ?? '') ||
+    description !== (co.description ?? '') ||
+    lumpSumAmount !== String(co.lumpSumAmount ?? 0) ||
+    scheduleImpactDays !== initialScheduleImpactDays ||
+    JSON.stringify(lines) !== JSON.stringify(co.lines.length ? co.lines : []);
+
+  const collab = useCollabEditing({
+    type: 'changeOrder',
+    id: co.id,
+    isDirty: () => dirty,
+    onFresh: onSaved,
+  });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
   const [emailDefaults, setEmailDefaults] = useState<{
@@ -95,6 +116,7 @@ export const ChangeOrderEditor: React.FC<{
     try {
       await saveChangeOrder(co.id, {
         ...co,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
         number: number || null,
         date: date ? new Date(date).getTime() : null,
         title: title || null,
@@ -216,6 +238,7 @@ export const ChangeOrderEditor: React.FC<{
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save change order'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <ChangeOrderStatusPill status={co.status} />
         {co.status !== 'approved' && <Button variant="ghost" size="sm" onClick={() => changeStatus('approved')}>Approve</Button>}

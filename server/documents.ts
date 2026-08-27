@@ -33,6 +33,8 @@ const KIND_LABELS: Record<string, string> = {
   'proposal-photo': 'Proposal Photo',
   printout: 'Printout',
   'plan-source': 'Plan Set',
+  'daily-report': 'Daily Report',
+  'daily-report-photo': 'Daily Report Photo',
 };
 const genericLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
 
@@ -249,6 +251,14 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     sql: ph => `SELECT id FROM projects WHERE id IN (${ph})`,
     label: () => 'Proposal',
     href: pid => pid ? `/project/${pid}/proposal` : null,
+  },
+  // Daily reports have no per-id route — the project's Daily Reports list
+  // (grouped by date, not by report id) is the click-through destination for
+  // both the report PDF and its photos.
+  dailyReport: {
+    sql: ph => `SELECT id, reportDate FROM daily_reports WHERE id IN (${ph})`,
+    label: row => `Daily Report — ${row.reportDate ?? '?'}`,
+    href: pid => pid ? `/project/${pid}/daily-reports` : null,
   },
 };
 

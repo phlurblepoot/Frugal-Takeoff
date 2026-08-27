@@ -1,5 +1,5 @@
 // src/pages/project/billing/AiaPayApplications.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { AiaPayAppListItem, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
@@ -11,6 +11,8 @@ import {
 } from '../../../components/ui';
 import type { PillTone } from '../../../components/ui';
 import { AiaPayAppEditor } from './AiaPayAppEditor';
+import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { EditingChip } from '../../../components/EditingChip';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -34,7 +36,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
   const reload = () => {
     getPayApps(projectId).then(setApps).catch(() => setApps([]));
   };
-  useEffect(reload, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveQuery(reload, { types: ['aiaPayApp', 'payment'], projectId });
 
   const startCreate = () => {
     setNPeriodTo('');
@@ -90,7 +92,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
                 const meta = STATUS_META[app.status] ?? { label: app.status, tone: 'slate' as PillTone };
                 return (
                   <TR key={app.id} interactive onClick={() => setOpenId(app.id)}>
-                    <TD className="font-medium text-ink">#{app.number}</TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">#{app.number}<EditingChip type="aiaPayApp" id={app.id} /></span></TD>
                     <TD className="text-ink-soft">{fmtDate(app.periodTo)}</TD>
                     <TD className="text-ink-soft">{fmtDate(app.applicationDate)}</TD>
                     <TD><StatusPill tone={meta.tone}>{meta.label}</StatusPill></TD>

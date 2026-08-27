@@ -8,6 +8,8 @@ import {
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui';
+import { useCollabEditing } from '../../hooks/useCollabEditing';
+import { EditPresenceBanner } from '../../components/EditPresenceBanner';
 
 interface Props {
   task: Task;
@@ -64,10 +66,21 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
     projectId !== (task.projectId ?? null) ||
     customerId !== (task.customerId ?? null);
 
+  const collab = useCollabEditing({
+    type: 'task',
+    id: task.id,
+    isDirty: () => dirty,
+    onFresh: onSaved,   // parent refetches the task and (via key remount) resets this form
+  });
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveTask(task.id, { ...task, category, title, notes, assigneeUserId, dueDate: dueDate || null, projectId, customerId });
+      await saveTask(task.id, {
+        ...task,
+        ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
+        category, title, notes, assigneeUserId, dueDate: dueDate || null, projectId, customerId,
+      });
       toast('Task saved', { type: 'success' });
       onSaved();
     } catch (e) {
@@ -118,6 +131,7 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
+      <EditPresenceBanner state={collab} />
       <div className="mb-3">
         <Field label="Status" htmlFor="task-status">
           <Select id="task-status" value={task.status} onChange={e => changeStatus(e.target.value)}>
