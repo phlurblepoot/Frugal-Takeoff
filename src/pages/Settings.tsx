@@ -22,10 +22,11 @@ interface ChangelogEntry {
 const CHANGELOG: ChangelogEntry[] = [
   {
     version: '2.7.2',
-    date: 'August 26, 2026',
+    date: 'August 27, 2026',
     changes: [
-      'Improved: the recent-activity feeds (Dashboard and project Overview) now show the project name on each entry, and clicking an entry jumps to the page it happened on — an RFI event opens that project’s RFIs, a payment opens Billing, and so on.',
+      'Improved: the recent-activity feeds (Dashboard and project Overview) now show the project name on each entry, and clicking an entry jumps to the page it happened on — an RFI event opens that project’s RFIs, a payment opens Billing, and so on. Billing entries only link for admins, since Billing is an admin-only section.',
       'Fix: Project Settings no longer saves while you type. Fields kept auto-saving on every change, which briefly disabled the inputs (losing your cursor) and let live-refresh swap the page mid-edit. Details and contacts now commit with an explicit Save button (with a Discard option), and other users’ screens refresh when you save — not on every keystroke.',
+      'Fix: on the daily report form, the man-count description box is now the wide one and the count box the narrow one (they were flipped).',
     ],
   },
   {
