@@ -1159,6 +1159,81 @@ export const sendRfi = async (id: string, payload: { to: string; cc?: string; bc
   const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res);
 };
 
+// ── Daily Reports ──────────────────────────────────────────────────────────
+
+export interface DailyReportPhoto { id: string; fileId: string; sortOrder: number; }
+export interface ManCountLine { type: string; count: number; }
+export interface DailyWeatherHour { hour: string; tempF: number | null; condition: string; }
+export interface DailyReport {
+  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  weatherSummary: string; temperature: string; weatherHourly: DailyWeatherHour[];
+  manCounts: ManCountLine[]; fieldNotes: string; issues: string;
+  createdBy: string | null; createdAt: number; updatedAt: number; version: number;
+  photos: DailyReportPhoto[];
+}
+export interface DailyReportListItem {
+  id: string; projectId: string; reportDate: string; jobName: string; contractorName: string;
+  weatherSummary: string; temperature: string; manCounts: ManCountLine[];
+  createdBy: string | null; createdAt: number; updatedAt: number; version: number; photoCount: number;
+}
+export class DateTakenError extends Error { constructor(public existingId: string) { super('date taken'); this.name = 'DateTakenError'; } }
+
+const dailyJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+export const getDailyReports = async (projectId: string): Promise<DailyReportListItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-reports`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const getDailyReport = async (id: string): Promise<DailyReport> => {
+  const res = await fetchWithRetry(`/api/daily-reports/${id}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res); return res.json();
+};
+export const createDailyReport = async (projectId: string, input: { reportDate: string; jobName?: string; contractorName?: string }): Promise<{ id: string }> => {
+  const res = await dailyJson('POST', `/api/projects/${projectId}/daily-reports`, input);
+  if (res.status === 409) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'date_taken' && b.existingId) throw new DateTakenError(b.existingId);
+    throw new ConflictError(projectId);
+  }
+  await handleResponse(res); return res.json();
+};
+export const saveDailyReport = async (id: string, report: Partial<DailyReport> & { version: number }): Promise<{ version: number }> => {
+  const res = await dailyJson('PUT', `/api/daily-reports/${id}`, report);
+  if (res.status === 409) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'date_taken' && b.existingId) throw new DateTakenError(b.existingId);
+    throw new ConflictError(id);
+  }
+  await handleResponse(res); return res.json();
+};
+export const deleteDailyReport = async (id: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}`); await handleResponse(res);
+};
+export const addDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
+  const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const sendDailyReport = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res);
+};
+export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/daily-weather?date=${encodeURIComponent(date)}`, { headers: { ...getAuthHeaders() } });
+  if (res.status === 400) {
+    const b = await res.json().catch(() => ({} as any));
+    if (b?.error === 'no_address') throw new Error('no_address');
+    throw new Error('weather_unavailable');
+  }
+  if (!res.ok) throw new Error('weather_unavailable');
+  return res.json();
+};
+
 export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
   const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
 };
