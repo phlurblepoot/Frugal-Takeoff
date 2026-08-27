@@ -1244,6 +1244,7 @@ export const migrations: Migration[] = [
           sortOrder INTEGER NOT NULL DEFAULT 0,
           createdAt INTEGER NOT NULL
         );
+        CREATE INDEX idx_daily_report_photos_report ON daily_report_photos(dailyReportId);
       `);
     },
   },

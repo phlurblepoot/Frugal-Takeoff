@@ -683,4 +683,13 @@ describe('migration 27: daily reports', () => {
     db.prepare(`INSERT INTO daily_report_photos (id, dailyReportId, fileId, sortOrder, createdAt) VALUES ('ph1','d1','f1',0,1)`).run();
     expect(db.prepare('SELECT COUNT(*) c FROM daily_report_photos').get()).toEqual({ c: 1 });
   });
+
+  it('creates idx_daily_report_photos_report', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-m27b-')), migrations);
+    const names = (db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_daily_report_photos_report'`
+    ).all() as { name: string }[]).map(r => r.name);
+    expect(names).toContain('idx_daily_report_photos_report');
+  });
 });
