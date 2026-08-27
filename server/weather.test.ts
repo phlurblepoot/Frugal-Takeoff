@@ -87,6 +87,19 @@ describe('geocodeAddress', () => {
     expect(result).toBeNull();
   });
 
+  it('does not cache a transient (!ok) failure — a later successful call still hits fetch and succeeds', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [{ lat: '1', lon: '2' }] });
+    vi.stubGlobal('fetch', fetchMock);
+    const uniqueAddress = `retry-after-failure-${Math.random()}`;
+    const first = await geocodeAddress(uniqueAddress);
+    expect(first).toBeNull();
+    const second = await geocodeAddress(uniqueAddress);
+    expect(second).toEqual({ lat: 1, lon: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('caches by address and does not hit fetch again for a repeat call', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -148,7 +161,7 @@ describe('fetchDailyWeather', () => {
     expect(calledUrl).not.toContain('past_days');
   });
 
-  it('picks the forecast host for a recent date, with a past_days param', async () => {
+  it('picks the forecast host for a recent date, with no past_days param', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => mockMeteoPayload() });
     vi.stubGlobal('fetch', fetchMock);
     const recent = new Date().toISOString().slice(0, 10);
@@ -156,6 +169,8 @@ describe('fetchDailyWeather', () => {
     const calledUrl = fetchMock.mock.calls[0][0] as string;
     expect(calledUrl).toContain('api.open-meteo.com');
     expect(calledUrl).not.toContain('archive-api');
-    expect(calledUrl).toContain('past_days=7');
+    // Open-Meteo rejects past_days when start_date/end_date are present
+    // (HTTP 400 "mutually exclusive") — verified live against the real API.
+    expect(calledUrl).not.toContain('past_days');
   });
 });

@@ -54,7 +54,11 @@ export async function geocodeAddress(address: string): Promise<{ lat: number; lo
     headers: { 'User-Agent': 'Frugal-Takeoff/2.7 (daily-report weather)' },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) { geocodeCache.set(address, null); return null; }
+  // A transient !ok (e.g. Nominatim 429/503) must NOT be cached — that would
+  // permanently poison this address until restart, with no way to recover via
+  // "Refresh weather". Only a genuinely bad address (ok but empty results) is
+  // cacheable.
+  if (!res.ok) return null;
   const data = await res.json();
   if (!Array.isArray(data) || data.length === 0) { geocodeCache.set(address, null); return null; }
 
@@ -73,8 +77,10 @@ export async function fetchDailyWeather(lat: number, lon: number, date: string):
   const daysAgo = Math.floor((Date.now() - new Date(date + 'T12:00:00').getTime()) / 86_400_000);
   const isArchive = daysAgo >= 8;
   const host = isArchive ? 'https://archive-api.open-meteo.com/v1/archive' : 'https://api.open-meteo.com/v1/forecast';
-  const pastDays = isArchive ? '' : '&past_days=7';
-  const url = `${host}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto&start_date=${date}&end_date=${date}${pastDays}`;
+  // Open-Meteo rejects `past_days` when start_date/end_date are present
+  // ("mutually exclusive"), and both hosts serve any date (recent or old)
+  // fine without it — so it's never added.
+  const url = `${host}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto&start_date=${date}&end_date=${date}`;
 
   const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Open-Meteo request failed: ${res.status}`);
