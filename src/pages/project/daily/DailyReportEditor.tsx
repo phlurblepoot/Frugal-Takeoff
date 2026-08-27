@@ -310,8 +310,15 @@ export const DailyReportEditor: React.FC<{
           <div className="space-y-2">
             {manCounts.map((l, i) => (
               <div key={i} className="flex items-center gap-2">
-                <Input value={l.type} onChange={e => updateManCount(i, { type: e.target.value })} placeholder="Trade / role" className="flex-1" />
-                <Input type="number" min={0} value={l.count} onChange={e => updateManCount(i, { count: Number(e.target.value) })} className="w-20" />
+                <div className="min-w-0 flex-1">
+                  <Input value={l.type} onChange={e => updateManCount(i, { type: e.target.value })} placeholder="Trade / role" />
+                </div>
+                {/* Wrapper (not className) constrains the width: the Input base
+                    classes start with w-full, which in this flex row out-muscled
+                    a passed w-20 and made the count box the WIDE one. */}
+                <div className="w-20 flex-none">
+                  <Input type="number" min={0} value={l.count} onChange={e => updateManCount(i, { count: Number(e.target.value) })} />
+                </div>
                 <button onClick={() => removeManCountLine(i)} title="Remove" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
               </div>
             ))}
