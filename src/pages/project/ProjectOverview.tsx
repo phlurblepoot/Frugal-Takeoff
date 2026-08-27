@@ -6,6 +6,7 @@ import {
   FolderOpen, MapPin, Ruler, Upload,
 } from 'lucide-react';
 import { useProjectOutlet } from './ProjectLayout';
+import { activityTarget } from '../../utils/activityLink';
 import {
   ActivityItem, TimeEntryLite, getActivity, getMyTimeEntries, clockIn,
 } from '../../utils/store';
@@ -138,12 +139,24 @@ export const ProjectOverview: React.FC = () => {
               <EmptyState title="No activity yet" description="Events on this project show up here." />
             ) : (
               <ul className="divide-y divide-edge">
-                {activity.map(a => (
-                  <li key={a.id} className="px-4 py-2.5">
-                    <p className="text-sm text-ink">{a.message}</p>
-                    <p className="text-xs text-ink-faint">{a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}</p>
-                  </li>
-                ))}
+                {activity.map(a => {
+                  const target = activityTarget(a);
+                  const body = (
+                    <>
+                      <p className="text-sm text-ink">{a.message}</p>
+                      <p className="text-xs text-ink-faint">{a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}</p>
+                    </>
+                  );
+                  return (
+                    <li key={a.id}>
+                      {target ? (
+                        <Link to={target} className="block px-4 py-2.5 transition-colors hover:bg-hover">{body}</Link>
+                      ) : (
+                        <div className="px-4 py-2.5">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardBody>

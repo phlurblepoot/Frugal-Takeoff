@@ -13,6 +13,7 @@ import {
 import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/UpcomingTasksCard';
 import { GROUP_DEFS } from './ProjectsPage';
 import { useLiveQuery } from '../hooks/useLiveQuery';
+import { activityTarget } from '../utils/activityLink';
 
 const DAY = 86_400_000;
 
@@ -181,14 +182,27 @@ export const Dashboard: React.FC = () => {
               <EmptyState title="No activity yet" description="Project events show up here as your team works." />
             ) : (
               <ul className="divide-y divide-edge">
-                {activity.map(a => (
-                  <li key={a.id} className="px-4 py-2.5">
-                    <p className="text-sm text-ink">{a.message}</p>
-                    <p className="text-xs text-ink-faint">
-                      {a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}
-                    </p>
-                  </li>
-                ))}
+                {activity.map(a => {
+                  const target = activityTarget(a);
+                  const body = (
+                    <>
+                      <p className="text-sm text-ink">{a.message}</p>
+                      <p className="text-xs text-ink-faint">
+                        {a.projectName && <span className="font-medium text-ink-soft">{a.projectName} · </span>}
+                        {a.username ? `${a.username} · ` : ''}{timeAgo(a.createdAt)}
+                      </p>
+                    </>
+                  );
+                  return (
+                    <li key={a.id}>
+                      {target ? (
+                        <Link to={target} className="block px-4 py-2.5 transition-colors hover:bg-hover">{body}</Link>
+                      ) : (
+                        <div className="px-4 py-2.5">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardBody>
