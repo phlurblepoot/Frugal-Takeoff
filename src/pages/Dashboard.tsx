@@ -52,6 +52,7 @@ const ACTIVE = GROUP_DEFS.find(g => g.id === 'active')!.statuses;
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const isAdmin = (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
   const [summaries, setSummaries] = useState<ProjectSummary[] | null>(null);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
   const [hours, setHours] = useState<number | null>(null);
@@ -183,7 +184,7 @@ export const Dashboard: React.FC = () => {
             ) : (
               <ul className="divide-y divide-edge">
                 {activity.map(a => {
-                  const target = activityTarget(a);
+                  const target = activityTarget(a, { admin: isAdmin });
                   const body = (
                     <>
                       <p className="text-sm text-ink">{a.message}</p>

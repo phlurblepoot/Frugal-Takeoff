@@ -11,9 +11,15 @@ const SECTION_BY_PREFIX: [RegExp, string][] = [
   [/^proposal_/, 'proposal'],
 ];
 
-export const activityTarget = (a: { type: string; projectId: string | null }): string | null => {
+export const activityTarget = (
+  a: { type: string; projectId: string | null },
+  opts: { admin?: boolean } = {},
+): string | null => {
   // No project to land on — either a global event or the project is gone.
   if (!a.projectId || a.type === 'project_deleted') return null;
   const match = SECTION_BY_PREFIX.find(([re]) => re.test(a.type));
+  // Billing is admin-only; a non-admin gets no link rather than a dead end
+  // at the section's access gate.
+  if (match?.[1] === 'billing' && !opts.admin) return null;
   return `/project/${a.projectId}${match ? `/${match[1]}` : ''}`;
 };

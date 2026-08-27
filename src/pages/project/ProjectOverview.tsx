@@ -140,7 +140,7 @@ export const ProjectOverview: React.FC = () => {
             ) : (
               <ul className="divide-y divide-edge">
                 {activity.map(a => {
-                  const target = activityTarget(a);
+                  const target = activityTarget(a, { admin: isAdmin });
                   const body = (
                     <>
                       <p className="text-sm text-ink">{a.message}</p>
