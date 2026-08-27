@@ -304,6 +304,18 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'printout', id: 'po-1', label: 'Bid Set', href: '/project/p1/proposal' });
   });
 
+  it('resolves a dailyReport label (Daily Report — <date>) with an href to the project daily-reports list', async () => {
+    const dr = await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' });
+    const pdfFid = await upload('dr-pdf', { projectId: 'p1', kind: 'daily-report', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'DailyReport.pdf' });
+    const photoFid = await upload('dr-photo', { projectId: 'p1', kind: 'daily-report-photo', sourceType: 'dailyReport', sourceId: dr.body.id, name: 'photo.jpg' });
+
+    const res = await request(app).get('/api/documents');
+    const byId = Object.fromEntries(res.body.rows.map((r: any) => [r.id, r]));
+
+    expect(byId[pdfFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
+    expect(byId[photoFid].source).toEqual({ type: 'dailyReport', id: dr.body.id, label: 'Daily Report — 2026-08-20', href: '/project/p1/daily-reports' });
+  });
+
   it('falls back to a generic kind-based label with null href for a dangling sourceId', async () => {
     const fid = await upload('dangling', { projectId: 'p1', kind: 'invoice', sourceType: 'invoice', sourceId: 'no-such-invoice', name: 'Ghost.pdf' });
 
