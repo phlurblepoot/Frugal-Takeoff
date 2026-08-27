@@ -21,6 +21,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.7.2',
+    date: 'August 26, 2026',
+    changes: [
+      'Fix: Project Settings no longer saves while you type. Fields kept auto-saving on every change, which briefly disabled the inputs (losing your cursor) and let live-refresh swap the page mid-edit. Details and contacts now commit with an explicit Save button (with a Discard option), and other users’ screens refresh when you save — not on every keystroke.',
+    ],
+  },
+  {
     version: '2.7.1',
     date: 'August 26, 2026',
     changes: [

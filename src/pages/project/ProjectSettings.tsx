@@ -3,8 +3,12 @@
 // Admin-only Project Settings section (Phase 5c). Surfaces the project metadata
 // editors that previously lived inline in ProjectView (name, contractor,
 // address, due date, stage) plus a Danger Zone for archive/delete. Metadata
-// edits reuse the optimistic saveProject + rollback pattern ported from
-// ProjectView; stage reuses ProjectStageControl; archive matches ProjectsPage's
+// commits through ONE explicit Save button — per-field auto-save was removed
+// after the realtime upgrade: each keystroke's save toggled `busy` (dropping
+// input focus) and left the form pristine, so the collab hook's silent reload
+// could swap the page out from under a typing user. Local edits keep the form
+// dirty, which also holds off remote-refresh clobbering (banner instead).
+// Stage reuses ProjectStageControl; archive matches ProjectsPage's
 // patchProject({ archived }) toggle; delete matches deleteProject + confirm.
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -76,9 +80,9 @@ export const ProjectSettings: React.FC = () => {
   };
   useEffect(reload, [projectId, admin]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fields here auto-save individually on blur/change (no single "Save"
-  // button), so dirty is a snapshot-compare against the loaded project —
-  // true only in the brief window between typing and the field's own save.
+  // Dirty = any local mirror differs from the loaded project. Stays true for
+  // the whole editing session (fields no longer auto-save), which is what
+  // keeps useCollabEditing from silently reloading under the user's cursor.
   const dirty =
     !!project && (
       name !== (project.name ?? '') ||
@@ -125,71 +129,72 @@ export const ProjectSettings: React.FC = () => {
     );
   }
 
-  // Optimistic metadata save: apply locally, persist, roll back + toast on error.
-  // Ported from ProjectView's handleSave* handlers (version respected by
-  // saveProject's queue + latestVersions reconciliation).
-  const saveField = async (patch: Partial<Project>, label: string) => {
-    if (!project) return;
+  // Selecting a customer only updates the local mirrors (contractor follows
+  // the linked customer's name, matching the old auto-save behavior) — the
+  // pairing commits with everything else on Save.
+  const pickCustomer = (custId: string) => {
+    setSelectedCustomerId(custId || undefined);
+    const found = customers.find(c => c.id === custId);
+    if (found) setContractor(found.name);
+  };
+
+  // ONE explicit commit for every metadata field. This is the only path that
+  // persists (and therefore broadcasts) Details/contacts changes — other
+  // users' pages live-refresh when this lands, not while someone is typing.
+  // On failure the typed values are KEPT (no mirror rollback) so the user can
+  // retry; only the optimistic `project` swap is rolled back.
+  const saveAll = async () => {
+    if (!project || busy) return;
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      toast('Project name cannot be empty', { type: 'error' });
+      return;
+    }
     const previous = project;
-    const updated = {
+    const updated: Project = {
       ...project,
       ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
-      ...patch,
+      name: trimmedName,
+      contractor: contractor.trim() || undefined,
+      address: address.trim() || undefined,
+      // Match ProjectView.handleSaveDueDate: 'YYYY-MM-DD' ↔ ms epoch.
+      bidDueDate: dueDate ? new Date(dueDate).getTime() : undefined,
+      customerId: selectedCustomerId,
+      contactEmails,
     };
     setProject(updated);
     setBusy(true);
     try {
       await saveProject(updated);
+      toast('Settings saved', { type: 'success' });
+      reload();
     } catch (error) {
       setProject(previous);
-      // Re-sync the local editor mirror with the rolled-back value.
-      setName(previous.name ?? '');
-      setContractor(previous.contractor ?? '');
-      setAddress(previous.address ?? '');
-      setDueDate(previous.bidDueDate ? new Date(previous.bidDueDate).toISOString().split('T')[0] : '');
-      setSelectedCustomerId(previous.customerId ?? undefined);
-      setContactEmails(previous.contactEmails ?? {});
-      const msg = error instanceof ConflictError
-        ? `Project changed elsewhere — couldn't save ${label}`
-        : `Failed to save ${label}. Please try again.`;
-      toast(msg, { type: 'error' });
+      toast(error instanceof ConflictError
+        ? 'Project changed elsewhere — review the banner above, then save again'
+        : 'Failed to save settings. Please try again.', { type: 'error' });
     } finally {
       setBusy(false);
     }
   };
 
-  const saveName = () => {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === project.name) return;
-    saveField({ name: trimmed }, 'project name');
+  // Throw away local edits and re-mirror the loaded project.
+  const discard = () => {
+    setName(project.name ?? '');
+    setContractor(project.contractor ?? '');
+    setAddress(project.address ?? '');
+    setDueDate(project.bidDueDate ? new Date(project.bidDueDate).toISOString().split('T')[0] : '');
+    setSelectedCustomerId(project.customerId ?? undefined);
+    setContactEmails(project.contactEmails ?? {});
   };
-  const saveContractor = () => {
-    const next = contractor.trim() || undefined;
-    if (next === (project.contractor ?? undefined)) return;
-    saveField({ contractor: next }, 'contractor');
-  };
-  const saveAddress = (value: string) => {
-    setAddress(value);
-    const next = value.trim() || undefined;
-    if (next === (project.address ?? undefined)) return;
-    saveField({ address: next }, 'address');
-  };
-  const saveDueDate = (value: string) => {
-    setDueDate(value);
-    // Match ProjectView.handleSaveDueDate: 'YYYY-MM-DD' ↔ ms epoch.
-    saveField({ bidDueDate: value ? new Date(value).getTime() : undefined }, 'due date');
-  };
-  const saveCustomerLink = (custId: string) => {
-    setSelectedCustomerId(custId || undefined);
-    const found = customers.find(c => c.id === custId);
-    // Keep contractor in sync with the linked customer name.
-    const nextContractor = found ? found.name : contractor;
-    setContractor(nextContractor);
-    saveField({ customerId: custId || undefined, contractor: nextContractor || undefined }, 'customer');
-  };
-  const saveContactEmails = (next: CustomerRoleEmails) => {
-    setContactEmails(next);
-    saveField({ contactEmails: next }, 'contact emails');
+
+  // Stage changes commit instantly (button, not typing). While the form is
+  // dirty, refresh only the underlying `project` row (version/status) without
+  // resetting the field mirrors — a full reload would wipe in-progress edits.
+  const onStageChanged = () => {
+    if (!dirty) { reload(); return; }
+    if (!projectId) return;
+    getProject(projectId).then(p => { if (p) setProject(p); }).catch(() => {});
   };
 
   const isArchived = !!project.archived;
@@ -258,10 +263,17 @@ export const ProjectSettings: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-6 md:px-8 space-y-6">
-      <h1 className="text-xl font-bold text-ink">Project Settings</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-xl font-bold text-ink">Project Settings</h1>
+        <div className="flex items-center gap-3">
+          {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>}
+          <Button variant="secondary" onClick={discard} disabled={!dirty || busy}>Discard</Button>
+          <Button onClick={saveAll} disabled={!dirty || busy}>Save</Button>
+        </div>
+      </div>
       <EditPresenceBanner state={collab} />
 
-      {/* Metadata */}
+      {/* Metadata — edits stay local until Save commits them all at once. */}
       <Card>
         <CardHeader title="Details" />
         <CardBody>
@@ -269,12 +281,11 @@ export const ProjectSettings: React.FC = () => {
             <Field label="Project name" htmlFor="ps-name">
               <Input id="ps-name" value={name} disabled={busy}
                 onChange={e => setName(e.target.value)}
-                onBlur={saveName}
-                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+                onKeyDown={e => { if (e.key === 'Enter' && dirty) saveAll(); }} />
             </Field>
             <Field label="Customer" htmlFor="ps-customer">
               <Select id="ps-customer" value={selectedCustomerId ?? ''} disabled={busy}
-                onChange={e => saveCustomerLink(e.target.value)}>
+                onChange={e => pickCustomer(e.target.value)}>
                 <option value="">— None —</option>
                 {customers.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
@@ -282,11 +293,12 @@ export const ProjectSettings: React.FC = () => {
               </Select>
             </Field>
             <Field label="Address" htmlFor="ps-address">
-              <AddressAutocomplete value={address} onChange={saveAddress} disabled={busy} />
+              <AddressAutocomplete value={address} onChange={setAddress} disabled={busy} />
             </Field>
             <Field label="Bid due date" htmlFor="ps-due">
               <Input id="ps-due" type="date" value={dueDate} disabled={busy}
-                onChange={e => saveDueDate(e.target.value)} />
+                onChange={e => setDueDate(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && dirty) saveAll(); }} />
             </Field>
           </div>
 
@@ -296,7 +308,7 @@ export const ProjectSettings: React.FC = () => {
               projectId={project.id}
               version={project.version}
               status={project.status}
-              onChanged={reload}
+              onChanged={onStageChanged}
             />
           </div>
 
@@ -310,10 +322,11 @@ export const ProjectSettings: React.FC = () => {
         <CardBody>
           <p className="text-xs text-ink-faint mb-4">
             These email addresses are used for this project only and override any emails set on the linked customer.
+            Changes commit with the Save button above.
           </p>
           <RoleEmailsEditor
             value={contactEmails}
-            onChange={next => { setContactEmails(next); saveContactEmails(next); }}
+            onChange={setContactEmails}
             disabled={busy}
           />
         </CardBody>
