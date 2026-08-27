@@ -3,7 +3,7 @@ import { useCollaboration } from '../context/CollaborationContext';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 export type EntityType =
-  | 'project' | 'task' | 'issue' | 'rfi' | 'punch'
+  | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'punch'
   | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
   | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template';
 

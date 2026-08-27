@@ -7,7 +7,7 @@
 import type { Server } from 'socket.io';
 
 export type EntityType =
-  | 'project' | 'task' | 'issue' | 'rfi' | 'punch'
+  | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'punch'
   | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
   | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template';
 

@@ -29,6 +29,12 @@ import {
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
 } from './rfiStore';
 import {
+  getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
+  addPhoto as addDailyPhoto, removePhoto as removeDailyPhoto,
+  ValidationError as DailyValidationError, ConflictError as DailyConflictError,
+  NotFoundError as DailyNotFoundError, DateTakenError as DailyDateTakenError,
+} from './dailyReportStore';
+import {
   getPunchItem, listPunchItems, createPunchItem, savePunchItem,
   setPunchDone, deletePunchItem, addPunchPhoto, removePunchPhoto,
   ValidationError as PunchValidationError,
@@ -690,6 +696,69 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     } catch (e) { rfiErr(e, res); }
   });
 
+  // ── Daily Reports (any authenticated user — field-created, like RFIs) ──────
+  const dailyErr = (e: unknown, res: express.Response) => {
+    if (e instanceof DailyDateTakenError) return res.status(409).json({ error: 'date_taken', existingId: e.existingId });
+    if (e instanceof DailyNotFoundError) return res.status(404).json({ error: e.message });
+    if (e instanceof DailyConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
+    if (e instanceof DailyValidationError) return res.status(400).json({ error: e.message });
+    console.error('Daily report error:', e);
+    return res.status(500).json({ error: 'Daily report operation failed' });
+  };
+
+  app.get('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
+    try { res.json(listDailyReports(db, req.params.id)); } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/projects/:id/daily-reports', authenticateToken, (req, res) => {
+    try {
+      const r = createDailyReport(db, req.params.id, req.body, (req as any).user?.username);
+      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'daily_report_created', message: `Daily report ${req.body?.reportDate ?? ''} created` });
+      deps.broadcastChange({ type: 'dailyReport', id: r.id, projectId: req.params.id, version: 1, action: 'created', ...requestMeta(req) });
+      res.json(r);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.get('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const report = getDailyReport(db, req.params.id);
+      if (!report) return res.status(404).json({ error: 'Daily report not found' });
+      res.json(report);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.put('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyReport(db, req.params.id);
+      const result = saveDailyReport(db, req.params.id, req.body);
+      if (before) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: before.projectId, version: result.version, action: 'updated', ...requestMeta(req) });
+      res.json(result);
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id', authenticateToken, (req, res) => {
+    try {
+      const before = getDailyReport(db, req.params.id);
+      deleteDailyReport(db, req.params.id);
+      if (before) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.post('/api/daily-reports/:id/photos', authenticateToken, (req, res) => {
+    try {
+      addDailyPhoto(db, req.params.id, req.body.fileId);
+      const row = getDailyReport(db, req.params.id);
+      // addPhoto/removePhoto don't bump the daily report's version — attaching
+      // an unbumped version would poison the client's version-dedupe.
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+  app.delete('/api/daily-reports/:id/photos/:fileId', authenticateToken, (req, res) => {
+    try {
+      removeDailyPhoto(db, req.params.id, req.params.fileId);
+      const row = getDailyReport(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { dailyErr(e, res); }
+  });
+
   // ── Punch & Checklists (any authenticated user — field-created, spec §4.2) ──
   const punchErr = (e: unknown, res: express.Response) => {
     if (e instanceof PunchNotFoundError) return res.status(404).json({ error: e.message });
@@ -1160,7 +1229,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     // walk above reaches. Project-attributed rows are covered by the clause
     // below, but task photos are deliberately project-less (a task outlives the
     // project it merely refers to), so without this pass they read as orphans.
-    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos']) {
+    for (const table of ['issue_photos', 'punch_photos', 'task_photos', 'change_order_photos', 'rfi_photos', 'daily_report_photos']) {
       let rows: { fileId: string | null }[] = [];
       try { rows = db.prepare(`SELECT fileId FROM ${table}`).all() as { fileId: string | null }[]; } catch { continue; }
       for (const r of rows) if (r.fileId) referenced.add(r.fileId);
@@ -1778,6 +1847,27 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     } catch (e: any) {
       console.error('Error sending RFI:', e);
       res.status(500).json({ error: e.message || 'Failed to send RFI' });
+    }
+  });
+
+  // Send a daily report PDF via SMTP (any authenticated user — field members file dailies)
+  app.post('/api/daily-reports/:id/send', authenticateToken, async (req, res) => {
+    try {
+      const report = getDailyReport(db, req.params.id);
+      if (!report) return res.status(404).json({ error: 'Daily report not found' });
+      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      await send((req as any).user.id, {
+        to, cc, bcc,
+        subject: subject?.trim() || `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
+        text: body ?? message ?? 'Please find the attached daily report.',
+        attachments: buildSendAttachments(db, { fileId, attachmentName: `DailyReport-${report.reportDate}.pdf` }, attachmentFileIds),
+      });
+      logActivity(db, { projectId: report.projectId, userId: (req as any).user?.id, type: 'daily_report_sent', message: `Daily report ${report.reportDate} emailed to ${to}` });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Error sending daily report:', e);
+      res.status(500).json({ error: e.message || 'Failed to send daily report' });
     }
   });
 }
