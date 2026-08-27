@@ -4,14 +4,20 @@ import { Camera, CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
   saveDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
-  uploadProjectFile, getImageUrl,
+  uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
+  fetchFileBlob, persistGeneratedDocument, sendDailyReport,
 } from '../../../utils/store';
+import { Customer } from '../../../types';
+import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
+import { EmailComposer } from '../../../components/EmailComposer';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { formatReportDate, manCountTotal } from '../ProjectDailyReports';
 import { normalizeManCounts } from './dailyReportForm';
+import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
+import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
 export const DailyReportEditor: React.FC<{
   report: DailyReport;
@@ -50,6 +56,49 @@ export const DailyReportEditor: React.FC<{
     issues !== (report.issues ?? '');
 
   const collab = useCollabEditing({ type: 'dailyReport', id: report.id, isDirty, onFresh: onSaved });
+
+  // Email defaults: resolved recipient, always-CC, header-email options.
+  // recipients.ts has no 'dailyReport' template role — its TemplateType is a
+  // fixed union, so we use the closest general fallback ('rfi', which maps to
+  // the 'pm' role) rather than widen the union for one caller.
+  const [emailDefaults, setEmailDefaults] = useState<{
+    defaultTo: string;
+    defaultCc: string;
+    defaultBcc: string;
+    companyEmail: string;
+    headerEmailOptions: { label: string; value: string }[];
+  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [settings, smtp, alwaysCc, project] = await Promise.all([
+          getSettings(),
+          getSmtpSettings().catch(() => ({})),
+          getAlwaysCc(),
+          getProject(projectId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        let customer: Customer | undefined;
+        if (project?.customerId) {
+          customer = await getCustomer(project.customerId).catch(() => undefined);
+        }
+        const resolved = resolveRecipient('rfi', project?.contactEmails, customer?.emails);
+        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
+        const companyEmail = settings.companyEmail ?? '';
+        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const opts = [
+          companyEmail ? { label: 'Company default', value: companyEmail } : null,
+          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
+        ].filter(Boolean) as { label: string; value: string }[];
+        if (!cancelled) {
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchWeather = async (opts?: { silent?: boolean }) => {
     setFetchingWeather(true);
@@ -111,6 +160,73 @@ export const DailyReportEditor: React.FC<{
     try { await removeDailyReportPhoto(report.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
   };
 
+  const buildBytes = async (headerEmail?: string): Promise<ArrayBuffer> => {
+    const settings = await getSettings();
+    let logoDataUrl: string | undefined = settings.logoUrl || undefined;
+    if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
+      const blob = await (await fetch(logoDataUrl)).blob();
+      logoDataUrl = await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); });
+    }
+    if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
+      logoDataUrl = await invertImageDataUrl(logoDataUrl);
+    }
+    // fetch each photo as a dataURL (authenticated content endpoint)
+    const photoDataUrls: string[] = [];
+    for (const p of report.photos) {
+      try {
+        const blob = await fetchFileBlob(p.fileId);
+        photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
+      } catch { /* skip */ }
+    }
+    return buildDailyReportPdf({
+      report,
+      projectName,
+      photoDataUrls,
+      letterhead: {
+        brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
+        company: {
+          name: settings.companyName || settings.appName,
+          phone: settings.companyPhone,
+          email: headerEmail ?? settings.companyEmail,
+          address: settings.companyAddress,
+        },
+        logoDataUrl,
+      },
+      headerEmail: headerEmail || undefined,
+    });
+  };
+
+  const handleDownload = async () => {
+    if (isDirty()) {
+      toast('Save your changes first', { type: 'warning' });
+      return;
+    }
+    try {
+      const bytes = await buildBytes();
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const fileName = dailyReportFileName(report);
+      // Keep a copy in Documents, but never let that failure block the download.
+      try {
+        await persistGeneratedDocument(blob, { projectId, kind: 'daily-report', name: fileName, sourceType: 'dailyReport', sourceId: report.id });
+      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { toast('Failed to generate report', { type: 'error' }); }
+  };
+
+  const [composing, setComposing] = useState(false);
+
+  // Save-first guard: don't open the composer with unsaved edits.
+  const openComposer = () => {
+    if (isDirty()) {
+      toast('Save your changes before sending', { type: 'warning' });
+      return;
+    }
+    setComposing(true);
+  };
+
   const handleSave = async () => {
     setDateError(null);
     setSaving(true);
@@ -146,8 +262,8 @@ export const DailyReportEditor: React.FC<{
     <Modal open onClose={onClose} title={`Daily Report — ${formatReportDate(report.reportDate)}`} width="lg"
       footer={<>
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="ghost" disabled title="Coming in this feature's PDF step">Download PDF</Button>
-        <Button variant="ghost" disabled title="Coming in this feature's PDF step">Send…</Button>
+        <Button variant="ghost" onClick={handleDownload}>Download PDF</Button>
+        <Button variant="ghost" onClick={openComposer}>Send…</Button>
         <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
@@ -237,6 +353,35 @@ export const DailyReportEditor: React.FC<{
           </div>
         )}
       </div>
+
+      <EmailComposer
+        open={composing}
+        onClose={() => setComposing(false)}
+        projectId={projectId}
+        title="Send daily report"
+        primaryAttachmentName={dailyReportFileName(report)}
+        defaultTo={emailDefaults.defaultTo || undefined}
+        defaultCc={emailDefaults.defaultCc || undefined}
+        defaultBcc={emailDefaults.defaultBcc || undefined}
+        defaultSubject={`Daily Report — ${formatReportDate(report.reportDate)} — ${projectName}`}
+        defaultBody={`Hello,\n\nPlease find attached the daily report for ${formatReportDate(report.reportDate)} on ${projectName}.\n\nThank you.`}
+        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
+        onSend={async (m) => {
+          // Always regenerate with the chosen header email so the PDF contact matches.
+          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
+          const bytes = await buildBytes(effectiveHeaderEmail);
+          const fileName = dailyReportFileName(report);
+          const file = new File([bytes], fileName, { type: 'application/pdf' });
+          // Uploaded as a project document before sending; the source triple makes the
+          // server version this report's one document rather than pile up copies, so a
+          // failed send + retry (and plain Download) all land on the same document.
+          const { fileId } = await uploadProjectFile(projectId, file, 'daily-report', { sourceType: 'dailyReport', sourceId: report.id });
+          await sendDailyReport(report.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
+          toast('Daily report sent', { type: 'success' });
+          onSaved();
+        }}
+      />
     </Modal>
   );
 };
