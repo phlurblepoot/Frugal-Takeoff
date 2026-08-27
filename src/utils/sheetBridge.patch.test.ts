@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type ExcelJS from 'exceljs';
-import { workbookToFortuneSheets, patchWorkbookFromFortuneSheets, type BridgeResult } from './sheetBridge';
+import { workbookToFortuneSheets, patchWorkbookFromFortuneSheets, ensureSheetCelldata, type BridgeResult } from './sheetBridge';
 import type { Sheet as FortuneSheetData } from '@fortune-sheet/core';
 
 async function loadExcelJS() {
@@ -300,5 +300,65 @@ describe('patchWorkbookFromFortuneSheets', () => {
     expect(outWs.getCell('A3').result).toBe(99990);
 
     expect(outWs.getCell('A11').formula).toBe('SUM(A2:A2)');
+  });
+
+  // WS5 task 9 regression pin: FortuneSheet's own onChange payload for a
+  // LIVE-EDITED sheet is `data`-shaped (a dense 2D matrix, nulls for empty
+  // cells), NOT `celldata`-shaped (the sparse list every other test in this
+  // file uses, matching workbookToFortuneSheets's import output). Before
+  // this fix, rebuildWorksheetGrid only ever read `celldata`, so autosaving
+  // a live edit silently blanked the sheet (found while writing the WS5 e2e
+  // fidelity proof — see task-9-report.md). Pinned here so a regression
+  // fails a fast unit test, not just the slower e2e proof.
+  function buildDataShapedSheet(id: string, name: string): FortuneSheetData {
+    return {
+      name,
+      id,
+      order: 0,
+      status: 1,
+      config: {},
+      data: [
+        [{ v: 'Hello', m: 'Hello' }, { v: 42, m: '42' }],
+        [null, null],
+      ],
+    } as FortuneSheetData;
+  }
+
+  it('patchWorkbookFromFortuneSheets writes values correctly from a data-shaped sheet carrying no celldata at all', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('Data').getCell('A1').value = 'Original';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const sheet = buildDataShapedSheet('sheet_0_Data', 'Data');
+    expect(sheet.celldata).toBeUndefined();
+
+    const outBytes = await patchWorkbookFromFortuneSheets(buffer, [sheet]);
+    const outWb = await reload(outBytes);
+    const outWs = outWb.worksheets[0];
+
+    expect(outWs.getCell('A1').value).toBe('Hello');
+    expect(outWs.getCell('B1').value).toBe(42);
+  });
+
+  it('ensureSheetCelldata converts a data-shaped sheet to celldata with correct r/c/v entries, and leaves celldata-shaped input untouched', () => {
+    const dataSheet = buildDataShapedSheet('sheet_0_Data', 'Data');
+    const normalized = ensureSheetCelldata(dataSheet);
+
+    expect(normalized.celldata).toEqual([
+      { r: 0, c: 0, v: { v: 'Hello', m: 'Hello' } },
+      { r: 0, c: 1, v: { v: 42, m: '42' } },
+    ]);
+
+    const celldataSheet: FortuneSheetData = {
+      name: 'Data',
+      id: 'sheet_0_Data',
+      order: 0,
+      status: 1,
+      celldata: [{ r: 0, c: 0, v: { v: 'already', m: 'already' } }],
+    };
+    // Untouched means the SAME reference comes back — no unnecessary work,
+    // and proof the celldata-shaped (normal import) case is a true no-op.
+    expect(ensureSheetCelldata(celldataSheet)).toBe(celldataSheet);
   });
 });

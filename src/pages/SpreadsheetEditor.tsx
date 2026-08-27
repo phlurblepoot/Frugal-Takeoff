@@ -721,8 +721,13 @@ export const SpreadsheetEditor: React.FC = () => {
       tabsRef.current = restoredTabs;
       setActiveTabId(active.id);
       activeTabIdRef.current = active.id;
-      setCurrentSheets(active.sheets);
-      currentSheetsRef.current = active.sheets;
+      // Same fresh-mount concern as switchTab/closeTab (see their comments):
+      // an ad-hoc tab persisted to IDB while `data`-shaped (before this fix,
+      // or from a tab that was never re-normalized) must not seed a blank
+      // mount on the next app open.
+      const activeSheets = active.sheets.map(ensureSheetCelldata);
+      setCurrentSheets(activeSheets);
+      currentSheetsRef.current = activeSheets;
     };
 
     init().catch(console.error);
@@ -734,11 +739,17 @@ export const SpreadsheetEditor: React.FC = () => {
   const switchTab = useCallback((tabId: string) => {
     if (tabId === activeTabIdRef.current) return;
 
-    // Flush live data into the outgoing tab
+    // Flush live data into the outgoing tab. Normalized here (not just on
+    // load below) because this is the point where a `data`-shaped live
+    // document — FortuneSheet's own onChange payload, see
+    // ensureSheetCelldata's comment — first gets written into tab state:
+    // fixing it here means every LATER read of this tab (another switch
+    // back, a close-tab fallback, or an IDB restore next session) already
+    // sees celldata-shaped sheets without needing to re-derive it.
     const outId = activeTabIdRef.current;
     if (outId) {
       const flushed = tabsRef.current.map((t) =>
-        t.id === outId ? { ...t, sheets: currentSheetsRef.current } : t,
+        t.id === outId ? { ...t, sheets: currentSheetsRef.current.map(ensureSheetCelldata) } : t,
       );
       setTabs(flushed);
       tabsRef.current = flushed;
@@ -747,10 +758,16 @@ export const SpreadsheetEditor: React.FC = () => {
     const target = tabsRef.current.find((t) => t.id === tabId);
     if (!target) return;
 
+    // The Workbook remounts on every tab switch (its `key` includes
+    // `activeTab.id`), so the incoming tab's sheets are about to become a
+    // FRESH mount's seed — normalize here too as a second, independent
+    // guard (e.g. a tab restored from IDB before this fix existed could
+    // still be `data`-shaped on disk).
+    const targetSheets = target.sheets.map(ensureSheetCelldata);
     setActiveTabId(tabId);
     activeTabIdRef.current = tabId;
-    setCurrentSheets(target.sheets);
-    currentSheetsRef.current = target.sheets;
+    setCurrentSheets(targetSheets);
+    currentSheetsRef.current = targetSheets;
     scheduleSave();
   }, [scheduleSave]);
 
@@ -784,10 +801,12 @@ export const SpreadsheetEditor: React.FC = () => {
     tabsRef.current = remaining;
 
     if (wasActive) {
+      // Same fresh-mount concern as switchTab's load side — see its comment.
+      const newActiveSheets = newActive.sheets.map(ensureSheetCelldata);
       setActiveTabId(newActive.id);
       activeTabIdRef.current = newActive.id;
-      setCurrentSheets(newActive.sheets);
-      currentSheetsRef.current = newActive.sheets;
+      setCurrentSheets(newActiveSheets);
+      currentSheetsRef.current = newActiveSheets;
     }
     scheduleSave();
   }, [scheduleSave]);

@@ -137,4 +137,72 @@ test.describe('sheets editor (single-user)', () => {
     await expect.poll(() => nameBoxText(authedPage)).toBe('B1');
     await expect.poll(() => fxInputText(authedPage)).toBe(newValue);
   });
+
+  // Regression net for a fix-round finding: ad-hoc tabs (no fileId — no
+  // collab session, so nothing rescues them the way a rejoin's
+  // ensureSheetCelldata call does) have their OWN blank-on-remount exposure.
+  // FortuneSheet's onChange fires as `data`-shaped the moment a document is
+  // edited; switchTab flushes that straight into the outgoing tab's
+  // `sheets`, and the Workbook remounts on every tab switch (its `key`
+  // includes the active tab id) — so switching away from an edited ad-hoc
+  // tab and back is the same "fresh mount fed a data-shaped sheet with no
+  // celldata" trap as the collab-rejoin case, just reached through the tab
+  // bar instead of a socket reconnect. Two LOCAL (never-uploaded) xlsx files
+  // via the hidden file input exercise this without needing a seeded fileId.
+  test('ad-hoc tabs: edit one, switch away and back, edited value survives (tab-switch data-shape regression)', async ({
+    authedPage,
+  }) => {
+    const buildAdHocXlsx = async (a1Value: string): Promise<Buffer> => {
+      const wb = new ExcelJS.Workbook();
+      wb.addWorksheet('Sheet1').getCell('A1').value = a1Value;
+      const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+      return Buffer.from(buffer);
+    };
+    const xlsxMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    await authedPage.goto('/tools/sheets');
+    const fileInput = authedPage.locator('input[type="file"]');
+
+    // Open ad-hoc file 1 — becomes the active tab.
+    await fileInput.setInputFiles({
+      name: 'adhoc1.xlsx', mimeType: xlsxMime, buffer: await buildAdHocXlsx('File1 A1'),
+    });
+    await expect(authedPage.getByText('adhoc1.xlsx', { exact: true })).toBeVisible();
+    const box1 = await canvasBox(authedPage);
+    await clickCell(authedPage, box1, 0, 0); // A1
+    await expect.poll(() => fxInputText(authedPage)).toBe('File1 A1');
+
+    // Open ad-hoc file 2 (same hidden input, reset after each use) — becomes
+    // the new active tab, so file 1 is now the "outgoing" tab whenever we
+    // switch away from it.
+    await fileInput.setInputFiles({
+      name: 'adhoc2.xlsx', mimeType: xlsxMime, buffer: await buildAdHocXlsx('File2 A1'),
+    });
+    await expect(authedPage.getByText('adhoc2.xlsx', { exact: true })).toBeVisible();
+
+    // Switch to file 1 and edit B1 — this is the local edit that leaves
+    // `currentSheetsRef` (and therefore file 1's flushed tab.sheets on the
+    // next switch-away) `data`-shaped.
+    await authedPage.getByText('adhoc1.xlsx', { exact: true }).click();
+    const box1Active = await canvasBox(authedPage);
+    await clickCell(authedPage, box1Active, 0, 1); // B1
+    const editedValue = 'Edited ad-hoc';
+    await authedPage.keyboard.type(editedValue);
+    await authedPage.keyboard.press('Enter');
+
+    // Switch away to file 2, then back to file 1 — two fresh Workbook
+    // remounts of file 1's tab data around the edit.
+    await authedPage.getByText('adhoc2.xlsx', { exact: true }).click();
+    await expect(authedPage.locator('canvas.fortune-sheet-canvas')).toBeVisible();
+    await authedPage.getByText('adhoc1.xlsx', { exact: true }).click();
+
+    const box1Back = await canvasBox(authedPage);
+    await clickCell(authedPage, box1Back, 0, 1); // B1
+    await expect.poll(() => nameBoxText(authedPage)).toBe('B1');
+    await expect.poll(() => fxInputText(authedPage)).toBe(editedValue);
+    // A1 (never touched) must also still be intact — proof the whole sheet
+    // wasn't blanked, not just that B1 happened to survive.
+    await clickCell(authedPage, box1Back, 0, 0);
+    await expect.poll(() => fxInputText(authedPage)).toBe('File1 A1');
+  });
 });
