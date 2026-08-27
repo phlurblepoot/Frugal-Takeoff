@@ -63,6 +63,10 @@ interface CollaborationContextType {
   onSheetEvent: (cb: (ev:
     | { kind: 'op'; fileId: string; ops: string; seq: number; bySessionId?: string }
     | { kind: 'presence'; fileId: string; sessionId: string; name: string; color: string; presence: { sheetId: string; r: number; c: number } }
+    // I5: the flush engine's failed/recovered signal for this fileId's
+    // autosave — SpreadsheetEditor flips its chip out of "Live" into a
+    // visible error state on 'failed', back on 'recovered'.
+    | { kind: 'flush-status'; fileId: string; status: 'failed' | 'recovered' }
   ) => void) => () => void;
 }
 
@@ -138,6 +142,12 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     });
     newSocket.on('sheet-presence', (data: { fileId: string; sessionId: string; name: string; color: string; presence: { sheetId: string; r: number; c: number } }) => {
       sheetEventCallbacks.current.forEach(cb => cb({ kind: 'presence', ...data }));
+    });
+    newSocket.on('sheet-flush-failed', (data: { fileId: string }) => {
+      sheetEventCallbacks.current.forEach(cb => cb({ kind: 'flush-status', fileId: data.fileId, status: 'failed' }));
+    });
+    newSocket.on('sheet-flush-recovered', (data: { fileId: string }) => {
+      sheetEventCallbacks.current.forEach(cb => cb({ kind: 'flush-status', fileId: data.fileId, status: 'recovered' }));
     });
     newSocket.on('connect', () => {
       if (latestLocationRef.current) newSocket.emit('set-location', latestLocationRef.current);

@@ -187,6 +187,10 @@ export const SpreadsheetEditor: React.FC = () => {
   // autosave chip + item 7's participant count read these).
   const [collabJoining, setCollabJoining] = useState(false);
   const [collabLive, setCollabLive] = useState(false);
+  // I5: flipped by the flush engine's failed/recovered broadcast for this
+  // fileId (see the 'flush-status' branch below) — surfaces autosave
+  // failures that were previously console-only on the server.
+  const [autosaveFailing, setAutosaveFailing] = useState(false);
   // Bumped on every successful (re)join for a fileId tab. Folded into the
   // Workbook's `key` below so a rehydrate — including a reconnect-triggered
   // one, where `activeTab.id` alone doesn't change — always forces a fresh
@@ -338,11 +342,20 @@ export const SpreadsheetEditor: React.FC = () => {
       stateSyncTimerRef.current = setTimeout(() => {
         stateSyncTimerRef.current = null;
         if (!localDirtyRef.current) return;
-        localDirtyRef.current = false;
+        // I2 fix: localDirtyRef is cleared ONLY on ack success now (was
+        // cleared unconditionally before the send). An offline/failed send
+        // used to still clear it, so any transport blip lasting >2s (this
+        // timer's own debounce) made `handleReconnect` below see dirty=false
+        // and take the `runJoin` path — whose hydrationEpoch remount visibly
+        // replaced these unsent local edits with stale server state.
         sendSheetState(fileId, JSON.stringify(currentSheetsRef.current)).then((res) => {
-          if ('error' in res && res.error !== 'offline') {
-            toast('Sync issue — changes may not be saved to the shared session', { type: 'warning' });
+          if ('error' in res) {
+            if (res.error !== 'offline') {
+              toast('Sync issue — changes may not be saved to the shared session', { type: 'warning' });
+            }
+            return; // leave localDirtyRef set — handleReconnect will push it authoritatively
           }
+          localDirtyRef.current = false;
         }).catch(() => {});
       }, 2000);
     },
@@ -425,12 +438,30 @@ export const SpreadsheetEditor: React.FC = () => {
     joinAbortRef.current = fileId;
     setCollabJoining(true);
     setCollabLive(false);
+    setAutosaveFailing(false);
 
     const applyForeignOp = (opsJson: string) => {
-      if (!workbookRef.current) return;
+      let ops: Op[];
+      try {
+        ops = JSON.parse(opsJson) as Op[];
+      } catch {
+        return; // malformed — nothing to apply or queue
+      }
+      // I3 fix: during the join-ack->mount window and every hydrationEpoch
+      // remount, workbookRef is briefly null — a foreign op arriving in that
+      // window used to be silently dropped here. The sender still shows it
+      // locally, but this receiver's NEXT debounced state-sync folds the
+      // journal and becomes authoritative — erasing the dropped op from
+      // server state and then from disk. Queuing into pendingTailOpsRef
+      // (the same mechanism the join's own journal-tail replay uses) lets
+      // the effect below apply it as soon as the Workbook ref exists.
+      if (!workbookRef.current) {
+        pendingTailOpsRef.current.push(ops);
+        return;
+      }
       applyingRemoteRef.current = true;
       try {
-        workbookRef.current.applyOp(JSON.parse(opsJson) as Op[]);
+        workbookRef.current.applyOp(ops);
       } finally {
         applyingRemoteRef.current = false;
       }
@@ -438,6 +469,10 @@ export const SpreadsheetEditor: React.FC = () => {
 
     const unsubscribe = onSheetEvent((ev) => {
       if (cancelled || ev.fileId !== fileId) return;
+      if (ev.kind === 'flush-status') {
+        setAutosaveFailing(ev.status === 'failed');
+        return;
+      }
       if (ev.kind === 'presence') {
         if (ev.sessionId === mySessionId) return; // defensive; server already excludes the sender
         presencesRef.current.set(ev.sessionId, {
@@ -550,8 +585,30 @@ export const SpreadsheetEditor: React.FC = () => {
     // otherwise silently discard that work.
     const handleReconnect = () => {
       if (localDirtyRef.current) {
-        sendSheetState(fileId, JSON.stringify(currentSheetsRef.current)).then((res) => {
-          if (!('error' in res)) localDirtyRef.current = false;
+        sendSheetState(fileId, JSON.stringify(currentSheetsRef.current)).then(async (res) => {
+          if ('error' in res) return; // still failing — stay dirty, the next reconnect retries
+          localDirtyRef.current = false;
+          if (cancelled || joinAbortRef.current !== fileId) return;
+          // I8 fix: an authoritative push alone never calls store.join on the
+          // server (only 'sheet-join' does), so this client's session
+          // membership silently goes stale after ANY reconnect-while-dirty —
+          // participants stay off by one, this session gets no version
+          // archive on the next flush (needsSessionSnapshot stays keyed to
+          // whoever last actually joined), no leave-flush when this client
+          // eventually departs, and the chip is stuck showing "Offline" even
+          // though ops keep relaying fine. Re-join to restore membership —
+          // but deliberately discard its hydration payload (state/ops tail):
+          // the state we just pushed IS authoritative here, so remounting
+          // from the join response would be redundant and could visibly
+          // flicker/regress a newer local edit made during the push.
+          const joinRes = await joinSheet(fileId);
+          if (cancelled || joinAbortRef.current !== fileId) return;
+          if ('error' in joinRes) {
+            setCollabLive(false);
+            return;
+          }
+          setCollabLive(true);
+          setCollabJoining(false);
         }).catch(() => {});
         return;
       }
@@ -640,7 +697,12 @@ export const SpreadsheetEditor: React.FC = () => {
         const buf = await file.arrayBuffer();
         const { sheets, warnings } = await workbookToFortuneSheets(buf);
         if (!sheets.length) throw new Error('No sheets found');
-        if (warnings.length) setImportWarning('Charts/images preserved but not shown.');
+        // M1: mentions rich text/hyperlinks alongside charts/images/
+        // validation — all four are things the bridge preserves-or-flattens
+        // without rendering, surfaced via the same warnings mechanism.
+        if (warnings.length) {
+          setImportWarning('Charts/images preserved but not shown. Rich text and hyperlinks are flattened to plain text.');
+        }
         addTabFromSheets(file.name, sheets, source);
       } catch (err) {
         console.error('Failed to open file', err);
@@ -897,7 +959,13 @@ export const SpreadsheetEditor: React.FC = () => {
 
         {collabFileId ? (
           <>
-            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60">
+            <span
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${
+                collabLive && autosaveFailing
+                  ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30'
+                  : 'text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60'
+              }`}
+            >
               {collabJoining ? (
                 <Loader2 size={14} className="animate-spin" />
               ) : (
@@ -905,9 +973,11 @@ export const SpreadsheetEditor: React.FC = () => {
               )}
               {collabJoining
                 ? 'Connecting…'
-                : `Autosaves to file · ${collabLive ? 'Live' : 'Offline'}${
-                    collabLive && participantCount > 1 ? ` · ${participantCount} viewing` : ''
-                  }`}
+                : collabLive && autosaveFailing
+                  ? 'Autosave failing — changes held in session'
+                  : `Autosaves to file · ${collabLive ? 'Live' : 'Offline'}${
+                      collabLive && participantCount > 1 ? ` · ${participantCount} viewing` : ''
+                    }`}
             </span>
             <button
               onClick={handleSnapshot}
