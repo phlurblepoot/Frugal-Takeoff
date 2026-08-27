@@ -21,6 +21,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.7.1',
+    date: 'August 26, 2026',
+    changes: [
+      'New: Daily Reports tab on every project — one report per work day with crew man-counts, field notes, and issues; weather auto-fills with the actual hourly conditions for the day when the project has an address (editable). Reports print/email on the company letterhead with photos attached, and long sections continue cleanly onto a second page.',
+    ],
+  },
+  {
     version: '2.7',
     date: 'August 26, 2026',
     changes: [
