@@ -220,6 +220,21 @@ describe('upsert-by-source uploads', () => {
     expect(getMeta(db, 'rfi-pdf')!.versionNumber).toBe(1);
   });
 
+  it('never versions daily-report photos onto each other — a 5-photo upload yields 5 distinct rows, not 1', () => {
+    const SOURCE_DR = { kind: 'daily-report-photo', sourceType: 'dailyReport', sourceId: 'dr-1' };
+    const first = putBuffer(db, dir, 'drp1', Buffer.from('photo-1'), 'image/jpeg', SOURCE_DR);
+    const second = putBuffer(db, dir, 'drp2', Buffer.from('photo-2'), 'image/jpeg', SOURCE_DR);
+    expect(first).toMatchObject({ id: 'drp1', versioned: false });
+    expect(second).toMatchObject({ id: 'drp2', versioned: false }); // not versioned onto drp1
+
+    const live = db.prepare(
+      'SELECT id FROM files WHERE parentFileId IS NULL AND sourceType = ? AND sourceId = ? ORDER BY id'
+    ).all('dailyReport', 'dr-1') as { id: string }[];
+    expect(live.map(r => r.id)).toEqual(['drp1', 'drp2']);
+    expect(readFileContent(dir, 'drp1')!.toString()).toBe('photo-1');
+    expect(readFileContent(dir, 'drp2')!.toString()).toBe('photo-2');
+  });
+
   it('never versions a multi-instance kind — an entity has many photos', () => {
     const first = putBuffer(db, dir, 'ph1', Buffer.from('photo-a'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });
     const second = putBuffer(db, dir, 'ph2', Buffer.from('photo-b'), 'image/jpeg', { kind: 'issue-photo', sourceType: 'issue', sourceId: 'issue-1' });

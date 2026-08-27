@@ -48,7 +48,7 @@ export const SYSTEM_KINDS = [
   'invoice', 'change-order', 'change-order-photo', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
-  'settings-asset',
+  'settings-asset', 'daily-report', 'daily-report-photo',
 ] as const;
 
 // Kinds an entity legitimately holds MANY of: one issue has a dozen photos,
@@ -61,7 +61,7 @@ export const SYSTEM_KINDS = [
 // pdf would start rendering the second.
 export const MULTI_INSTANCE_KINDS = [
   'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
-  'rfi-photo', 'proposal-photo', 'plan-source',
+  'rfi-photo', 'proposal-photo', 'plan-source', 'daily-report-photo',
 ] as const;
 
 // Kinds a person can pick in the upload popup — the only ones a file may be
