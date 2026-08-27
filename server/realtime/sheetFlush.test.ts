@@ -318,6 +318,55 @@ describe('SheetFlushEngine', () => {
   // I5: flush failures must be observable via the `notify` callback —
   // previously every failure path was console-only. Repeated failures for
   // the same file only report the initial "failed" edge, not every retry.
+  // N2 regression (micro-fix round — found by the re-review of the I4 fix):
+  // a BARE setState (no `appendOps` in between) during an in-flight flush
+  // used to slip past the stateSeq-based compare-and-clear, because
+  // setState's own `newSeq` is sourced from MAX(seq) in sheet_ops — a second
+  // setState with nothing newer in the journal leaves stateSeq unchanged.
+  // This is exactly I8's dirty-reconnect push shape (sendSheetState with no
+  // preceding sendSheetOp). The generation-counter fix bumps unconditionally
+  // on every setState, so it can't miss this.
+  it('a bare setState (no intervening appendOps) during an in-flight flush also keeps dirty set', async () => {
+    const fileId = await seedFile();
+    const store = new SheetSessionStore(db);
+    const engine = new SheetFlushEngine(db, store, dir);
+
+    store.join(fileId, 's1');
+    store.setState(fileId, await stateWithA2Changed(fileId));
+
+    const mocked = vi.mocked(patchWorkbookFromFortuneSheets);
+    const realImpl = mocked.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mocked.mockImplementationOnce(async (...args) => {
+      await gate;
+      return realImpl(...args);
+    });
+
+    const flushPromise = engine.flushFile(fileId);
+    await new Promise((r) => setImmediate(r));
+
+    // A bare setState — NO appendOps call before it — while the flush above
+    // is still awaiting the gated patch call.
+    const { sheets } = await workbookToFortuneSheets(readFileContent(dir, fileId)!);
+    sheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!.v!.v = 7777;
+    sheets[0].celldata!.find((cd) => cd.r === 1 && cd.c === 0)!.v!.m = '7777';
+    store.setState(fileId, JSON.stringify(sheets));
+
+    release();
+    const result = await flushPromise;
+    expect(result.ok).toBe(true);
+
+    // Must still be dirty — a stateSeq-based compare would have wrongly
+    // cleared this (stateSeq didn't move), but generation did.
+    expect(store.dirtyFiles()).toContain(fileId);
+
+    await engine.flushFile(fileId);
+    expect(store.dirtyFiles()).not.toContain(fileId);
+    const outWb = await reload(readFileContent(dir, fileId)!);
+    expect(outWb.worksheets[0].getCell('A2').value).toBe(7777);
+  });
+
   it('notify fires "failed" once for a flush error, not again on a repeated failure', async () => {
     const store = new SheetSessionStore(db);
     const events: { fileId: string; event: 'failed' | 'recovered' }[] = [];

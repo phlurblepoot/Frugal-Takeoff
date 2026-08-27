@@ -145,6 +145,59 @@ describe('SheetSessionStore', () => {
     expect(store.getState('f1')).toBe('{"sheets":["x"]}');
   });
 
+  // N2 regression (micro-fix round — found by the re-review of the I4 fix):
+  // the persisted `stateSeq` column only advances when setState's own query
+  // finds a NEWER row in sheet_ops than what's already recorded — a second
+  // setState with no appendOps in between leaves it completely unchanged.
+  // A flush's compare-and-clear keyed on stateSeq would then spuriously
+  // "match" and wrongly clear dirty for state it never actually flushed.
+  // The in-memory generation counter bumps on EVERY setState/appendOps
+  // unconditionally, so it can't miss this.
+  it('generation bumps on appendOps AND a bare setState, even when stateSeq itself does not move', () => {
+    const store = new SheetSessionStore(db);
+    store.join('f1', 's1');
+    const g0 = store.generation('f1');
+
+    store.appendOps('f1', '[{"op":"a"}]');
+    const g1 = store.generation('f1');
+    expect(g1).not.toBe(g0);
+
+    store.setState('f1', '{"sheets":["folded"]}');
+    const stateSeqAfterFirstSetState = (db.prepare('SELECT stateSeq FROM sheet_sessions WHERE fileId = ?').get('f1') as any).stateSeq;
+    const g2 = store.generation('f1');
+    expect(g2).not.toBe(g1);
+
+    // A SECOND setState with no appendOps in between — exactly I8's
+    // dirty-reconnect push shape (an authoritative sendSheetState with
+    // nothing recorded server-side during the outage).
+    store.setState('f1', '{"sheets":["folded-again"]}');
+    const stateSeqAfterSecondSetState = (db.prepare('SELECT stateSeq FROM sheet_sessions WHERE fileId = ?').get('f1') as any).stateSeq;
+    expect(stateSeqAfterSecondSetState).toBe(stateSeqAfterFirstSetState); // stateSeq alone missed this
+    const g3 = store.generation('f1');
+    expect(g3).not.toBe(g2); // generation still caught it
+  });
+
+  it('markFlushed(fileId, expectedGeneration) only clears dirty when the generation is unchanged', () => {
+    const store = new SheetSessionStore(db);
+    store.join('f1', 's1');
+    store.setState('f1', '{"sheets":["a"]}');
+    const gen = store.generation('f1');
+
+    // Nothing mutated since — clears as expected.
+    store.markFlushed('f1', gen);
+    expect(store.dirtyFiles()).not.toContain('f1');
+
+    // Something mutates AFTER the caller captured `gen` (simulating a
+    // flush's in-flight window) — the stale generation must not clear it.
+    store.setState('f1', '{"sheets":["b"]}');
+    store.markFlushed('f1', gen);
+    expect(store.dirtyFiles()).toContain('f1');
+
+    // A fresh capture succeeds.
+    store.markFlushed('f1', store.generation('f1'));
+    expect(store.dirtyFiles()).not.toContain('f1');
+  });
+
   it('crash recovery: a second store built on the same db sees dirty files and journal intact', () => {
     const store1 = new SheetSessionStore(db);
     store1.join('f1', 's1');

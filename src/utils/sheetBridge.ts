@@ -725,35 +725,76 @@ export async function patchWorkbookFromFortuneSheets(
   // "move worksheet" API to do it safely).
   const orderedIncoming = [...sheets].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-  for (const incoming of orderedIncoming) {
-    let original = incoming.id ? idToOriginal.get(incoming.id) : undefined;
-    // C1 fix: an id miss ALSO falls back to an exact NAME match against an
-    // as-yet-unmatched original sheet — not just when incoming.id is absent.
-    // This matters across a second flush of the SAME client state: the
-    // client's ids are minted once at import and never change, but this
-    // function recomputes `sheet_${i}_${name}` from THIS flush's on-disk
-    // bytes every time, which already reflect the FIRST flush's rename/
-    // delete. A rename shifts nothing (same index, new name) so the id
-    // recomputed from the post-rename bytes no longer matches the state's
-    // pre-rename id; a delete shifts every LATER sheet's index, so even an
-    // untouched sheet's recomputed id no longer matches. Previously an
-    // id-carrying sheet that missed by id NEVER fell back to name-matching,
-    // so it hit `wb.addWorksheet(incoming.name)` below while the
-    // same-named sheet still existed — exceljs's name setter throws
-    // "Worksheet name already exists". Since sheet names are unique in both
-    // Excel and FortuneSheet, name-matching an unmatched original on any id
-    // miss is deterministic and safe, and (like the original id-less
-    // fallback) preserves sheet-level artifacts (images/validation) instead
-    // of a spurious delete+add.
-    if (!original) {
-      const byName = nameToOriginal.get(incoming.name);
-      if (byName && !matchedOriginals.has(byName)) original = byName;
-    }
-    const worksheet = original ?? wb.addWorksheet(incoming.name);
-    if (original) matchedOriginals.add(original);
-    if (worksheet.name !== incoming.name) worksheet.name = incoming.name;
+  // N1 fix (micro-fix round, re-review defect): resolving each incoming
+  // sheet's original AND mutating the workbook in the SAME loop made the
+  // outcome depend on `orderedIncoming`'s iteration order whenever an id
+  // match and a name-fallback match could both land on the SAME original —
+  // e.g. a renamed sheet (matches its original by id — the id survives a
+  // FortuneSheet rename) and, in the SAME flush, a genuinely new sheet that
+  // reuses the name the rename just freed (misses by id, so it fell back to
+  // a name match against that same original). Whichever incoming entry was
+  // processed first claimed the original via `matchedOriginals`; if the
+  // new-by-name sheet went first, it silently squatted the original ahead
+  // of the id match — which, being unguarded, then blindly reused the SAME
+  // (already-claimed) worksheet anyway and overwrote the new sheet's just
+  // -written data with the renamed sheet's data. No error, no warning, one
+  // sheet's data just vanishes.
+  //
+  // Fixed by fully separating RESOLUTION (which original, if any, does each
+  // incoming sheet map to) from MUTATION (rename + rebuild), across three
+  // order-independent passes:
+  const resolvedOriginal = new Map<FortuneSheetData, ExcelJS.Worksheet>();
 
-    rebuildWorksheetGrid(worksheet, incoming, !original);
+  // Pass 1: id matches always win, unconditionally ahead of any name-based
+  // claim — the id is the stronger identity signal (minted once, at import
+  // time, for that literal original sheet), so it must never lose a claim
+  // to an unrelated new sheet's name-based squat, regardless of which one
+  // `orderedIncoming` happens to visit first.
+  for (const incoming of orderedIncoming) {
+    if (!incoming.id) continue;
+    const byId = idToOriginal.get(incoming.id);
+    if (byId && !matchedOriginals.has(byId)) {
+      matchedOriginals.add(byId);
+      resolvedOriginal.set(incoming, byId);
+    }
+  }
+
+  // Pass 2: name-fallback — for sheets pass 1 left unresolved (no id at
+  // all, or an id that missed / lost its claim), match by exact name
+  // against whatever originals pass 1 didn't already claim. See the
+  // file-header decision note above for why id-less/id-miss sheets fall
+  // back to name-matching at all (sheet names are unique in both Excel and
+  // FortuneSheet, so this is deterministic) rather than always being
+  // treated as new.
+  for (const incoming of orderedIncoming) {
+    if (resolvedOriginal.has(incoming)) continue;
+    const byName = nameToOriginal.get(incoming.name);
+    if (byName && !matchedOriginals.has(byName)) {
+      matchedOriginals.add(byName);
+      resolvedOriginal.set(incoming, byName);
+    }
+  }
+
+  // Pass 3: mutate, now that every incoming sheet's original (or lack of
+  // one) is fully and deterministically resolved — nothing here depends on
+  // iteration order anymore EXCEPT one thing: renaming a matched original
+  // must happen before any NEW sheet's `addWorksheet` call, because a new
+  // sheet can legitimately reuse a name a rename is about to free — if the
+  // new sheet's `addWorksheet(name)` ran first, it would collide with the
+  // still-original-named worksheet that hasn't been renamed away yet (its
+  // rename is a separate incoming entry, resolved but not yet applied).
+  // Splitting into two sub-passes (rename matched originals, THEN add new
+  // sheets) sidesteps this regardless of `orderedIncoming`'s order.
+  for (const incoming of orderedIncoming) {
+    const original = resolvedOriginal.get(incoming);
+    if (!original) continue;
+    if (original.name !== incoming.name) original.name = incoming.name;
+    rebuildWorksheetGrid(original, incoming, false);
+  }
+  for (const incoming of orderedIncoming) {
+    if (resolvedOriginal.has(incoming)) continue;
+    const worksheet = wb.addWorksheet(incoming.name);
+    rebuildWorksheetGrid(worksheet, incoming, true);
   }
 
   // Remove original sheets that were matched to nothing in the incoming state.

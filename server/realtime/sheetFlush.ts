@@ -142,17 +142,19 @@ export class SheetFlushEngine {
   }
 
   private async doFlushFile(fileId: string): Promise<FlushResult> {
-    // I4: captured BEFORE the await below (patchWorkbookFromFortuneSheets can
-    // take hundreds of ms) so markFlushed can compare-and-clear instead of
-    // clearing dirty unconditionally after a `setState` may have landed
-    // mid-flush and advanced it.
-    const stateSeqAtStart = this.store.getStateSeq(fileId);
+    // I4/N2: captured BEFORE the await below (patchWorkbookFromFortuneSheets
+    // can take hundreds of ms) so markFlushed can compare-and-clear instead
+    // of clearing dirty unconditionally after ANY mutation (setState OR
+    // appendOps) may have landed mid-flush. Generation, not stateSeq — see
+    // SheetSessionStore's generation()/markFlushed comments for why a bare
+    // setState (no intervening appendOps) doesn't reliably move stateSeq.
+    const flushGeneration = this.store.generation(fileId);
     const stateJson = this.store.getState(fileId);
     if (stateJson === null) {
       // Dirty with no folded state yet means there's nothing to flush (the
       // client hasn't pushed a state-sync) — a dirty flag in that shape is
       // meaningless, so clear it rather than retry-looping forever.
-      this.store.markFlushed(fileId, stateSeqAtStart);
+      this.store.markFlushed(fileId, flushGeneration);
       this.reportRecoveryIfNeeded(fileId);
       return { ok: true };
     }
@@ -191,7 +193,7 @@ export class SheetFlushEngine {
       writeFileContent(this.dataDir, fileId, buf);
     }
 
-    this.store.markFlushed(fileId, stateSeqAtStart);
+    this.store.markFlushed(fileId, flushGeneration);
     this.reportRecoveryIfNeeded(fileId);
     return { ok: true };
   }
@@ -240,9 +242,9 @@ export class SheetFlushEngine {
       return { ok: false, error };
     }
 
-    // I4: same compare-and-clear reasoning as doFlushFile — captured before
-    // the same kind of long-running await below.
-    const stateSeqAtStart = this.store.getStateSeq(fileId);
+    // I4/N2: same compare-and-clear reasoning as doFlushFile — captured
+    // before the same kind of long-running await below.
+    const flushGeneration = this.store.generation(fileId);
     const stateJson = this.store.getState(fileId);
     let buf: Buffer;
     try {
@@ -257,7 +259,7 @@ export class SheetFlushEngine {
 
     const { versionNumber } = saveNewVersion(this.db, this.dataDir, fileId, buf, meta.mime);
     this.store.markSessionSnapshotDone(fileId);
-    if (stateJson !== null) this.store.markFlushed(fileId, stateSeqAtStart);
+    if (stateJson !== null) this.store.markFlushed(fileId, flushGeneration);
     return { ok: true, version: versionNumber };
   }
 

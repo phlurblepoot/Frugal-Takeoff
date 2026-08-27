@@ -24,8 +24,34 @@ interface SessionRow {
 // — sessions die with the process); every other flag is persisted.
 export class SheetSessionStore {
   private participantsByFile = new Map<string, Set<string>>();
+  // N2 fix (micro-fix round): in-memory-only per-file generation counter,
+  // bumped on EVERY setState AND appendOps. Not persisted — the `dirty` flag
+  // is already persisted and durable, and this only needs to hold across
+  // ONE process lifetime (a flush's own in-flight window). Needed because
+  // the persisted `stateSeq` column doesn't reliably serve the same purpose:
+  // setState's `newSeq` is sourced from `MAX(seq)` in sheet_ops (see
+  // setState below), so a SECOND setState with no `appendOps` in between
+  // (exactly what I8's dirty-reconnect push does — an authoritative
+  // sendSheetState with nothing recorded server-side during the outage)
+  // leaves stateSeq completely unchanged. A flush's compare-and-clear keyed
+  // on stateSeq would then spuriously "match" and wrongly clear dirty for
+  // state it never actually flushed — reproduced directly against this
+  // store with two bare setStates in a row. The generation counter bumps on
+  // both mutation paths unconditionally, so it can't miss this case.
+  private generationByFile = new Map<string, number>();
 
   constructor(private db: Database.Database) {}
+
+  private bumpGeneration(fileId: string): void {
+    this.generationByFile.set(fileId, (this.generationByFile.get(fileId) ?? 0) + 1);
+  }
+
+  // N2: a flush captures this BEFORE its (awaited) bridge patch, then passes
+  // it to markFlushed — which only clears dirty if the generation is STILL
+  // what it was then.
+  generation(fileId: string): number {
+    return this.generationByFile.get(fileId) ?? 0;
+  }
 
   private getRow(fileId: string): SessionRow | undefined {
     return this.db.prepare('SELECT * FROM sheet_sessions WHERE fileId = ?').get(fileId) as SessionRow | undefined;
@@ -88,6 +114,7 @@ export class SheetSessionStore {
     const seq = (maxOp.m ?? row.stateSeq) + 1;
     this.db.prepare('INSERT INTO sheet_ops (fileId, seq, ops) VALUES (?, ?, ?)').run(fileId, seq, opsJson);
     this.db.prepare('UPDATE sheet_sessions SET dirty = 1, updatedAt = ? WHERE fileId = ?').run(now, fileId);
+    this.bumpGeneration(fileId);
     return seq;
   }
 
@@ -112,6 +139,7 @@ export class SheetSessionStore {
       this.db.prepare('DELETE FROM sheet_ops WHERE fileId = ? AND seq <= ?').run(fileId, newSeq);
     });
     tx();
+    this.bumpGeneration(fileId);
   }
 
   dirtyFiles(): string[] {
@@ -119,25 +147,22 @@ export class SheetSessionStore {
       .map(r => r.fileId);
   }
 
-  // I4 fix: `expectedStateSeq`, when given, makes this a compare-and-clear —
-  // dirty is only cleared if stateSeq is STILL what it was when the caller
-  // started its (awaited) flush. A `setState` landing mid-flush bumps
-  // stateSeq (see setState above), so this correctly leaves dirty=1 for a
-  // state that arrived after the in-flight flush already read its snapshot,
-  // instead of the flush's unconditional clear silently discarding it.
-  // Omitted (existing behavior, kept for callers/tests that don't care about
-  // the race) clears unconditionally.
-  markFlushed(fileId: string, expectedStateSeq?: number): void {
-    if (expectedStateSeq === undefined) {
-      this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ?').run(fileId);
-      return;
+  // I4 fix, revised by N2 (micro-fix round): `expectedGeneration`, when
+  // given, makes this a compare-and-clear — dirty is only cleared if the
+  // in-memory generation counter is STILL what it was when the caller
+  // started its (awaited) flush (see `generation()`/`bumpGeneration()`
+  // above for why generation — not the persisted `stateSeq` column — is
+  // the correct comparison basis). Omitted (existing behavior, kept for
+  // callers/tests that don't care about the race) clears unconditionally.
+  markFlushed(fileId: string, expectedGeneration?: number): void {
+    if (expectedGeneration !== undefined && this.generation(fileId) !== expectedGeneration) {
+      return; // something mutated this file since the flush captured its generation — leave dirty=1
     }
-    this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ? AND stateSeq = ?').run(fileId, expectedStateSeq);
+    this.db.prepare('UPDATE sheet_sessions SET dirty = 0 WHERE fileId = ?').run(fileId);
   }
 
-  // I4: lets a flush capture stateSeq BEFORE its (awaited) bridge patch, so
-  // it can later compare-and-clear via markFlushed instead of clearing dirty
-  // unconditionally after an arbitrarily long await.
+  // Kept as its own accessor (unrelated to the flush race now — see N2
+  // above) for whatever else wants to read the persisted fold point.
   getStateSeq(fileId: string): number {
     return this.getRow(fileId)?.stateSeq ?? 0;
   }

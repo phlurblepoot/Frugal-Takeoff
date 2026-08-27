@@ -398,6 +398,58 @@ describe('patchWorkbookFromFortuneSheets', () => {
     expect(outWb.getWorksheet('B')!.getCell('A1').value).toBe('b');
   });
 
+  // N1 regression (micro-fix round — found by the re-review of the C1 fix):
+  // the broadened id-miss->name-fallback had no `matchedOriginals` guard on
+  // the ID-match branch — only the name-fallback branch checked it. So when
+  // one incoming sheet resolves by id (a rename — id unchanged) and a
+  // DIFFERENT incoming sheet resolves by name-fallback to that SAME
+  // original (a genuinely new sheet reusing the name the rename just
+  // freed, in the SAME flush), whichever was processed first (by `order`)
+  // claimed the original, and the id-match branch — being unguarded — then
+  // blindly reused that already-claimed worksheet anyway, silently
+  // overwriting one sheet's data with the other's. No error, no warning.
+  // Fixed by resolving every incoming sheet's original in two
+  // order-independent passes (ids first, unconditionally ahead of any name
+  // match) before any mutation happens — this test proves BOTH `order`
+  // orderings produce the same (correct) two-sheet result.
+  it('N1: a rename and a distinct new sheet reusing the freed name resolve correctly regardless of order', async () => {
+    const ExcelJSlib = await loadExcelJS();
+    const wb = new ExcelJSlib.Workbook();
+    wb.addWorksheet('Sheet1').getCell('A1').value = 'original';
+    const buffer = (await wb.xlsx.writeBuffer()) as unknown as ArrayBuffer;
+
+    const { sheets } = await workbookToFortuneSheets(buffer);
+    const originalSheet = sheets[0]; // id 'sheet_0_Sheet1', name 'Sheet1'
+
+    const buildState = (renamedOrder: number, newSheetOrder: number): FortuneSheetData[] => {
+      const renamed: FortuneSheetData = { ...originalSheet, name: 'Renamed', order: renamedOrder };
+      const newSheet: FortuneSheetData = {
+        name: 'Sheet1', // reuses the name the rename just freed, in the SAME flush
+        id: 'sheet_brand_new_uuid',
+        order: newSheetOrder,
+        status: 0,
+        celldata: [{ r: 0, c: 0, v: { v: 'new-sheet-data', m: 'new-sheet-data' } }],
+      };
+      return [renamed, newSheet];
+    };
+
+    const assertBothSheetsSurvive = (outWb: ExcelJS.Workbook) => {
+      expect(outWb.worksheets).toHaveLength(2);
+      expect(outWb.getWorksheet('Renamed')!.getCell('A1').value).toBe('original');
+      expect(outWb.getWorksheet('Sheet1')!.getCell('A1').value).toBe('new-sheet-data');
+    };
+
+    // Ordering A: the renamed (id-matching) sheet's `order` comes first.
+    const outA = await patchWorkbookFromFortuneSheets(buffer, buildState(0, 1));
+    assertBothSheetsSurvive(await reload(outA));
+
+    // Ordering B: the new (name-fallback-matching) sheet's `order` comes
+    // first — this is the ordering the re-review's repro used to reproduce
+    // silent data loss before the fix.
+    const outB = await patchWorkbookFromFortuneSheets(buffer, buildState(1, 0));
+    assertBothSheetsSurvive(await reload(outB));
+  });
+
   // M2 regression: a matched EXISTING sheet's non-frozen view settings (zoom,
   // gridlines, rtl) must survive a rebuild untouched — previously every
   // rebuild unconditionally set `views = []` for a non-frozen sheet, wiping
