@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS daily_reports (
   manCounts TEXT NOT NULL DEFAULT '[]',      -- JSON [{type:"Plasterer",count:4}]
   fieldNotes TEXT NOT NULL DEFAULT '',
   issues TEXT NOT NULL DEFAULT '',
-  photoIds TEXT NOT NULL DEFAULT '[]',       -- JSON string[] of file-store ids
   createdBy TEXT,                            -- username
   createdAt INTEGER NOT NULL,
   updatedAt INTEGER NOT NULL,
@@ -40,9 +39,16 @@ CREATE TABLE IF NOT EXISTS daily_reports (
   UNIQUE(projectId, reportDate)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_reports_project ON daily_reports(projectId);
+CREATE TABLE daily_report_photos (           -- join table, same shape as rfi_photos/issue_photos
+  id TEXT PRIMARY KEY,
+  dailyReportId TEXT NOT NULL,
+  fileId TEXT NOT NULL,
+  sortOrder INTEGER NOT NULL DEFAULT 0,
+  createdAt INTEGER NOT NULL
+);
 ```
 
-No existing tables touched. Photos live in the existing file store (same as Issue photos).
+No existing tables touched. Photo bytes live in the existing file store (same as RFI/Issue photos); `daily_report_photos` must also be added to the hardcoded photo-purge table list in `server/routes.ts` (the `['issue_photos','punch_photos',…]` array) or bulk cleanup silently misses it.
 
 ## 3. Server
 
@@ -75,13 +81,13 @@ Nothing is fetched automatically on a schedule — only when the user opens/refr
 
 **`src/pages/project/ProjectDailyReports.tsx`** — list page: one row per date (date, man-count total, weather summary snippet, photo count), newest first, live-refreshing via `useLiveQuery`. "New report" defaults to today; if today exists it opens that report.
 
-**`src/pages/project/daily/DailyReportEditor.tsx`** — the form, top-to-bottom per Nathan's five sections:
+**`src/pages/project/daily/DailyReportEditor.tsx`** — an editor modal opened from the list (RFI pattern: rendered conditionally, keyed `${id}:${version}` so version bumps remount cleanly). Form top-to-bottom per Nathan's five sections:
 1. Prefilled fields: Job name, Contractor, Date (date input; uniqueness conflict shows an inline message and blocks save).
 2. Weather block: when the project has an address, fetch on first open of a new report (and via a Refresh button) → compact hourly strip (6 AM–6 PM) + editable Summary and Temperature fields. Without an address: the two editable fields only.
 3. Man count: dynamic rows (`type` text + `count` number), add/remove, only entered rows exist; computed "Total: N men" line. Rendered side-by-side with…
 4. Field notes: free text area (side-by-side on desktop, stacked on mobile).
 5. Issues: full-width text area below.
-Plus: photo attachments using the same staged-photo pattern as Issues/Punch; Save (explicit, versioned, 409 soft-handled); edit-presence banner + editing chip (`useCollabEditing`); PDF download; Email send card via the shared `EmailComposer`.
+Plus: photo attachments using the RFI pattern (immediate upload on file-input change, save-first guard, camera capture on mobile, thumbnail grid with delete); Save (explicit, versioned, 409 soft-handled); edit-presence banner + editing chip (`useCollabEditing`); PDF download; Email send card via the shared `EmailComposer`.
 
 ## 5. PDF — `src/pages/project/daily/dailyReportPdf.ts`
 
@@ -101,8 +107,8 @@ Generated/sent PDFs register in unified Documents under canonical type **"Daily 
 
 - `dailyReportStore.test.ts`: CRUD, unique-date conflict (with existing id), version conflict, list ordering.
 - Route tests in the existing routes test style: endpoints incl. 409 shapes; weather endpoint with mocked `fetch` (geocode + both Open-Meteo paths + no-address + upstream-failure).
-- `dailyReportPdf.test.ts`: mirrors `rfiPdf.test.ts` — renders with sparse and overflowing content; asserts page counts and continuation behavior.
-- Editor component tests: man-count add/remove/total, date-conflict message, weather manual fallback.
+- `dailyReportPdf.test.ts`: per repo convention (rfiPdf.test.ts tests only exported pure helpers, never jsPDF) — test the exported heading/formatting/layout-math helpers; no jsPDF mocking.
+- Editor/list tests: exported pure helpers (man-count total, date formatting/conflict predicate, weather summary derivation) — the repo's list/editor tests are pure-helper tests, not RTL renders.
 - Migration 27 covered by the migration list test conventions.
 
 ## 7. Non-goals (v1)
