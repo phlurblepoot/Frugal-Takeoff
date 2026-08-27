@@ -379,9 +379,19 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       }
       if (Buffer.byteLength(state, 'utf8') > MAX_SHEET_STATE_BYTES) return respond({ ok: false, error: 'invalid_request' });
       if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
-      if (!opts.sheetStore) return respond({ ok: false, error: 'no_db' });
+      if (!opts.db || !opts.sheetStore) return respond({ ok: false, error: 'no_db' });
 
+      // I7 fix: sheet-join enforces exists+isSpreadsheetFile, but this
+      // handler previously only checked room membership — and ANY location
+      // with a fileId joins sheetRoom(fileId) (see roomsForLocation above),
+      // so any authed client could push arbitrary "state" for any fileId
+      // (a PDF, a nonexistent id), creating a poison dirty row that hits the
+      // flush engine's permanent 15s error loop.
       try {
+        const meta = getMeta(opts.db, fileId);
+        if (!meta) return respond({ ok: false, error: 'file_not_found' });
+        if (!isSpreadsheetFile(meta)) return respond({ ok: false, error: 'not_spreadsheet' });
+
         opts.sheetStore.setState(fileId, state);
         respond({ ok: true });
       } catch (err) {
@@ -396,7 +406,20 @@ export function registerRealtime(io: Server, opts: RealtimeOptions): RealtimeHan
       const { fileId } = payload as { fileId?: unknown };
       if (typeof fileId !== 'string' || !fileId) return respond({ ok: false, error: 'invalid_request' });
       if (!socket.rooms.has(sheetRoom(fileId))) return respond({ ok: false, error: 'not_in_sheet' });
-      if (!opts.sheetFlush) return respond({ ok: false, error: 'no_db' });
+      if (!opts.db || !opts.sheetFlush) return respond({ ok: false, error: 'no_db' });
+
+      // I7 fix: same exists+isSpreadsheetFile gate as sheet-join/sheet-state-
+      // sync — without it, any fileId in a room could trigger version-spam
+      // via a forced archive of a non-spreadsheet (or nonexistent) file.
+      let meta: ReturnType<typeof getMeta>;
+      try {
+        meta = getMeta(opts.db, fileId);
+      } catch (err) {
+        console.error('sheet-snapshot failed', err);
+        return respond({ ok: false, error: 'internal' });
+      }
+      if (!meta) return respond({ ok: false, error: 'file_not_found' });
+      if (!isSpreadsheetFile(meta)) return respond({ ok: false, error: 'not_spreadsheet' });
 
       opts.sheetFlush.snapshotNow(fileId)
         .then((result) => {

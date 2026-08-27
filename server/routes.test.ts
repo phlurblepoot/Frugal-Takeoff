@@ -11,6 +11,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
+import { SheetSessionStore } from './realtime/sheetSessions';
 
 let db: Database.Database;
 let dir: string;
@@ -468,6 +469,71 @@ describe('file versions over HTTP', () => {
     expect(cleanup.status).toBe(200);
     const versions = await request(app).get('/api/files/f1/versions');
     expect(versions.body).toHaveLength(2); // history survived
+  });
+});
+
+// I6: version-replace and delete must invalidate any persisted sheet-collab
+// session for that fileId, or (a) the next sheet-join would hydrate the OLD
+// working copy over the replaced bytes and revert them on the next flush, or
+// (b) a deleted file's dirty row would error-loop the flush engine forever.
+describe('sheet-session invalidation on version-replace / delete (I6)', () => {
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  let sheetStore: SheetSessionStore;
+  let sheetApp: express.Express;
+
+  beforeEach(() => {
+    sheetStore = new SheetSessionStore(db);
+    sheetApp = express();
+    sheetApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(sheetApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: (token: string) => (token === 'good-token' ? { id: 'u1', role: 'admin' } : null),
+      broadcastChange: () => {},
+      sheetStore,
+    });
+  });
+
+  it('POST /versions clears a pending sheet session for the replaced fileId', async () => {
+    await request(sheetApp).post('/api/files/sheet1?kind=spreadsheet&name=Book.xlsx')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
+
+    sheetStore.join('sheet1', 's1');
+    sheetStore.setState('sheet1', '{"sheets":["stale"]}');
+    expect(sheetStore.getState('sheet1')).not.toBeNull();
+    expect(sheetStore.dirtyFiles()).toContain('sheet1');
+
+    const res = await request(sheetApp).post('/api/files/sheet1/versions')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v2'));
+    expect(res.status).toBe(200);
+
+    expect(sheetStore.getState('sheet1')).toBeNull();
+    expect(sheetStore.dirtyFiles()).not.toContain('sheet1');
+  });
+
+  it('DELETE clears a pending sheet session for the deleted fileId', async () => {
+    await request(sheetApp).post('/api/files/sheet2?kind=spreadsheet&name=Book2.xlsx')
+      .set('Content-Type', XLSX_MIME).send(Buffer.from('v1'));
+
+    sheetStore.join('sheet2', 's1');
+    sheetStore.setState('sheet2', '{"sheets":["stale"]}');
+
+    const res = await request(sheetApp).delete('/api/files/sheet2');
+    expect(res.status).toBe(200);
+
+    expect(sheetStore.getState('sheet2')).toBeNull();
+    expect(sheetStore.dirtyFiles()).not.toContain('sheet2');
+  });
+
+  it('a route registered with no sheetStore (existing test convention) is unaffected', async () => {
+    // `app` (module-level, from the outer beforeEach) never passes sheetStore
+    // — the routes must no-op cleanly rather than throw.
+    await request(app).post('/api/files/plainf1?kind=document&name=Doc.pdf')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v1'));
+    const res = await request(app).post('/api/files/plainf1/versions')
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(res.status).toBe(200);
   });
 });
 

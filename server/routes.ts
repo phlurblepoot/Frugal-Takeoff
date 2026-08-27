@@ -55,6 +55,7 @@ import {
 } from './customerStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
+import type { SheetSessionStore } from './realtime/sheetSessions';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -66,6 +67,13 @@ export interface RouteDeps {
   // headers). Returns the decoded user or null.
   verifyToken: (token: string) => unknown | null;
   broadcastChange: BroadcastChange;
+  // I6: optional so existing tests that construct RouteDeps by hand (no
+  // sheet-collab wiring) keep working untouched. When present, a version-
+  // replace or a file delete invalidates that fileId's persisted collab
+  // session (see the call sites below) — without it, a replaced file's next
+  // sheet-join would hydrate the OLD working copy over the new bytes, or a
+  // deleted file's dirty row would error-loop the flush engine forever.
+  sheetStore?: SheetSessionStore;
 }
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
@@ -995,6 +1003,11 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         if (target.parentFileId) return res.status(400).json({ error: 'Cannot version a historical file row' });
         const mime = (req.get('Content-Type') || 'application/octet-stream').split(';')[0].trim();
         const result = saveNewVersion(db, dataDir, req.params.id, body, mime);
+        // I6: this route replaces the LIVE bytes out from under any sheet
+        // session the flush engine doesn't know about — clear it so the next
+        // sheet-join re-imports the new bytes instead of hydrating the stale
+        // working copy over them.
+        deps.sheetStore?.clearSession(req.params.id);
         deps.broadcastChange({ type: 'file', id: req.params.id, projectId: target.projectId ?? undefined, action: 'updated', ...requestMeta(req) });
         res.json({ success: true, ...result });
       } catch (e) {
@@ -1093,6 +1106,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const before = getMeta(db, req.params.id);
       const result = deleteDocument(db, dataDir, req.params.id, isAdmin);
       if (result.ok === false) return res.status(result.status).json({ error: result.error });
+      // I6: a deleted file's dirty sheet-session row would otherwise
+      // error-loop the flush engine every 15s forever (durable across
+      // restarts) trying to patch bytes that no longer exist.
+      deps.sheetStore?.clearSession(req.params.id);
       if (before) deps.broadcastChange({ type: 'file', id: req.params.id, projectId: before.projectId ?? undefined, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) {

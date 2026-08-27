@@ -229,6 +229,52 @@ describe('sheet socket layer: sheet-join / sheet-op / sheet-state-sync / sheet-s
     a.c.close(); b.c.close();
   });
 
+  // I7: sheet-state-sync and sheet-snapshot previously only checked room
+  // membership — and ANY location carrying a fileId joins sheetRoom(fileId)
+  // (roomsForLocation in registerRealtime.ts), so a socket could push state
+  // or force an archive for a fileId it never actually sheet-joined,
+  // including a non-spreadsheet file or a fileId that doesn't exist.
+  it('sheet-state-sync on a non-spreadsheet file is rejected with not_spreadsheet, without creating a session row', async () => {
+    const fileId = await seedNonSheetFile();
+    const a = await joinedClient('a', fileId); // in the room via set-location only — never sheet-joins
+
+    const ack = await emitWithAck<any>(a.c, 'sheet-state-sync', { fileId, state: '{"sheets":[]}' });
+    expect(ack).toEqual({ ok: false, error: 'not_spreadsheet' });
+    expect(store.getState(fileId)).toBeNull();
+
+    a.c.close();
+  });
+
+  it('sheet-state-sync on a nonexistent fileId is rejected with file_not_found', async () => {
+    const fileId = 'does-not-exist';
+    const a = await joinedClient('a', fileId);
+
+    const ack = await emitWithAck<any>(a.c, 'sheet-state-sync', { fileId, state: '{"sheets":[]}' });
+    expect(ack).toEqual({ ok: false, error: 'file_not_found' });
+
+    a.c.close();
+  });
+
+  it('sheet-snapshot on a non-spreadsheet file is rejected with not_spreadsheet', async () => {
+    const fileId = await seedNonSheetFile();
+    const a = await joinedClient('a', fileId);
+
+    const ack = await emitWithAck<any>(a.c, 'sheet-snapshot', { fileId });
+    expect(ack).toEqual({ ok: false, error: 'not_spreadsheet' });
+
+    a.c.close();
+  });
+
+  it('sheet-snapshot on a nonexistent fileId is rejected with file_not_found', async () => {
+    const fileId = 'also-does-not-exist';
+    const a = await joinedClient('a', fileId);
+
+    const ack = await emitWithAck<any>(a.c, 'sheet-snapshot', { fileId });
+    expect(ack).toEqual({ ok: false, error: 'file_not_found' });
+
+    a.c.close();
+  });
+
   it('an oversized op payload is rejected with invalid_request', async () => {
     const fileId = await seedSheetFile();
     const a = await joinedClient('a', fileId);
