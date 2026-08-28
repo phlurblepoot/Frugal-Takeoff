@@ -9,6 +9,7 @@ import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { registerDataRoutes } from './routes';
+import { pathFor } from './fileStore';
 
 let db: Database.Database;
 let dir: string;
@@ -118,6 +119,24 @@ describe('proposal routes', () => {
     expect(r.status).toBe(200);
     expect((await request(app).get(`/api/proposals/${c.body.id}`)).body).toMatchObject({ status: 'accepted', signedFileId: signed });
     expect(db.prepare(`SELECT type FROM activity WHERE projectId = 'p1' ORDER BY rowid`).all().map((x: any) => x.type)).toEqual(['proposal_created', 'proposal_accepted']);
+  });
+
+  it('delete removes the generated file row and its bytes too', async () => {
+    const c = await request(app).post('/api/projects/p1/proposals').send({});
+    const id = c.body.id;
+    const up = await request(app).post(`/api/files/gen?projectId=p1&kind=proposal&name=Proposal.pdf&sourceType=proposal&sourceId=${id}`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+    expect(up.status).toBe(200);
+    const fid = up.body.fileId as string;
+    expect((await request(app).post(`/api/proposals/${id}/file`).send({ fileId: fid })).status).toBe(200);
+    expect(fsSync.existsSync(pathFor(dir, fid))).toBe(true);
+
+    const d = await request(app).delete(`/api/proposals/${id}`);
+    expect(d.status).toBe(200);
+
+    expect(db.prepare('SELECT 1 FROM files WHERE id = ?').get(fid)).toBeUndefined();
+    expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(404);
+    expect(fsSync.existsSync(pathFor(dir, fid))).toBe(false);
   });
 
   it('revise via POST with revisedFromId + carry flags', async () => {

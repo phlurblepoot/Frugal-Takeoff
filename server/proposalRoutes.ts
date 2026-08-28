@@ -106,7 +106,8 @@ export function registerProposalRoutes(app: express.Express, deps: ProposalRoute
       res.json({ success: true });
     };
     app.post(`/api/proposals/:id/${name}`, ...gate, (req, res) => {
-      try { fns.add(db, req.params.id, req.body?.fileId); after(req, res); } catch (e) { proposalErr(e, res); }
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      try { fns.add(db, req.params.id, req.body.fileId); after(req, res); } catch (e) { proposalErr(e, res); }
     });
     app.patch(`/api/proposals/:id/${name}/:fileId`, ...gate, (req, res) => {
       try { fns.update(db, req.params.id, req.params.fileId, req.body ?? {}); after(req, res); } catch (e) { proposalErr(e, res); }
