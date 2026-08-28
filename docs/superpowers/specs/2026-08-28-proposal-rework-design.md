@@ -136,7 +136,7 @@ POST   /api/proposals/:id/send            SendBody (as today's send-proposal) �
 - Takeoff line amounts are computed client-side (`computeTakeoffTotals`, pure) and saved as a snapshot; server validates shape/ints only.
 - `deleteDocument` guard extended: refuse deleting a file referenced by `proposal_photos` / `proposal_attachments` / `proposals.fileId|signedFileId`.
 - Activity types: `proposal_created`, `proposal_sent`, `proposal_accepted`, `proposal_declined` → link `/project/:pid/proposal/:id`, admin-only.
-- Documents resolvers: `proposal` + `proposal-signed` → editor href; `takeoff-print` / `takeoff-export` → `/project/:pid?tab=takeoffs` (whatever the existing takeoffs-tab URL is).
+- Documents resolvers: `proposal` + `proposal-signed` → editor href; `takeoff-print` / `takeoff-export` → the project Takeoffs tab (the same href the Takeoffs sidebar entry uses).
 - Realtime: proposals broadcast on the project channel like COs so the list live-refreshes.
 - Removed: `POST /api/projects/:id/send-proposal`.
 
@@ -171,7 +171,7 @@ Props `{ open, accept?: 'pdf'|'image'|'any', multi?: boolean, excludeFileIds?: s
 - "Takeoff prints" link to the same URL, always visible.
 
 ### Dashboard
-Admin-only "Outstanding proposals" card: status `sent`, sorted by `validUntil` asc (expired flagged), link to editor. Backed by `GET /api/proposals/outstanding` (admin).
+Admin-only "Outstanding proposals" card: status `sent`, sorted by `validUntil` asc (expired flagged), link to editor. Backed by `GET /api/proposals/outstanding` (admin; registered before `/api/proposals/:id`).
 
 ### Documents page
 `docTypes.ts` adds the four kinds (labels/tones); `company-document` in `DIRECT_UPLOAD_KINDS`; upload modal allows no-project when kind is `company-document`.
