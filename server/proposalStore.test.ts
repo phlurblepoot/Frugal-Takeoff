@@ -131,6 +131,20 @@ describe('status transitions', () => {
     expect(() => setStatus(db, id, 'declined')).toThrow(ValidationError); // accepted is terminal
   });
 
+  // A legacy row (migration 28) is read-only history: Open PDF and Revise
+  // only (spec §5). It can carry status 'sent', so the 'sent' check alone
+  // wouldn't stop it.
+  it('a legacy proposal cannot be accepted or declined even when its status is sent', () => {
+    const { id } = createProposal(db, 'p1', {});
+    pdf('gen-l'); setProposalFile(db, id, 'gen-l');
+    markSent(db, id, { to: 'a@b.c', subject: 's' });
+    db.prepare('UPDATE proposals SET legacy = 1 WHERE id = ?').run(id);
+
+    expect(() => setStatus(db, id, 'accepted')).toThrow(LockedError);
+    expect(() => setStatus(db, id, 'declined')).toThrow(LockedError);
+    expect(getProposal(db, id)!.status).toBe('sent');
+  });
+
   it('listOutstanding returns sent proposals across projects sorted by validUntil', () => {
     const a = createProposal(db, 'p1', { validUntil: '2026-09-30' });
     const b = createProposal(db, 'p2', { validUntil: '2026-09-01' });

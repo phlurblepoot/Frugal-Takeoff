@@ -1326,7 +1326,15 @@ export const migrations: Migration[] = [
       `);
 
       const LEGACY_KEYS = ['printouts', 'proposalFileId', 'proposalSentAt', 'proposalPhotoIds', 'proposalCoverNotes', 'proposalTerms'];
-      const isoDate = (ts: number) => new Date(Number.isFinite(ts) ? ts : Date.now()).toISOString().slice(0, 10);
+      // LOCAL y-m-d, matching src/utils/takeoffPrintNames.ts and
+      // proposalFileName — an ISO slice shows tomorrow's (or yesterday's) date
+      // either side of UTC midnight, so a print made at 8pm would be dated the
+      // next day.
+      const isoDate = (ts: number) => {
+        const d = new Date(Number.isFinite(ts) ? ts : Date.now());
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      };
       const fileKind = db.prepare('SELECT kind, name FROM files WHERE id = ?');
       const setFile = db.prepare('UPDATE files SET kind = ?, name = ?, sourceType = ?, sourceId = ? WHERE id = ?');
       const setFileSource = db.prepare('UPDATE files SET sourceType = ?, sourceId = ? WHERE id = ?');
@@ -1344,7 +1352,22 @@ export const migrations: Migration[] = [
         if (!LEGACY_KEYS.some(k => k in p)) continue; // already migrated / never had proposals
 
         const projectName = (row.name && row.name.trim()) || 'Untitled';
-        const printouts: any[] = Array.isArray(p.printouts) ? p.printouts.filter((x: any) => x && typeof x === 'object' && typeof x.fileId === 'string') : [];
+        // Two guards on the legacy list before anything is created from it:
+        //  - a printout whose file row is gone (bytes reclaimed, project
+        //    partially deleted) must NOT become a proposal — it would be a
+        //    numbered row pointing at a dangling fileId, unopenable forever.
+        //  - the same fileId can appear twice (an old re-save appended rather
+        //    than replaced); keeping the first occurrence avoids two proposals
+        //    (or two relabels) fighting over one file row.
+        const seenFileIds = new Set<string>();
+        const printouts: any[] = (Array.isArray(p.printouts) ? p.printouts : [])
+          .filter((x: any) => x && typeof x === 'object' && typeof x.fileId === 'string')
+          .filter((x: any) => {
+            if (!fileKind.get(x.fileId)) return false;
+            if (seenFileIds.has(x.fileId)) return false;
+            seenFileIds.add(x.fileId);
+            return true;
+          });
         const isProposalPrintout = (po: any) => {
           // A printout whose fileId IS the sent proposal is always a proposal
           // printout, even if its own kind/name heuristics don't say so —

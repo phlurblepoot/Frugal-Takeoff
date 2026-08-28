@@ -14,6 +14,16 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset'] as const;
 // they carry no dollar figures.
 export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'change-order', 'proposal', 'proposal-signed'] as const;
 
+// Generated documents that are nonetheless deletable. Everything else with a
+// sourceType is owned by a record you delete it at (an invoice, an issue, a
+// proposal); a takeoff print/export has no owning record — its sourceId is a
+// bare printout id that exists only on the file row — so refusing to delete it
+// would strand it in the Documents list forever. Historical VERSIONS of one
+// are still refused (parentFileId check), same as any other file.
+export const DELETABLE_GENERATED_KINDS = ['takeoff-print', 'takeoff-export'] as const;
+const isDeletableGeneratedKind = (kind: string) =>
+  (DELETABLE_GENERATED_KINDS as readonly string[]).includes(kind);
+
 // Fallback label when the referenced entity no longer exists (spec: "Missing
 // referent (deleted entity) -> label from kind, href null").
 const KIND_LABELS: Record<string, string> = {
@@ -395,13 +405,14 @@ export function patchDocument(
 
 // ── DELETE /api/files/:id guard ─────────────────────────────────────────────
 
-// Only loose, never-sourced direct uploads are really deletable (spec §Safe
-// deletion tiers): generated/attached files are archived here and deleted at
-// their source entity instead. Wipes the live row AND every version row's
-// bytes (listVersions returns [live, ...history]). Deletable rows are always
-// direct-upload kinds (never a billing kind), so the role gate below is
-// vacuously true today — kept for uniformity with patchDocument and as a
-// guard against a future kind ever landing in both sets.
+// Loose, never-sourced direct uploads are deletable (spec §Safe deletion
+// tiers), and so are takeoff prints/exports, which are generated but have no
+// owning record to delete them at (DELETABLE_GENERATED_KINDS). Everything else
+// with a source is archived here and deleted at its source entity instead.
+// Wipes the live row AND every version row's bytes (listVersions returns
+// [live, ...history]). Deletable rows are never a billing kind, so the role
+// gate below is vacuously true today — kept for uniformity with patchDocument
+// and as a guard against a future kind ever landing in both sets.
 export function deleteDocument(
   db: Database.Database,
   dataDir: string,
@@ -420,10 +431,10 @@ export function deleteDocument(
     UNION SELECT 1 FROM proposals WHERE fileId = ? OR signedFileId = ?
     LIMIT 1`).get(id, id, id, id);
   if (proposalRef) return { ok: false, status: 409, error: 'This file is attached to a proposal — remove it from the proposal first' };
-  if (current.sourceType) {
+  if (current.sourceType && !isDeletableGeneratedKind(current.kind)) {
     return { ok: false, status: 409, error: 'This file is generated from another record — archive it here, or delete it at the source' };
   }
-  if (!isDirectUploadKind(current.kind)) {
+  if (!isDirectUploadKind(current.kind) && !isDeletableGeneratedKind(current.kind)) {
     return { ok: false, status: 409, error: 'This file type cannot be deleted directly' };
   }
   for (const v of listVersions(db, id)) removeFile(db, dataDir, v.id);

@@ -15,8 +15,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { History } from 'lucide-react';
-import { DocumentRow, ProjectFile, fetchFileBlob, formatBytes, listFileVersions } from '../../utils/store';
+import { DocumentRow, ProjectFile, createShare, fetchFileBlob, formatBytes, getSettings, listFileVersions } from '../../utils/store';
 import { useToast } from '../../components/Toast';
+import { useShareLink } from '../../components/ShareLinkModal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FileViewerDots } from '../../components/FileViewerDots';
 import { Skeleton, StatusPill, Table, TBody, TD, TH, THead, TR } from '../../components/ui';
@@ -99,6 +100,7 @@ export const DocumentsTable: React.FC<{
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
+  const shareLink = useShareLink();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [versions, setVersions] = useState<ProjectFile[] | null>(null);
   const [contextMenu, setContextMenu] = useState<RowContextMenuState | null>(null);
@@ -150,6 +152,21 @@ export const DocumentsTable: React.FC<{
     });
     if (!ok) return;
     onDeleteRows([row]);
+  };
+
+  // Public share link for a takeoff print/export — the share type stays
+  // 'printout' and the resourceId stays the FILE id, exactly as the retired
+  // Proposal tab created them, so old links and new ones resolve through the
+  // same GET /api/share/:shareId (which looks the resourceId up as a file id).
+  const handleShare = async (row: DocumentRow) => {
+    const name = row.name ?? 'Takeoff print';
+    try {
+      const [id, settings] = await Promise.all([createShare('printout', row.id, name), getSettings()]);
+      const host = (settings.publicHost || window.location.origin).replace(/\/$/, '');
+      shareLink(`${host}/share/${id}`, name);
+    } catch {
+      toast('Failed to create share link', { type: 'error' });
+    }
   };
 
   const handleHistory = async (row: DocumentRow) => {
@@ -400,6 +417,7 @@ export const DocumentsTable: React.FC<{
           onArchive={(row, archived) => onArchiveRows([row], archived)}
           onChangeKind={(row, kind) => onChangeKind(row, kind)}
           onDelete={handleDelete}
+          onShare={handleShare}
         />
       )}
     </>

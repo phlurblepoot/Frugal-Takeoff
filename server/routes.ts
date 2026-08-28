@@ -1642,6 +1642,15 @@ export function buildSendAttachments(
   return list;
 }
 
+// A stored document name is display text, not a filename: proposalFileName()
+// deliberately has no extension. Mail clients key their icon/open behavior off
+// one, so add .pdf when there isn't already an extension.
+export const withPdfExtension = (name: string | null | undefined): string | null => {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+  return /\.[A-Za-z0-9]{1,8}$/.test(trimmed) ? trimmed : `${trimmed}.pdf`;
+};
+
 interface SendBody {
   to?: string;
   fileId: string;
@@ -1704,10 +1713,15 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
       if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
       const project = loadProject(db, p.projectId);
       const subject = subjectIn?.trim() || `Proposal — ${project?.name ?? 'Untitled'}`;
+      // The attachment arrives named as the document is named in Documents
+      // ("Proposal – Job – 2026-08-28"), not a generic Proposal.pdf — that
+      // name is what the customer files. proposalFileName() carries no
+      // extension, so add one when the stored name lacks it.
+      const primaryName = withPdfExtension(getMeta(db, fileId)?.name) ?? 'Proposal.pdf';
       await send((req as any).user.id, {
         to, cc, bcc, subject,
         text: body ?? message ?? 'Please find the attached proposal.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: 'Proposal.pdf' }, attachmentFileIds),
+        attachments: buildSendAttachments(db, { fileId, attachmentName: primaryName }, attachmentFileIds),
         inReplyTo: project?.email?.messageId || undefined,
       });
       const r = markSent(db, p.id, { to, cc, subject });

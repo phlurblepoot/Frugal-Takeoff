@@ -95,7 +95,8 @@ export const ProposalsList: React.FC = () => {
     try {
       const [full, existing] = await Promise.all([getProposal(proposal.id), getSov(projectId!)]);
       const lines = full.lines.filter(l => !l.isAlternate);
-      if (!lines.length) return;
+      // Silence here read as "the SOV was filled"; say why nothing happened.
+      if (!lines.length) { toast('No price lines to prefill', { type: 'info' }); return; }
       if (existing.length && !await confirm({
         title: 'SOV already has lines',
         message: 'Add the proposal lines to the existing schedule of values?',
@@ -205,7 +206,10 @@ export const ProposalsList: React.FC = () => {
                             <Button variant="ghost" size="sm" title="Open & send" aria-label="Open and send"
                               onClick={() => openEditor(p.id)}><Send size={15} /></Button>
                           )}
-                          {p.status === 'sent' && (
+                          {/* A legacy row is read-only history — Open PDF and
+                              Revise only (spec §5) — even though it may carry
+                              status 'sent'; the server refuses either way. */}
+                          {p.status === 'sent' && !p.legacy && (
                             <>
                               <Button variant="ghost" size="sm" title="Mark accepted" aria-label="Mark accepted"
                                 onClick={() => setAccepting(p)}><Check size={15} /></Button>

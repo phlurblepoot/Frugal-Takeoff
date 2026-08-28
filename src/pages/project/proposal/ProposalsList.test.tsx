@@ -22,7 +22,7 @@ vi.mock('../../../utils/store', async (orig) => ({
   createSovLine: vi.fn(async () => ({ id: 's1' })),
   getUserPreferences: vi.fn(async () => userPrefs),
 }));
-import { createProposal, deleteProposal, setProposalStatus } from '../../../utils/store';
+import { createProposal, createSovLine, deleteProposal, getProposal, setProposalStatus } from '../../../utils/store';
 import { ProposalsList } from './ProposalsList';
 
 const base: ProposalSummary = {
@@ -117,6 +117,8 @@ describe('ProposalsList', () => {
       'proposal-includeCostDetail': 'true',
       'proposal-includeSignature': 'false',
       'proposal-showGrandTotal': 'false',
+      'proposal-coverNotes-history': JSON.stringify(['Thanks for the opportunity', 'older']),
+      'proposal-terms-history': JSON.stringify(['Net 30']),
     };
     renderList();
     await screen.findByTestId('proposal-row-1');
@@ -127,6 +129,9 @@ describe('ProposalsList', () => {
       includeCostDetail: true,
       includeSignature: false,
       showGrandTotal: false,
+      // the boilerplate this user last wrote is prefilled too
+      coverNotes: 'Thanks for the opportunity',
+      terms: 'Net 30',
     }));
   });
 
@@ -146,6 +151,38 @@ describe('ProposalsList', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Mark declined?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Mark declined' }));
     await waitFor(() => expect(setProposalStatus).toHaveBeenCalledWith('pr2', 'declined'));
+  });
+
+  // Legacy rows (migration 28) are read-only history: Open PDF + Revise only
+  // (spec §5). The server refuses setStatus on them, so the buttons must go.
+  it('hides accept/decline on a legacy row even though it is sent', async () => {
+    rows = [{ ...base, id: 'pr9', number: 9, status: 'sent', legacy: true, sentAt: 1 }];
+    renderList();
+    const legacy = await screen.findByTestId('proposal-row-9');
+    expect(legacy).toHaveTextContent('(legacy)');
+    expect(within(legacy).queryByLabelText('Mark accepted')).toBeNull();
+    expect(within(legacy).queryByLabelText('Mark declined')).toBeNull();
+    // Revise is still offered — that's the way forward from a legacy row.
+    expect(within(legacy).getByLabelText('Revise')).toBeInTheDocument();
+  });
+
+  // AcceptDialog only offers the prefill when it counted lines, so this
+  // branch is the race: the proposal was emptied between the dialog's count
+  // and the accept. Silence there reads as "the SOV was filled".
+  it('says so instead of silently doing nothing when there are no lines to prefill the SOV with', async () => {
+    const line = { id: 'l1', sortOrder: 0, kind: 'manual', takeoffId: null, description: 'Stucco', amountCents: 100, derivedAmountCents: null, measurementSummary: null, isAlternate: false };
+    vi.mocked(getProposal)
+      .mockResolvedValueOnce({ ...rows[1], lines: [line], photos: [], attachments: [] } as any)
+      .mockResolvedValue({ ...rows[1], lines: [], photos: [], attachments: [] } as any);
+    renderList();
+    const sent = await screen.findByTestId('proposal-row-2');
+    fireEvent.click(within(sent).getByLabelText('Mark accepted'));
+    // wait for the dialog's line count to land, so the prefill box is ticked
+    await screen.findByLabelText(/Prefill the schedule of values/);
+    fireEvent.click(await screen.findByTestId('confirm-accept'));
+
+    expect(await screen.findByText('No price lines to prefill')).toBeInTheDocument();
+    expect(createSovLine).not.toHaveBeenCalled();
   });
 
   it('redirects a non-admin back to the project', async () => {

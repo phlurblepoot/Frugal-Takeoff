@@ -91,6 +91,14 @@ export interface ProposalDraftState {
    */
   save: () => Promise<boolean>;
   reload: () => void;
+  /**
+   * Re-fetches the server-owned parts of the proposal the photo/attachment
+   * cards mutate — photos, attachments, version — WITHOUT touching `draft` or
+   * `dirty`. Adding a photo must never throw away unsaved cover notes or price
+   * lines (photos and attachments aren't part of Draft at all), so this is
+   * what those cards call instead of reload().
+   */
+  refreshMedia: () => void;
 }
 
 export function useProposalDraft(projectId?: string, proposalId?: string): ProposalDraftState {
@@ -156,6 +164,17 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
   };
   loadRef.current = load;
   const reload = () => loadRef.current();
+
+  // Media-only resync (see refreshMedia in ProposalDraftState). Adopting the
+  // fetched version matters if the server ever starts bumping on a photo add —
+  // it doesn't today (server/proposalStore.ts addPhoto/addAttachment skip
+  // bump()), but the next save would 409 against itself if it ever did.
+  const refreshMedia = () => {
+    if (!proposalId || !admin) return;
+    getProposal(proposalId)
+      .then(p => { setProposal(p); setLoadFailed(false); })
+      .catch(() => { /* the card that triggered this toasts its own failure */ });
+  };
 
   useEffect(() => { loadRef.current(); }, [projectId, proposalId]);
 
@@ -291,6 +310,6 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
     project, proposal, draft, missingTakeoffIds, dirty, saving, loadFailed, readOnly,
     takeoffTotals, totals,
     notesHistory, termsHistory, inclusionsHistory, exclusionsHistory, lineLibrary,
-    collab, patchDraft, applyOptions, save, reload,
+    collab, patchDraft, applyOptions, save, reload, refreshMedia,
   };
 }

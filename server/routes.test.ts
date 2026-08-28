@@ -1514,6 +1514,31 @@ describe('email send routes', () => {
       expect(again.status).toBe(409);
     });
 
+    // The attachment must arrive named as the document is named in Documents,
+    // not a generic Proposal.pdf. proposalFileName() stores no extension, so
+    // the route adds one.
+    it('names the attachment after the stored document, adding .pdf when it has no extension', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const name = 'Proposal – Test Project – 2026-08-28';
+      const up = await request(app).post(`/api/files/gen-named?projectId=p1&kind=proposal&name=${encodeURIComponent(name)}&sourceType=proposal&sourceId=${c.body.id}`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      sent.length = 0;
+      const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(res.status).toBe(200);
+      expect(sent[0].attachments[0].filename).toBe(`${name}.pdf`);
+    });
+
+    it('keeps an extension the stored name already has', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const up = await request(app).post(`/api/files/gen-ext?projectId=p1&kind=proposal&name=Bid.pdf&sourceType=proposal&sourceId=${c.body.id}`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      sent.length = 0;
+      await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(sent[0].attachments[0].filename).toBe('Bid.pdf');
+    });
+
     it('does not mark sent when SMTP fails', async () => {
       const c = await request(app).post('/api/projects/p1/proposals').send({});
       const up = await request(app).post('/api/files/gen2?projectId=p1&kind=proposal&name=P.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));

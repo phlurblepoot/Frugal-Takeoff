@@ -301,6 +301,11 @@ export function markSent(db: Database.Database, id: string, sentTo: { to: string
 export function setStatus(db: Database.Database, id: string, status: 'accepted' | 'declined', signedFileId?: string | null): { version: number } {
   const row = rowOf(db, id);
   if (status !== 'accepted' && status !== 'declined') throw new ValidationError('status must be accepted|declined');
+  // Legacy rows (migration 28) are read-only history: the only things offered
+  // on one are Open PDF and Revise (spec §5). They carry status 'sent' when
+  // they matched the old proposalFileId, so without this they'd otherwise slip
+  // through the 'sent' check below.
+  if (row.legacy) throw new LockedError('Proposal is locked — revise it to make changes');
   if (row.status !== 'sent') throw new ValidationError('Only a sent proposal can be accepted or declined');
   if (signedFileId) requireFile(db, signedFileId);
   const now = Date.now();

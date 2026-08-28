@@ -8,10 +8,10 @@
 // and simply absent (not disabled) when the row doesn't qualify.
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  Archive, ArchiveRestore, Download, ExternalLink, Tag, Trash2,
+  Archive, ArchiveRestore, Download, ExternalLink, Link as LinkIcon, Tag, Trash2,
 } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
-import { CustomDocType, DIRECT_UPLOAD_KINDS, isDirectUploadKind, kindLabel } from './docTypes';
+import { CustomDocType, DIRECT_UPLOAD_KINDS, isDeletableGeneratedKind, isDirectUploadKind, kindLabel } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
 import { clampToViewport } from './previewPosition';
 
@@ -32,7 +32,8 @@ export const RowContextMenu: React.FC<{
   onArchive: (row: DocumentRow, archived: boolean) => void;
   onChangeKind: (row: DocumentRow, kind: string) => void;
   onDelete: (row: DocumentRow) => void;
-}> = ({ state, customTypes, onClose, onOpen, onDownload, onArchive, onChangeKind, onDelete }) => {
+  onShare: (row: DocumentRow) => void;
+}> = ({ state, customTypes, onClose, onOpen, onDownload, onArchive, onChangeKind, onDelete, onShare }) => {
   const { row } = state;
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: state.x, top: state.y });
@@ -42,6 +43,11 @@ export const RowContextMenu: React.FC<{
   const archivableRow = archivable.length > 0;
   const deletableRow = deletable.length > 0;
   const directUpload = isDirectUploadKind(row.kind);
+  // Public share links exist for takeoff prints/exports only — they're the one
+  // generated document a customer or GC is handed directly, and the old
+  // Proposal tab's per-printout Share button was the way to do it before this
+  // page replaced that list.
+  const shareable = isDeletableGeneratedKind(row.kind);
 
   // Clamp to the viewport once the menu's real size is known — re-measured
   // whenever the nested change-type list opens/closes since that changes the
@@ -142,6 +148,11 @@ export const RowContextMenu: React.FC<{
             </div>
           )}
         </div>
+      )}
+      {shareable && (
+        <button role="menuitem" className={itemCls} onClick={() => { onClose(); onShare(row); }}>
+          <LinkIcon size={14} /> Share link
+        </button>
       )}
       {deletableRow && (
         <button

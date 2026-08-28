@@ -68,6 +68,16 @@ describe('selectionPolicy', () => {
     expect(selectionPolicy(rows).deletable.map(r => r.id)).toEqual(['document', 'spreadsheet', 'photo', 'other']);
   });
 
+  it('deletable includes takeoff prints/exports despite their source (nothing owns them)', () => {
+    const rows = [
+      row({ id: 'print', kind: 'takeoff-print', source: { type: 'takeoff-print', id: 'po-1', label: 'Takeoff Print', href: '/project/p1/takeoff' } }),
+      row({ id: 'xls', kind: 'takeoff-export', source: { type: 'takeoff-print', id: 'po-2', label: 'Takeoff Export', href: '/project/p1/takeoff' } }),
+      // a sourced document that IS owned by a record stays undeletable
+      row({ id: 'prop', kind: 'proposal', source: { type: 'proposal', id: 'pr1', label: 'Proposal #1', href: null } }),
+    ];
+    expect(selectionPolicy(rows).deletable.map(r => r.id)).toEqual(['print', 'xls']);
+  });
+
   it('returns empty arrays for an empty selection', () => {
     expect(selectionPolicy([])).toEqual({ downloadable: [], archivable: [], deletable: [] });
   });

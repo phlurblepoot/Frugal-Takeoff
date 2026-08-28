@@ -36,7 +36,7 @@ export const ProposalEditor: React.FC = () => {
   const {
     project, proposal, draft, missingTakeoffIds, dirty, saving, loadFailed, readOnly,
     takeoffTotals, totals, notesHistory, termsHistory, inclusionsHistory, exclusionsHistory,
-    lineLibrary, collab, patchDraft, applyOptions, save, reload,
+    lineLibrary, collab, patchDraft, applyOptions, save, reload, refreshMedia,
   } = useProposalDraft(projectId, proposalId);
 
   // Highlighted plan pages are a generate-time choice, not a stored proposal
@@ -291,18 +291,20 @@ export const ProposalEditor: React.FC = () => {
             onIncludeHighlightsChange={setIncludeHighlights}
           />
 
+          {/* refreshMedia, not reload: a photo/attachment change must not
+              replace the draft the estimator is still typing into. */}
           <ProposalPhotosCard
             proposal={proposal}
             projectId={projectId!}
             readOnly={readOnly}
-            onChanged={reload}
+            onChanged={refreshMedia}
           />
 
           <ProposalAttachmentsCard
             proposal={proposal}
             projectId={projectId!}
             readOnly={readOnly}
-            onChanged={reload}
+            onChanged={refreshMedia}
           />
         </div>
       )}

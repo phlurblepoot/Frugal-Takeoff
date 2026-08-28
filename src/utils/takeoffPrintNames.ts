@@ -6,8 +6,15 @@
 // project.printouts[] list. Shared between ProjectView.tsx (which saves and
 // navigates) and ProjectTakeoffsTab.tsx (which renders the "Takeoff prints"
 // link) so the name/URL format stays in exactly one place.
-export const takeoffPrintName = (projectName: string, kind: 'pdf' | 'excel', when: Date = new Date()) =>
-  `${kind === 'excel' ? 'Takeoff Export' : 'Takeoff Print'} – ${projectName} – ${when.toISOString().slice(0, 10)}`;
+// The date is the LOCAL y-m-d, matching proposalFileName (proposalGenerator.ts)
+// and migration 28's relabelling — an ISO slice would name a print made after
+// 8pm Eastern with tomorrow's date, so two prints from one evening would sort
+// and read as if they were made on different days.
+export const takeoffPrintName = (projectName: string, kind: 'pdf' | 'excel', when: Date = new Date()) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+  return `${kind === 'excel' ? 'Takeoff Export' : 'Takeoff Print'} – ${projectName} – ${date}`;
+};
 
 export const takeoffPrintsUrl = (projectId: string) =>
   `/documents?projectIds=${projectId}&kinds=takeoff-print,takeoff-export`;

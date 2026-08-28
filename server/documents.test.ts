@@ -439,6 +439,40 @@ describe('DELETE /api/files/:id', () => {
     const res = await request(app).delete('/api/files/nope');
     expect(res.status).toBe(404);
   });
+
+  // Takeoff prints/exports are generated (sourceType set) but no record owns
+  // them, so DELETE must go through — otherwise they can never be removed.
+  it('deletes a takeoff print despite its sourceType, wiping every version\'s bytes', async () => {
+    const fid = await upload('tp1', { projectId: 'p1', kind: 'takeoff-print', sourceType: 'takeoff-print', sourceId: 'po-1', name: 'Takeoff Print – Test – 2026-08-28' }, 'v1');
+    await request(app).post(`/api/files/${fid}/versions`).set('Content-Type', 'application/octet-stream').send(Buffer.from('v2'));
+    const historicalId = (await request(app).get(`/api/files/${fid}/versions`)).body[1].id;
+
+    const res = await request(app).delete(`/api/files/${fid}`);
+    expect(res.status).toBe(200);
+    expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(404);
+    expect(fsSync.existsSync(pathFor(dir, fid))).toBe(false);
+    expect(fsSync.existsSync(pathFor(dir, historicalId))).toBe(false);
+  });
+
+  it('deletes a takeoff export too', async () => {
+    const fid = await upload('tx1', { projectId: 'p1', kind: 'takeoff-export', sourceType: 'takeoff-print', sourceId: 'po-2', name: 'Takeoff Export – Test – 2026-08-28' });
+    expect((await request(app).delete(`/api/files/${fid}`)).status).toBe(200);
+  });
+
+  it('still refuses a historical VERSION of a takeoff print directly', async () => {
+    const fid = await upload('tp2', { projectId: 'p1', kind: 'takeoff-print', sourceType: 'takeoff-print', sourceId: 'po-3', name: 'T.pdf' }, 'v1');
+    await request(app).post(`/api/files/${fid}/versions`).set('Content-Type', 'application/octet-stream').send(Buffer.from('v2'));
+    const historicalId = (await request(app).get(`/api/files/${fid}/versions`)).body[1].id;
+    expect((await request(app).delete(`/api/files/${historicalId}`)).status).toBe(409);
+  });
+
+  it('a proposal-kind document is still owned by its proposal and 409s', async () => {
+    db.prepare(`INSERT INTO proposals (id, projectId, number, status, createdAt, updatedAt) VALUES ('pr-del', 'p1', 1, 'draft', 1, 1)`).run();
+    const fid = await upload('prop-del', { projectId: 'p1', kind: 'proposal', sourceType: 'proposal', sourceId: 'pr-del', name: 'Proposal.pdf' });
+    const res = await request(app).delete(`/api/files/${fid}`);
+    expect(res.status).toBe(409);
+    expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(200);
+  });
 });
 
 // Migration 25 exists because the listing's page-asset NOT EXISTS was

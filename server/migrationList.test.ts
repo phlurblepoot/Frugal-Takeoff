@@ -829,4 +829,84 @@ describe('migration 28 — proposals', () => {
     expect(db.prepare('SELECT COUNT(*) c FROM proposals').get()).toEqual({ c: 0 });
     db.close();
   });
+
+  // A printouts[] entry can outlive its file row (bytes reclaimed, a partial
+  // delete), and the same fileId can appear twice in the list. Neither may
+  // produce a proposal: the first would be a numbered row pointing at a
+  // dangling fileId, the second two rows fighting over one file.
+  it('skips a printout whose file row is gone, and dedupes repeats of one fileId', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    const meta = {
+      printouts: [
+        { id: 'po-a', name: 'Proposal – Ghost Job', fileId: 'f-missing', createdAt: 1000, type: 'pdf' },
+        { id: 'po-b', name: 'Proposal – Ghost Job', fileId: 'f-real', createdAt: 2000, type: 'pdf' },
+        { id: 'po-c', name: 'Proposal – Ghost Job', fileId: 'f-real', createdAt: 3000, type: 'pdf' },
+        { id: 'po-d', name: 'Printout - 1/2/2026, 9:00:00 AM', fileId: 'f-print', createdAt: 4000, type: 'pdf' },
+        { id: 'po-e', name: 'Printout - 1/2/2026, 9:00:00 AM', fileId: 'f-print', createdAt: 5000, type: 'pdf' },
+        { id: 'po-f', name: 'Printout - 1/2/2026, 9:10:00 AM', fileId: 'f-gone-too', createdAt: 6000, type: 'pdf' },
+      ],
+    };
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pg', 'Ghost Job', 1, 1, 1, ?)`).run(JSON.stringify(meta));
+    const ins = db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES (?, 'pg', ?, 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, ?, 'printout', ?, 0)`);
+    ins.run('f-real', 'Proposal – Ghost Job', 2000, 'po-b');
+    ins.run('f-print', 'Printout - 1/2/2026, 9:00:00 AM', 4000, 'po-d');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    // one proposal (from f-real, kept once), not three
+    const props = db.prepare('SELECT number, fileId FROM proposals WHERE projectId = ? ORDER BY number').all('pg') as any[];
+    expect(props).toEqual([{ number: 1, fileId: 'f-real' }]);
+    // the takeoff print was relabeled exactly once, and the two dead ids made nothing
+    const prints = db.prepare(`SELECT id FROM files WHERE kind = 'takeoff-print'`).all() as any[];
+    expect(prints.map(r => r.id)).toEqual(['f-print']);
+    expect(db.prepare('SELECT COUNT(*) c FROM files').get()).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('names relabeled takeoff prints with the LOCAL date of the printout', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    // 11pm local: already the next day in UTC west of Greenwich.
+    const late = new Date(2026, 0, 5, 23, 30, 0).getTime();
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pl', 'Late Job', 1, 1, 1, ?)`)
+      .run(JSON.stringify({ printouts: [{ id: 'po-l', name: 'Printout - x', fileId: 'f-late', createdAt: late, type: 'pdf' }] }));
+    db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES ('f-late', 'pl', 'Printout - x', 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, ?, 'printout', 'po-l', 0)`).run(late);
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    const name = (db.prepare('SELECT name FROM files WHERE id = ?').get('f-late') as any).name;
+    expect(name).toBe('Takeoff Print – Late Job – 2026-01-05');
+    db.close();
+  });
+});
+
+describe('migration 29 — proposal counter', () => {
+  it('backfills proposalCounter to each project\'s MAX(number), and createProposal continues from it', async () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pc', 'Counter Job', 1, 1, 1, '{}')`).run();
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pd', 'No Proposals', 1, 1, 1, '{}')`).run();
+    const ins = db.prepare(`INSERT INTO proposals (id, projectId, number, status, legacy, createdAt, updatedAt) VALUES (?, 'pc', ?, 'sent', 1, 1, 1)`);
+    ins.run('lp1', 1); ins.run('lp2', 2); ins.run('lp3', 3);
+    runMigrations(db, dir, migrations.filter(m => m.version <= 29));
+
+    expect((db.prepare('SELECT proposalCounter c FROM projects WHERE id = ?').get('pc') as any).c).toBe(3);
+    // a project with no proposals backfills to 0, not NULL
+    expect((db.prepare('SELECT proposalCounter c FROM projects WHERE id = ?').get('pd') as any).c).toBe(0);
+
+    // The number is issued from the counter, so it continues past the legacy
+    // rows — and never reuses one after a delete (the point of migration 29).
+    const { createProposal, deleteProposal } = await import('./proposalStore');
+    expect(createProposal(db, 'pc', {}).number).toBe(4);
+    const fifth = createProposal(db, 'pc', {});
+    expect(fifth.number).toBe(5);
+    deleteProposal(db, fifth.id);
+    expect(createProposal(db, 'pc', {}).number).toBe(6);
+    expect(createProposal(db, 'pd', {}).number).toBe(1);
+    db.close();
+  });
 });

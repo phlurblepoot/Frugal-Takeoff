@@ -77,6 +77,21 @@ describe('optionDefaultsFromPrefs', () => {
     });
   });
 
+  it('seeds cover notes and terms from the newest history entry', () => {
+    expect(optionDefaultsFromPrefs({
+      [PREF_KEYS.notes]: JSON.stringify(['Newest notes', 'older notes']),
+      [PREF_KEYS.terms]: JSON.stringify(['Net 30', 'Net 15']),
+    })).toEqual({ coverNotes: 'Newest notes', terms: 'Net 30' });
+  });
+
+  it('leaves cover notes and terms out for empty, absent or malformed histories', () => {
+    expect(optionDefaultsFromPrefs({
+      [PREF_KEYS.notes]: '[]',
+      [PREF_KEYS.terms]: 'not json',
+    })).toEqual({});
+    expect(optionDefaultsFromPrefs({ [PREF_KEYS.notes]: JSON.stringify(['']) })).toEqual({});
+  });
+
   it('ignores junk values rather than passing them to the server', () => {
     expect(optionDefaultsFromPrefs({
       [PREF_KEYS.font]: 'comic-sans',

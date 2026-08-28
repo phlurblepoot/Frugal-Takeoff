@@ -5,6 +5,7 @@
 // round-trip itself.
 import type { ProposalSaveInput } from '../../../utils/store';
 import { normalizeHighlightQuality } from './proposalGenerator';
+import { parseHistory } from './proposalTextHistory';
 
 export const PREF_KEYS = {
   notes: 'proposal-coverNotes-history',
@@ -82,5 +83,14 @@ export function optionDefaultsFromPrefs(prefs: Record<string, string>): Partial<
   if (signature !== undefined) out.includeSignature = signature;
   const grandTotal = bool(prefs[PREF_KEYS.grandTotal]);
   if (grandTotal !== undefined) out.showGrandTotal = grandTotal;
+  // The most recent cover notes / terms this user wrote seed the new proposal
+  // too — the same "don't retype the boilerplate" promise the option defaults
+  // make, and what the retired single-proposal page did. Only the newest entry
+  // is used; the rest of the history stays available from the editor's
+  // history menu.
+  const notes = parseHistory(prefs[PREF_KEYS.notes])[0];
+  if (notes) out.coverNotes = notes;
+  const terms = parseHistory(prefs[PREF_KEYS.terms])[0];
+  if (terms) out.terms = terms;
   return out;
 }

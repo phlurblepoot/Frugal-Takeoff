@@ -141,6 +141,39 @@ describe('useProposalDraft', () => {
     await waitFor(() => expect(getProposal).toHaveBeenCalledTimes(2));
   });
 
+  it('refreshMedia picks up new photos without discarding the unsaved draft', async () => {
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'half-typed notes' }));
+    expect(result.current.dirty).toBe(true);
+
+    // The photo card just uploaded a photo; the server now returns it (and a
+    // bumped version, defensively — addPhoto doesn't bump today).
+    getProposal.mockImplementation(async () => makeProposal({
+      version: 7,
+      photos: [{ id: 'pp1', fileId: 'ph1', sortOrder: 0, caption: null }],
+      photoCount: 1,
+      coverNotes: 'Hello', // the SERVER's stale text — must not win
+    }));
+    act(() => result.current.refreshMedia());
+
+    await waitFor(() => expect(result.current.proposal?.photos).toHaveLength(1));
+    expect(result.current.draft?.coverNotes).toBe('half-typed notes');
+    expect(result.current.dirty).toBe(true);
+    // and the next save goes out at the refreshed version, not the stale one
+    await act(async () => { expect(await result.current.save()).toBe(true); });
+    expect(saveProposal.mock.calls[0][1]).toMatchObject({ version: 7, coverNotes: 'half-typed notes' });
+  });
+
+  it('refreshMedia leaves a pristine draft alone too (it never touches draft/dirty)', async () => {
+    const { result } = await mount();
+    expect(result.current.dirty).toBe(false);
+    getProposal.mockImplementation(async () => makeProposal({ attachmentCount: 1 }));
+    act(() => result.current.refreshMedia());
+    await waitFor(() => expect(result.current.proposal?.attachmentCount).toBe(1));
+    expect(result.current.dirty).toBe(false);
+    expect(result.current.draft?.coverNotes).toBe('Hello');
+  });
+
   it('keeps the saved lines and warns when the project (and so the takeoffs) will not load', async () => {
     getProposal.mockImplementation(async () => makeProposal({
       lines: [line({ id: 'l2', kind: 'takeoff', takeoffId: 't1', amountCents: 500000, derivedAmountCents: 500000 })],

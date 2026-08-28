@@ -135,7 +135,10 @@ export const Dashboard: React.FC = () => {
           <Card>
             <CardHeader
               title="Outstanding proposals"
-              actions={<Link to="/projects" className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
+              /* There is no cross-project proposals list — proposals live per
+                 project — so "View all" goes to the nearest thing: every
+                 proposal document in one place. /projects was just wrong. */
+              actions={<Link to="/documents?kinds=proposal" className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
             />
             <CardBody className="p-0">
               {outstanding === null ? (
