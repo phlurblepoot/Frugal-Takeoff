@@ -1422,4 +1422,18 @@ export const migrations: Migration[] = [
       console.log(`[migrations] 28: ${proposalsMade} legacy proposals, ${photosMoved} photos moved, ${printsRelabeled} takeoff prints relabeled`);
     },
   },
+  {
+    version: 29,
+    name: 'proposal-counter',
+    // ADDITIVE. Same fix as migration 20 (rfi-counter): a proposal number is
+    // referenced once sent, so it must never be reused after a delete.
+    // Numbering moves from MAX(number)+1 to a per-project high-water counter,
+    // backfilled to each project's current max (including legacy rows from
+    // migration 28, which already occupy numbers).
+    up({ db }) {
+      db.exec('ALTER TABLE projects ADD COLUMN proposalCounter INTEGER NOT NULL DEFAULT 0;');
+      db.exec(`UPDATE projects SET proposalCounter = COALESCE(
+        (SELECT MAX(number) FROM proposals WHERE proposals.projectId = projects.id), 0)`);
+    },
+  },
 ];
