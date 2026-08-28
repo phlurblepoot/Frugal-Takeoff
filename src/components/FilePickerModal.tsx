@@ -1,7 +1,7 @@
 // src/components/FilePickerModal.tsx — pick files already on the server.
 // Reuses the Documents page's filter bar + row presentation
 // (spec docs/superpowers/specs/2026-08-28-proposal-rework-design.md §5).
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Customer } from '../types';
 import { DocumentRow, ProjectSummary, getCustomers, getDocumentTypes, getDocuments, getProjectsSummary } from '../utils/store';
 import { Button, Modal, Skeleton, StatusPill } from './ui';
@@ -37,6 +37,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
   const [rows, setRows] = useState<DocumentRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<Map<string, DocumentRow>>(new Map());
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -54,17 +55,60 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     getDocumentTypes().then(setCustomTypes).catch(() => setCustomTypes([]));
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Bumped on every filter-driven fetch so an out-of-order response (two
+  // rapid filter changes, or a filter change that lands while a page-one
+  // fetch is still in flight) can tell it's stale and drop itself instead of
+  // clobbering newer rows/total — mirrors DocumentsPage.tsx's requestIdRef
+  // guard. mountedRef must be reset true on every (re)mount, not just seeded
+  // via useRef(true): React 18 StrictMode double-invokes effects in dev
+  // (mount -> cleanup -> mount) on the SAME ref, so a cleanup-only effect
+  // would leave it stuck false after the simulated unmount.
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const filterKey = `${open}|${q}|${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${archived}|${accept}`;
-  const fetchPage = async (offset: number) => {
+
+  const refresh = async () => {
+    const myId = ++requestIdRef.current;
     setLoading(true);
     try {
-      const res = await getDocuments({ q: q || undefined, projectIds, customerIds, kinds, archived, mimes: MIMES[accept], limit: PAGE_SIZE, offset });
-      setRows(prev => offset === 0 ? res.rows : [...prev, ...res.rows]);
+      const res = await getDocuments({ q: q || undefined, projectIds, customerIds, kinds, archived, mimes: MIMES[accept], limit: PAGE_SIZE, offset: 0 });
+      if (!mountedRef.current || myId !== requestIdRef.current) return;
+      setRows(res.rows);
       setTotal(res.total);
-    } catch { if (offset === 0) { setRows([]); setTotal(0); } }
-    finally { setLoading(false); }
+    } catch {
+      if (mountedRef.current && myId === requestIdRef.current) { setRows([]); setTotal(0); }
+    } finally {
+      if (mountedRef.current && myId === requestIdRef.current) setLoading(false);
+    }
   };
-  useEffect(() => { if (open) fetchPage(0); }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) refresh(); }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Captures the CURRENT requestId (doesn't bump it) — if a filter change
+  // bumps requestIdRef while this page is in flight, its rows belong to a
+  // query that's no longer showing, so they're dropped rather than appended.
+  // Guarded against re-entry (loading/loadingMore) separately, so a
+  // double-click on "Load more" can't fetch — and duplicate-append — the
+  // same offset twice.
+  const loadMore = async () => {
+    if (loading || loadingMore) return;
+    const myId = requestIdRef.current;
+    setLoadingMore(true);
+    try {
+      const res = await getDocuments({ q: q || undefined, projectIds, customerIds, kinds, archived, mimes: MIMES[accept], limit: PAGE_SIZE, offset: rows.length });
+      if (!mountedRef.current || myId !== requestIdRef.current) return;
+      setRows(prev => [...prev, ...res.rows]);
+      setTotal(res.total);
+    } catch {
+      // best-effort — leave the already-loaded rows in place on failure
+    } finally {
+      if (mountedRef.current) setLoadingMore(false);
+    }
+  };
 
   const excluded = useMemo(() => new Set(excludeFileIds), [excludeFileIds]);
   const visible = rows.filter(r => !excluded.has(r.id));
@@ -120,7 +164,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
           </ul>
         )}
         {rows.length < total && (
-          <div className="p-2 text-center"><Button variant="ghost" onClick={() => fetchPage(rows.length)} disabled={loading}>Load more</Button></div>
+          <div className="p-2 text-center"><Button variant="ghost" onClick={loadMore} disabled={loading || loadingMore}>Load more</Button></div>
         )}
       </div>
       {hover && <DocumentHoverPreview row={hover.row} startX={hover.x} startY={hover.y} customTypes={customTypes} onHide={() => setHover(null)} />}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { FilePickerModal } from './FilePickerModal';
 
 vi.mock('../utils/store', async (orig) => ({
@@ -47,5 +47,40 @@ describe('FilePickerModal', () => {
     await screen.findByText('Spec.pdf');
     fireEvent.change(screen.getByLabelText('Search documents'), { target: { value: 'warr' } });
     await waitFor(() => expect((getDocuments as any).mock.calls.at(-1)[0].q).toBe('warr'), { timeout: 2000 });
+  });
+
+  it('drops a stale response when the filters change again before it resolves', async () => {
+    // Two in-flight requests (the initial fetch, then a filter change) that
+    // resolve OUT OF ORDER — the older (first) request's response must be
+    // dropped so it can't clobber the newer (second) request's rows.
+    const resolvers: ((v: unknown) => void)[] = [];
+    (getDocuments as any).mockImplementation(
+      () => new Promise(resolve => { resolvers.push(resolve); })
+    );
+
+    render(<FilePickerModal open onClose={() => {}} onPick={() => {}} />);
+    await waitFor(() => expect(resolvers.length).toBe(1));
+
+    fireEvent.click(screen.getByTestId('doc-filter-archived'));
+    await waitFor(() => expect(resolvers.length).toBe(2));
+
+    // Resolve the NEWER (second) request first.
+    await act(async () => {
+      resolvers[1]({
+        rows: [{ id: 'b', name: 'Spec.pdf', mime: 'application/pdf', size: 10, kind: 'document', createdAt: 2, versionNumber: 1, archived: true, projectId: 'p1', projectName: 'Job', customerId: null, customerName: null, source: null }],
+        total: 1,
+      });
+    });
+    expect(screen.getByText('Spec.pdf')).toBeInTheDocument();
+
+    // Now let the STALE (first) request resolve — it must not overwrite.
+    await act(async () => {
+      resolvers[0]({
+        rows: [{ id: 'a', name: 'Warranty.pdf', mime: 'application/pdf', size: 10, kind: 'company-document', createdAt: 1, versionNumber: 1, archived: false, projectId: null, projectName: null, customerId: null, customerName: null, source: null }],
+        total: 1,
+      });
+    });
+    expect(screen.queryByText('Warranty.pdf')).toBeNull();
+    expect(screen.getByText('Spec.pdf')).toBeInTheDocument();
   });
 });
