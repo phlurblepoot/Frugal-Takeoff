@@ -93,6 +93,27 @@ describe('UploadDocumentsModal', () => {
     expect(saveBinaryFile.mock.calls[0][2]).not.toHaveProperty('projectId');
   });
 
+  it('gates projectId/customerId per entry when per-file typing mixes company-document with a project-tagged file', async () => {
+    renderModal([png('shared.png'), png('company.png')]);
+    fireEvent.click(screen.getByLabelText('Set type per file'));
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'proj1' } });
+    fireEvent.change(screen.getByLabelText('Type for company.png'), { target: { value: 'company-document' } });
+    // Only one file opted into company-document — the batch isn't
+    // company-document-only, so the Project select stays as the person set it.
+    expect(screen.getByLabelText('Project')).toBeEnabled();
+    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('proj1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload \(2\)/ }));
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(2));
+
+    const shared = saveBinaryFile.mock.calls.find(c => (c[1] as File).name === 'shared.png')!;
+    const company = saveBinaryFile.mock.calls.find(c => (c[1] as File).name === 'company.png')!;
+    expect(shared[2]).toMatchObject({ kind: 'document', projectId: 'proj1', customerId: 'cust1' });
+    expect(company[2]).toMatchObject({ kind: 'company-document' });
+    expect(company[2]).not.toHaveProperty('projectId');
+    expect(company[2]).not.toHaveProperty('customerId');
+  });
+
   it('re-enables the Project select when the Type is changed away from company-document', async () => {
     renderModal([png()]);
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });

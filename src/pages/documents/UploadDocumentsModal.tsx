@@ -120,12 +120,17 @@ export const UploadDocumentsModal: React.FC<{
     setUploading(true);
     const uploaded = new Set<string>();
     for (const e of entries) {
+      // A per-file company-document in an otherwise project/customer-tagged
+      // batch must not inherit either — company documents aren't tied to a
+      // project (or its customer), regardless of what the rest of the batch
+      // picked.
+      const tagged = e.kind !== 'company-document';
       try {
         await saveBinaryFile(uuidv4(), e.file, {
           kind: e.kind,
           name: e.file.name,
-          ...(projectId ? { projectId } : {}),
-          ...(customerId ? { customerId } : {}),
+          ...(tagged && projectId ? { projectId } : {}),
+          ...(tagged && customerId ? { customerId } : {}),
         });
         uploaded.add(e.id);
       } catch { /* keep going, report the count below */ }
