@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
+import { ToastProvider } from '../../../components/Toast';
 import type { ProposalSaveInput } from '../../../utils/store';
 
 const proposal = {
@@ -20,13 +21,14 @@ const proposal = {
 
 const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4 }));
 const saveUserPreferences = vi.fn(async (_prefs: Record<string, string>) => {});
+const getProject = vi.fn(async (_id: string) => ({ id: 'proj1', name: 'Test', pages: [], takeoffs: [], planSets: [] }));
 
 vi.mock('../../../utils/store', async () => {
   const actual = await vi.importActual<typeof import('../../../utils/store')>('../../../utils/store');
   return {
     ...actual,
     getProposal: vi.fn(async () => proposal),
-    getProject: vi.fn(async () => ({ id: 'proj1', name: 'Test', pages: [], takeoffs: [], planSets: [] })),
+    getProject,
     getUserPreferences: vi.fn(async () => ({ 'proposal-manualLine-history': JSON.stringify([{ description: 'Permit', amountCents: 25000 }]) })),
     saveProposal,
     saveUserPreferences,
@@ -47,7 +49,11 @@ const renderEditor = () => render(
 );
 
 describe('ProposalEditor smoke', () => {
-  beforeEach(() => { localStorage.setItem('user', JSON.stringify({ role: 'admin' })); saveProposal.mockClear(); });
+  beforeEach(() => {
+    localStorage.setItem('user', JSON.stringify({ role: 'admin' }));
+    saveProposal.mockClear();
+    getProject.mockClear();
+  });
 
   it('mounts, edits, and saves', async () => {
     renderEditor();
@@ -74,6 +80,34 @@ describe('ProposalEditor smoke', () => {
     });
     // no takeoff lines => no highlights option
     expect(screen.queryByLabelText('Attach highlighted plan pages')).not.toBeInTheDocument();
+  });
+
+  it('does not flag every takeoff line as missing when the project fetch fails', async () => {
+    const takeoffLine = {
+      id: 'l2', sortOrder: 1, kind: 'takeoff', takeoffId: 't1', description: 'Stucco',
+      amountCents: 500000, derivedAmountCents: 500000, measurementSummary: '5,000.00 sq ft', isAlternate: false,
+    };
+    proposal.lines.push(takeoffLine as (typeof proposal)['lines'][number]);
+    getProject.mockRejectedValueOnce(new Error('offline'));
+    try {
+      render(
+        <ToastProvider>
+          <ConfirmProvider>
+            <MemoryRouter initialEntries={['/project/proj1/proposal/p1']}>
+              <Routes><Route path="/project/:projectId/proposal/:proposalId" element={<ProposalEditor />} /></Routes>
+            </MemoryRouter>
+          </ConfirmProvider>
+        </ToastProvider>,
+      );
+      expect(await screen.findByText('#2')).toBeInTheDocument();
+      expect(screen.queryByText(/no longer exists/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Remove line/ })).not.toBeInTheDocument();
+      expect(await screen.findByText(/amounts not refreshed/i)).toBeInTheDocument();
+      // Nothing was re-derived, so there is nothing to save.
+      expect(screen.getByTestId('proposal-state')).toHaveTextContent('Saved');
+    } finally {
+      proposal.lines.pop();
+    }
   });
 
   it('payment schedule toggles and inclusions edit', async () => {

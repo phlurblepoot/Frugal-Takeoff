@@ -7,7 +7,8 @@ import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle, Check, Copy, FileText, Plus, Send, Trash2, X } from 'lucide-react';
 import {
   ProposalSummary,
-  createProposal, createSovLine, deleteProposal, getProposal, getProposals, getSov, setProposalStatus,
+  createProposal, createSovLine, deleteProposal, getProposal, getProposals, getSov,
+  getUserPreferences, setProposalStatus,
 } from '../../../utils/store';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { useToast } from '../../../components/Toast';
@@ -18,6 +19,7 @@ import {
 } from '../../../components/ui';
 import { formatCurrency } from './proposalGenerator';
 import { STATUS_TONE, expiryText, proposalLabel } from './proposalPresentation';
+import { optionDefaultsFromPrefs } from './proposalPrefs';
 import { ReviseDialog } from './ReviseDialog';
 import { AcceptDialog } from './AcceptDialog';
 
@@ -47,7 +49,12 @@ export const ProposalsList: React.FC = () => {
 
   const handleNew = async () => {
     try {
-      const { id } = await createProposal(projectId!, {});
+      // A new proposal starts with the document options this user last saved
+      // (font, quality, cost detail, signature, grand total) — nobody wants to
+      // re-tick the same four boxes on every bid. Prefs are best-effort: an
+      // offline fetch just means the server's own defaults apply.
+      const prefs = await getUserPreferences().catch(() => ({} as Record<string, string>));
+      const { id } = await createProposal(projectId!, optionDefaultsFromPrefs(prefs));
       openEditor(id);
     } catch { toast('Failed to create proposal', { type: 'error' }); }
   };

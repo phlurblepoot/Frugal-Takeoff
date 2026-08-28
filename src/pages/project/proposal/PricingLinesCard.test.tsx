@@ -57,6 +57,16 @@ describe('PricingLinesCard', () => {
     expect(onChange).toHaveBeenLastCalledWith([takeoffLine, expect.objectContaining({ id: 'm1', isAlternate: true })]);
   });
 
+  it('clearing an amount restores the previous one instead of pricing the line at $0', async () => {
+    const onChange = vi.fn();
+    wrap(<PricingLinesCard lines={[takeoffLine]} onChange={onChange} readOnly={false} takeoffTotals={[t('t1', 'Stucco')]} missingTakeoffIds={[]} showGrandTotal onShowGrandTotalChange={() => {}} lineLibrary={[]} />);
+    const amt = screen.getByDisplayValue('10000.00');
+    fireEvent.change(amt, { target: { value: '' } });
+    fireEvent.blur(amt);
+    await waitFor(() => expect(screen.getByDisplayValue('10000.00')).toBeInTheDocument());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('flags a missing takeoff and offers removal', () => {
     const onChange = vi.fn();
     wrap(<PricingLinesCard lines={[takeoffLine]} onChange={onChange} readOnly={false} takeoffTotals={[]} missingTakeoffIds={['t1']} showGrandTotal onShowGrandTotalChange={() => {}} lineLibrary={[]} />);

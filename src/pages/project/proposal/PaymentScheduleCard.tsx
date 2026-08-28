@@ -25,8 +25,12 @@ const NumberField: React.FC<{
   onValueChange: (v: number | null) => void;
 }> = ({ value, fmt, parse, ariaLabel, disabled, onValueChange }) => {
   const [text, setText] = useState(() => (value === null ? '' : fmt(value)));
+  // Re-sync only when the value changed from OUTSIDE this field. An emptied
+  // box reads as 0 upstream (a row must keep its % / $ mode while you retype),
+  // so an empty text and a 0 value are treated as the same thing here —
+  // otherwise clearing the field would immediately snap a "0" back into it.
   useEffect(() => {
-    setText(prev => (parse(prev) === value ? prev : value === null ? '' : fmt(value)));
+    setText(prev => ((parse(prev) ?? 0) === (value ?? 0) ? prev : value === null ? '' : fmt(value)));
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -42,10 +46,11 @@ const NumberField: React.FC<{
   );
 };
 
+// These are <input type="number">, so the browser has already filtered out
+// anything unparsable; an empty box is the only realistic "no value" case.
 const parseNumber = (text: string): number | null => {
-  const cleaned = text.replace(/[$,%\s]/g, '');
-  if (!cleaned) return null;
-  const n = Number(cleaned);
+  if (!text.trim()) return null;
+  const n = Number(text);
   return Number.isFinite(n) ? n : null;
 };
 

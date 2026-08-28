@@ -20,6 +20,7 @@ vi.mock('../../../utils/store', async (orig) => ({
   getProposal: vi.fn(async () => ({ ...rows[0], lines: [], photos: [], attachments: [] })),
   getSov: vi.fn(async () => []),
   createSovLine: vi.fn(async () => ({ id: 's1' })),
+  getUserPreferences: vi.fn(async () => userPrefs),
 }));
 import { createProposal, deleteProposal, setProposalStatus } from '../../../utils/store';
 import { ProposalsList } from './ProposalsList';
@@ -34,6 +35,7 @@ const base: ProposalSummary = {
   totalCents: 125_000_00, alternateCount: 0, hasOverride: false, photoCount: 0, attachmentCount: 0,
 };
 let rows: ProposalSummary[] = [];
+let userPrefs: Record<string, string> = {};
 
 const renderList = () => render(
   <ToastProvider>
@@ -52,6 +54,7 @@ const renderList = () => render(
 beforeEach(() => {
   localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'admin' }));
   vi.clearAllMocks();
+  userPrefs = {};
   rows = [
     base,
     { ...base, id: 'pr2', number: 2, revisedFromId: 'pr1', revisedFromNumber: 1, status: 'sent', title: 'Revised bid', hasOverride: true, alternateCount: 2, sentAt: Date.UTC(2026, 7, 20, 18) },
@@ -105,6 +108,26 @@ describe('ProposalsList', () => {
     fireEvent.click(screen.getByTestId('btn-new-proposal'));
     await waitFor(() => expect(createProposal).toHaveBeenCalledWith('p1', {}));
     await screen.findByText('editor');
+  });
+
+  it('seeds a new proposal with this user\'s last-used document options', async () => {
+    userPrefs = {
+      'proposal-fontFamily': 'times',
+      'proposal-highlightQuality': 'email',
+      'proposal-includeCostDetail': 'true',
+      'proposal-includeSignature': 'false',
+      'proposal-showGrandTotal': 'false',
+    };
+    renderList();
+    await screen.findByTestId('proposal-row-1');
+    fireEvent.click(screen.getByTestId('btn-new-proposal'));
+    await waitFor(() => expect(createProposal).toHaveBeenCalledWith('p1', {
+      fontFamily: 'times',
+      highlightQuality: 'email',
+      includeCostDetail: true,
+      includeSignature: false,
+      showGrandTotal: false,
+    }));
   });
 
   it('confirms before deleting a draft', async () => {

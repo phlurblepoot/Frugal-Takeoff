@@ -16,11 +16,14 @@ const money = (cents: number) => formatCurrency(cents / 100);
 
 // Amount fields are edited in dollars but stored in integer cents, so the
 // input keeps its own text while focused and only converts on commit.
+// The control is <input type="number">, so the browser has already rejected
+// anything that isn't a number by the time this runs — a cleared or unparsable
+// field returns null and the caller restores the previous amount rather than
+// silently pricing the line at $0.
 const fmtAmount = (cents: number) => (cents / 100).toFixed(2);
 const parseAmount = (text: string): number | null => {
-  const cleaned = text.replace(/[$,\s]/g, '');
-  if (!cleaned) return 0;
-  const n = Number(cleaned);
+  if (!text.trim()) return null;
+  const n = Number(text);
   return Number.isFinite(n) ? toCents(n) : null;
 };
 
@@ -61,6 +64,9 @@ const LineRow: React.FC<{
     // Pricing a takeoff line by hand is deliberate and slightly dangerous —
     // it silently decouples the proposal from the measured work — so it is
     // confirmed. The takeoff itself is never written to.
+    // A takeoff line with no derived amount (an older row, or one whose
+    // takeoff never produced a total) has nothing to diverge FROM: it is
+    // edited freely, and isOverridden() likewise never calls it overridden.
     if (line.kind === 'takeoff' && derived !== null && next !== derived) {
       const ok = await confirm({
         title: 'Use a different amount?',
@@ -159,12 +165,17 @@ export const PricingLinesCard: React.FC<{
   const takeoffLines = lines.filter(l => l.kind === 'takeoff');
   const manualLines = lines.filter(l => l.kind === 'manual');
 
+  // Array order IS the print order (the editor strips ids and sortOrder on
+  // save and the server re-assigns from position), but sortOrder is kept
+  // consistent with it anywhere the ORDER changes so nothing downstream can
+  // read a stale number.
+  const reorder = (next: ProposalLine[]) => onChange(next.map((l, i) => ({ ...l, sortOrder: i })));
+
   const update = (id: string, patch: Partial<ProposalLine>) => onChange(lines.map(l => (l.id === id ? { ...l, ...patch } : l)));
-  const remove = (id: string) => onChange(lines.filter(l => l.id !== id));
+  const remove = (id: string) => reorder(lines.filter(l => l.id !== id));
 
   // Reordering stays inside a kind group — takeoff lines print above manual
-  // ones — so a move swaps with the nearest neighbour of the same kind and
-  // then renumbers sortOrder across the whole array.
+  // ones — so a move swaps with the nearest neighbour of the same kind.
   const move = (id: string, dir: -1 | 1) => {
     const idx = lines.findIndex(l => l.id === id);
     if (idx < 0) return;
@@ -174,14 +185,14 @@ export const PricingLinesCard: React.FC<{
     if (j < 0 || j >= lines.length) return;
     const next = [...lines];
     [next[idx], next[j]] = [next[j], next[idx]];
-    onChange(next.map((l, i) => ({ ...l, sortOrder: i })));
+    reorder(next);
   };
 
   const availableTakeoffs = takeoffTotals.filter(t => !takeoffLines.some(l => l.takeoffId === t.id));
   const addTakeoff = (t: TakeoffTotals) =>
-    onChange([...lines, { id: uuidv4(), sortOrder: lines.length, ...lineFromTakeoff(t) } as ProposalLine]);
+    reorder([...lines, { id: uuidv4(), sortOrder: lines.length, ...lineFromTakeoff(t) } as ProposalLine]);
   const addManual = (mem?: ManualLineMemory) =>
-    onChange([...lines, {
+    reorder([...lines, {
       id: uuidv4(), sortOrder: lines.length, kind: 'manual', takeoffId: null,
       description: mem?.description ?? '', amountCents: mem?.amountCents ?? 0,
       derivedAmountCents: null, measurementSummary: null, isAlternate: false,

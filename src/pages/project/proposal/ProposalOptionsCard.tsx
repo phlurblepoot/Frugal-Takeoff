@@ -84,20 +84,21 @@ export const ProposalOptionsCard: React.FC<{
         )}
       </div>
 
-      {canIncludeHighlights && includeHighlights && (
-        <Field label="Highlight quality" htmlFor="proposal-quality">
-          <Select
-            id="proposal-quality"
-            value={value.highlightQuality}
-            disabled={readOnly}
-            onChange={e => onChange({ highlightQuality: e.target.value as HighlightQuality })}
-          >
-            {(Object.keys(HIGHLIGHT_QUALITY_PRESETS) as HighlightQuality[]).map(q => (
-              <option key={q} value={q}>{HIGHLIGHT_QUALITY_PRESETS[q].label}</option>
-            ))}
-          </Select>
-        </Field>
-      )}
+      {/* Not gated on the highlights checkbox: quality is a stored proposal
+          column, and 'email' shrinks the WHOLE generated PDF — photos and
+          attachments included — not just the highlighted plan pages. */}
+      <Field label="PDF quality" htmlFor="proposal-quality">
+        <Select
+          id="proposal-quality"
+          value={value.highlightQuality}
+          disabled={readOnly}
+          onChange={e => onChange({ highlightQuality: e.target.value as HighlightQuality })}
+        >
+          {(Object.keys(HIGHLIGHT_QUALITY_PRESETS) as HighlightQuality[]).map(q => (
+            <option key={q} value={q}>{HIGHLIGHT_QUALITY_PRESETS[q].label}</option>
+          ))}
+        </Select>
+      </Field>
     </CardBody>
   </Card>
 );

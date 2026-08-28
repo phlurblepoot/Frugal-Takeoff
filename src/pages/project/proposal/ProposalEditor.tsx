@@ -115,11 +115,22 @@ export const ProposalEditor: React.FC = () => {
           setDirty(false);
           return;
         }
+        // Without the project there are no takeoffs to compare against, and a
+        // re-derive would flag EVERY takeoff line as "no longer exists" —
+        // offering to delete real work because one fetch failed. Leave the
+        // saved lines alone and say so instead.
+        if (!proj) {
+          setDraft(draftFrom(p, p.lines));
+          setMissingTakeoffIds([]);
+          setDirty(false);
+          toast("Couldn't load takeoffs — amounts not refreshed", { type: 'warning' });
+          return;
+        }
         // Re-derive against the CURRENT takeoffs so a draft always prices the
         // work as it stands today; overridden lines keep their hand-set
         // amount (proposalMath.rederiveLines), and takeoffs that vanished are
         // flagged rather than silently zeroed.
-        const totals = proj ? computeTakeoffTotals(proj, computeRevisionModel(proj, '').currentPageIds) : [];
+        const totals = computeTakeoffTotals(proj, computeRevisionModel(proj, '').currentPageIds);
         const { lines, missingTakeoffIds: missing } = rederiveLines(p.lines, totals);
         setDraft(draftFrom(p, lines));
         setMissingTakeoffIds(missing);

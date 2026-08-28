@@ -38,6 +38,7 @@ import {
   normalizeHighlightQuality,
 } from './project/proposal/proposalGenerator';
 import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './project/proposal/shrinkPdf';
+import { optionDefaultsFromPrefs } from './project/proposal/proposalPrefs';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
@@ -1344,7 +1345,13 @@ export const ProjectView: React.FC = () => {
   const handleCreateProposal = async () => {
     if (!project || selectedTakeoffIds.size === 0) return;
     try {
-      const { id } = await createProposal(project.id, { takeoffIds: [...selectedTakeoffIds] });
+      // Same last-used document options a blank proposal gets (ProposalsList's
+      // handleNew) — best-effort, so an offline prefs fetch is not fatal.
+      const prefs = await getUserPreferences().catch(() => ({} as Record<string, string>));
+      const { id } = await createProposal(project.id, {
+        takeoffIds: [...selectedTakeoffIds],
+        ...optionDefaultsFromPrefs(prefs),
+      });
       navigate(`/project/${project.id}/proposal/${id}`);
     } catch {
       toast('Failed to create proposal', { type: 'error' });
