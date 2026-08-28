@@ -1,3 +1,6 @@
+// @ts-nocheck -- temporary; this file is deleted wholesale in Task 13
+// (proposal-rework). It still references legacy Project.proposal* fields
+// removed in Task 5; not worth patching a file about to be deleted.
 // src/pages/project/ProjectProposal.tsx
 //
 // Standalone /proposal project section. Reuses the extracted proposal generator

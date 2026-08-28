@@ -354,19 +354,6 @@ export const testSmtpConnection = async (): Promise<void> => {
   await handleResponse(res);
 };
 
-export const sendProjectProposal = async (
-  projectId: string,
-  payload: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }
-): Promise<Project> => {
-  const res = await fetch(`/api/projects/${projectId}/send-proposal`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(payload),
-  });
-  await handleResponse(res);
-  return await res.json();
-};
-
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
   const res = await fetch(`/api/projects/${projectId}/notes`, { headers: getAuthHeaders() });
   await handleResponse(res);
@@ -748,6 +735,7 @@ export interface DocumentFilters {
   projectIds?: string[];
   customerIds?: string[];
   kinds?: string[];
+  mimes?: string[];
   q?: string;
   archived?: boolean;
   // Admin-only exclusive view — ignored by the server for non-admins. See
@@ -764,6 +752,7 @@ export const getDocuments = async (
   if (filters.projectIds?.length) p.set('projectIds', filters.projectIds.join(','));
   if (filters.customerIds?.length) p.set('customerIds', filters.customerIds.join(','));
   if (filters.kinds?.length) p.set('kinds', filters.kinds.join(','));
+  if (filters.mimes?.length) p.set('mimes', filters.mimes.join(','));
   if (filters.q) p.set('q', filters.q);
   if (filters.archived) p.set('archived', '1');
   if (filters.unassigned) p.set('unassigned', '1');
@@ -1234,6 +1223,94 @@ export const getDailyWeather = async (projectId: string, date: string): Promise<
   }
   if (!res.ok) throw new Error('weather_unavailable');
   return res.json();
+};
+
+// ── Proposals (admin-only; spec 2026-08-28) ─────────────────────────────────
+
+export type ProposalStatus = 'draft' | 'sent' | 'accepted' | 'declined';
+export interface ProposalLine {
+  id: string; sortOrder: number; kind: 'manual' | 'takeoff'; takeoffId: string | null;
+  description: string; amountCents: number; derivedAmountCents: number | null;
+  measurementSummary: string | null; isAlternate: boolean;
+}
+export interface ProposalLineInput extends Omit<ProposalLine, 'id' | 'sortOrder'> { id?: string }
+export interface ProposalPhoto { id: string; fileId: string; sortOrder: number; caption: string | null }
+export interface ProposalAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
+export interface PaymentScheduleRow { description: string; percent: number | null; amountCents: number | null }
+export interface ProposalSummary {
+  id: string; projectId: string; number: number; revisedFromId: string | null; revisedFromNumber: number | null;
+  status: ProposalStatus; legacy: boolean; title: string | null; validUntil: string | null;
+  fontFamily: 'helvetica' | 'times' | 'courier' | null; coverNotes: string | null; terms: string | null;
+  inclusions: string[]; exclusions: string[]; paymentSchedule: PaymentScheduleRow[] | null;
+  showGrandTotal: boolean; includeCostDetail: boolean; includeSignature: boolean; highlightQuality: 'best' | 'email';
+  fileId: string | null; signedFileId: string | null;
+  sentAt: number | null; sentTo: { to: string; cc?: string; subject: string } | null;
+  acceptedAt: number | null; declinedAt: number | null;
+  version: number; createdBy: string | null; createdAt: number; updatedAt: number;
+  totalCents: number; alternateCount: number; hasOverride: boolean; photoCount: number; attachmentCount: number;
+}
+export interface Proposal extends ProposalSummary { lines: ProposalLine[]; photos: ProposalPhoto[]; attachments: ProposalAttachment[] }
+export interface OutstandingProposal extends ProposalSummary { projectName: string | null }
+export interface ProposalSaveInput {
+  version: number; title?: string | null; validUntil?: string | null; fontFamily?: string | null;
+  coverNotes?: string | null; terms?: string | null; inclusions?: string[]; exclusions?: string[];
+  paymentSchedule?: PaymentScheduleRow[] | null; showGrandTotal?: boolean; includeCostDetail?: boolean;
+  includeSignature?: boolean; highlightQuality?: 'best' | 'email'; lines?: ProposalLineInput[];
+}
+export class ProposalLockedError extends Error { constructor() { super('Proposal is locked'); this.name = 'ProposalLockedError'; } }
+const proposalJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, { method, headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+// 409s carry a `code`: locked (not a draft) vs version_conflict (stale save).
+const handleProposalResponse = async (res: Response, id: string) => {
+  if (res.status === 409) {
+    // The body is consumed here rather than via res.clone() — every call
+    // site either throws immediately after (this branch) or never reads
+    // the body again, so there's nothing left to clone for.
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'locked') throw new ProposalLockedError();
+    throw new ConflictError(id);
+  }
+  await handleResponse(res);
+};
+export const getProposals = async (projectId: string): Promise<ProposalSummary[]> => {
+  const res = await proposalJson('GET', `/api/projects/${projectId}/proposals`); await handleResponse(res); return res.json();
+};
+export const getOutstandingProposals = async (): Promise<OutstandingProposal[]> => {
+  const res = await proposalJson('GET', '/api/proposals/outstanding'); await handleResponse(res); return res.json();
+};
+export const getProposal = async (id: string): Promise<Proposal> => {
+  const res = await proposalJson('GET', `/api/proposals/${id}`); await handleResponse(res); return res.json();
+};
+export const createProposal = async (projectId: string, input: { takeoffIds?: string[]; revisedFromId?: string; carryPhotos?: boolean; carryAttachments?: boolean } & Partial<Omit<ProposalSaveInput, 'version'>>) => {
+  const res = await proposalJson('POST', `/api/projects/${projectId}/proposals`, input); await handleResponse(res);
+  return res.json() as Promise<{ id: string; number: number; version: number }>;
+};
+export const saveProposal = async (id: string, input: ProposalSaveInput): Promise<{ version: number }> => {
+  const res = await proposalJson('PUT', `/api/proposals/${id}`, input); await handleProposalResponse(res, id); return res.json();
+};
+export const deleteProposal = async (id: string): Promise<void> => {
+  const res = await proposalJson('DELETE', `/api/proposals/${id}`); await handleProposalResponse(res, id);
+};
+export const setProposalFile = async (id: string, fileId: string): Promise<void> => {
+  const res = await proposalJson('POST', `/api/proposals/${id}/file`, { fileId }); await handleProposalResponse(res, id);
+};
+const sub = (name: 'photos' | 'attachments') => ({
+  add: async (id: string, fileId: string) => { const res = await proposalJson('POST', `/api/proposals/${id}/${name}`, { fileId }); await handleProposalResponse(res, id); },
+  update: async (id: string, fileId: string, patch: Record<string, unknown>) => { const res = await proposalJson('PATCH', `/api/proposals/${id}/${name}/${encodeURIComponent(fileId)}`, patch); await handleProposalResponse(res, id); },
+  remove: async (id: string, fileId: string) => { const res = await proposalJson('DELETE', `/api/proposals/${id}/${name}/${encodeURIComponent(fileId)}`); await handleProposalResponse(res, id); },
+});
+const photosApi = sub('photos'); const attachmentsApi = sub('attachments');
+export const addProposalPhoto = photosApi.add;
+export const updateProposalPhoto = (id: string, fileId: string, patch: { caption?: string | null; sortOrder?: number }) => photosApi.update(id, fileId, patch);
+export const removeProposalPhoto = photosApi.remove;
+export const addProposalAttachment = attachmentsApi.add;
+export const updateProposalAttachment = (id: string, fileId: string, patch: { sortOrder: number }) => attachmentsApi.update(id, fileId, patch);
+export const removeProposalAttachment = attachmentsApi.remove;
+export const setProposalStatus = async (id: string, status: 'accepted' | 'declined', signedFileId?: string | null): Promise<{ version: number }> => {
+  const res = await proposalJson('POST', `/api/proposals/${id}/status`, { status, signedFileId: signedFileId ?? null }); await handleResponse(res); return res.json();
+};
+export const sendProposal = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<{ version: number }> => {
+  const res = await proposalJson('POST', `/api/proposals/${id}/send`, payload); await handleProposalResponse(res, id); return res.json();
 };
 
 export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {

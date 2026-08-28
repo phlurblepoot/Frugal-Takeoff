@@ -22,7 +22,10 @@ const KIND_META: Record<string, KindMeta> = {
   other:                { label: 'Other',              tone: 'slate' },
   proposal:             { label: 'Proposal',           tone: 'blue' },
   'proposal-photo':     { label: 'Proposal Photo',     tone: 'blue' },
-  printout:             { label: 'Printout',           tone: 'slate' },
+  'proposal-signed':    { label: 'Signed Proposal',    tone: 'blue' },
+  'takeoff-print':      { label: 'Takeoff Print',      tone: 'slate' },
+  'takeoff-export':     { label: 'Takeoff Export',     tone: 'green' },
+  'company-document':   { label: 'Company Document',   tone: 'violet' },
   'plan-source':        { label: 'Plan Set',           tone: 'slate' },
   invoice:              { label: 'Invoice',            tone: 'emerald' },
   'change-order':       { label: 'Change Order',       tone: 'amber' },
@@ -64,7 +67,7 @@ export const kindTone = (kind: string): PillTone =>
 // bundle). These are the only kinds a person can pick in the upload popup or
 // re-type a file into via "Change type", and the only ones a file may ever be
 // deleted outright (see documentsPolicy.ts).
-export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other'] as const;
+export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other', 'company-document'] as const;
 
 export const isDirectUploadKind = (kind: string): boolean =>
   (DIRECT_UPLOAD_KINDS as readonly string[]).includes(kind) || kind.startsWith('custom:');

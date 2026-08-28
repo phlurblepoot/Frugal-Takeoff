@@ -42,11 +42,9 @@ export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
           </button>
         </div>
 
-        {project.proposalSentAt && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/40 text-xs text-emerald-700 dark:text-emerald-300">
-            Proposal sent {new Date(project.proposalSentAt).toLocaleString()}
-          </div>
-        )}
+        {/* Proposal-sent badge removed (proposalSentAt lived on Project;
+            proposal send status now lives on the Proposal itself — see the
+            Proposal section, sentAt/sentTo on ProposalSummary). */}
 
         {(() => {
           const thread = project.emails && project.emails.length > 0
