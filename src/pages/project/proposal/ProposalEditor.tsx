@@ -104,8 +104,10 @@ export const ProposalEditor: React.FC = () => {
     // the one failure this section cannot have. Generate is the preview path;
     // this is the one that goes to the client, stamped with their chosen
     // from-address. A render that fails aborts the send rather than falling
-    // back to the old document.
+    // back to the old document. `busy` covers this render phase too — same
+    // as Generate — so the two can't race each other into overlapping renders.
     let fileId: string;
+    setBusy(true);
     try {
       fileId = await renderAndStore(m.headerEmail);
     } catch (e) {
@@ -114,6 +116,7 @@ export const ProposalEditor: React.FC = () => {
       toast('Could not generate the proposal PDF — nothing was sent', { type: 'error' });
       throw e;
     } finally {
+      setBusy(false);
       setProgress('');
     }
     try {
@@ -142,8 +145,10 @@ export const ProposalEditor: React.FC = () => {
   const noProject = !project ? "Couldn't load the project — reload the page" : undefined;
   const generateBlockedReason = noProject;
   // Send renders its own PDF, so it needs no prior Generate — only a draft that
-  // is actually on the server.
-  const sendBlockedReason = noProject ?? (dirty ? 'Save first' : undefined);
+  // is actually on the server and has something to price.
+  const sendBlockedReason = noProject
+    ?? (draft && draft.lines.length === 0 ? 'Add at least one price line' : undefined)
+    ?? (dirty ? 'Save first' : undefined);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">

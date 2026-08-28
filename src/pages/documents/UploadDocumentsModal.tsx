@@ -78,10 +78,25 @@ export const UploadDocumentsModal: React.FC<{
 
   const removeEntry = (id: string) => setEntries(prev => prev.filter(e => e.id !== id));
 
+  // Company documents aren't tied to a project (spec §Decisions): a project
+  // pick from a prior batch would silently carry over otherwise.
+  const isCompanyDocOnly = perFileType
+    ? entries.length > 0 && entries.every(e => e.kind === 'company-document')
+    : sharedKind === 'company-document';
+
   const changeSharedKind = (kind: string) => {
     setSharedKind(kind);
     if (!perFileType) setEntries(prev => prev.map(e => ({ ...e, kind })));
   };
+
+  // Clears whatever Project was picked (even from a prior batch) the moment
+  // the batch becomes company-document-only, from any of the paths that can
+  // get there: the shared Type select, toggling per-file typing, or editing
+  // an individual chip's type.
+  useEffect(() => {
+    if (isCompanyDocOnly) setProjectId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCompanyDocOnly]);
 
   const togglePerFileType = (checked: boolean) => {
     setPerFileType(checked);
@@ -223,8 +238,12 @@ export const UploadDocumentsModal: React.FC<{
               onChange={e => togglePerFileType(e.target.checked)}
             />
           </div>
-          <Field label="Project" htmlFor="upload-project" hint="Optional.">
-            <Select id="upload-project" value={projectId} onChange={e => onProjectChange(e.target.value)}>
+          <Field
+            label="Project"
+            htmlFor="upload-project"
+            hint={isCompanyDocOnly ? "Company documents aren't tied to a project." : 'Optional.'}
+          >
+            <Select id="upload-project" value={projectId} disabled={isCompanyDocOnly} onChange={e => onProjectChange(e.target.value)}>
               <option value="">— none —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>

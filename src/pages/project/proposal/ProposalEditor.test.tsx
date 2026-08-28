@@ -285,4 +285,34 @@ describe('ProposalEditor smoke', () => {
       proposal.fileId = null;
     }
   });
+
+  it('blocks Send when the draft has no price lines, same message as Generate', async () => {
+    const savedLines = proposal.lines;
+    proposal.lines = [];
+    try {
+      renderEditor();
+      await screen.findByText('#2');
+      expect(screen.getByTestId('btn-send-proposal')).toBeDisabled();
+      expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Add at least one price line');
+    } finally {
+      proposal.lines = savedLines;
+    }
+  });
+
+  it('disables Generate while a send is rendering its own PDF, re-enabling once it settles', async () => {
+    let release = () => {};
+    buildProposalPdf.mockImplementationOnce(() => new Promise(resolve => {
+      release = () => resolve({
+        pdfBytes: new Uint8Array([1, 2, 3]).buffer as ArrayBuffer,
+        suggestedName: 'Proposal – Test – 2026-08-28', overBudget: false, sections: {},
+      });
+    }));
+    const dialog = await openComposer();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(screen.getByTestId('btn-generate-proposal')).toBeDisabled());
+    await act(async () => { release(); });
+    await waitFor(() => expect(sendProposal).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('btn-generate-proposal')).toBeEnabled());
+  });
 });
