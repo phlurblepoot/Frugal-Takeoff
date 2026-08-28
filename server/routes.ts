@@ -63,6 +63,8 @@ import {
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
+import { registerProposalRoutes, proposalErr } from './proposalRoutes';
+import { getProposal, markSent, LockedError as ProposalLockedError } from './proposalStore';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -1546,6 +1548,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     }
     catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
   });
+
+  registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
 }
 
 // ── Email send routes ────────────────────────────────────────────────────────
@@ -1690,48 +1694,30 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     }
   });
 
-  // Send a proposal as a reply to the email stored on a project
-  app.post('/api/projects/:id/send-proposal', authenticateToken, async (req, res) => {
+  // Send a proposal PDF via SMTP (admin only). Marks sent only after SMTP succeeds.
+  app.post('/api/proposals/:id/send', authenticateToken, requireAdmin, async (req, res) => {
     try {
-      const project = loadProject(db, req.params.id);
-      if (!project) return res.status(404).json({ error: 'Project not found' });
-
-      const { fileId, message, to, cc, bcc, subject: subjectIn, body, attachmentFileIds } = req.body as SendBody;
-      const toAddress = (typeof to === 'string' && to.trim()) ? to.trim() : (project.email?.from || '');
-      if (!toAddress) return res.status(400).json({ error: 'No recipient address' });
-
-      const subject = subjectIn?.trim() || (project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name ?? 'Untitled'}`);
-
+      const p = getProposal(db, req.params.id);
+      if (!p) return res.status(404).json({ error: 'Proposal not found' });
+      if (p.legacy || p.status !== 'draft') return res.status(409).json({ error: 'Proposal already sent', code: 'locked' });
+      const { to, fileId, message, cc, bcc, subject: subjectIn, body, attachmentFileIds } = req.body as SendBody;
+      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
+      const project = loadProject(db, p.projectId);
+      const subject = subjectIn?.trim() || `Proposal — ${project?.name ?? 'Untitled'}`;
       await send((req as any).user.id, {
-        to: toAddress,
-        cc,
-        bcc,
-        subject,
+        to, cc, bcc, subject,
         text: body ?? message ?? 'Please find the attached proposal.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: 'Proposal.pdf' }, attachmentFileIds),
-        inReplyTo: project.email?.messageId || undefined,
+        inReplyTo: project?.email?.messageId || undefined,
       });
-
-      logActivity(db, {
-        projectId: req.params.id, userId: (req as any).user?.id,
-        type: 'proposal_sent', message: `Proposal emailed for "${project.name ?? 'Untitled'}"`,
-      });
-
-      // Reload after the SMTP await so a concurrent edit during the send can't
-      // make the version-checked save fail and strand a sent proposal. With no
-      // await between this load and the save, nothing can interleave.
-      const fresh = loadProject(db, req.params.id) ?? project;
-      const updatedProject = { ...fresh, proposalFileId: fileId, proposalSentAt: Date.now() };
-      saveProject(db, req.params.id, updatedProject, dataDir);
-      const saved = loadProject(db, req.params.id);
-      deps.broadcastChange({
-        type: 'project', id: req.params.id, projectId: req.params.id,
-        version: saved?.version, action: 'updated', ...requestMeta(req),
-      });
-      res.json(saved);
-    } catch (error: any) {
-      console.error('Error sending project proposal:', error);
-      res.status(500).json({ error: error.message || 'Failed to send proposal' });
+      const r = markSent(db, p.id, { to, cc, subject });
+      logActivity(db, { projectId: p.projectId, userId: (req as any).user?.id, type: 'proposal_sent', message: `Proposal #${p.number} emailed to ${to}` });
+      deps.broadcastChange({ type: 'proposal', id: p.id, projectId: p.projectId, version: r.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
+    } catch (e: any) {
+      if (e instanceof ProposalLockedError) return proposalErr(e, res);
+      console.error('Error sending proposal:', e);
+      res.status(500).json({ error: e.message || 'Failed to send proposal' });
     }
   });
 

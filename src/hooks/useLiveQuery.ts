@@ -5,7 +5,7 @@ import { CLIENT_SESSION_ID } from '../utils/clientSession';
 export type EntityType =
   | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'punch'
   | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
-  | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template';
+  | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template' | 'proposal';
 
 export interface EntityChangedEvent {
   type: EntityType; id: string; projectId?: string; version?: number;
