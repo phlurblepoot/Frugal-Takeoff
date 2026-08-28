@@ -26,6 +26,8 @@ import { PricingLinesCard } from './PricingLinesCard';
 import { InclusionsExclusionsCard } from './InclusionsExclusionsCard';
 import { PaymentScheduleCard } from './PaymentScheduleCard';
 import { ProposalOptionsCard, type ProposalOptionsValue } from './ProposalOptionsCard';
+import { ProposalPhotosCard } from './ProposalPhotosCard';
+import { ProposalAttachmentsCard } from './ProposalAttachmentsCard';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
@@ -396,7 +398,19 @@ export const ProposalEditor: React.FC = () => {
             onIncludeHighlightsChange={setIncludeHighlights}
           />
 
-          {/* Task 12: ProposalPhotosCard + ProposalAttachmentsCard */}
+          <ProposalPhotosCard
+            proposal={proposal}
+            projectId={projectId!}
+            readOnly={readOnly}
+            onChanged={load}
+          />
+
+          <ProposalAttachmentsCard
+            proposal={proposal}
+            projectId={projectId!}
+            readOnly={readOnly}
+            onChanged={load}
+          />
         </div>
       )}
     </div>
