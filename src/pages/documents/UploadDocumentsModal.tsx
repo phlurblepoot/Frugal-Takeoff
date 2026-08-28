@@ -89,12 +89,12 @@ export const UploadDocumentsModal: React.FC<{
     if (!perFileType) setEntries(prev => prev.map(e => ({ ...e, kind })));
   };
 
-  // Clears whatever Project was picked (even from a prior batch) the moment
-  // the batch becomes company-document-only, from any of the paths that can
-  // get there: the shared Type select, toggling per-file typing, or editing
-  // an individual chip's type.
+  // Clears whatever Project/Customer was picked (even from a prior batch) the
+  // moment the batch becomes company-document-only, from any of the paths
+  // that can get there: the shared Type select, toggling per-file typing, or
+  // editing an individual chip's type.
   useEffect(() => {
-    if (isCompanyDocOnly) setProjectId('');
+    if (isCompanyDocOnly) { setProjectId(''); setCustomerId(''); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCompanyDocOnly]);
 
@@ -253,8 +253,12 @@ export const UploadDocumentsModal: React.FC<{
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           </Field>
-          <Field label="Customer" htmlFor="upload-customer" hint={projectId ? 'Set by the selected project.' : undefined}>
-            <Select id="upload-customer" value={customerId} disabled={!!projectId} onChange={e => setCustomerId(e.target.value)}>
+          <Field
+            label="Customer"
+            htmlFor="upload-customer"
+            hint={isCompanyDocOnly ? "Company documents aren't tied to a customer." : projectId ? 'Set by the selected project.' : undefined}
+          >
+            <Select id="upload-customer" value={customerId} disabled={isCompanyDocOnly || !!projectId} onChange={e => setCustomerId(e.target.value)}>
               <option value="">— none —</option>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>

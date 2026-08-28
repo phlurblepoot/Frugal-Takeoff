@@ -19,6 +19,7 @@ vi.mock('../../utils/store', async (importOriginal) => {
 const png = (name = 'shot.png') => new File([new Uint8Array([1])], name, { type: 'image/png' });
 
 const project = { id: 'proj1', name: 'Test Project', customerId: 'cust1' } as any;
+const customer = { id: 'cust2', name: 'Test Customer' } as any;
 
 const renderModal = (initialFiles?: File[]) =>
   render(
@@ -28,7 +29,7 @@ const renderModal = (initialFiles?: File[]) =>
         onClose={() => {}}
         onUploaded={() => {}}
         projects={[project]}
-        customers={[]}
+        customers={[customer]}
         customTypes={[]}
         initialFiles={initialFiles}
       />
@@ -91,6 +92,31 @@ describe('UploadDocumentsModal', () => {
     await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1));
     expect(saveBinaryFile.mock.calls[0][2]).toMatchObject({ kind: 'company-document' });
     expect(saveBinaryFile.mock.calls[0][2]).not.toHaveProperty('projectId');
+  });
+
+  it('selecting company-document disables and clears the Customer select and uploads carry no customerId', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'cust2' } });
+    expect((screen.getByLabelText('Customer') as HTMLSelectElement).value).toBe('cust2');
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Customer')).toBeDisabled();
+    expect((screen.getByLabelText('Customer') as HTMLSelectElement).value).toBe('');
+    expect(screen.getByText("Company documents aren't tied to a customer.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload \(1\)/ }));
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1));
+    expect(saveBinaryFile.mock.calls[0][2]).toMatchObject({ kind: 'company-document' });
+    expect(saveBinaryFile.mock.calls[0][2]).not.toHaveProperty('customerId');
+  });
+
+  it('re-enables the Customer select when the Type is changed away from company-document', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Customer')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'document' } });
+    expect(screen.getByLabelText('Customer')).toBeEnabled();
   });
 
   it('gates projectId/customerId per entry when per-file typing mixes company-document with a project-tagged file', async () => {
