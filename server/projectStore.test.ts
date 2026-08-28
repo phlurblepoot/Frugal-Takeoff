@@ -70,19 +70,21 @@ beforeEach(() => {
   runMigrations(db, dir, migrations.filter(m => m.version <= 4));
 });
 
-const seedLegacyAndNormalize = (blob: any) => {
+// migrationCap: leave undefined to run the full (latest) migrations array —
+// the default for round-trip/saveProject tests. Pass 27 only for the
+// "saveProject source-side file cascade" block below, which still exercises
+// the pre-proposals p.printouts/proposalPhotoIds cascade in
+// saveProject/loadProject (that logic — and these tests — are superseded
+// once proposals become first-class rows, in a later task).
+const seedLegacyAndNormalize = (blob: any, migrationCap?: number) => {
   db.prepare('INSERT INTO projects (id, data, createdAt) VALUES (?, ?, ?)')
     .run(blob.id, JSON.stringify(blob), blob.createdAt);
   // also seed referenced files so labeling has rows to update
   for (const fid of ['thumb1', 'pdf1', 'raster1', 'pofile1', 'prop1', 'att1']) {
     db.prepare(`INSERT INTO files (id, mime, size, sha256, kind, createdAt) VALUES (?, 'application/octet-stream', 1, 'x', 'other', 1)`).run(fid);
   }
-  // Capped at 27 (pre-proposals): this fixture exercises migration 5's
-  // legacy-JSON normalization and the printouts/proposalFileId cascade in
-  // saveProject/loadProject, not migration 28's legacy proposal/printout
-  // data transform (which converts those same meta fields into first-class
-  // proposal rows and would otherwise interfere with this fixture).
-  runMigrations(db, dir, migrations.filter(m => m.version <= 27)); // applies migration 5
+  const set = migrationCap == null ? migrations : migrations.filter(m => m.version <= migrationCap);
+  runMigrations(db, dir, set); // applies migration 5 (and, by default, everything after it)
 };
 
 describe('migration 5 + loadProject round-trip', () => {
@@ -105,7 +107,12 @@ describe('migration 5 + loadProject round-trip', () => {
     // Two-stage lifecycle (spec 2026-08-16): full-document saves normalize to
     // bidding|in_progress; meta.accepted drives in_progress, everything else
     // (including this fixture's submitted:true) is a bid.
-    expect(loaded).toEqual({ ...LEGACY_PROJECT, version: 1, status: 'bidding' });
+    // Migration 28 converts the legacy printouts/proposalFileId into
+    // first-class proposal rows and strips both keys from meta — they were
+    // never re-surfaced onto the loaded project shape (that's a later task),
+    // so exclude them from the exact-shape comparison too.
+    const { printouts: _printouts, proposalFileId: _proposalFileId, ...expectedRest } = LEGACY_PROJECT;
+    expect(loaded).toEqual({ ...expectedRest, version: 1, status: 'bidding' });
   });
 
   it('nulls out the legacy data blob', () => {
@@ -124,7 +131,11 @@ describe('migration 5 + loadProject round-trip', () => {
       .toEqual({ sourceType: 'plan-set', sourceId: 'ps1' });
     expect(kind('thumb1')).toEqual({ projectId: 'proj1', kind: 'plan' });
     expect(kind('raster1')).toEqual({ projectId: 'proj1', kind: 'plan' });
-    expect(kind('pofile1')).toEqual({ projectId: 'proj1', kind: 'printout' });
+    // Migration 23 first labels pofile1 `printout`; migration 28 then relabels
+    // this non-proposal-named printout as a `takeoff-print` document (prop1's
+    // `proposal` kind is unaffected — 28 only repoints its sourceId, which
+    // this assertion doesn't check).
+    expect(kind('pofile1')).toEqual({ projectId: 'proj1', kind: 'takeoff-print' });
     expect(kind('prop1')).toEqual({ projectId: 'proj1', kind: 'proposal' });
     expect(kind('att1')).toEqual({ projectId: 'proj1', kind: 'document' });
   });
@@ -146,8 +157,7 @@ describe('migration 5 + loadProject round-trip', () => {
     ins.run('badNull', 'null', 1);
     ins.run('badArr', '[1,2]', 2);
     ins.run(LEGACY_PROJECT.id, JSON.stringify(LEGACY_PROJECT), LEGACY_PROJECT.createdAt);
-    // Capped at 27 for the same reason as seedLegacyAndNormalize above.
-    expect(() => runMigrations(db, dir, migrations.filter(m => m.version <= 27))).not.toThrow();
+    expect(() => runMigrations(db, dir, migrations)).not.toThrow();
     // the valid project normalized
     expect(loadProject(db, 'proj1')!.name).toBe('Maple St Office');
     expect((db.prepare('SELECT data FROM projects WHERE id = ?').get('proj1') as any).data).toBeNull();
@@ -244,7 +254,9 @@ describe('saveProject', () => {
 // a live project — dropping the entry here is the only moment their bytes can
 // be reclaimed.
 describe('saveProject source-side file cascade', () => {
-  beforeEach(() => seedLegacyAndNormalize(LEGACY_PROJECT));
+  // Capped at 27 (pre-proposals): exercises the old p.printouts/proposalPhotoIds
+  // cascade directly, which migration 28 (in a full run) would convert away.
+  beforeEach(() => seedLegacyAndNormalize(LEGACY_PROJECT, 27));
 
   // A live file with real bytes plus one archived version row, i.e. everything
   // a printout that has been regenerated once would have.

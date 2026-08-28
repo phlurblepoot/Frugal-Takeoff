@@ -762,6 +762,30 @@ describe('migration 28 — proposals', () => {
     db.close();
   });
 
+  it('a non-proposal-named printout whose fileId matches proposalFileId becomes the sent proposal, not a takeoff print', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    const meta = {
+      printouts: [
+        { id: 'po-1', name: 'Printout - 3/3/2026, 9:00:00 AM', fileId: 'f-1', createdAt: 1000, type: 'pdf' },
+      ],
+      proposalFileId: 'f-1',
+      proposalSentAt: 1500,
+    };
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p3', 'Edge Job', 1, 1, 1, ?)`).run(JSON.stringify(meta));
+    db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES ('f-1', 'p3', 'Printout - 3/3/2026, 9:00:00 AM', 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, 1000, 'printout', 'po-1', 0)`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    const rows = db.prepare('SELECT * FROM proposals WHERE projectId = ?').all('p3') as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ number: 1, legacy: 1, status: 'sent', fileId: 'f-1', sentAt: 1500 });
+    const f = db.prepare('SELECT kind, sourceType, sourceId FROM files WHERE id = ?').get('f-1') as any;
+    expect(f).toEqual({ kind: 'proposal', sourceType: 'proposal', sourceId: rows[0].id });
+    db.close();
+  });
+
   it('attaches legacy proposal photos to the LATEST legacy proposal', () => {
     const db = seedLegacy();
     const latest = db.prepare('SELECT id FROM proposals WHERE projectId = ? ORDER BY number DESC LIMIT 1').get('p1') as any;

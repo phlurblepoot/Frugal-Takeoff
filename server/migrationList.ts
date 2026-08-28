@@ -1346,6 +1346,12 @@ export const migrations: Migration[] = [
         const projectName = (row.name && row.name.trim()) || 'Untitled';
         const printouts: any[] = Array.isArray(p.printouts) ? p.printouts.filter((x: any) => x && typeof x === 'object' && typeof x.fileId === 'string') : [];
         const isProposalPrintout = (po: any) => {
+          // A printout whose fileId IS the sent proposal is always a proposal
+          // printout, even if its own kind/name heuristics don't say so —
+          // otherwise it gets classified as sent-proposal AND relabeled as a
+          // takeoff print below, leaving proposals.fileId pointing at a
+          // mislabeled file.
+          if (typeof p.proposalFileId === 'string' && po.fileId === p.proposalFileId) return true;
           const f = fileKind.get(po.fileId) as { kind: string; name: string | null } | undefined;
           if (f?.kind === 'proposal') return true;
           const nm = String(po.name ?? f?.name ?? '');
