@@ -22,6 +22,7 @@ import { Project, MeasurementTakeoff } from '../../types';
 import { formatRealValue, calculateTakeoffTotalCost, calculateTakeoffCostDetails, roundUpTo100 } from '../../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails } from '../../utils/costAllocation';
 import { HIGHLIGHT_QUALITY_PRESETS, HighlightQuality, TakeoffTotals } from './proposal/proposalGenerator';
+import { takeoffPrintsUrl } from '../../utils/takeoffPrintNames';
 
 interface ProjectTakeoffsTabProps {
   // state / computed
@@ -40,9 +41,11 @@ interface ProjectTakeoffsTabProps {
   setShowTakeoffModal: (open: boolean) => void;
   setShowDeleteAllConfirm: (open: boolean) => void;
   setSelectedTakeoffIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  isAdmin: boolean;
   // handlers
   handlePrint: () => void;
   handleExportExcel: () => void;
+  onCreateProposal: () => void;
   toggleTakeoffSelection: (takeoffId: string) => void;
   toggleTakeoffExpanded: (takeoffId: string) => void;
   toggleTakeoffPageExpanded: (takeoffId: string, pageId: string) => void;
@@ -62,12 +65,14 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
   searchTerm,
   projectId,
   getTakeoffTotals,
+  isAdmin,
   setHighlightQuality,
   setShowTakeoffModal,
   setShowDeleteAllConfirm,
   setSelectedTakeoffIds,
   handlePrint,
   handleExportExcel,
+  onCreateProposal,
   toggleTakeoffSelection,
   toggleTakeoffExpanded,
   toggleTakeoffPageExpanded,
@@ -111,16 +116,20 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       {isExportingExcel ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
                       Excel ({selectedTakeoffIds.size})
                     </button>
-                    <button
-                      onClick={() => navigate(`/project/${projectId}/proposal`)}
-                      className="flex-1 sm:flex-none px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
-                    >
-                      <FileText size={14} />
-                      Proposal
-                    </button>
+                    {isAdmin && (
+                      <button
+                        data-testid="btn-proposal"
+                        onClick={onCreateProposal}
+                        className="flex-1 sm:flex-none px-3 py-2 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                      >
+                        <FileText size={14} />
+                        Proposal
+                      </button>
+                    )}
                   </div>
                 )}
                 <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <Link to={takeoffPrintsUrl(projectId ?? '')} className="text-xs text-accent-600 hover:underline whitespace-nowrap">Takeoff prints</Link>
                   {project.takeoffs.length > 0 && (
                     <button
                       onClick={() => setShowDeleteAllConfirm(true)}

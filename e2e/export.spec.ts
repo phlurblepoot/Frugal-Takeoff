@@ -1,7 +1,8 @@
 import { test, expect, seedProjectWithTakeoffMeasurement } from './fixtures/test';
 import type { Page } from '@playwright/test';
 
-// Characterization spec for the Takeoffs-tab exports (Print PDF + Excel).
+// Characterization spec for the Takeoffs-tab exports (Print PDF + Excel) and
+// the Proposal button (spec 2026-08-28-proposal-rework Task 9).
 //
 // IMPORTANT real-behavior notes (read handleExportExcel / handlePrint in
 // src/pages/ProjectView.tsx):
@@ -12,21 +13,20 @@ import type { Page } from '@playwright/test';
 //    The per-row select control is a bare <input type="checkbox"> inside the
 //    desktop takeoffs-table row (no dedicated testid), so we target it by role.
 //
-//  • Excel export does NOT trigger a browser download. handleExportExcel writes
-//    the workbook to the server via saveFile(), appends an "Excel Export - …"
-//    Printout (type 'excel') to project.printouts, then navigates to
-//    /project/:id/proposal. The actual file download lives elsewhere (the
-//    Proposal section's per-printout Download button). So the correct, real
-//    assertion here is: an Excel printout appears in the Proposal section's
-//    "Printout history" after the export. We do NOT assert on a download event,
-//    nor on workbook binary content.
+//  • Excel export does NOT trigger a browser download. handleExportExcel
+//    streams the workbook to the server as a `takeoff-export` document (named
+//    via takeoffPrintName()), then navigates to the filtered Documents view
+//    (takeoffPrintsUrl()). The actual file download lives on the Documents
+//    page itself. We do NOT assert on a download event, nor on workbook
+//    binary content.
 //
-//  • Print (handlePrint → buildHighlightsPdf) returns null and records NO
-//    printout unless some CURRENT page carries a measurement whose takeoffId is
-//    in the selected set. To exercise the full Print path without slow canvas
-//    drawing, we seed a project that already has one takeoff + one length
-//    measurement wired to it (seedProjectWithTakeoffMeasurement). On success it
-//    records a "Printout - …" entry (type 'pdf') and navigates to /proposal.
+//  • Print (handlePrint → buildHighlightsPdf) returns null and saves no
+//    document unless some CURRENT page carries a measurement whose takeoffId
+//    is in the selected set. To exercise the full Print path without slow
+//    canvas drawing, we seed a project that already has one takeoff + one
+//    length measurement wired to it (seedProjectWithTakeoffMeasurement). On
+//    success it saves a `takeoff-print` document and navigates to the
+//    filtered Documents view.
 //
 // Each test seeds a FRESH project to avoid cross-test bleed (shared server/DB).
 
@@ -71,11 +71,10 @@ test('Excel export records an Excel printout in the Proposal section', async ({
   await excelBtn.click();
 
   // characterization: NO browser download fires. handleExportExcel persists the
-  // workbook server-side, appends an "Excel Export - …" printout, and navigates
-  // to the Proposal section, where the printout history now shows it.
-  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal`));
-  await expect(authedPage.getByText('Printout history')).toBeVisible();
-  await expect(authedPage.getByText(/Excel Export -/)).toBeVisible();
+  // workbook server-side as a takeoff-export document and navigates to the
+  // filtered Documents view, where it now shows up.
+  await expect(authedPage).toHaveURL(new RegExp(`/documents\\?projectIds=${projectId}&kinds=takeoff-print(,|%2C)takeoff-export`), { timeout: 30_000 });
+  await expect(authedPage.getByText(/^Takeoff Export – /).first()).toBeVisible({ timeout: 15_000 });
 });
 
 test('Print records a PDF printout in the Proposal section', async ({
@@ -99,17 +98,11 @@ test('Print records a PDF printout in the Proposal section', async ({
 
   // Print rasterizes/stamps the highlights PDF — it can be slow. The seeded
   // measurement (bound to the selected takeoff) makes the page eligible, so
-  // buildHighlightsPdf returns bytes, a "Printout - …" entry is recorded, and
-  // handlePrint navigates to /proposal. Give it a generous timeout.
-  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal`), {
-    timeout: 30_000,
-  });
-  await expect(authedPage.getByText('Printout history')).toBeVisible();
-  // .first(): the Send-proposal card's "Attach proposal" <select> below also
-  // renders an <option> with this same printout name — a pre-existing
-  // strict-mode ambiguity (reproduces on the pre-SDD base commit too),
-  // unrelated to this change. Disambiguate to the visible history list item.
-  await expect(authedPage.getByText(/^Printout -/).first()).toBeVisible({ timeout: 15_000 });
+  // buildHighlightsPdf returns bytes, a takeoff-print document is saved, and
+  // handlePrint navigates to the filtered Documents view. Give it a generous
+  // timeout.
+  await expect(authedPage).toHaveURL(new RegExp(`/documents\\?projectIds=${projectId}&kinds=takeoff-print(,|%2C)takeoff-export`), { timeout: 30_000 });
+  await expect(authedPage.getByText(/^Takeoff Print – /).first()).toBeVisible({ timeout: 15_000 });
 });
 
 test('Print with Email-ready quality records a printout (pass-through path)', async ({
@@ -127,10 +120,26 @@ test('Print with Email-ready quality records a printout (pass-through path)', as
   await authedPage.getByTestId('btn-print').click();
 
   // Small seeded page → shrinkPdfToBudget's result is far under 18MB → the
-  // pass-through path (no re-render needed), and a printout is still recorded.
-  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal`), {
-    timeout: 30_000,
-  });
-  await expect(authedPage.getByText('Printout history')).toBeVisible();
-  await expect(authedPage.getByText(/^Printout -/).first()).toBeVisible({ timeout: 15_000 });
+  // pass-through path (no re-render needed), and a takeoff-print document is
+  // still saved.
+  await expect(authedPage).toHaveURL(new RegExp(`/documents\\?projectIds=${projectId}&kinds=takeoff-print(,|%2C)takeoff-export`), { timeout: 30_000 });
+  await expect(authedPage.getByText(/^Takeoff Print – /).first()).toBeVisible({ timeout: 15_000 });
+});
+
+test('Proposal button creates a draft seeded with the selected takeoffs and opens the editor', async ({ authedPage, apiToken, request }) => {
+  const { token } = apiToken;
+  const { projectId, takeoffName } = await seedProjectWithTakeoffMeasurement(request, token);
+  await gotoTakeoffsTab(authedPage, projectId);
+  await selectFirstTakeoff(authedPage);
+  await authedPage.getByTestId('btn-proposal').click();
+  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal/[0-9a-f-]{36}$`));
+  await expect(authedPage.getByTestId('pricing-lines')).toContainText(takeoffName);
+});
+
+test('Takeoff prints link goes to the filtered Documents view', async ({ authedPage, apiToken, request }) => {
+  const { token } = apiToken;
+  const { projectId } = await seedProjectWithTakeoffMeasurement(request, token);
+  await gotoTakeoffsTab(authedPage, projectId);
+  await authedPage.getByRole('link', { name: 'Takeoff prints' }).click();
+  await expect(authedPage).toHaveURL(new RegExp(`/documents\\?projectIds=${projectId}&kinds=takeoff-print`));
 });
