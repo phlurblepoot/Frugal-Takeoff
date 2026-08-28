@@ -77,7 +77,12 @@ const seedLegacyAndNormalize = (blob: any) => {
   for (const fid of ['thumb1', 'pdf1', 'raster1', 'pofile1', 'prop1', 'att1']) {
     db.prepare(`INSERT INTO files (id, mime, size, sha256, kind, createdAt) VALUES (?, 'application/octet-stream', 1, 'x', 'other', 1)`).run(fid);
   }
-  runMigrations(db, dir, migrations); // applies migration 5
+  // Capped at 27 (pre-proposals): this fixture exercises migration 5's
+  // legacy-JSON normalization and the printouts/proposalFileId cascade in
+  // saveProject/loadProject, not migration 28's legacy proposal/printout
+  // data transform (which converts those same meta fields into first-class
+  // proposal rows and would otherwise interfere with this fixture).
+  runMigrations(db, dir, migrations.filter(m => m.version <= 27)); // applies migration 5
 };
 
 describe('migration 5 + loadProject round-trip', () => {
@@ -141,7 +146,8 @@ describe('migration 5 + loadProject round-trip', () => {
     ins.run('badNull', 'null', 1);
     ins.run('badArr', '[1,2]', 2);
     ins.run(LEGACY_PROJECT.id, JSON.stringify(LEGACY_PROJECT), LEGACY_PROJECT.createdAt);
-    expect(() => runMigrations(db, dir, migrations)).not.toThrow();
+    // Capped at 27 for the same reason as seedLegacyAndNormalize above.
+    expect(() => runMigrations(db, dir, migrations.filter(m => m.version <= 27))).not.toThrow();
     // the valid project normalized
     expect(loadProject(db, 'proj1')!.name).toBe('Maple St Office');
     expect((db.prepare('SELECT data FROM projects WHERE id = ?').get('proj1') as any).data).toBeNull();
