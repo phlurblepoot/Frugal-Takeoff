@@ -14,6 +14,7 @@ import {
 import { Button, Card, CardBody, CardHeader } from '../../../components/ui';
 import { FilePickerModal } from '../../../components/FilePickerModal';
 import { useToast } from '../../../components/Toast';
+import { handleProposalCardError, toastProposalCardError } from './proposalCardErrors';
 
 const fmtSize = (n: number | null) => {
   if (n == null) return null;
@@ -50,31 +51,42 @@ export const ProposalAttachmentsCard: React.FC<{
     onChanged();
   };
 
+  // Mirrors handleUpload's count-and-summarize: a per-row failure (a stale
+  // fileId, or the proposal locking mid-pick) must not be swallowed silently
+  // — the picker can select many rows in one go.
   const handlePick = async (rows: DocumentRow[]) => {
+    let ok = 0;
     for (const row of rows) {
-      try { await addProposalAttachment(proposal.id, row.id); } catch { /* keep going */ }
+      try { await addProposalAttachment(proposal.id, row.id); ok++; } catch { /* keep going */ }
     }
-    onChanged();
+    if (ok < rows.length) toast(`Added ${ok} of ${rows.length} files`, { type: ok ? 'warning' : 'error' });
+    if (ok > 0) onChanged();
   };
 
+  // The two PATCHes are sequential rather than Promise.all'd: if the second
+  // one fails, the server is left with one attachment's sortOrder already
+  // moved — onChanged() always runs (via finally) so the card resyncs to
+  // whatever sortOrder the server actually ended up with, instead of showing
+  // a stale (and now duplicate) local order.
   const handleMove = async (index: number, dir: -1 | 1) => {
     const cur = attachments[index];
     const other = attachments[index + dir];
     if (!other) return;
     try {
-      await Promise.all([
-        updateProposalAttachment(cur.id, cur.fileId, { sortOrder: other.sortOrder }),
-        updateProposalAttachment(other.id, other.fileId, { sortOrder: cur.sortOrder }),
-      ]);
+      await updateProposalAttachment(cur.id, cur.fileId, { sortOrder: other.sortOrder });
+      await updateProposalAttachment(other.id, other.fileId, { sortOrder: cur.sortOrder });
+    } catch (e) {
+      toastProposalCardError(e, toast, 'Failed to reorder attachments');
+    } finally {
       onChanged();
-    } catch { toast('Failed to reorder attachments', { type: 'error' }); }
+    }
   };
 
   const handleRemove = async (attachment: ProposalAttachment) => {
     try {
       await removeProposalAttachment(proposal.id, attachment.fileId);
       onChanged();
-    } catch { toast('Failed to remove attachment', { type: 'error' }); }
+    } catch (e) { handleProposalCardError(e, toast, onChanged, 'Failed to remove attachment'); }
   };
 
   return (
