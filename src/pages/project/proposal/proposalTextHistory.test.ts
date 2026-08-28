@@ -43,6 +43,11 @@ describe('pushHistory', () => {
     expect(result.length).toBe(PROPOSAL_TEXT_HISTORY_MAX);
   });
 
+  it('honours an explicit cap', () => {
+    const history = ['1', '2', '3'];
+    expect(pushHistory(history, '4', 2)).toEqual(['4', '1']);
+  });
+
   it('returns a NEW array (not mutating the input) on a normal push', () => {
     const history = ['a', 'b'];
     const result = pushHistory(history, 'c');

@@ -6,16 +6,17 @@
 export const PROPOSAL_TEXT_HISTORY_MAX = 5;
 
 // Push `entry` onto `history` (newest first): trim, skip empty, dedup by
-// exact trimmed match (moving the dup to the front), cap at
-// PROPOSAL_TEXT_HISTORY_MAX. Returns a NEW array; returns `history` unchanged
-// (same reference) when entry is empty or already at front — so callers can
-// skip a save with a reference check.
-export function pushHistory(history: string[], entry: string): string[] {
+// exact trimmed match (moving the dup to the front), cap at `max`
+// (PROPOSAL_TEXT_HISTORY_MAX by default; the manual-line library keeps a
+// longer list). Returns a NEW array; returns `history` unchanged (same
+// reference) when entry is empty or already at front — so callers can skip a
+// save with a reference check.
+export function pushHistory(history: string[], entry: string, max = PROPOSAL_TEXT_HISTORY_MAX): string[] {
   const trimmed = entry.trim();
   if (!trimmed) return history;
   if (history[0] === trimmed) return history;
   const deduped = history.filter(h => h !== trimmed);
-  return [trimmed, ...deduped].slice(0, PROPOSAL_TEXT_HISTORY_MAX);
+  return [trimmed, ...deduped].slice(0, max);
 }
 
 // Parse a prefs JSON value into a safe string[]. Bad JSON, a non-array
