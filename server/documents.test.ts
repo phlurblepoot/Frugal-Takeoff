@@ -239,13 +239,13 @@ describe('GET /api/documents — clutter exclusions (spec 2026-08-17-documents-c
 });
 
 describe('GET /api/documents — role exclusion', () => {
-  it('non-admin excludes invoice/payapp-export/change-order/proposal but keeps change-order-photo and printout', async () => {
+  it('non-admin excludes invoice/payapp-export/change-order/proposal but keeps change-order-photo and takeoff-print', async () => {
     await upload('inv', { projectId: 'p1', kind: 'invoice', name: 'Inv.pdf' });
     await upload('pae', { projectId: 'p1', kind: 'payapp-export', name: 'PayApp.xlsx' });
     await upload('co', { projectId: 'p1', kind: 'change-order', name: 'CO.pdf' });
     await upload('prop', { projectId: 'p1', kind: 'proposal', name: 'Proposal.pdf' });
     const cop = await upload('cop', { projectId: 'p1', kind: 'change-order-photo', name: 'photo.jpg' });
-    const po = await upload('po', { projectId: 'p1', kind: 'printout', name: 'Printout.pdf' });
+    const po = await upload('po', { projectId: 'p1', kind: 'takeoff-print', name: 'Printout.pdf' });
 
     const adminRes = await request(app).get('/api/documents');
     expect(adminRes.body.rows.map((r: any) => r.id).sort()).toEqual(['co', 'cop', 'inv', 'pae', 'po', 'prop'].sort());
@@ -292,16 +292,12 @@ describe('GET /api/documents — source label resolution', () => {
     expect(byId[photoFid].source).toEqual({ type: 'punch', id: item.body.id, label: 'Fix crack', href: '/project/p1/punch' });
   });
 
-  it('resolves a printout label from project.printouts[] by its own id', async () => {
-    const current = (await request(app).get('/api/projects/p1')).body;
-    await request(app).put('/api/projects/p1').send({
-      ...current, printouts: [{ id: 'po-1', name: 'Bid Set', fileId: 'po-f', createdAt: 1 }],
-    });
-    const fid = await upload('po-f', { projectId: 'p1', kind: 'printout', sourceType: 'printout', sourceId: 'po-1', name: 'Printout.pdf' });
+  it('resolves a takeoff-print label from the file\'s own name, with a Takeoffs-tab href', async () => {
+    const fid = await upload('po-f', { projectId: 'p1', kind: 'takeoff-print', sourceType: 'takeoff-print', sourceId: 'po-1', name: 'Printout.pdf' });
 
     const res = await request(app).get('/api/documents');
     const row = res.body.rows.find((r: any) => r.id === fid);
-    expect(row.source).toEqual({ type: 'printout', id: 'po-1', label: 'Bid Set', href: '/project/p1/proposal' });
+    expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-1', label: 'Printout.pdf', href: '/project/p1/takeoff' });
   });
 
   it('resolves a dailyReport label (Daily Report — <date>) with an href to the project daily-reports list', async () => {
@@ -324,12 +320,12 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'invoice', id: 'no-such-invoice', label: 'Invoice', href: null });
   });
 
-  it('a dangling printout sourceId also falls back generically', async () => {
-    const fid = await upload('dangling-po', { projectId: 'p1', kind: 'printout', sourceType: 'printout', sourceId: 'no-such-printout', name: 'Ghost.pdf' });
+  it('a nameless takeoff-print falls back to the generic kind label', async () => {
+    const fid = await upload('nameless-po', { projectId: 'p1', kind: 'takeoff-print', sourceType: 'takeoff-print', sourceId: 'po-2' });
 
     const res = await request(app).get('/api/documents');
     const row = res.body.rows.find((r: any) => r.id === fid);
-    expect(row.source).toEqual({ type: 'printout', id: 'no-such-printout', label: 'Printout', href: null });
+    expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-2', label: 'Takeoff Print', href: '/project/p1/takeoff' });
   });
 
   it('files with no sourceType have source: null', async () => {
@@ -467,5 +463,67 @@ describe('pages asset indexes (migration 25)', () => {
     expect(plan).toContain('idx_pages_imageId');
     expect(plan).toContain('idx_pages_thumbnailId');
     expect(plan).not.toMatch(/SCAN pg\b/);
+  });
+});
+
+describe('proposal rework kinds', () => {
+  const insertProposal = (id: string, number: number, projectId = 'p1') =>
+    db.prepare(`INSERT INTO proposals (id, projectId, number, status, createdAt, updatedAt) VALUES (?, ?, ?, 'draft', 1, 1)`).run(id, projectId, number);
+
+  it('resolves a proposal document to "Proposal #n" with an editor href', async () => {
+    insertProposal('prop-1', 3);
+    await upload('f1', { projectId: 'p1', kind: 'proposal', name: 'Proposal – Test – 2026-08-28', sourceType: 'proposal', sourceId: 'prop-1' });
+    const res = await request(app).get('/api/documents');
+    const row = res.body.rows.find((r: any) => r.id === 'f1');
+    expect(row.source).toEqual({ type: 'proposal', id: 'prop-1', label: 'Proposal #3', href: '/project/p1/proposal/prop-1' });
+  });
+
+  it('resolves a takeoff-print to its own name with the Takeoffs-tab href', async () => {
+    await upload('f2', { projectId: 'p1', kind: 'takeoff-print', name: 'Takeoff Print – Test – 2026-08-28', sourceType: 'takeoff-print', sourceId: 'po-9' });
+    const res = await request(app).get('/api/documents');
+    const row = res.body.rows.find((r: any) => r.id === 'f2');
+    expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-9', label: 'Takeoff Print – Test – 2026-08-28', href: '/project/p1/takeoff' });
+  });
+
+  it('hides proposal + proposal-signed from non-admins but shows takeoff prints', async () => {
+    insertProposal('prop-1', 1);
+    await upload('f1', { projectId: 'p1', kind: 'proposal', name: 'p', sourceType: 'proposal', sourceId: 'prop-1' });
+    await upload('f2', { projectId: 'p1', kind: 'proposal-signed', name: 's', sourceType: 'proposal', sourceId: 'prop-1' });
+    await upload('f3', { projectId: 'p1', kind: 'takeoff-print', name: 't', sourceType: 'takeoff-print', sourceId: 'po-1' });
+    const res = await request(buildApp('user')).get('/api/documents');
+    const ids = res.body.rows.map((r: any) => r.id);
+    expect(ids).not.toContain('f1');
+    expect(ids).not.toContain('f2');
+    expect(ids).toContain('f3');
+  });
+
+  it('accepts company-document as a direct-upload kind with no project', async () => {
+    await upload('f4', { kind: 'company-document', name: 'Warranty.pdf' });
+    const res = await request(app).get('/api/documents?kinds=company-document');
+    expect(res.body.rows.map((r: any) => r.id)).toEqual(['f4']);
+    // and it can be re-typed / deleted like any direct upload
+    const del = await request(app).delete('/api/files/f4');
+    expect(del.status).toBe(200);
+  });
+
+  it('filters by mime prefix', async () => {
+    await request(app).post('/api/files/pdf1?projectId=p1&kind=document&name=a.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+    await request(app).post('/api/files/img1?projectId=p1&kind=photo&name=a.jpg').set('Content-Type', 'image/jpeg').send(Buffer.from('x'));
+    const pdfs = await request(app).get('/api/documents?mimes=application/pdf');
+    expect(pdfs.body.rows.map((r: any) => r.id)).toEqual(['pdf1']);
+    const imgs = await request(app).get('/api/documents?mimes=image/');
+    expect(imgs.body.rows.map((r: any) => r.id)).toEqual(['img1']);
+  });
+
+  it('refuses to delete a file referenced by a proposal (photo, attachment, pdf, signed)', async () => {
+    insertProposal('prop-1', 1);
+    await upload('att', { projectId: 'p1', kind: 'document', name: 'spec.pdf' });
+    db.prepare(`INSERT INTO proposal_attachments (id, proposalId, fileId, sortOrder, createdAt) VALUES ('a1', 'prop-1', 'att', 0, 1)`).run();
+    const res = await request(app).delete('/api/files/att');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/proposal/i);
+    await upload('ph', { projectId: 'p1', kind: 'photo', name: 'x.jpg' });
+    db.prepare(`INSERT INTO proposal_photos (id, proposalId, fileId, sortOrder, createdAt) VALUES ('p1x', 'prop-1', 'ph', 0, 1)`).run();
+    expect((await request(app).delete('/api/files/ph')).status).toBe(409);
   });
 });

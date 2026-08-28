@@ -12,7 +12,7 @@ const ALWAYS_EXCLUDED_KINDS = ['plan', 'settings-asset'] as const;
 // Billing-priced kinds — hidden from non-admins (spec §Decisions "Role
 // visibility"). change-order-photo and printout are deliberately NOT here:
 // they carry no dollar figures.
-export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'change-order', 'proposal'] as const;
+export const NON_ADMIN_EXCLUDED_KINDS = ['invoice', 'payapp-export', 'change-order', 'proposal', 'proposal-signed'] as const;
 
 // Fallback label when the referenced entity no longer exists (spec: "Missing
 // referent (deleted entity) -> label from kind, href null").
@@ -31,7 +31,11 @@ const KIND_LABELS: Record<string, string> = {
   'payapp-export': 'Pay App Export',
   proposal: 'Proposal',
   'proposal-photo': 'Proposal Photo',
+  'proposal-signed': 'Signed Proposal',
   printout: 'Printout',
+  'takeoff-print': 'Takeoff Print',
+  'takeoff-export': 'Takeoff Export',
+  'company-document': 'Company Document',
   'plan-source': 'Plan Set',
   'daily-report': 'Daily Report',
   'daily-report-photo': 'Daily Report Photo',
@@ -52,6 +56,9 @@ export interface DocumentFilters {
   // not a narrowing of the default one, so no archived clause is applied
   // within it (both archived and non-archived unassigned rows show).
   unassigned?: boolean;
+  // Mime prefix filter (e.g. ['application/pdf'] or ['image/']) — used by the
+  // FilePickerModal's `accept` option. OR'd together.
+  mimes?: string[];
   limit?: number;
   offset?: number;
 }
@@ -146,6 +153,10 @@ export function listDocuments(
     where.push('LOWER(f.name) LIKE ?');
     params.push(`%${filters.q.toLowerCase()}%`);
   }
+  if (filters.mimes?.length) {
+    where.push(`(${filters.mimes.map(() => 'f.mime LIKE ?').join(' OR ')})`);
+    params.push(...filters.mimes.map(m => `${m}%`));
+  }
 
   const whereSql = where.join(' AND ');
   // customers joined via COALESCE so a customer-only upload (no project) and
@@ -206,7 +217,10 @@ export function listDocuments(
 interface SimpleResolver {
   sql: (placeholders: string) => string;
   label: (row: any) => string;
-  href: (projectId: string | null) => string | null;
+  // sourceId is only needed by resolvers whose href is per-entity (e.g.
+  // proposal); every other resolver's href depends on projectId alone and
+  // simply ignores the second argument.
+  href: (projectId: string | null, sourceId: string) => string | null;
 }
 const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
   invoice: {
@@ -244,13 +258,12 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
     label: row => (typeof row.name === 'string' && row.name.trim()) ? row.name.trim() : 'Plan set',
     href: pid => pid ? `/project/${pid}/takeoff` : null,
   },
-  // sourceId is the owning project's id (spec: "One proposal per project, so
-  // the project id is its source id"); existence is all that's checked, the
-  // label is fixed.
+  // sourceId is the proposal's own id in the `proposals` table (migration 28
+  // — proposals are first-class rows, one project may have several).
   proposal: {
-    sql: ph => `SELECT id FROM projects WHERE id IN (${ph})`,
-    label: () => 'Proposal',
-    href: pid => pid ? `/project/${pid}/proposal` : null,
+    sql: ph => `SELECT id, number FROM proposals WHERE id IN (${ph})`,
+    label: row => `Proposal #${row.number ?? '?'}`,
+    href: (pid, id) => pid ? `/project/${pid}/proposal/${id}` : null,
   },
   // Daily reports have no per-id route — the project's Daily Reports list
   // (grouped by date, not by report id) is the click-through destination for
@@ -262,35 +275,17 @@ const SIMPLE_RESOLVERS: Record<string, SimpleResolver> = {
   },
 };
 
-// printout sourceId is the printout entry's OWN id inside project.printouts[]
-// (JSON), not a row in any table — resolved by loading the owning project's
-// meta and matching by id.
-function resolvePrintouts(db: Database.Database, rows: RawRow[], out: Map<string, DocumentSource>): void {
-  const list = rows.filter(r => r.sourceType === 'printout' && r.sourceId);
-  if (!list.length) return;
-  const projectIds = [...new Set(list.map(r => r.projectId).filter((x): x is string => !!x))];
-  const projRows = projectIds.length
-    ? (db.prepare(`SELECT id, meta, data FROM projects WHERE id IN (${inClause(projectIds.length)})`)
-        .all(...projectIds) as { id: string; meta: string | null; data: string | null }[])
-    : [];
-  const printoutsByProject = new Map<string, Map<string, { name: string | null }>>();
-  for (const pr of projRows) {
-    let p: any = null;
-    try { p = pr.meta ? JSON.parse(pr.meta) : null; } catch { /* left unparsed below */ }
-    if (!p && pr.data) { try { p = JSON.parse(pr.data); } catch { /* legacy blob unreadable */ } }
-    const m = new Map<string, { name: string | null }>();
-    if (p && Array.isArray(p.printouts)) {
-      for (const po of p.printouts) {
-        if (po && typeof po === 'object' && typeof po.id === 'string' && po.id) m.set(po.id, { name: po.name ?? null });
-      }
-    }
-    printoutsByProject.set(pr.id, m);
-  }
-  for (const r of list) {
-    const po = r.projectId ? printoutsByProject.get(r.projectId)?.get(r.sourceId!) : undefined;
-    out.set(r.id, po
-      ? { type: 'printout', id: r.sourceId!, label: (po.name && po.name.trim()) || 'Printout', href: r.projectId ? `/project/${r.projectId}/proposal` : null }
-      : { type: 'printout', id: r.sourceId!, label: genericLabel(r.kind), href: null });
+// takeoff-print / takeoff-export files (and the legacy `printout` kind that
+// migration 28 relabels) carry no table row: the file's own name is the
+// label; click-through is the project's Takeoffs tab.
+function resolveTakeoffPrints(rows: RawRow[], out: Map<string, DocumentSource>): void {
+  for (const r of rows) {
+    if (r.sourceType !== 'takeoff-print' || !r.sourceId) continue;
+    out.set(r.id, {
+      type: 'takeoff-print', id: r.sourceId,
+      label: (r.name && r.name.trim()) || genericLabel(r.kind),
+      href: r.projectId ? `/project/${r.projectId}/takeoff` : null,
+    });
   }
 }
 
@@ -343,11 +338,11 @@ function resolveSources(db: Database.Database, rows: RawRow[]): Map<string, Docu
     for (const r of list) {
       const match = found.get(r.sourceId as string);
       out.set(r.id, match
-        ? { type, id: r.sourceId as string, label: resolver.label(match), href: resolver.href(r.projectId) }
+        ? { type, id: r.sourceId as string, label: resolver.label(match), href: resolver.href(r.projectId, r.sourceId as string) }
         : { type, id: r.sourceId as string, label: genericLabel(r.kind), href: null });
     }
   }
-  resolvePrintouts(db, rows, out);
+  resolveTakeoffPrints(rows, out);
   resolvePunch(db, rows, out);
   return out;
 }
@@ -419,6 +414,12 @@ export function deleteDocument(
     return { ok: false, status: 404, error: 'File not found' };
   }
   if (current.parentFileId) return { ok: false, status: 409, error: 'Cannot delete a historical file version directly' };
+  const proposalRef = db.prepare(`
+    SELECT 1 FROM proposal_photos WHERE fileId = ?
+    UNION SELECT 1 FROM proposal_attachments WHERE fileId = ?
+    UNION SELECT 1 FROM proposals WHERE fileId = ? OR signedFileId = ?
+    LIMIT 1`).get(id, id, id, id);
+  if (proposalRef) return { ok: false, status: 409, error: 'This file is attached to a proposal — remove it from the proposal first' };
   if (current.sourceType) {
     return { ok: false, status: 409, error: 'This file is generated from another record — archive it here, or delete it at the source' };
   }

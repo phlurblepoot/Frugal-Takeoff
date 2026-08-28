@@ -44,7 +44,8 @@ export interface FileMeta {
 // Canonical document kinds (spec 2026-08-17 §Data model). System kinds are
 // written by the program; users can never re-type a file into or out of one.
 export const SYSTEM_KINDS = [
-  'plan-source', 'plan', 'proposal', 'proposal-photo', 'printout',
+  'plan-source', 'plan', 'proposal', 'proposal-photo', 'proposal-signed', 'printout',
+  'takeoff-print', 'takeoff-export',
   'invoice', 'change-order', 'change-order-photo', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
@@ -66,7 +67,7 @@ export const MULTI_INSTANCE_KINDS = [
 
 // Kinds a person can pick in the upload popup — the only ones a file may be
 // re-typed to, and the only ones that are ever really deletable.
-export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other'] as const;
+export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other', 'company-document'] as const;
 
 // Admin-defined types are stored as `custom:<id>` and behave like uploads.
 export function isDirectUploadKind(kind: string): boolean {

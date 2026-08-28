@@ -1149,6 +1149,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         customerIds: csv(q.customerIds),
         kinds: csv(q.kinds),
         q: typeof q.q === 'string' && q.q ? q.q : undefined,
+        mimes: csv(q.mimes),
         archived: q.archived === '1',
         // Admin-only inside listDocuments (re-checked against isAdmin there);
         // passed through as-is here since the raw param is harmless for a
