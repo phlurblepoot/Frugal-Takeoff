@@ -570,7 +570,6 @@ export interface ProposalRenderInput {
   takeoffTotals: TakeoffTotals[];
   /** Current (non-superseded) page ids, for the highlights merge. */
   currentPageIds: Set<string>;
-  settings: Record<string, string>;
   letterhead: LetterheadContext;
   photos: { dataUrl: string; caption: string | null }[];
   /** Attachment PDF bytes, in arranged order — appended untouched. */
@@ -651,20 +650,39 @@ export async function generateProposalPdf(
   };
 
   // Cursor-based flow: `y` is the next free baseline. `ensure(h)` starts a fresh
-  // framed page (with a "(cont.)" band) when h points won't fit; `onBreak` lets
-  // a caller redraw whatever the break scrolled off (column heads, table rules).
+  // framed page when h points won't fit; `onBreak` lets a caller redraw whatever
+  // the break scrolled off (column heads, table rules).
+  //
+  // Banding: a section's FIRST page carries its plain title and only genuine
+  // continuations get "(cont.)". `sectionOpen` is what tells the two apart — a
+  // section that opens with `ensure()` (Inclusions, Notes) may break before it
+  // has drawn anything, and that fresh page is where the section STARTS.
   let y = 0;
   let bandTitle = '';
+  let sectionOpen = false;
+  /** Begin a section that flows on from the current page. */
+  const startSection = (title: string, alreadyOnPage = false) => {
+    bandTitle = title;
+    sectionOpen = alreadyOnPage;
+  };
   const newPage = (title: string) => {
     pdf.addPage();
     drawFrame();
     y = drawSectionBand(title);
   };
+  /** Begin a section on a page of its own. */
+  const openSection = (title: string) => {
+    startSection(title, true);
+    newPage(title);
+  };
   const ensure = (h: number, onBreak?: () => void) => {
     if (y + h > pageBottom - 12) {
-      newPage(`${bandTitle} (cont.)`);
+      newPage(sectionOpen ? `${bandTitle} (cont.)` : bandTitle);
       onBreak?.();
     }
+    // Whatever the caller reserved is drawn right after this returns, so the
+    // section now owns content on this page.
+    sectionOpen = true;
   };
 
   // ── Cover ──────────────────────────────────────────────────────────────────
@@ -701,7 +719,7 @@ export async function generateProposalPdf(
   y = coverY + 34;
 
   // ── Pricing ────────────────────────────────────────────────────────────────
-  bandTitle = 'Pricing';
+  startSection('Pricing', true); // the cover page is this section's first page
 
   /** One priced table (heading + rows + subtotal). `withSummary` prints each
    *  takeoff line's measurement totals under its description. */
@@ -817,7 +835,7 @@ export async function generateProposalPdf(
 
   // ── Inclusions / Exclusions ────────────────────────────────────────────────
   if (proposal.inclusions.length || proposal.exclusions.length) {
-    bandTitle = 'Inclusions & Exclusions';
+    startSection('Inclusions & Exclusions');
     const colW = (W - 100) / 2;
     const colX = [M, M + colW + 20];
     const drawColumnHeads = () => {
@@ -854,7 +872,7 @@ export async function generateProposalPdf(
 
   // ── Notes (flowing) ────────────────────────────────────────────────────────
   if (proposal.coverNotes?.trim()) {
-    bandTitle = 'Notes';
+    startSection('Notes');
     const drawNotesHead = () => {
       styleHeading();
       pdf.text('NOTES', M, y);
@@ -880,8 +898,7 @@ export async function generateProposalPdf(
   // Their own page, same takeoff/manual split, no grand total — they are priced
   // separately and must never read as part of the contract sum.
   if (totals.altTakeoff.length || totals.altManual.length) {
-    bandTitle = 'Alternates';
-    newPage('Alternates');
+    openSection('Alternates');
     sections.alternates = pageNo();
     pdf.setFontSize(9);
     pdf.setFont(font, 'italic');
@@ -900,8 +917,7 @@ export async function generateProposalPdf(
     const byId = new Map(takeoffTotals.map(t => [t.id, t]));
     const detailed = totals.takeoffLines.filter(l => l.takeoffId && byId.has(l.takeoffId));
     if (detailed.length) {
-      bandTitle = 'Cost Detail';
-      newPage('Cost Detail');
+      openSection('Cost Detail');
       sections.costDetail = pageNo();
       for (const l of detailed) {
         const t = byId.get(l.takeoffId as string) as TakeoffTotals;
@@ -936,8 +952,7 @@ export async function generateProposalPdf(
 
   // ── Terms + signature ──────────────────────────────────────────────────────
   if (proposal.terms?.trim() || proposal.includeSignature) {
-    bandTitle = 'Terms & Conditions';
-    newPage('Terms & Conditions');
+    openSection('Terms & Conditions');
     sections.terms = pageNo();
     if (proposal.terms?.trim()) {
       styleBody();
@@ -975,8 +990,7 @@ export async function generateProposalPdf(
   // ── Photos (2-up, captions under each) ─────────────────────────────────────
   if (photos.length) {
     onProgress?.('Adding photos…');
-    bandTitle = 'Photos';
-    newPage('Photos');
+    openSection('Photos');
     sections.photos = pageNo();
     const gap = 12, cellW = (W - 2 * M - gap) / 2, cellH = 150, capH = 14;
     let col = 0;

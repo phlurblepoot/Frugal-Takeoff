@@ -2113,7 +2113,7 @@ export const ProjectView: React.FC = () => {
           />
         ) : (
           /* Email tab — only reachable when project.email exists */
-          <EmailTab project={project} onOpenProposal={() => navigate(`/project/${projectId}/proposal`)} />
+          <EmailTab project={project} onOpenProposal={isAdmin ? () => navigate(`/project/${projectId}/proposal`) : undefined} />
         )}
       </div>
 

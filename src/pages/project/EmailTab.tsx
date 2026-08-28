@@ -11,7 +11,8 @@ import { Project } from '../../types';
 
 interface EmailTabProps {
   project: Project;
-  onOpenProposal: () => void;
+  /** Omitted for non-admins — proposals are an admin-only section. */
+  onOpenProposal?: () => void;
 }
 
 export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
@@ -34,12 +35,14 @@ export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
               <span className="ml-2">{new Date(project.email.receivedAt).toLocaleString()}</span>
             </p>
           </div>
-          <button
-            onClick={onOpenProposal}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all shrink-0"
-          >
-            <Send size={13} /> Send Proposal
-          </button>
+          {onOpenProposal && (
+            <button
+              onClick={onOpenProposal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-600 text-white text-xs font-medium hover:bg-accent-700 transition-all shrink-0"
+            >
+              <Send size={13} /> Send Proposal
+            </button>
+          )}
         </div>
 
         {/* Proposal-sent badge removed (proposalSentAt lived on Project;

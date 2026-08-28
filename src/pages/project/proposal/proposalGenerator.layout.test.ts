@@ -1,8 +1,9 @@
 // src/pages/project/proposal/proposalGenerator.layout.test.ts
 // Layout contract for the snapshot renderer: which sections exist, what order
-// they come in, and which page each one STARTS on. pdf-lib can't extract text,
-// so placement is asserted through the generator's `sections` map (1-based page
-// index per section) plus the final page count.
+// they come in, and which page each one STARTS on. Placement is asserted
+// through the generator's `sections` map (1-based page index per section) plus
+// the final page count; `textByPage` below adds the drawn strings for the
+// assertions (section bands) that a page index alone can't express.
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { generateProposalPdf, proposalFileName } from './proposalGenerator';
@@ -28,10 +29,33 @@ const base = (o: Partial<Proposal> = {}): Proposal => ({
 });
 
 const input = (proposal: Proposal, extra: Partial<ProposalRenderInput> = {}): ProposalRenderInput => ({
-  proposal, project, takeoffTotals: [], currentPageIds: new Set(), settings: {},
+  proposal, project, takeoffTotals: [], currentPageIds: new Set(),
   letterhead: { brandRgb: [153, 203, 56], company: { name: 'Big Bear' } },
   photos: [], attachments: [], includeHighlights: false, ...extra,
 });
+
+// jsPDF writes uncompressed content streams and pdf-lib copies them verbatim
+// into the merged file, so the drawn strings survive in the output bytes. The
+// "Page N of M" stamp is written last on every body page, which makes it a
+// reliable delimiter: everything before it belongs to that page.
+const textByPage = (bytes: ArrayBuffer): Map<number, string[]> => {
+  const raw = Buffer.from(bytes).toString('latin1');
+  const texts = [...raw.matchAll(/\(((?:\\.|[^()\\])*)\)\s*Tj/g)]
+    .map(m => m[1].replace(/\\([()\\])/g, '$1'));
+  const byPage = new Map<number, string[]>();
+  let current: string[] = [];
+  for (const t of texts) {
+    const stamp = /^Page (\d+) of \d+$/.exec(t);
+    if (stamp) { byPage.set(Number(stamp[1]), current); current = []; }
+    else current.push(t);
+  }
+  return byPage;
+};
+
+const BAND = /^(Pricing|Inclusions & Exclusions|Notes|Alternates|Cost Detail|Terms & Conditions|Photos)( \(cont\.\))?$/;
+/** The section band printed at the top of a given 1-based page, if any. */
+const bandOnPage = (bytes: ArrayBuffer, page: number): string | undefined =>
+  textByPage(bytes).get(page)?.find(t => BAND.test(t));
 
 const pages = async (bytes: ArrayBuffer) => (await PDFDocument.load(bytes)).getPageCount();
 const makePdf = async (n: number) => {
@@ -88,6 +112,25 @@ describe('proposal layout', () => {
     // The total is the reader's headline: it must precede the notes, on page 1.
     expect(sections.grandTotal).toBe(1);
     expect(sections.notes).toBe(1);
+  });
+
+  it('a section pushed onto a fresh page by its opening ensure() is banded plainly, not "(cont.)"', async () => {
+    // 60 price lines fill pages 1-2 and spill the total onto page 3, where the
+    // inclusions still fit; the notes then open with a page break onto page 5.
+    // That page is where Notes STARTS — it must not claim to be a continuation.
+    const p = base({
+      lines: Array.from({ length: 60 }, (_, i) => line({ id: `l${i}`, description: `Item number ${i}` })),
+      inclusions: Array.from({ length: 30 }, (_, i) => `Inclusion ${i}`),
+      exclusions: ['Paint'],
+      coverNotes: 'Hello there.',
+    });
+    const { pdfBytes, sections } = await generateProposalPdf(input(p));
+
+    expect(bandOnPage(pdfBytes, sections.notes)).toBe('Notes');
+    // Pricing really did continue from the cover, and the inclusions from the
+    // page the pricing ended on — those bands stay marked as continuations.
+    expect(bandOnPage(pdfBytes, 2)).toBe('Pricing (cont.)');
+    expect(bandOnPage(pdfBytes, sections.inclusions + 1)).toBe('Inclusions & Exclusions (cont.)');
   });
 
   it('inclusions/exclusions sit between the pricing and the notes', async () => {

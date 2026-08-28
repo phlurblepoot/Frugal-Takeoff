@@ -133,7 +133,10 @@ test('Proposal button creates a draft seeded with the selected takeoffs and open
   await selectFirstTakeoff(authedPage);
   await authedPage.getByTestId('btn-proposal').click();
   await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal/[0-9a-f-]{36}$`));
-  await expect(authedPage.getByTestId('pricing-lines')).toContainText(takeoffName);
+  // The seeded takeoff arrives as a pricing line whose description is an
+  // editable input, so its name is a VALUE, not page text.
+  await expect(authedPage.getByTestId('pricing-lines').getByLabel('Description').first())
+    .toHaveValue(takeoffName);
 });
 
 test('Takeoff prints link goes to the filtered Documents view', async ({ authedPage, apiToken, request }) => {

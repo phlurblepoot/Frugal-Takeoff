@@ -1,10 +1,11 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 import { ToastProvider } from '../../../components/Toast';
-import type { ProposalSaveInput } from '../../../utils/store';
+import type { FileUploadOpts, ProposalSaveInput } from '../../../utils/store';
+import type { BuildProposalPdfArgs } from './buildProposalPdf';
 
 const proposal = {
   id: 'p1', projectId: 'proj1', number: 2, revisedFromId: null, revisedFromNumber: null,
@@ -21,38 +22,77 @@ const proposal = {
 
 const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4 }));
 const saveUserPreferences = vi.fn(async (_prefs: Record<string, string>) => {});
-const getProject = vi.fn(async (_id: string) => ({ id: 'proj1', name: 'Test', pages: [], takeoffs: [], planSets: [] }));
+const getProposal = vi.fn(async () => proposal);
+const getProject = vi.fn(async (_id: string) => ({
+  id: 'proj1', name: 'Test', pages: [], takeoffs: [], planSets: [],
+  contactEmails: { estimating: { to: 'client@example.com' } },
+}));
+const persistGeneratedDocument = vi.fn(async (_blob: Blob, _opts: FileUploadOpts & { kind: string; name: string }) => ({ fileId: 'f-generated', versioned: false }));
+const setProposalFile = vi.fn(async (_id: string, _fileId: string) => {});
+const sendProposal = vi.fn(async (_id: string, _payload: { to: string; fileId: string; attachmentFileIds?: string[] }) => ({ version: 5 }));
 
 vi.mock('../../../utils/store', async () => {
   const actual = await vi.importActual<typeof import('../../../utils/store')>('../../../utils/store');
   return {
     ...actual,
-    getProposal: vi.fn(async () => proposal),
+    getProposal,
     getProject,
     getUserPreferences: vi.fn(async () => ({ 'proposal-manualLine-history': JSON.stringify([{ description: 'Permit', amountCents: 25000 }]) })),
     saveProposal,
     saveUserPreferences,
+    persistGeneratedDocument,
+    setProposalFile,
+    sendProposal,
+    getSettings: vi.fn(async () => ({ companyEmail: 'office@bigbear.test' })),
+    getSmtpSettings: vi.fn(async () => ({ fromAddress: 'me@bigbear.test' })),
+    getAlwaysCc: vi.fn(async () => ''),
+    getCustomer: vi.fn(async () => undefined),
   };
 });
+
+// The renderer itself is exercised by proposalGenerator.layout.test.ts; here
+// only the pipeline around it matters.
+const buildProposalPdf = vi.fn(async (_args: BuildProposalPdfArgs) => ({
+  pdfBytes: new Uint8Array([1, 2, 3]).buffer as ArrayBuffer,
+  suggestedName: 'Proposal – Test – 2026-08-28',
+  overBudget: false,
+  sections: {},
+}));
+vi.mock('./buildProposalPdf', () => ({ buildProposalPdf }));
 
 // Imported dynamically, not statically: a static import is evaluated before
 // this file's `const proposal` runs, and the store mock's factory closes over
 // it. Awaiting the import here means the fixture is initialised first.
 const { ProposalEditor } = await import('./ProposalEditor');
 
+const { ProposalLockedError } = await import('../../../utils/store');
+
 const renderEditor = () => render(
-  <ConfirmProvider>
-    <MemoryRouter initialEntries={['/project/proj1/proposal/p1']}>
-      <Routes><Route path="/project/:projectId/proposal/:proposalId" element={<ProposalEditor />} /></Routes>
-    </MemoryRouter>
-  </ConfirmProvider>,
+  <ToastProvider>
+    <ConfirmProvider>
+      <MemoryRouter initialEntries={['/project/proj1/proposal/p1']}>
+        <Routes><Route path="/project/:projectId/proposal/:proposalId" element={<ProposalEditor />} /></Routes>
+      </MemoryRouter>
+    </ConfirmProvider>
+  </ToastProvider>,
 );
+
+/** Runs `body` with the proposal already carrying a generated PDF. */
+const withGeneratedPdf = async (body: () => Promise<void>) => {
+  proposal.fileId = 'f-existing' as (typeof proposal)['fileId'];
+  try { await body(); } finally { proposal.fileId = null; }
+};
 
 describe('ProposalEditor smoke', () => {
   beforeEach(() => {
     localStorage.setItem('user', JSON.stringify({ role: 'admin' }));
     saveProposal.mockClear();
     getProject.mockClear();
+    getProposal.mockClear();
+    buildProposalPdf.mockClear();
+    persistGeneratedDocument.mockClear();
+    setProposalFile.mockClear();
+    sendProposal.mockClear();
   });
 
   it('mounts, edits, and saves', async () => {
@@ -123,5 +163,101 @@ describe('ProposalEditor smoke', () => {
     const inc = screen.getByTestId('proposal-inclusions');
     fireEvent.change(inc, { target: { value: 'Scaffolding\n' } });
     expect((inc as HTMLTextAreaElement).value).toBe('Scaffolding\n');
+  });
+
+  it('Generate saves the draft first, then stores the PDF as the proposal document', async () => {
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'Ready to print' } });
+
+    fireEvent.click(screen.getByTestId('btn-generate-proposal'));
+    await waitFor(() => expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated'));
+
+    // Save-first is the whole contract: the client receives exactly what was
+    // stored, never a PDF of edits that failed to save.
+    expect(saveProposal.mock.invocationCallOrder[0])
+      .toBeLessThan(buildProposalPdf.mock.invocationCallOrder[0]);
+    const rendered = buildProposalPdf.mock.calls[0][0];
+    expect(rendered.proposal.coverNotes).toBe('Ready to print');
+    expect(rendered.includeHighlights).toBe(false);
+    expect(rendered.headerEmail).toBeUndefined();
+    expect(persistGeneratedDocument.mock.calls[0][1]).toMatchObject({
+      projectId: 'proj1', kind: 'proposal', name: 'Proposal – Test – 2026-08-28',
+      sourceType: 'proposal', sourceId: 'p1',
+    });
+    expect(await screen.findByText('Proposal PDF generated')).toBeInTheDocument();
+    // Reloaded, so the new fileId (and with it the Send button) appears.
+    await waitFor(() => expect(getProposal).toHaveBeenCalledTimes(2));
+  });
+
+  it('a save that bounces off a lock aborts the generate', async () => {
+    saveProposal.mockRejectedValueOnce(new ProposalLockedError());
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'Too late' } });
+
+    fireEvent.click(screen.getByTestId('btn-generate-proposal'));
+    await waitFor(() => expect(saveProposal).toHaveBeenCalled());
+    expect(await screen.findByText(/no longer a draft/)).toBeInTheDocument();
+    expect(buildProposalPdf).not.toHaveBeenCalled();
+    expect(setProposalFile).not.toHaveBeenCalled();
+  });
+
+  it('Send is blocked until the PDF has been generated', async () => {
+    renderEditor();
+    await screen.findByText('#2');
+    expect(screen.getByTestId('btn-send-proposal')).toBeDisabled();
+    expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Generate the PDF first');
+  });
+
+  it('Send is blocked again as soon as the draft is edited', async () => {
+    await withGeneratedPdf(async () => {
+      renderEditor();
+      await screen.findByText('#2');
+      expect(screen.getByTestId('btn-send-proposal')).toBeEnabled();
+
+      fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'edited' } });
+      expect(screen.getByTestId('btn-send-proposal')).toBeDisabled();
+      expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Save first');
+    });
+  });
+
+  it('sends the stored PDF to the resolved recipient', async () => {
+    await withGeneratedPdf(async () => {
+      renderEditor();
+      await screen.findByText('#2');
+      fireEvent.click(screen.getByTestId('btn-send-proposal'));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+      await waitFor(() => expect(sendProposal).toHaveBeenCalled());
+      expect(sendProposal.mock.calls[0]).toMatchObject(['p1', {
+        to: 'client@example.com', fileId: 'f-existing', attachmentFileIds: [],
+      }]);
+      // The company default was kept, so there was nothing to re-stamp.
+      expect(buildProposalPdf).not.toHaveBeenCalled();
+      expect(await screen.findByText('Proposal sent')).toBeInTheDocument();
+    });
+  });
+
+  it('re-stamps the letterhead when the sender picks a different from-address', async () => {
+    await withGeneratedPdf(async () => {
+      renderEditor();
+      await screen.findByText('#2');
+      fireEvent.click(screen.getByTestId('btn-send-proposal'));
+
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+      fireEvent.change(within(dialog).getByLabelText('Document shows email:'), { target: { value: 'me@bigbear.test' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+      await waitFor(() => expect(sendProposal).toHaveBeenCalled());
+      expect(buildProposalPdf.mock.calls[0][0]).toMatchObject({ headerEmail: 'me@bigbear.test' });
+      expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated');
+      // The freshly stamped document is what goes out, not the old one.
+      expect(sendProposal.mock.calls[0][1]).toMatchObject({ fileId: 'f-generated' });
+    });
   });
 });

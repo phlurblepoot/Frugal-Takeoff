@@ -980,11 +980,9 @@ export async function seedDocumentsPortfolio(
   );
   if (!payAppFileRes.ok()) throw new Error(`pay app file upload failed: ${payAppFileRes.status()} ${await payAppFileRes.text()}`);
 
-  // Printout — a non-billing generated kind (visible to non-admins), whose
-  // source lives in project.printouts[] JSON rather than a table row (spec
-  // §Data model). Mirrors ProjectProposal.tsx's real save sequence: mint the
-  // printout id first, upload the file against it, then append the printout
-  // entry to the project and PUT the whole project back (optimistic version).
+  // Printout — a non-billing generated kind (visible to non-admins). Mirrors
+  // the Takeoffs tab's real save sequence: mint the print id first, then
+  // upload the file against it (handlePrint in src/pages/ProjectView.tsx).
   const printoutId = randomUUID();
   const printoutFileName = `Takeoff Print – ${portfolio.inProgressProjectName} – 2026-01-01`;
   const printoutFileId = randomUUID();

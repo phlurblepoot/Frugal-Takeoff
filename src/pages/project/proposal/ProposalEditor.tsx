@@ -1,77 +1,31 @@
 // src/pages/project/proposal/ProposalEditor.tsx — /project/:projectId/proposal/:proposalId
-// The full-page proposal editor. It owns the whole editable draft; every card
-// below it is controlled. Only a DRAFT (and non-legacy) proposal is editable —
-// once sent, a proposal is a historical record and must be revised instead.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+// The full-page proposal editor. It owns the whole editable draft (via
+// useProposalDraft); every card below it is controlled. Only a DRAFT (and
+// non-legacy) proposal is editable — once sent, a proposal is a historical
+// record and must be revised instead.
+import React, { useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileText, Save } from 'lucide-react';
+import { ArrowLeft, FileText, Save, Send } from 'lucide-react';
 import {
-  ConflictError, ProposalLockedError,
-  getProject, getProposal, getUserPreferences, saveProposal, saveUserPreferences,
-  type PaymentScheduleRow, type Proposal, type ProposalLine,
+  ProposalLockedError, persistGeneratedDocument, sendProposal, setProposalFile,
+  type Proposal,
 } from '../../../utils/store';
-import type { Project } from '../../../types';
-import { computeRevisionModel } from '../../../utils/planSets';
 import { useToast } from '../../../components/Toast';
-import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
+import { EmailComposer } from '../../../components/EmailComposer';
 import { Button, Card, CardBody, CardHeader, Skeleton, StatusPill, Textarea } from '../../../components/ui';
-import { computeTakeoffTotals, formatCurrency, normalizeHighlightQuality, type HighlightQuality } from './proposalGenerator';
-import { proposalTotals, rederiveLines } from './proposalMath';
+import { formatCurrency, proposalFileName } from './proposalGenerator';
 import { STATUS_TONE, proposalLabel } from './proposalPresentation';
-import { parseHistory, pushHistory } from './proposalTextHistory';
-import { PREF_KEYS, parseLineLibrary, pushLineLibrary, type ManualLineMemory } from './proposalPrefs';
+import { buildProposalPdf } from './buildProposalPdf';
+import { isAdmin, useProposalDraft } from './useProposalDraft';
+import { useProposalEmailDefaults } from './useProposalEmailDefaults';
 import { HistoryMenu } from './HistoryMenu';
 import { PricingLinesCard } from './PricingLinesCard';
 import { InclusionsExclusionsCard } from './InclusionsExclusionsCard';
 import { PaymentScheduleCard } from './PaymentScheduleCard';
-import { ProposalOptionsCard, type ProposalOptionsValue } from './ProposalOptionsCard';
+import { ProposalOptionsCard } from './ProposalOptionsCard';
 import { ProposalPhotosCard } from './ProposalPhotosCard';
 import { ProposalAttachmentsCard } from './ProposalAttachmentsCard';
-
-const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
-
-// The editable shape. Nullable server columns are flattened to '' here so
-// every input stays controlled; save() puts the nulls back.
-interface Draft {
-  title: string;
-  validUntil: string;
-  fontFamily: NonNullable<Proposal['fontFamily']>;
-  coverNotes: string;
-  terms: string;
-  inclusions: string[];
-  exclusions: string[];
-  paymentSchedule: PaymentScheduleRow[] | null;
-  showGrandTotal: boolean;
-  includeCostDetail: boolean;
-  includeSignature: boolean;
-  highlightQuality: HighlightQuality;
-  lines: ProposalLine[];
-}
-
-const draftFrom = (p: Proposal, lines: ProposalLine[]): Draft => ({
-  title: p.title ?? '',
-  validUntil: p.validUntil ?? '',
-  fontFamily: p.fontFamily ?? 'helvetica',
-  coverNotes: p.coverNotes ?? '',
-  terms: p.terms ?? '',
-  inclusions: p.inclusions ?? [],
-  exclusions: p.exclusions ?? [],
-  paymentSchedule: p.paymentSchedule,
-  showGrandTotal: p.showGrandTotal,
-  includeCostDetail: p.includeCostDetail,
-  includeSignature: p.includeSignature,
-  highlightQuality: normalizeHighlightQuality(p.highlightQuality),
-  lines,
-});
-
-// A line the re-derive touched: the takeoff moved under the proposal since it
-// was last saved, so the draft is dirty before the estimator types anything.
-const linesDiffer = (a: ProposalLine[], b: ProposalLine[]) =>
-  a.length !== b.length || a.some((l, i) =>
-    l.amountCents !== b[i].amountCents ||
-    l.derivedAmountCents !== b[i].derivedAmountCents ||
-    l.measurementSummary !== b[i].measurementSummary);
 
 export const ProposalEditor: React.FC = () => {
   const { projectId, proposalId } = useParams<{ projectId: string; proposalId: string }>();
@@ -79,195 +33,95 @@ export const ProposalEditor: React.FC = () => {
   const { toast } = useToast();
   const admin = isAdmin();
 
-  const [project, setProject] = useState<Project | null>(null);
-  const [proposal, setProposal] = useState<Proposal | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [missingTakeoffIds, setMissingTakeoffIds] = useState<string[]>([]);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const {
+    project, proposal, draft, missingTakeoffIds, dirty, saving, loadFailed, readOnly,
+    takeoffTotals, totals, notesHistory, termsHistory, inclusionsHistory, exclusionsHistory,
+    lineLibrary, collab, patchDraft, applyOptions, save, reload,
+  } = useProposalDraft(projectId, proposalId);
 
   // Highlighted plan pages are a generate-time choice, not a stored proposal
   // column — the same option the old page carried.
   const [includeHighlights, setIncludeHighlights] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [composing, setComposing] = useState(false);
+  const emailDefaults = useProposalEmailDefaults(projectId);
 
-  const [notesHistory, setNotesHistory] = useState<string[]>([]);
-  const [termsHistory, setTermsHistory] = useState<string[]>([]);
-  const [inclusionsHistory, setInclusionsHistory] = useState<string[]>([]);
-  const [exclusionsHistory, setExclusionsHistory] = useState<string[]>([]);
-  const [lineLibrary, setLineLibrary] = useState<ManualLineMemory[]>([]);
-
-  // useCollabEditing reads dirtiness from a callback on every foreign event,
-  // long after this render closed over it — a ref keeps it current.
-  const dirtyRef = useRef(false);
-  dirtyRef.current = dirty;
-
-  const loadRef = useRef<() => void>(() => {});
-  const load = () => {
-    if (!projectId || !proposalId || !admin) return;
-    Promise.all([getProposal(proposalId), getProject(projectId).catch(() => null)])
-      .then(([p, proj]) => {
-        setProject(proj);
-        setProposal(p);
-        setLoadFailed(false);
-        const editable = p.status === 'draft' && !p.legacy;
-        if (!editable) {
-          setDraft(draftFrom(p, p.lines));
-          setMissingTakeoffIds([]);
-          setDirty(false);
-          return;
-        }
-        // Without the project there are no takeoffs to compare against, and a
-        // re-derive would flag EVERY takeoff line as "no longer exists" —
-        // offering to delete real work because one fetch failed. Leave the
-        // saved lines alone and say so instead.
-        if (!proj) {
-          setDraft(draftFrom(p, p.lines));
-          setMissingTakeoffIds([]);
-          setDirty(false);
-          toast("Couldn't load takeoffs — amounts not refreshed", { type: 'warning' });
-          return;
-        }
-        // Re-derive against the CURRENT takeoffs so a draft always prices the
-        // work as it stands today; overridden lines keep their hand-set
-        // amount (proposalMath.rederiveLines), and takeoffs that vanished are
-        // flagged rather than silently zeroed.
-        const totals = computeTakeoffTotals(proj, computeRevisionModel(proj, '').currentPageIds);
-        const { lines, missingTakeoffIds: missing } = rederiveLines(p.lines, totals);
-        setDraft(draftFrom(p, lines));
-        setMissingTakeoffIds(missing);
-        setDirty(linesDiffer(lines, p.lines));
-      })
-      .catch(() => setLoadFailed(true));
-  };
-  loadRef.current = load;
-
-  useEffect(() => { loadRef.current(); }, [projectId, proposalId]);
-
-  useEffect(() => {
-    getUserPreferences()
-      .then(prefs => {
-        setNotesHistory(parseHistory(prefs[PREF_KEYS.notes]));
-        setTermsHistory(parseHistory(prefs[PREF_KEYS.terms]));
-        setInclusionsHistory(parseHistory(prefs[PREF_KEYS.inclusions]));
-        setExclusionsHistory(parseHistory(prefs[PREF_KEYS.exclusions]));
-        setLineLibrary(parseLineLibrary(prefs[PREF_KEYS.lines]));
-      })
-      .catch(() => { /* offline — the editor just has no remembered text */ });
-  }, []);
-
-  // Presence + the "someone else saved" banner. A pristine editor silently
-  // reloads; a dirty one keeps the estimator's work and offers Review & merge
-  // / Keep mine rather than clobbering it.
-  const collab = useCollabEditing({
-    type: 'proposal',
-    id: proposalId ?? '',
-    isDirty: () => dirtyRef.current,
-    onFresh: () => loadRef.current(),
-    enabled: admin,
+  // The PDF renders the draft as it stands on screen — Generate saves first, so
+  // what the client receives is exactly what was just stored.
+  const renderPdf = (headerEmail?: string) => buildProposalPdf({
+    proposal: { ...(proposal as Proposal), ...draft },
+    project: project!,
+    takeoffTotals,
+    includeHighlights,
+    headerEmail,
+    onProgress: setProgress,
+    onSkippedAttachment: name => toast(`Skipped unreadable attachment ${name}`, { type: 'warning' }),
   });
 
-  const takeoffTotals = useMemo(
-    () => (project ? computeTakeoffTotals(project, computeRevisionModel(project, '').currentPageIds) : []),
-    [project],
-  );
-
-  const readOnly = !proposal || proposal.status !== 'draft' || proposal.legacy;
-  const totals = draft ? proposalTotals(draft.lines) : null;
-
-  const patchDraft = (patch: Partial<Draft>) => {
-    setDraft(d => (d ? { ...d, ...patch } : d));
-    setDirty(true);
-  };
-
-  // The options card speaks the server's nullable shape; the draft keeps ''.
-  const applyOptions = (patch: Partial<ProposalOptionsValue>) => {
-    const next: Partial<Draft> = {};
-    if (patch.title !== undefined) next.title = patch.title ?? '';
-    if (patch.validUntil !== undefined) next.validUntil = patch.validUntil ?? '';
-    if (patch.fontFamily !== undefined) next.fontFamily = patch.fontFamily ?? 'helvetica';
-    if (patch.includeCostDetail !== undefined) next.includeCostDetail = patch.includeCostDetail;
-    if (patch.includeSignature !== undefined) next.includeSignature = patch.includeSignature;
-    if (patch.highlightQuality !== undefined) next.highlightQuality = patch.highlightQuality;
-    patchDraft(next);
-  };
-
-  // What this user just wrote becomes their defaults next time: the four text
-  // histories, the manual-line library, and the document options. Never
-  // throws — a preferences hiccup must not make a successful save look failed.
-  const recordMemories = async (saved: Draft) => {
-    try {
-      const prefs = await getUserPreferences();
-      const out: Record<string, string> = {};
-      const text = (key: string, value: string, setter: (h: string[]) => void) => {
-        const before = parseHistory(prefs[key]);
-        const after = pushHistory(before, value);
-        if (after !== before) { out[key] = JSON.stringify(after); setter(after); }
-      };
-      text(PREF_KEYS.notes, saved.coverNotes, setNotesHistory);
-      text(PREF_KEYS.terms, saved.terms, setTermsHistory);
-      text(PREF_KEYS.inclusions, saved.inclusions.join('\n'), setInclusionsHistory);
-      text(PREF_KEYS.exclusions, saved.exclusions.join('\n'), setExclusionsHistory);
-
-      const before = parseLineLibrary(prefs[PREF_KEYS.lines]);
-      let library = before;
-      for (const l of saved.lines) {
-        if (l.kind === 'manual' && l.description.trim()) {
-          library = pushLineLibrary(library, { description: l.description, amountCents: l.amountCents });
-        }
-      }
-      if (library !== before) { out[PREF_KEYS.lines] = JSON.stringify(library); setLineLibrary(library); }
-
-      out[PREF_KEYS.font] = saved.fontFamily;
-      out[PREF_KEYS.quality] = saved.highlightQuality;
-      out[PREF_KEYS.costDetail] = String(saved.includeCostDetail);
-      out[PREF_KEYS.signature] = String(saved.includeSignature);
-      out[PREF_KEYS.grandTotal] = String(saved.showGrandTotal);
-      await saveUserPreferences(out);
-    } catch { /* non-fatal */ }
-  };
-
-  const save = async () => {
-    if (!draft || !proposal || readOnly || saving) return;
-    setSaving(true);
-    try {
-      const { version } = await saveProposal(proposal.id, {
-        // "Keep mine" adopts the foreign version so this save overwrites it
-        // deliberately instead of bouncing off a stale-version 409.
-        version: collab.keepMineVersion ?? proposal.version,
-        title: draft.title.trim() || null,
-        validUntil: draft.validUntil || null,
-        fontFamily: draft.fontFamily,
-        coverNotes: draft.coverNotes,
-        terms: draft.terms,
-        inclusions: draft.inclusions,
-        exclusions: draft.exclusions,
-        paymentSchedule: draft.paymentSchedule,
-        showGrandTotal: draft.showGrandTotal,
-        includeCostDetail: draft.includeCostDetail,
-        includeSignature: draft.includeSignature,
-        highlightQuality: draft.highlightQuality,
-        // Ids and sort order are the server's to assign: array order IS the
-        // print order.
-        lines: draft.lines.map(({ id: _id, sortOrder: _sortOrder, ...rest }) => rest),
-      });
-      setProposal(prev => (prev ? { ...prev, version } : prev));
-      setDirty(false);
-      toast('Proposal saved', { type: 'success' });
-      void recordMemories(draft);
-    } catch (e) {
-      if (e instanceof ProposalLockedError) {
-        toast('This proposal is no longer a draft — revise it to make changes', { type: 'error' });
-        load();
-      } else if (e instanceof ConflictError) {
-        toast('Someone else saved first — reloading their version', { type: 'error' });
-        load();
-      } else {
-        toast('Failed to save the proposal', { type: 'error' });
-      }
-    } finally {
-      setSaving(false);
+  /** Renders, stores as the proposal's document, and returns the new file id. */
+  const renderAndStore = async (headerEmail?: string): Promise<string> => {
+    const { pdfBytes, suggestedName, overBudget } = await renderPdf(headerEmail);
+    const { fileId } = await persistGeneratedDocument(
+      new Blob([pdfBytes], { type: 'application/pdf' }),
+      { projectId: proposal!.projectId, kind: 'proposal', name: suggestedName, sourceType: 'proposal', sourceId: proposal!.id },
+    );
+    await setProposalFile(proposal!.id, fileId);
+    if (overBudget) {
+      toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target`, { type: 'warning' });
     }
+    return fileId;
+  };
+
+  const handleGenerate = async () => {
+    if (!draft || !proposal || !project) return;
+    if (draft.lines.length === 0) { toast('Add at least one price line', { type: 'warning' }); return; }
+    setBusy(true);
+    try {
+      // Generate always saves first; a save that bounced (lock/conflict) has
+      // already reloaded someone else's version, so there is nothing to render.
+      if (dirty && !(await save())) return;
+      await renderAndStore();
+      toast('Proposal PDF generated', { type: 'success' });
+      reload();
+    } catch (e) {
+      console.error(e);
+      toast('Failed to generate proposal PDF', { type: 'error' });
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+  };
+
+  const handleSend = async (m: {
+    to: string; cc?: string; bcc?: string; subject: string; body: string;
+    attachmentFileIds: string[]; headerEmail?: string;
+  }) => {
+    if (!proposal?.fileId || !project) return;
+    let fileId = proposal.fileId;
+    // A sender who picked a from-address other than the company default gets a
+    // fresh PDF stamped with it, so the client replies where they should.
+    if (m.headerEmail && m.headerEmail !== emailDefaults.companyEmail) {
+      try {
+        fileId = await renderAndStore(m.headerEmail);
+      } catch (e) {
+        console.error(e);
+        toast('Could not restamp the letterhead — sending the generated PDF', { type: 'warning' });
+      } finally {
+        setProgress('');
+      }
+    }
+    try {
+      await sendProposal(proposal.id, {
+        to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+        fileId, attachmentFileIds: m.attachmentFileIds,
+      });
+      toast('Proposal sent', { type: 'success' });
+    } catch (e) {
+      if (!(e instanceof ProposalLockedError)) throw e;
+      toast('This proposal was already sent — revise it to send again', { type: 'error' });
+    }
+    reload();
   };
 
   // Every hook above runs unconditionally; the gate is the last thing before
@@ -277,6 +131,13 @@ export const ProposalEditor: React.FC = () => {
   const statusText = readOnly
     ? (proposal?.legacy ? 'Imported — revise to change' : 'Locked — revise to change')
     : dirty ? 'Unsaved changes' : 'Saved';
+  // No project means no takeoffs to price and nothing to address the email to —
+  // the render would be wrong rather than merely incomplete, so both actions
+  // are blocked with a reason rather than silently doing nothing.
+  const noProject = !project ? "Couldn't load the project — reload the page" : undefined;
+  const generateBlockedReason = noProject;
+  const sendBlockedReason = noProject
+    ?? (!proposal?.fileId ? 'Generate the PDF first' : dirty ? 'Save first' : undefined);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
@@ -294,18 +155,39 @@ export const ProposalEditor: React.FC = () => {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {progress && <span className="text-sm text-ink-faint" data-testid="proposal-progress">{progress}</span>}
           {totals && <span className="mr-1 text-sm font-semibold text-ink">{formatCurrency(totals.totalCents / 100)}</span>}
           {!readOnly && (
-            <Button onClick={save} disabled={saving || !dirty} data-testid="btn-save-proposal">
-              <Save size={16} />{saving ? 'Saving…' : 'Save'}
-            </Button>
+            <>
+              <Button onClick={save} disabled={saving || !dirty} data-testid="btn-save-proposal">
+                <Save size={16} />{saving ? 'Saving…' : 'Save'}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleGenerate}
+                disabled={busy || !draft || !!generateBlockedReason}
+                title={generateBlockedReason}
+                data-testid="btn-generate-proposal"
+              >
+                <FileText size={16} />{busy ? 'Generating…' : 'Generate PDF'}
+              </Button>
+            </>
           )}
           {proposal?.fileId && (
             <Button variant="secondary" onClick={() => navigate(`/tools/pdf?fileId=${proposal.fileId}`)}>
               <FileText size={16} />Open PDF
             </Button>
           )}
-          {/* Task 13: Generate PDF + Send (email defaults resolver + EmailComposer) */}
+          {!readOnly && (
+            <Button
+              onClick={() => setComposing(true)}
+              disabled={busy || !!sendBlockedReason}
+              title={sendBlockedReason}
+              data-testid="btn-send-proposal"
+            >
+              <Send size={16} />Send
+            </Button>
+          )}
         </div>
       </div>
 
@@ -402,16 +284,34 @@ export const ProposalEditor: React.FC = () => {
             proposal={proposal}
             projectId={projectId!}
             readOnly={readOnly}
-            onChanged={load}
+            onChanged={reload}
           />
 
           <ProposalAttachmentsCard
             proposal={proposal}
             projectId={projectId!}
             readOnly={readOnly}
-            onChanged={load}
+            onChanged={reload}
           />
         </div>
+      )}
+
+      {proposal && project && (
+        <EmailComposer
+          open={composing}
+          onClose={() => setComposing(false)}
+          projectId={project.id}
+          title="Send proposal"
+          primaryAttachmentName={`${proposalFileName(project)}.pdf`}
+          defaultTo={emailDefaults.defaultTo || project.email?.from || ''}
+          defaultCc={emailDefaults.defaultCc || undefined}
+          defaultBcc={emailDefaults.defaultBcc || undefined}
+          defaultSubject={project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`}
+          defaultBody={"Please find our proposal attached. Don't hesitate to reach out with any questions."}
+          headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
+          defaultHeaderEmail={emailDefaults.companyEmail || undefined}
+          onSend={handleSend}
+        />
       )}
     </div>
   );
