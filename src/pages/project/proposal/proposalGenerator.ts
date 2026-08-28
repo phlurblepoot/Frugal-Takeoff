@@ -719,7 +719,9 @@ export async function generateProposalPdf(
   y = coverY + 34;
 
   // ── Pricing ────────────────────────────────────────────────────────────────
-  startSection('Pricing', true); // the cover page is this section's first page
+  // `alreadyOnPage`: the cover IS this section's first page, so the next page
+  // of a long price list is a genuine continuation and reads "Pricing (cont.)".
+  startSection('Pricing', true);
 
   /** One priced table (heading + rows + subtotal). `withSummary` prints each
    *  takeoff line's measurement totals under its description. */

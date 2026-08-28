@@ -76,6 +76,7 @@ export const ProposalEditor: React.FC = () => {
   const handleGenerate = async () => {
     if (!draft || !proposal || !project) return;
     if (draft.lines.length === 0) { toast('Add at least one price line', { type: 'warning' }); return; }
+    if (dirty && saving) { toast('Save in progress — try again in a moment', { type: 'warning' }); return; }
     setBusy(true);
     try {
       // Generate always saves first; a save that bounced (lock/conflict) has
@@ -97,19 +98,23 @@ export const ProposalEditor: React.FC = () => {
     to: string; cc?: string; bcc?: string; subject: string; body: string;
     attachmentFileIds: string[]; headerEmail?: string;
   }) => {
-    if (!proposal?.fileId || !project) return;
-    let fileId = proposal.fileId;
-    // A sender who picked a from-address other than the company default gets a
-    // fresh PDF stamped with it, so the client replies where they should.
-    if (m.headerEmail && m.headerEmail !== emailDefaults.companyEmail) {
-      try {
-        fileId = await renderAndStore(m.headerEmail);
-      } catch (e) {
-        console.error(e);
-        toast('Could not restamp the letterhead — sending the generated PDF', { type: 'warning' });
-      } finally {
-        setProgress('');
-      }
+    if (!proposal || !project) return;
+    // ALWAYS render at send time. A stored fileId goes stale the moment anything
+    // is saved or a photo/attachment changes, and emailing last week's price is
+    // the one failure this section cannot have. Generate is the preview path;
+    // this is the one that goes to the client, stamped with their chosen
+    // from-address. A render that fails aborts the send rather than falling
+    // back to the old document.
+    let fileId: string;
+    try {
+      fileId = await renderAndStore(m.headerEmail);
+    } catch (e) {
+      console.error(e);
+      // The composer reports the failed send itself; this says which step broke.
+      toast('Could not generate the proposal PDF — nothing was sent', { type: 'error' });
+      throw e;
+    } finally {
+      setProgress('');
     }
     try {
       await sendProposal(proposal.id, {
@@ -136,8 +141,9 @@ export const ProposalEditor: React.FC = () => {
   // are blocked with a reason rather than silently doing nothing.
   const noProject = !project ? "Couldn't load the project — reload the page" : undefined;
   const generateBlockedReason = noProject;
-  const sendBlockedReason = noProject
-    ?? (!proposal?.fileId ? 'Generate the PDF first' : dirty ? 'Save first' : undefined);
+  // Send renders its own PDF, so it needs no prior Generate — only a draft that
+  // is actually on the server.
+  const sendBlockedReason = noProject ?? (dirty ? 'Save first' : undefined);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">

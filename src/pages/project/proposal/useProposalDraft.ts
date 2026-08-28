@@ -83,7 +83,12 @@ export interface ProposalDraftState {
   collab: CollabEditingState;
   patchDraft: (patch: Partial<Draft>) => void;
   applyOptions: (patch: Partial<ProposalOptionsValue>) => void;
-  /** Resolves true when the draft is on the server (or there was nothing to save). */
+  /**
+   * Writes the draft. Resolves true only when the server took it; false when
+   * the save did not happen at all — nothing editable (no draft / read-only),
+   * a save already in flight, or the server rejected it (lock/conflict, which
+   * also reloads).
+   */
   save: () => Promise<boolean>;
   reload: () => void;
 }

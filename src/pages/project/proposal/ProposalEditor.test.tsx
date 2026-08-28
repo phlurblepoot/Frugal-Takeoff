@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 import { ToastProvider } from '../../../components/Toast';
@@ -76,12 +76,6 @@ const renderEditor = () => render(
     </ConfirmProvider>
   </ToastProvider>,
 );
-
-/** Runs `body` with the proposal already carrying a generated PDF. */
-const withGeneratedPdf = async (body: () => Promise<void>) => {
-  proposal.fileId = 'f-existing' as (typeof proposal)['fileId'];
-  try { await body(); } finally { proposal.fileId = null; }
-};
 
 describe('ProposalEditor smoke', () => {
   beforeEach(() => {
@@ -190,6 +184,22 @@ describe('ProposalEditor smoke', () => {
     await waitFor(() => expect(getProposal).toHaveBeenCalledTimes(2));
   });
 
+  it('Generate says so rather than doing nothing while a save is still in flight', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4 }); }));
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'in flight' } });
+    fireEvent.click(screen.getByTestId('btn-save-proposal'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-proposal')).toHaveTextContent('Saving…'));
+
+    fireEvent.click(screen.getByTestId('btn-generate-proposal'));
+    expect(await screen.findByText(/Save in progress/)).toBeInTheDocument();
+    expect(buildProposalPdf).not.toHaveBeenCalled();
+    await act(async () => { release(); });
+  });
+
   it('a save that bounces off a lock aborts the generate', async () => {
     saveProposal.mockRejectedValueOnce(new ProposalLockedError());
     renderEditor();
@@ -203,61 +213,76 @@ describe('ProposalEditor smoke', () => {
     expect(setProposalFile).not.toHaveBeenCalled();
   });
 
-  it('Send is blocked until the PDF has been generated', async () => {
+  it('Send needs no prior Generate, but is blocked while the draft is unsaved', async () => {
     renderEditor();
     await screen.findByText('#2');
+    // Send renders its own PDF, so a proposal with no fileId is still sendable.
+    expect(proposal.fileId).toBeNull();
+    expect(screen.getByTestId('btn-send-proposal')).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'edited' } });
     expect(screen.getByTestId('btn-send-proposal')).toBeDisabled();
-    expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Generate the PDF first');
+    expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Save first');
   });
 
-  it('Send is blocked again as soon as the draft is edited', async () => {
-    await withGeneratedPdf(async () => {
-      renderEditor();
-      await screen.findByText('#2');
-      expect(screen.getByTestId('btn-send-proposal')).toBeEnabled();
+  const openComposer = async () => {
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.click(screen.getByTestId('btn-send-proposal'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+    return dialog;
+  };
 
-      fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'edited' } });
-      expect(screen.getByTestId('btn-send-proposal')).toBeDisabled();
-      expect(screen.getByTestId('btn-send-proposal')).toHaveAttribute('title', 'Save first');
-    });
-  });
-
-  it('sends the stored PDF to the resolved recipient', async () => {
-    await withGeneratedPdf(async () => {
-      renderEditor();
-      await screen.findByText('#2');
-      fireEvent.click(screen.getByTestId('btn-send-proposal'));
-
-      const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+  it('always renders and stores a fresh PDF before sending it', async () => {
+    // A stored fileId goes stale the moment anything is saved or a photo
+    // changes, so the send never trusts one — it renders its own.
+    proposal.fileId = 'f-stale' as (typeof proposal)['fileId'];
+    try {
+      const dialog = await openComposer();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
 
       await waitFor(() => expect(sendProposal).toHaveBeenCalled());
-      expect(sendProposal.mock.calls[0]).toMatchObject(['p1', {
-        to: 'client@example.com', fileId: 'f-existing', attachmentFileIds: [],
-      }]);
-      // The company default was kept, so there was nothing to re-stamp.
-      expect(buildProposalPdf).not.toHaveBeenCalled();
-      expect(await screen.findByText('Proposal sent')).toBeInTheDocument();
-    });
-  });
-
-  it('re-stamps the letterhead when the sender picks a different from-address', async () => {
-    await withGeneratedPdf(async () => {
-      renderEditor();
-      await screen.findByText('#2');
-      fireEvent.click(screen.getByTestId('btn-send-proposal'));
-
-      const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
-      fireEvent.change(within(dialog).getByLabelText('Document shows email:'), { target: { value: 'me@bigbear.test' } });
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
-
-      await waitFor(() => expect(sendProposal).toHaveBeenCalled());
-      expect(buildProposalPdf.mock.calls[0][0]).toMatchObject({ headerEmail: 'me@bigbear.test' });
+      expect(buildProposalPdf).toHaveBeenCalledTimes(1);
+      expect(persistGeneratedDocument).toHaveBeenCalledTimes(1);
       expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated');
-      // The freshly stamped document is what goes out, not the old one.
-      expect(sendProposal.mock.calls[0][1]).toMatchObject({ fileId: 'f-generated' });
-    });
+      expect(buildProposalPdf.mock.invocationCallOrder[0])
+        .toBeLessThan(sendProposal.mock.invocationCallOrder[0]);
+      expect(persistGeneratedDocument.mock.invocationCallOrder[0])
+        .toBeLessThan(sendProposal.mock.invocationCallOrder[0]);
+      // The fresh document goes out — never the stale one on the record.
+      expect(sendProposal.mock.calls[0]).toMatchObject(['p1', {
+        to: 'client@example.com', fileId: 'f-generated', attachmentFileIds: [],
+      }]);
+      expect(await screen.findByText('Proposal sent')).toBeInTheDocument();
+    } finally {
+      proposal.fileId = null;
+    }
+  });
+
+  it('stamps the from-address the sender picked onto that PDF', async () => {
+    const dialog = await openComposer();
+    fireEvent.change(within(dialog).getByLabelText('Document shows email:'), { target: { value: 'me@bigbear.test' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(sendProposal).toHaveBeenCalled());
+    expect(buildProposalPdf.mock.calls[0][0]).toMatchObject({ headerEmail: 'me@bigbear.test' });
+    expect(sendProposal.mock.calls[0][1]).toMatchObject({ fileId: 'f-generated' });
+  });
+
+  it('a render that fails aborts the send instead of emailing the old PDF', async () => {
+    proposal.fileId = 'f-stale' as (typeof proposal)['fileId'];
+    buildProposalPdf.mockRejectedValueOnce(new Error('render blew up'));
+    try {
+      const dialog = await openComposer();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText(/Could not generate the proposal PDF/)).toBeInTheDocument();
+      expect(sendProposal).not.toHaveBeenCalled();
+      // The composer stays open so the send can be retried.
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    } finally {
+      proposal.fileId = null;
+    }
   });
 });
