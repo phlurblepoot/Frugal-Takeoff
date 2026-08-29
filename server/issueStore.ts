@@ -104,8 +104,19 @@ export function removePhoto(db: Database.Database, issueId: string, fileId: stri
   tx();
 }
 
+// sentAt is always refreshed; the status/version/updatedAt write happens only
+// on a real transition. updatedAt is the clock the generated-PDF "up to date"
+// chip compares the stored file against, so a re-send of an already-sent issue
+// must leave it alone — otherwise every successful send immediately marks its
+// own PDF stale, with no way back to current.
 export function markIssueSent(db: Database.Database, id: string): void {
+  const row = db.prepare('SELECT status FROM issues WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!row) throw new NotFoundError('Issue not found');
   const now = Date.now();
+  if (row.status === 'sent') {
+    db.prepare('UPDATE issues SET sentAt = ? WHERE id = ?').run(now, id);
+    return;
+  }
   db.prepare("UPDATE issues SET status = 'sent', sentAt = ?, version = version + 1, updatedAt = ? WHERE id = ?").run(now, now, id);
 }
 

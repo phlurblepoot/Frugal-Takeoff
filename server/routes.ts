@@ -1781,9 +1781,11 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         text: body ?? message ?? 'Please find the attached invoice.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: `${inv.number || 'invoice'}.pdf` }, attachmentFileIds),
       });
-      // Mark sent (best effort) — but never demote an already-paid invoice back to sent.
+      // Mark sent (best effort) — never demote an already-paid invoice back to
+      // sent, and skip the write entirely when it is already 'sent' so a
+      // re-send doesn't stamp updatedAt and mark its own PDF out of date.
       try {
-        if (inv.status !== 'paid') setInvoiceStatus(db, req.params.id, 'sent');
+        if (inv.status !== 'sent' && inv.status !== 'paid') setInvoiceStatus(db, req.params.id, 'sent');
       } catch { /* ignore */ }
       logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
       const fresh = getInvoice(db, req.params.id);
@@ -1811,9 +1813,11 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         text: body ?? message ?? 'Please find the attached change order request.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: `CO-${number || 'change-order'}.pdf` }, attachmentFileIds),
       });
-      // Mark sent (best effort) — but never override an already approved/rejected CO.
+      // Mark sent (best effort) — never override an already approved/rejected CO,
+      // and skip a no-op re-send write (it would bump updatedAt and stale the
+      // PDF that was just emailed).
       try {
-        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
+        if (co.status !== 'sent' && co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
       } catch { /* best effort */ }
       logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
       const fresh = getChangeOrder(db, req.params.id);

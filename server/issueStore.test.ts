@@ -103,6 +103,26 @@ describe('photos + sent', () => {
     expect(typeof iss.sentAt).toBe('number');
   });
 
+  // updatedAt is the clock the generated-PDF "up to date" chip compares the
+  // stored file against, so re-sending must not stamp it — the send would
+  // otherwise stale the very PDF it just mailed, permanently.
+  it('markIssueSent refreshes sentAt but leaves updatedAt/version alone on a re-send', async () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    const created = getIssue(db, id) as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    markIssueSent(db, id);
+    const firstSend = getIssue(db, id) as any;
+    expect(firstSend.updatedAt).toBeGreaterThan(created.updatedAt); // first send is a real transition
+    await new Promise(r => setTimeout(r, 2));
+
+    markIssueSent(db, id);
+    const resent = getIssue(db, id) as any;
+    expect(resent.updatedAt).toBe(firstSend.updatedAt);
+    expect(resent.version).toBe(firstSend.version);
+    expect(resent.sentAt).toBeGreaterThan(firstSend.sentAt);
+  });
+
   it('countOpenIssues counts only open issues for a project', () => {
     const a = createIssue(db, 'p1', { title: 'A' });
     createIssue(db, 'p1', { title: 'B' });

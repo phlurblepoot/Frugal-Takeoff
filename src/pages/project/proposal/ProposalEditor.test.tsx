@@ -337,16 +337,18 @@ describe('ProposalEditor smoke', () => {
     expect(setProposalFile).not.toHaveBeenCalled();
   });
 
-  it('Send needs no prior Generate, but is blocked while the draft is unsaved', async () => {
+  it('Send needs no prior Generate, and stays available while the draft is dirty', async () => {
     renderEditor();
     await screen.findByText('#2');
     // Send renders its own PDF, so a proposal with no document is still sendable.
     expect(proposal.fileId).toBeNull();
     expect(await screen.findByTestId('proposal-send')).toBeEnabled();
 
+    // A pending edit is committed by Send itself (spec §2), not a blocker.
     fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'edited' } });
-    expect(screen.getByTestId('proposal-send')).toBeDisabled();
-    expect(screen.getByTestId('proposal-send')).toHaveAttribute('title', 'Save first');
+    const send = screen.getByTestId('proposal-send');
+    expect(send).toBeEnabled();
+    expect(send).not.toHaveAttribute('title', 'Save first');
   });
 
   const openComposer = async () => {

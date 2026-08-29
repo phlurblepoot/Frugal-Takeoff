@@ -140,13 +140,38 @@ export function recordPayment(db: Database.Database, targetType: string, targetI
   if (!target) throw new NotFoundError(targetType === 'invoice' ? 'Invoice not found' : 'Pay application not found');
   if (!Number.isFinite(input.amount) || (input.amount as number) <= 0) throw new ValidationError('Payment amount must be a positive number');
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, targetType, targetId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());
+  const now = Date.now();
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, targetType, targetId, input.date ?? now, input.amount, input.method ?? null, input.note ?? null, now);
+    touchPaymentTarget(db, targetType, targetId, now);
+  });
+  tx();
   return { id };
 }
 
+// The invoice PDF and the pay-app G702 both print Paid-to-date and Balance, so
+// a payment changes what a generated document should say even though nothing on
+// the invoice/pay-app row itself moved. Without this stamp the up-to-date chip
+// stays green and Send reuses a stored file whose totals are already wrong
+// (spec docs/superpowers/specs/2026-08-29-document-actions-rollout).
+function touchPaymentTarget(db: Database.Database, targetType: string, targetId: string, now: number): void {
+  // targetType is validated against PAYMENT_TARGET_TYPES before it ever reaches
+  // here (and on the way into the row we read back), so the table name is ours.
+  const table = targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
+  db.prepare(`UPDATE ${table} SET updatedAt = ? WHERE id = ?`).run(now, targetId);
+}
+
 export function deletePayment(db: Database.Database, id: string): void {
-  db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    // Read the target before the row goes away — the deletion changes the same
+    // Paid/Balance figures the insert does.
+    const row = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(id) as
+      { targetType: string; targetId: string } | undefined;
+    db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+    if (row) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+  });
+  tx();
 }
 
 // All payments across a project's invoices AND pay applications, with a resolved
@@ -175,8 +200,16 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
   if (!(INVOICE_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid invoice status: ${status}`);
   let out = { version: 0, status };
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM invoices WHERE id = ?').get(id) as { version: number } | undefined;
+    const row = db.prepare('SELECT version, status FROM invoices WHERE id = ?').get(id) as { version: number; status: string } | undefined;
     if (!row) throw new NotFoundError('Invoice not found');
+    // Re-sending an invoice that is already 'sent' asks for the status it
+    // already has. Writing it anyway would bump updatedAt, which is exactly the
+    // "is the stored PDF still current?" clock — the chip would flip to
+    // out-of-date the instant the send succeeded and could never go back.
+    if (row.status === status) {
+      out = { version: row.version, status };
+      return;
+    }
     const newVersion = row.version + 1;
     db.prepare('UPDATE invoices SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
     out = { version: newVersion, status };
@@ -305,8 +338,11 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
 
 export function setChangeOrderStatus(db: Database.Database, id: string, status: string): { status: string; version: number } {
   if (!(CHANGE_ORDER_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid change order status: ${status}`);
-  const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(id) as { version: number } | undefined;
+  const row = db.prepare('SELECT version, status FROM change_orders WHERE id = ?').get(id) as { version: number; status: string } | undefined;
   if (!row) throw new NotFoundError('Change order not found');
+  // Same no-op guard as setInvoiceStatus: a re-send of an already-sent CO must
+  // not touch updatedAt, or the generated-PDF chip goes stale on every send.
+  if (row.status === status) return { status, version: row.version ?? 1 };
   const newVersion = (row.version ?? 1) + 1;
   db.prepare('UPDATE change_orders SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
   return { status, version: newVersion };

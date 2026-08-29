@@ -7,12 +7,15 @@
 //
 // The invariants worth knowing before changing anything here:
 //  - Generating from a dirty editor would produce a document that disagrees
-//    with the record, so we save first and abort if that save fails.
+//    with the record, so Generate AND Send both save first and abort if that
+//    save fails (spec §2, "Dirty rule").
 //  - A record that already has a document never gets silently replaced — the
 //    version/overwrite dialog is the only way past it.
 //  - Send reuses the stored file only when it is genuinely current AND the
 //    header email wasn't overridden in the composer; anything else rebuilds,
 //    so the recipient always gets bytes that match the record.
+//  - A record with no change clock (staleness="unknown") never claims to be
+//    current, so Send always rebuilds rather than mailing a stale file.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, FileText, Mail } from 'lucide-react';
 import { GeneratedDoc, fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
@@ -39,7 +42,8 @@ type SendMessage = {
 
 export interface DocumentActionsBarProps {
   /** sourceId may be absent while the record is still unsaved — the bar then
-   *  shows Generate/Send as blocked ('Save first') instead of guessing an id. */
+   *  shows Generate/Send as blocked ('Save first') instead of guessing an id.
+   *  A dirty (but saved) record does NOT block: both actions save first. */
   source: { sourceType: string; sourceId?: string };
   /** Document kind for persistGeneratedDocument (invoice, issue-report, …). */
   kind: string;
@@ -53,10 +57,15 @@ export interface DocumentActionsBarProps {
   save: () => Promise<boolean>;
   /** When the underlying record last changed — drives the up-to-date chip. */
   updatedAt: number | null | undefined;
+  /** Set to 'unknown' when the record has no updatedAt to compare against (the
+   *  project-level punch report is assembled from rows that carry only
+   *  createdAt). The chip then makes no freshness claim and Send always
+   *  regenerates — a missing clock must not read as "nothing has changed". */
+  staleness?: 'unknown';
   readOnly?: boolean;
   onGenerated?: (fileId: string) => void | Promise<void>;
   send?: {
-    /** Non-empty disables Send and explains why (wins over the dirty hint). */
+    /** Non-empty disables Send and explains why. */
     blockedReason?: string;
     composer: Omit<EmailComposerProps, 'open' | 'onClose' | 'onSend' | 'projectId' | 'primaryAttachmentName'>;
     sendFn: (fileId: string, m: SendMessage) => Promise<void>;
@@ -73,7 +82,7 @@ type PendingChoice = {
 
 export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   source, kind, format, projectId, fileName, build, dirty, save, updatedAt,
-  readOnly = false, onGenerated, send, size, testIdPrefix = 'doc',
+  staleness, readOnly = false, onGenerated, send, size, testIdPrefix = 'doc',
 }) => {
   const { toast } = useToast();
   // Same peek-then-decide viewer the list rows open; it owns the modal, the
@@ -143,29 +152,42 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
       // so the server keeps its own default.
       ...(mode ? { mode } : {}),
     });
-    await onGenerated?.(fileId);
+    // The bytes are stored by this point. If the editor's own bookkeeping
+    // (proposal fileId, a parent refresh) then fails, saying "failed to
+    // generate" would be a lie that sends the user off regenerating a document
+    // that already exists — report the linking failure for what it is.
+    if (onGenerated) {
+      try {
+        await onGenerated(fileId);
+      } catch {
+        toast(`${word} generated, but linking it to the record failed`, { type: 'warning' });
+      }
+    }
     await refresh();
     return fileId;
+  };
+
+  // Generate and Send share one rule: a dirty editor is committed before any
+  // bytes are built, and a failed save stops the flow (spec §2).
+  const saveFirst = async (): Promise<boolean> => {
+    if (!dirty) return true;
+    set(setBusy, 'Saving…');
+    try {
+      return await save();
+    } catch {
+      return false;
+    } finally {
+      set(setBusy, null);
+    }
   };
 
   const handleGenerate = async () => {
     // Guarded by the disabled button too; belt and braces, since persisting
     // against a missing sourceId would orphan the document.
     if (busy || unsaved) return;
-    if (dirty) {
-      let saved = false;
-      set(setBusy, 'Saving…');
-      try {
-        saved = await save();
-      } catch {
-        saved = false;
-      } finally {
-        set(setBusy, null);
-      }
-      if (!saved) {
-        toast('Save failed — nothing generated', { type: 'error' });
-        return;
-      }
+    if (!(await saveFirst())) {
+      toast('Save failed — nothing generated', { type: 'error' });
+      return;
     }
 
     let mode: 'version' | 'overwrite' | undefined;
@@ -205,13 +227,21 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
 
   const handleSend = async (m: SendMessage & { headerEmail?: string }) => {
     if (!send) return;
+    // Emailing from a dirty editor would attach bytes that disagree with the
+    // record, so Send commits first exactly like Generate. A failed save throws
+    // the same sentinel a cancelled dialog does, so EmailComposer keeps the
+    // typed message on screen instead of reporting a send failure.
+    if (!(await saveFirst())) {
+      toast('Save failed — nothing sent', { type: 'error' });
+      throw new DocumentGenerationCancelled();
+    }
     // Picking a different "document shows email" in the composer changes the
     // document itself, so a stored copy can't be reused even if it's current.
     const headerOverride =
       m.headerEmail && m.headerEmail !== send.composer.defaultHeaderEmail ? m.headerEmail : undefined;
 
     let fileId: string;
-    if (file && upToDate && !headerOverride) {
+    if (file && upToDate && staleness !== 'unknown' && !headerOverride) {
       fileId = file.id;
     } else {
       let mode: 'version' | 'overwrite' | undefined;
@@ -240,8 +270,10 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     toast('Sent', { type: 'success' });
   };
 
+  // Dirty is no longer a blocker — Send saves first. Only a caller-supplied
+  // reason or a record with no id (nothing to attach a document to) stops it.
   const sendBlocked = send
-    ? (send.blockedReason ?? (dirty || unsaved ? 'Save first' : undefined))
+    ? (send.blockedReason ?? (unsaved ? 'Save first' : undefined))
     : undefined;
   const generateBlocked = unsaved ? 'Save first' : undefined;
 
@@ -249,7 +281,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     <>
       <div className="flex flex-wrap items-center gap-2" data-testid={`${p}-actions`}>
         <span data-testid={`${p}-status`}>
-          <DocumentStatusChip file={file} upToDate={upToDate} format={format} size={size} />
+          <DocumentStatusChip file={file} upToDate={upToDate} format={format} size={size} staleness={staleness} />
         </span>
 
         {!readOnly && (

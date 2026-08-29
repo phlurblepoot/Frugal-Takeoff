@@ -52,6 +52,16 @@ export function listSovLines(db: Database.Database, projectId: string): any[] {
   ).all(projectId) as any[];
 }
 
+// Every pay application's G702/G703 is computed live from the project's schedule
+// of values, so ANY SOV edit changes what a stored pay-app Excel should say even
+// though no aia_pay_apps row moved. updatedAt is the clock the generated-document
+// "up to date" chip compares the stored file's createdAt against, so stamping the
+// apps here is what makes an out-of-date export announce itself (spec
+// docs/superpowers/specs/2026-08-29-document-actions-rollout).
+function touchProjectPayApps(db: Database.Database, projectId: string, now: number): void {
+  db.prepare('UPDATE aia_pay_apps SET updatedAt = ? WHERE projectId = ?').run(now, projectId);
+}
+
 export function createSovLine(db: Database.Database, projectId: string, input: SovLineInput): { id: string } {
   requireProject(db, projectId);
   if (typeof input.description !== 'string') throw new ValidationError('description is required');
@@ -59,11 +69,13 @@ export function createSovLine(db: Database.Database, projectId: string, input: S
   const retainage = validateRetainagePercent(input.retainagePercent);
   const isCO = input.isChangeOrder ? 1 : 0;
   const id = crypto.randomUUID();
+  const now = Date.now();
   const tx = db.transaction(() => {
     const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM aia_sov_lines WHERE projectId = ?').get(projectId) as any).m;
     db.prepare(
       'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)'
-    ).run(id, projectId, input.itemNo ?? null, input.description, cents, retainage, isCO, input.changeOrderId ?? null, max + 1, Date.now());
+    ).run(id, projectId, input.itemNo ?? null, input.description, cents, retainage, isCO, input.changeOrderId ?? null, max + 1, now);
+    touchProjectPayApps(db, projectId, now);
   });
   tx();
   return { id };
@@ -78,19 +90,27 @@ export function saveSovLine(db: Database.Database, id: string, input: SovLineInp
   }
   let newVersion = 0;
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM aia_sov_lines WHERE id = ?').get(id) as { version: number } | undefined;
+    const row = db.prepare('SELECT version, projectId FROM aia_sov_lines WHERE id = ?').get(id) as { version: number; projectId: string } | undefined;
     if (!row) throw new NotFoundError('SOV line not found');
     if (row.version !== input.version) throw new ConflictError(`SOV line changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
     db.prepare('UPDATE aia_sov_lines SET itemNo = ?, description = ?, scheduledValueCents = ?, retainagePercent = ?, version = ? WHERE id = ?')
       .run(input.itemNo ?? null, input.description, cents, retainage, newVersion, id);
+    touchProjectPayApps(db, row.projectId, Date.now());
   });
   tx();
   return { version: newVersion };
 }
 
 export function deleteSovLine(db: Database.Database, id: string): void {
-  db.prepare('DELETE FROM aia_sov_lines WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    // Read the owning project before the row goes: the delete reshapes every
+    // pay app's G703 just as much as an edit does.
+    const row = db.prepare('SELECT projectId FROM aia_sov_lines WHERE id = ?').get(id) as { projectId: string } | undefined;
+    db.prepare('DELETE FROM aia_sov_lines WHERE id = ?').run(id);
+    if (row) touchProjectPayApps(db, row.projectId, Date.now());
+  });
+  tx();
 }
 
 interface SeedLine { description?: string; scheduledValueCents?: number; itemNo?: string | null; }
@@ -126,6 +146,7 @@ export function seedSovLines(db: Database.Database, projectId: string, lines: Se
     const cos = db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 1 ORDER BY sortOrder ASC, createdAt ASC, rowid ASC').all(projectId) as { id: string }[];
     const upd = db.prepare('UPDATE aia_sov_lines SET sortOrder = ? WHERE id = ?');
     for (const co of cos) upd.run(next++, co.id);
+    touchProjectPayApps(db, projectId, now);
   });
   tx();
   return { count: prepared.length };
@@ -162,6 +183,10 @@ export function syncChangeOrders(db: Database.Database, projectId: string): { ad
       );
       added++;
     }
+    // Idempotent by design (re-running adds 0), so only a real insert counts as
+    // a change — an unconditional stamp would re-stale every export each time
+    // the billing screen resyncs.
+    if (added > 0) touchProjectPayApps(db, projectId, now);
   });
   tx();
   return { added };
@@ -317,7 +342,8 @@ export function savePayAppLines(db: Database.Database, payAppId: string, lines: 
   let newVersion = 0;
   const now = Date.now();
   const tx = db.transaction(() => {
-    const app = db.prepare('SELECT version FROM aia_pay_apps WHERE id = ?').get(payAppId) as { version: number } | undefined;
+    const app = db.prepare('SELECT version, projectId, number FROM aia_pay_apps WHERE id = ?').get(payAppId) as
+      { version: number; projectId: string; number: number } | undefined;
     if (!app) throw new NotFoundError('Pay application not found');
     if (app.version !== version) throw new ConflictError(`Pay application changed since it was loaded (server v${app.version}, payload v${version})`);
     const upd = db.prepare('UPDATE aia_pay_app_lines SET percentComplete = ?, storedMaterialsCents = ? WHERE payAppId = ? AND sovLineId = ?');
@@ -330,6 +356,10 @@ export function savePayAppLines(db: Database.Database, payAppId: string, lines: 
     }
     newVersion = app.version + 1;
     db.prepare('UPDATE aia_pay_apps SET version = ?, updatedAt = ? WHERE id = ?').run(newVersion, now, payAppId);
+    // "Less previous certificates" on every LATER application is the sum of the
+    // work billed before it, so editing this app's lines changes their G702 too.
+    db.prepare('UPDATE aia_pay_apps SET updatedAt = ? WHERE projectId = ? AND number > ?')
+      .run(now, app.projectId, app.number);
   });
   tx();
   return { version: newVersion };

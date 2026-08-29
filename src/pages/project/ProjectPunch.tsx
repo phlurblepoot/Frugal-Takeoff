@@ -188,11 +188,13 @@ export const ProjectPunch: React.FC = () => {
           }}
           dirty={false}
           save={async () => true}
-          // PunchItem/PunchListItem carry no updatedAt (only createdAt) — the
-          // "current" comparison in useGeneratedDocument treats a missing
-          // updatedAt as always up to date, so the chip just tracks whether a
-          // report file exists rather than staleness against edits.
+          // PunchItem/PunchListItem carry no updatedAt (only createdAt), so
+          // there is no clock to compare a stored report against. Saying
+          // 'unknown' keeps the chip from claiming freshness it can't know and
+          // makes Send always regenerate — which is what the old always-rebuild
+          // Download/Send button did.
           updatedAt={null}
+          staleness="unknown"
           size="sm"
           send={{
             blockedReason: list.length === 0 ? 'No punch items' : undefined,

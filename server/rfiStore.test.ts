@@ -162,28 +162,55 @@ describe('rfiStore', () => {
     expect(typeof rfi.sentAt).toBe('number');
   });
 
-  it('markRfiSent does not demote an answered RFI, but refreshes sentAt', () => {
+  // A send that changes no status writes only sentAt: version and updatedAt
+  // stay put, because updatedAt is what the generated-PDF "up to date" chip
+  // compares the stored file's createdAt against — bumping it here would mark
+  // the just-emailed PDF stale the moment the send succeeded.
+  it('markRfiSent does not demote an answered RFI, and leaves version/updatedAt alone', async () => {
     const { id } = createRfi(db, 'p1', { title: 'A' });
     setRfiResponse(db, id, { text: 'Answer' });
-    const before = getRfi(db, id)!;
+    const before = getRfi(db, id)! as any;
     expect(before.status).toBe('answered');
-    const beforeVersion = before.version;
+    await new Promise(r => setTimeout(r, 2));
+
     markRfiSent(db, id);
-    const rfi = getRfi(db, id)!;
+    const rfi = getRfi(db, id)! as any;
     expect(rfi.status).toBe('answered');
     expect(typeof rfi.sentAt).toBe('number');
-    expect(rfi.version).toBe(beforeVersion + 1);
+    expect(rfi.version).toBe(before.version);
+    expect(rfi.updatedAt).toBe(before.updatedAt);
   });
 
-  it('markRfiSent does not demote a closed RFI, but refreshes sentAt', () => {
+  it('markRfiSent does not demote a closed RFI, and leaves version/updatedAt alone', async () => {
     const { id } = createRfi(db, 'p1', { title: 'A' });
     setRfiStatus(db, id, 'closed');
-    const beforeVersion = getRfi(db, id)!.version;
+    const before = getRfi(db, id)! as any;
+    await new Promise(r => setTimeout(r, 2));
+
     markRfiSent(db, id);
-    const rfi = getRfi(db, id)!;
+    const rfi = getRfi(db, id)! as any;
     expect(rfi.status).toBe('closed');
     expect(typeof rfi.sentAt).toBe('number');
-    expect(rfi.version).toBe(beforeVersion + 1);
+    expect(rfi.version).toBe(before.version);
+    expect(rfi.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('markRfiSent stamps updatedAt on the first send, but not on a re-send', async () => {
+    const { id } = createRfi(db, 'p1', { title: 'A' });
+    const created = getRfi(db, id)! as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    markRfiSent(db, id); // open -> sent: a real transition
+    const firstSend = getRfi(db, id)! as any;
+    expect(firstSend.status).toBe('sent');
+    expect(firstSend.updatedAt).toBeGreaterThan(created.updatedAt);
+    await new Promise(r => setTimeout(r, 2));
+
+    markRfiSent(db, id); // already sent: sentAt only
+    const resent = getRfi(db, id)! as any;
+    expect(resent.updatedAt).toBe(firstSend.updatedAt);
+    expect(resent.version).toBe(firstSend.version);
+    expect(resent.sentAt).toBeGreaterThan(firstSend.sentAt);
   });
 
   it('saveRfi and setRfiResponse bump updatedAt', async () => {

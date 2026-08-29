@@ -118,12 +118,19 @@ export function removePhoto(db: Database.Database, rfiId: string, fileId: string
 }
 
 // Advances status to 'sent' only from 'open'; answered/closed are never demoted
-// by a (re)send. sentAt is always refreshed and version always bumps.
+// by a (re)send. sentAt is always refreshed, but version/updatedAt move only on
+// a real transition: updatedAt is what the generated-PDF "up to date" chip
+// compares the stored file's createdAt against, so bumping it on a no-op status
+// write would mark the just-emailed PDF stale the moment the send succeeded.
 export function markRfiSent(db: Database.Database, id: string): void {
   const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
   if (!row) throw new NotFoundError('RFI not found');
   const nextStatus = row.status === 'open' ? 'sent' : row.status;
   const now = Date.now();
+  if (nextStatus === row.status) {
+    db.prepare('UPDATE rfis SET sentAt = ? WHERE id = ?').run(now, id);
+    return;
+  }
   db.prepare('UPDATE rfis SET status = ?, sentAt = ?, version = version + 1, updatedAt = ? WHERE id = ?').run(nextStatus, now, now, id);
 }
 

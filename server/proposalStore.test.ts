@@ -158,6 +158,25 @@ describe('status transitions', () => {
     expect(() => setStatus(db, id, 'declined')).toThrow(ValidationError); // accepted is terminal
   });
 
+  // Sending doesn't change what the proposal SAYS, and a sent proposal is
+  // locked — it can never regenerate its PDF. Stamping updatedAt here would
+  // leave every sent proposal showing "PDF out of date" forever, so markSent
+  // deliberately leaves that clock alone (same rule as setProposalFile).
+  it('markSent records the send without stamping updatedAt', async () => {
+    const { id } = createProposal(db, 'p1', {});
+    pdf('gen-u'); setProposalFile(db, id, 'gen-u');
+    const before = getProposal(db, id)! as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    markSent(db, id, { to: 'a@b.c', subject: 's' });
+
+    const after = getProposal(db, id)! as any;
+    expect(after.status).toBe('sent');
+    expect(after.sentAt).toBeGreaterThan(0);
+    expect(after.version).toBe(before.version + 1); // collaborators still reload
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
   // A legacy row (migration 28) is read-only history: Open PDF and Revise
   // only (spec §5). It can carry status 'sent', so the 'sent' check alone
   // wouldn't stop it.

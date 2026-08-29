@@ -136,6 +136,32 @@ describe('ProjectPunch — document actions', () => {
     expect(send).toBeEnabled();
   });
 
+  // Punch items carry no updatedAt, so the generic "file newer than the record"
+  // check would call any stored report current forever. The bar is told the
+  // staleness is unknown instead: no freshness claim, and Send rebuilds — which
+  // is what the old always-regenerate Send report button did.
+  it('never claims a stored report is current, and rebuilds on send anyway', async () => {
+    h.getDocumentBySource.mockResolvedValue({
+      id: 'file-old', name: 'punch.pdf', mime: 'application/pdf', size: 10,
+      createdAt: 5_000, versionNumber: 1,
+    });
+    mount();
+
+    expect(await screen.findByTestId('doc-status')).toHaveTextContent('PDF saved');
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(await screen.findByTestId('composer-send'));
+
+    // A file exists, so the version/overwrite prompt still guards it.
+    await screen.findByText('Replace the existing PDF?');
+    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
+
+    await waitFor(() => expect(h.buildPunchPdf).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(h.sendPunchReport).toHaveBeenCalledTimes(1));
+    // The freshly built file goes out, not the stored one.
+    expect(h.sendPunchReport.mock.calls[0][1]).toMatchObject({ fileId: 'file-9' });
+  });
+
   it('sends the generated file through sendPunchReport', async () => {
     mount();
     fireEvent.click(await screen.findByTestId('doc-send'));

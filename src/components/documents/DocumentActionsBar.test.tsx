@@ -280,19 +280,95 @@ describe('DocumentActionsBar — send', () => {
     expect(screen.getByTestId('composer')).toBeInTheDocument();
   });
 
-  it('blocks sending while the editor is dirty, and blockedReason wins', () => {
+  // Spec §2: Generate AND Send save first. A dirty editor no longer blocks
+  // Send — it commits, then builds from the saved record.
+  it('saves a dirty editor before building and sending', async () => {
+    h.state.file = FILE;
+    // A dirty editor means the record is about to move past the stored file —
+    // the hook reports it stale once the save lands.
+    h.state.upToDate = false;
+    renderBar({ dirty: true, send: sendProp() });
+
+    const btn = screen.getByTestId('doc-send');
+    expect(btn).toBeEnabled();
+    expect(btn).not.toHaveAttribute('title', 'Save first');
+
+    fireEvent.click(btn);
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    // The stored file predates the pending edit, so it can't be reused: the
+    // dialog is how the freshly saved record gets its document.
+    await screen.findByText('Replace the existing PDF?');
+    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
+
+    await waitFor(() => expect(sendFn).toHaveBeenCalled());
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(build.mock.invocationCallOrder[0]);
+    expect(sendFn.mock.calls[0][0]).toBe('new-file');
+  });
+
+  it('sends nothing when the save fails, and leaves the composer open', async () => {
+    save.mockResolvedValue(false);
     h.state.file = FILE;
     h.state.upToDate = true;
-    const { unmount } = renderBar({ dirty: true, send: sendProp() });
-    const btn = screen.getByTestId('doc-send');
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute('title', 'Save first');
-    unmount();
+    renderBar({ dirty: true, send: sendProp() });
 
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Save failed — nothing sent', expect.anything()));
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(build).not.toHaveBeenCalled();
+    expect(persistGeneratedDocument).not.toHaveBeenCalled();
+    // The sentinel keeps the typed message on screen instead of reporting a
+    // send failure the user can't act on.
+    await waitFor(() => expect(h.sendErrors).toHaveLength(1));
+    expect(h.sendErrors[0]).toBeInstanceOf(DocumentGenerationCancelled);
+    expect(screen.getByTestId('composer')).toBeInTheDocument();
+  });
+
+  it('still blocks Send for a caller-supplied reason', () => {
+    h.state.file = FILE;
+    h.state.upToDate = true;
     renderBar({ dirty: true, send: sendProp({ blockedReason: 'Add a recipient first' }) });
     const blocked = screen.getByTestId('doc-send');
     expect(blocked).toBeDisabled();
     expect(blocked).toHaveAttribute('title', 'Add a recipient first');
+  });
+});
+
+// A record with no updatedAt (the project-level punch report) has no clock to
+// compare a stored file against. isUpToDate reports `true` for a missing
+// updatedAt, so without this the chip would claim freshness it cannot know and
+// Send would mail an old file forever.
+describe('DocumentActionsBar — staleness unknown', () => {
+  it('makes no freshness claim in the chip', () => {
+    const { unmount } = renderBar({ updatedAt: null, staleness: 'unknown' });
+    expect(screen.getByTestId('doc-status')).toHaveTextContent('No PDF yet');
+    unmount();
+
+    h.state.file = FILE;
+    h.state.upToDate = true;
+    renderBar({ updatedAt: null, staleness: 'unknown' });
+    expect(screen.getByTestId('doc-status')).toHaveTextContent('PDF saved');
+  });
+
+  it('always rebuilds on send, even with an "up to date" file', async () => {
+    h.state.file = FILE;
+    h.state.upToDate = true;
+    renderBar({ updatedAt: null, staleness: 'unknown', send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    // A file exists, so the version/overwrite prompt still stands between the
+    // send and the stored document (spec §2).
+    await screen.findByText('Replace the existing PDF?');
+    fireEvent.click(screen.getByRole('button', { name: 'Save as new version' }));
+
+    await waitFor(() => expect(sendFn).toHaveBeenCalled());
+    expect(build).toHaveBeenCalled();
+    expect(sendFn.mock.calls[0][0]).toBe('new-file');
   });
 });
 
@@ -376,6 +452,24 @@ describe('DocumentActionsBar — open / download / formats', () => {
     const snd = screen.getByTestId('doc-send');
     expect(snd).toBeDisabled();
     expect(snd).toHaveAttribute('title', 'Save first');
+  });
+
+  // The bytes are already stored by the time onGenerated runs, so a failure in
+  // the editor's own bookkeeping must not be reported as a failed generation —
+  // that would send the user off regenerating a document that exists.
+  it('reports an onGenerated failure as a linking failure, not a generation failure', async () => {
+    onGenerated.mockRejectedValueOnce(new Error('setProposalFile blew up'));
+    renderBar();
+
+    fireEvent.click(screen.getByTestId('doc-generate'));
+
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith(
+      'PDF generated, but linking it to the record failed', { type: 'warning' },
+    ));
+    expect(h.toast).not.toHaveBeenCalledWith('Failed to generate the PDF', expect.anything());
+    expect(persistGeneratedDocument).toHaveBeenCalled();
+    // The file is real, so the bar still refreshes into its Open/Download state.
+    expect(h.state.refresh).toHaveBeenCalled();
   });
 
   it('honours a custom testIdPrefix', () => {

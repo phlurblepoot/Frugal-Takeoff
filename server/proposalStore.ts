@@ -301,11 +301,18 @@ export function removeAttachment(db: Database.Database, id: string, fileId: stri
   db.prepare('DELETE FROM proposal_attachments WHERE proposalId = ? AND fileId = ?').run(id, fileId);
 }
 
+// Recording that the proposal went out does not change what the proposal SAYS —
+// the PDF carries no status/sentAt — so this deliberately leaves `updatedAt`
+// alone, for the same reason setProposalFile does (see the comment there):
+// updatedAt is the "is this PDF still current?" clock. Bumping it here would
+// leave every sent proposal — permanently locked, so its PDF can never be
+// regenerated — showing "PDF out of date" forever. version still bumps so
+// collaborators reload the new status.
 export function markSent(db: Database.Database, id: string, sentTo: { to: string; cc?: string; subject: string }): { version: number } {
   const row = requireDraft(db, id);
   if (!row.fileId) throw new ValidationError('Generate the proposal PDF before sending');
-  db.prepare(`UPDATE proposals SET status = 'sent', sentAt = ?, sentTo = ?, version = version + 1, updatedAt = ? WHERE id = ?`)
-    .run(Date.now(), JSON.stringify({ to: sentTo.to, cc: sentTo.cc, subject: sentTo.subject }), Date.now(), id);
+  db.prepare(`UPDATE proposals SET status = 'sent', sentAt = ?, sentTo = ?, version = version + 1 WHERE id = ?`)
+    .run(Date.now(), JSON.stringify({ to: sentTo.to, cc: sentTo.cc, subject: sentTo.subject }), id);
   return { version: row.version + 1 };
 }
 

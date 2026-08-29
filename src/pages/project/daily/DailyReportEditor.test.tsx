@@ -183,18 +183,24 @@ describe('DailyReportEditor — document actions', () => {
     expect(h.persistGeneratedDocument).not.toHaveBeenCalled();
   });
 
-  it('stops blocking Email once the saved record comes back', async () => {
+  it('keeps Email available while dirty, and stops re-saving once the record comes back', async () => {
     const { rerender } = mount();
     expect(await screen.findByTestId('doc-send')).toBeEnabled();
 
+    // A pending edit no longer blocks Email — the bar saves first (spec §2).
     fireEvent.change(screen.getByLabelText('Job name'), { target: { value: 'Typed job' } });
-    expect(screen.getByTestId('doc-send')).toHaveAttribute('title', 'Save first');
+    const dirtySend = screen.getByTestId('doc-send');
+    expect(dirtySend).toBeEnabled();
+    expect(dirtySend).not.toHaveAttribute('title', 'Save first');
 
     rerender(tree(report({ jobName: 'Typed job', version: 3, updatedAt: 20 })));
 
-    const send = screen.getByTestId('doc-send');
-    expect(send).toBeEnabled();
-    expect(send).not.toHaveAttribute('title', 'Save first');
+    // The round-tripped record must read as clean: if it still looked dirty,
+    // every send would fire a redundant save of the record it just loaded.
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(await screen.findByTestId('composer-send'));
+    await waitFor(() => expect(h.sendDailyReport).toHaveBeenCalled());
+    expect(h.saveDailyReport).not.toHaveBeenCalled();
   });
 
   it('does not stay dirty over a man-count row that only differs by the trim/blank-row normalize handleSave applies', async () => {
@@ -213,9 +219,11 @@ describe('DailyReportEditor — document actions', () => {
     // (non-normalized) compare of the two would disagree forever.
     rerender(tree(report({ manCounts: [{ type: 'Plasterer', count: 3 }], version: 3, updatedAt: 20 })));
 
-    const send = screen.getByTestId('doc-send');
-    expect(send).toBeEnabled();
-    expect(send).not.toHaveAttribute('title', 'Save first');
+    // Still-dirty would mean every send re-saves the record it just loaded.
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(await screen.findByTestId('composer-send'));
+    await waitFor(() => expect(h.sendDailyReport).toHaveBeenCalled());
+    expect(h.saveDailyReport).not.toHaveBeenCalled();
   });
 
   it('sends the generated file through sendDailyReport', async () => {

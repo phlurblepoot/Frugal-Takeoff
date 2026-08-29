@@ -178,18 +178,24 @@ describe('RfiEditor — document actions', () => {
     expect(h.persistGeneratedDocument).not.toHaveBeenCalled();
   });
 
-  it('stops blocking Email once the saved record comes back', async () => {
+  it('keeps Email available while dirty, and stops re-saving once the record comes back', async () => {
     const { rerender } = mount();
     expect(await screen.findByTestId('doc-send')).toBeEnabled();
 
+    // A pending edit no longer blocks Email — the bar saves first (spec §2).
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Typed title' } });
-    expect(screen.getByTestId('doc-send')).toHaveAttribute('title', 'Save first');
+    const dirtySend = screen.getByTestId('doc-send');
+    expect(dirtySend).toBeEnabled();
+    expect(dirtySend).not.toHaveAttribute('title', 'Save first');
 
     rerender(tree(rfi({ title: 'Typed title', version: 3, updatedAt: 20 })));
 
-    const send = screen.getByTestId('doc-send');
-    expect(send).toBeEnabled();
-    expect(send).not.toHaveAttribute('title', 'Save first');
+    // The round-tripped record must read as clean: if it still looked dirty,
+    // every send would fire a redundant save of the record it just loaded.
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(await screen.findByTestId('composer-send'));
+    await waitFor(() => expect(h.sendRfi).toHaveBeenCalled());
+    expect(h.saveRfi).not.toHaveBeenCalled();
   });
 
   it('sends the generated file through sendRfi', async () => {
