@@ -9,7 +9,9 @@
 // Two rules drive nearly every number here:
 //   • the grand total leads on the cover, ahead of the itemised pricing;
 //   • sections flow on from wherever the previous one ended, separated by an
-//     inline divider — a page break only happens when the content won't fit.
+//     inline divider — but a section is measured first, and one that would be
+//     cut by a break takes the next page whole (plain band, no divider) rather
+//     than straddling the two. Only a section taller than a sheet splits.
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { generateProposalPdf, proposalFileName } from './proposalGenerator';
@@ -294,8 +296,94 @@ describe('proposal layout', () => {
     const { pdfBytes, sections } = await generateProposalPdf(input(p));
     expect(await pages(pdfBytes)).toBeGreaterThan(2);
     expect(sections.terms).toBe(1);                     // starts inline on the cover
+    expect(dividerOnPage(pdfBytes, 1, 'Terms & Conditions')).toBe(true);
     expect(bandOnPage(pdfBytes, 2)).toBe('Terms & Conditions (cont.)');
   });
+
+  // ── Keep-together ──────────────────────────────────────────────────────────
+  // A section is measured before it is drawn: one that would be cut by a page
+  // break but fits a sheet on its own is moved whole to the next page, so the
+  // reader never gets a heading here and its last line over the fold. The
+  // fixtures below share one shape — three price lines, which land the cursor
+  // near the foot of the cover — and vary ONLY the size of the terms section.
+  const pricingThenTerms = (termLines: number) => base({
+    lines: Array.from({ length: 3 }, (_, i) => line({ id: `l${i}`, description: `Item ${i}` })),
+    terms: Array.from({ length: termLines }, (_, i) => `Term ${i}`).join('\n'),
+  });
+
+  it('moves a section that would be cut onto the next page, whole', async () => {
+    // ~128pt of terms against ~80pt of room: it would have straddled the break.
+    const { pdfBytes, sections } = await generateProposalPdf(input(pricingThenTerms(8)));
+
+    expect(sections.terms).toBe(2);
+    // The fresh page introduces it with its plain band…
+    expect(bandOnPage(pdfBytes, 2)).toBe('Terms & Conditions');
+    // …and page 1 was left alone: no inline divider opening a section it never
+    // got to carry (a divider AND a band would introduce it twice).
+    expect(dividerOnPage(pdfBytes, 1, 'Terms & Conditions')).toBe(false);
+    // Whole means whole — nothing continued past the page it started on.
+    expect(await pages(pdfBytes)).toBe(2);
+    expect(bandOnPage(pdfBytes, 2)).not.toContain('cont.');
+  });
+
+  it('leaves a section that does fit exactly where it is', async () => {
+    // Same cursor, a section small enough to sit under the divider: it stays.
+    const { pdfBytes, sections } = await generateProposalPdf(input(pricingThenTerms(2)));
+    expect(await pages(pdfBytes)).toBe(1);
+    expect(sections.terms).toBe(1);
+    expect(dividerOnPage(pdfBytes, 1, 'Terms & Conditions')).toBe(true);
+    expect(bandOnPage(pdfBytes, 1)).toBeUndefined(); // never broke, so no band
+  });
+
+  it('starts an over-long section on a fresh page when only a scrap would fit here', async () => {
+    // 120 clauses can't fit any sheet, so this one HAS to split — but with four
+    // price lines the cover has room for barely a line of it. Opening there
+    // would strand that line under the divider, so it opens on page 2 instead
+    // and paginates from there.
+    const terms = Array.from({ length: 120 }, (_, i) => `Clause ${i}: the contractor shall do the thing.`).join('\n');
+    const p = base({
+      lines: Array.from({ length: 4 }, (_, i) => line({ id: `l${i}`, description: `Item ${i}` })),
+      terms,
+    });
+    const { pdfBytes, sections } = await generateProposalPdf(input(p));
+
+    expect(sections.terms).toBe(2);
+    expect(dividerOnPage(pdfBytes, 1, 'Terms & Conditions')).toBe(false);
+    expect(bandOnPage(pdfBytes, 2)).toBe('Terms & Conditions');
+    expect(bandOnPage(pdfBytes, 3)).toBe('Terms & Conditions (cont.)');
+  });
+
+  // The rule this whole mechanism exists to enforce, checked across a sweep
+  // rather than at one hand-picked size: wherever a section opens inline, real
+  // content follows it on that same sheet. A divider alone at the foot of a
+  // page is precisely the "heading here, body overleaf" split being prevented,
+  // and it is also what a mis-measured section would produce — ensure() breaks
+  // on the RESERVE a row asks for, which can exceed what the row then draws.
+  it('never strands an inline divider at the foot of a page', async () => {
+    const DIVIDERS = /^(PRICING|PAYMENT SCHEDULE|INCLUSIONS & EXCLUSIONS|NOTES|ALTERNATES|COST DETAIL|TERMS & CONDITIONS|PHOTOS)$/;
+    const stranded: string[] = [];
+
+    for (const priceLines of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      for (const termLines of [0, 2, 5, 13]) {
+        for (const inclusions of [0, 9]) {
+          const { pdfBytes } = await generateProposalPdf(input(base({
+            lines: Array.from({ length: priceLines }, (_, i) => line({ id: `l${i}`, description: `Item ${i}` })),
+            terms: Array.from({ length: termLines }, (_, i) => `Term ${i}`).join('\n'),
+            inclusions: Array.from({ length: inclusions }, (_, i) => `Inclusion ${i}`),
+            exclusions: inclusions ? ['Paint'] : [],
+          })));
+          for (const [page, texts] of textByPage(pdfBytes)) {
+            texts.forEach((t, i) => {
+              if (DIVIDERS.test(t) && i === texts.length - 1) {
+                stranded.push(`${priceLines}/${termLines}/${inclusions} p${page}: ${t}`);
+              }
+            });
+          }
+        }
+      }
+    }
+    expect(stranded).toEqual([]);
+  }, 30000);
 
   it('renders every section, in spec order, on non-decreasing pages', async () => {
     const takeoff = {
