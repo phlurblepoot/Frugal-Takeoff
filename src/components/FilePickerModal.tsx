@@ -164,7 +164,11 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
     return () => { mountedRef.current = false; };
   }, []);
 
-  const filterKey = `${open}|${q}|${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${archived}|${accept}`;
+  // `tab` is part of the key so a picker that opens straight onto Upload
+  // (defaultTab='upload') doesn't fire a documents query nobody asked for —
+  // and so switching back to Existing after an upload re-queries, which is
+  // what makes the file just added show up in the list.
+  const filterKey = `${open}|${tab}|${q}|${projectIds.join(',')}|${customerIds.join(',')}|${kinds.join(',')}|${archived}|${accept}`;
 
   const refresh = async () => {
     const myId = ++requestIdRef.current;
@@ -180,7 +184,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
       if (mountedRef.current && myId === requestIdRef.current) setLoading(false);
     }
   };
-  useEffect(() => { if (open) refresh(); }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && tab === 'existing') refresh(); }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Captures the CURRENT requestId (doesn't bump it) — if a filter change
   // bumps requestIdRef while this page is in flight, its rows belong to a

@@ -289,3 +289,17 @@ describe('FilePickerModal — Upload tab', () => {
     expect(uploadProjectFile).toHaveBeenCalledWith('p1', good, 'photo', expect.anything());
   });
 });
+
+describe('FilePickerModal — query cost', () => {
+  it('does not query documents while it is showing the Upload tab', async () => {
+    render(
+      <FilePickerModal open onClose={() => {}} onPick={() => {}} upload={uploadCfg} defaultTab="upload" />
+    );
+    expect(screen.getByTestId('picker-upload-panel')).toBeInTheDocument();
+    expect(getDocuments).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
+    await screen.findByText('Spec.pdf');
+    expect(getDocuments).toHaveBeenCalledTimes(1);
+  });
+});
