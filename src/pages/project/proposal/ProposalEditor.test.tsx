@@ -300,6 +300,29 @@ describe('ProposalEditor smoke', () => {
     expect(screen.queryByText('Save failed — nothing generated')).toBeNull();
   });
 
+  it('persists text typed during an in-flight save before Generate renders it', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'A' } });
+    fireEvent.click(screen.getByTestId('btn-save-proposal'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-proposal')).toHaveTextContent('Saving…'));
+
+    // Typing continues while A is going out, then Generate saves-first. Letting
+    // A's write satisfy that would store a PDF of A+B against a record of A.
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'A+B' } });
+    fireEvent.click(screen.getByTestId('proposal-generate'));
+    await act(async () => { release(); });
+
+    await waitFor(() => expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated'));
+    expect(saveProposal).toHaveBeenCalledTimes(2);
+    expect(saveProposal.mock.calls[1][1]).toMatchObject({ version: 4, coverNotes: 'A+B' });
+    // The stored PDF and the stored record say the same thing.
+    expect(buildProposalPdf.mock.calls[0][0].proposal.coverNotes).toBe('A+B');
+  });
+
   it('a save that bounces off a lock aborts the generate', async () => {
     saveProposal.mockRejectedValueOnce(new ProposalLockedError());
     renderEditor();

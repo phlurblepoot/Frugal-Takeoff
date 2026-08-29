@@ -87,9 +87,10 @@ export interface ProposalDraftState {
    * Writes the draft. Resolves true only when the server took it; false when
    * the save did not happen at all — nothing editable (no draft / read-only)
    * or the server rejected it (lock/conflict, which also reloads). Called while
-   * a write is already in flight it returns THAT write's promise rather than
-   * bouncing, so the Save button and the document bar's save-then-generate
-   * never race into a spurious "save failed".
+   * a write is already in flight it waits for that write instead of bouncing —
+   * and if the draft moved on while it was going out, sends one more so the
+   * record matches the screen. That is what lets the document bar's
+   * save-then-generate trust that the PDF it renders is the PDF on file.
    */
   save: () => Promise<boolean>;
   reload: () => void;
@@ -264,42 +265,55 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
   };
 
   // The Save button is no longer the only caller: the document bar saves first
-  // before it generates. A second call while a write is in flight must not
-  // report a failure that never happened, so both callers await the same write.
+  // before it generates. A second call while a write is in flight must neither
+  // report a failure that never happened nor let the bar generate a PDF of text
+  // that write never carried — so callers queue instead of bouncing.
   const inFlightRef = useRef<Promise<boolean> | null>(null);
+  // What the in-flight write is carrying, plus the current draft/record and the
+  // version the NEXT write must quote. These are refs, not state: a chained
+  // save runs in the microtask after the first resolves, long before React has
+  // re-rendered, and quoting the version it just superseded would 409.
+  const sentRef = useRef<Draft | null>(null);
+  const draftRef = useRef<Draft | null>(null);
+  const proposalRef = useRef<Proposal | null>(null);
+  const savedVersionRef = useRef<number | null>(null);
+  draftRef.current = draft;
+  proposalRef.current = proposal;
 
-  const runSave = async (): Promise<boolean> => {
-    if (!draft || !proposal) return false;
+  const runSave = async (sent: Draft, target: Proposal, version: number): Promise<boolean> => {
+    sentRef.current = sent;
     setSaving(true);
     try {
-      const { version, updatedAt } = await saveProposal(proposal.id, {
-        // "Keep mine" adopts the foreign version so this save overwrites it
-        // deliberately instead of bouncing off a stale-version 409.
-        version: collab.keepMineVersion ?? proposal.version,
-        title: draft.title.trim() || null,
-        validUntil: draft.validUntil || null,
-        fontFamily: draft.fontFamily,
-        coverNotes: draft.coverNotes,
-        terms: draft.terms,
-        inclusions: draft.inclusions,
-        exclusions: draft.exclusions,
-        paymentSchedule: draft.paymentSchedule,
-        showGrandTotal: draft.showGrandTotal,
-        includeCostDetail: draft.includeCostDetail,
-        includeSignature: draft.includeSignature,
-        highlightQuality: draft.highlightQuality,
+      const { version: newVersion, updatedAt } = await saveProposal(target.id, {
+        version,
+        title: sent.title.trim() || null,
+        validUntil: sent.validUntil || null,
+        fontFamily: sent.fontFamily,
+        coverNotes: sent.coverNotes,
+        terms: sent.terms,
+        inclusions: sent.inclusions,
+        exclusions: sent.exclusions,
+        paymentSchedule: sent.paymentSchedule,
+        showGrandTotal: sent.showGrandTotal,
+        includeCostDetail: sent.includeCostDetail,
+        includeSignature: sent.includeSignature,
+        highlightQuality: sent.highlightQuality,
         // Ids and sort order are the server's to assign: array order IS the
         // print order.
-        lines: draft.lines.map(({ id: _id, sortOrder: _sortOrder, ...rest }) => rest),
+        lines: sent.lines.map(({ id: _id, sortOrder: _sortOrder, ...rest }) => rest),
       });
+      savedVersionRef.current = newVersion;
       // updatedAt matters as much as version here: it is what the document bar
       // compares a generated PDF's createdAt against, so keeping the pre-save
       // timestamp would leave a just-edited proposal claiming its old PDF is
       // still current — and Send would email that stale PDF.
-      setProposal(prev => (prev ? { ...prev, version, updatedAt } : prev));
-      setDirty(false);
+      setProposal(prev => (prev ? { ...prev, version: newVersion, updatedAt } : prev));
+      // Only the draft that actually went out is saved. If the estimator typed
+      // while this write was in flight, the screen still holds text the server
+      // has never seen, and showing "Saved" would be a lie.
+      if (draftRef.current === sent) setDirty(false);
       toast('Proposal saved', { type: 'success' });
-      void recordMemories(draft);
+      void recordMemories(sent);
       return true;
     } catch (e) {
       if (e instanceof ProposalLockedError) {
@@ -317,15 +331,32 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
     }
   };
 
-  const save = (): Promise<boolean> => {
-    if (inFlightRef.current) return inFlightRef.current;
-    if (!draft || !proposal || readOnly) return Promise.resolve(false);
-    // runSave never rejects (every failure path returns false), so the cleanup
-    // below cannot leave an unhandled rejection behind.
-    const run = runSave();
+  // runSave never rejects (every failure path returns false), so neither the
+  // chaining below nor the cleanup can strand an unhandled rejection.
+  const track = (run: Promise<boolean>): Promise<boolean> => {
     inFlightRef.current = run;
-    void run.finally(() => { inFlightRef.current = null; });
+    void run.finally(() => { if (inFlightRef.current === run) inFlightRef.current = null; });
     return run;
+  };
+
+  const save = (): Promise<boolean> => {
+    const pending = inFlightRef.current;
+    if (pending) {
+      // Wait for the write already going out; if the draft moved on while it
+      // was in flight, send ONE more so the record matches the screen before
+      // the caller (the document bar) renders it. One chained write, never a
+      // recursion — a further edit rides the next save.
+      return track(pending.then(ok => {
+        const d = draftRef.current;
+        const target = proposalRef.current;
+        if (!ok || !d || !target || readOnly || d === sentRef.current) return ok;
+        return runSave(d, target, savedVersionRef.current ?? target.version);
+      }));
+    }
+    if (!draft || !proposal || readOnly) return Promise.resolve(false);
+    // "Keep mine" adopts the foreign version so this save overwrites it
+    // deliberately instead of bouncing off a stale-version 409.
+    return track(runSave(draft, proposal, collab.keepMineVersion ?? proposal.version));
   };
 
   return {
