@@ -21,6 +21,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.0',
+    date: 'August 29, 2026',
+    changes: [
+      'One shared document strip now covers every generated PDF/Excel in the app — invoices, change orders, issue reports, punch printouts, RFI responses, daily reports, proposals, and AIA pay applications — showing whether a document exists and is current ("No PDF yet" / "PDF up to date" / "PDF out of date"), with Generate, Open, Download, and Email all in one place. Regenerating a document that already exists always asks first: save as a new version (keeping the old one as history) or overwrite it.',
+      'One shared "Add files" button now covers every photo grid and attachment list — issue/punch/daily-report photos, proposal photos and attachments, RFI responses — letting you upload fresh files or pick from the project\'s existing documents from the same picker, with drag-and-drop support.',
+      'Note for self-hosters: this update includes an additive migration (30) that adds an updatedAt column to invoices, change orders, issues, RFIs, and pay applications, so the new document status chip can tell when a record has changed since its last generated document.',
+    ],
+  },
+  {
     version: '2.8.0',
     date: 'August 28, 2026',
     changes: [
