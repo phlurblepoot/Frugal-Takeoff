@@ -1,7 +1,7 @@
 // src/pages/project/ProjectRfis.tsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
+import { Eye, MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
 import {
   Rfi, RfiListItem, getRfis, getRfi, createRfi, deleteRfi,
 } from '../../utils/store';
@@ -15,6 +15,9 @@ import {
 import { RfiStatusPill } from '../../components/ui/RfiStatusPill';
 import { RfiEditor } from './rfi/RfiEditor';
 import { EditingChip } from '../../components/EditingChip';
+import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 
 export const rfiNo = (n: number): string => `RFI-${String(n).padStart(3, '0')}`;
 
@@ -33,6 +36,11 @@ export const ProjectRfis: React.FC = () => {
   const confirm = useConfirm();
   const [rfis, setRfis] = useState<RfiListItem[] | null>(null);
   const [editing, setEditing] = useState<Rfi | null>(null);
+  // Bumped only when an outside change actually moved the record on, re-keying
+  // the modal so it reloads (the collab "review merge" path). A refresh the
+  // editor asked to survive — or one that changed nothing — leaves the user's
+  // typed draft alone.
+  const [editorSeq, setEditorSeq] = useState(0);
   const [newTitle, setNewTitle] = useState('');
 
   const load = () => {
@@ -40,6 +48,17 @@ export const ProjectRfis: React.FC = () => {
     getRfis(projectId).then(setRfis).catch(() => setRfis([]));
   };
   useLiveQuery(load, { types: ['rfi'], projectId });
+
+  // One batched by-source lookup for the whole list: each row shows whether its
+  // RFI PDF exists and is still current.
+  const rows = rfis ?? [];
+  const docs = useGeneratedDocuments({
+    sourceType: 'rfi',
+    kind: 'rfi',
+    sourceIds: rows.map(r => r.id),
+    updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
+  });
+  const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New RFI" action.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -106,7 +125,21 @@ export const ProjectRfis: React.FC = () => {
                 </TD>
                 <TD className="text-ink-soft">{rfi.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{rfi.photoCount}</span> : '—'}</TD>
                 <TD onClick={e => e.stopPropagation()}>
-                  <button onClick={() => removeRfi(rfi.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
+                  <div className="flex items-center justify-end gap-1">
+                    {docs.byId[rfi.id]?.file && (
+                      <>
+                        <DocumentStatusChip file={docs.byId[rfi.id].file} upToDate={docs.byId[rfi.id].upToDate} size="sm" />
+                        <button
+                          onClick={() => viewer.open(docs.byId[rfi.id].file!, 'rfi', projectId ?? null)}
+                          title="Open PDF" aria-label="Open PDF"
+                          className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-ink"
+                        >
+                          <Eye size={14} />
+                        </button>
+                      </>
+                    )}
+                    <button onClick={() => removeRfi(rfi.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
+                  </div>
                 </TD>
               </TR>
             ))}
@@ -116,15 +149,29 @@ export const ProjectRfis: React.FC = () => {
 
       {editing && (
         <RfiEditor
-          key={`${editing.id}:${editing.version}`}
+          key={`${editing.id}:${editorSeq}`}
           rfi={editing}
           projectId={projectId ?? ''}
           projectName={summary?.name ?? ''}
           contractor={summary?.contractor}
           onClose={() => setEditing(null)}
-          onSaved={async () => { try { setEditing(await getRfi(editing.id)); } catch { setEditing(null); } load(); }}
+          onSaved={async (opts) => {
+            let fresh: Rfi | null = null;
+            try { fresh = await getRfi(editing.id); setEditing(fresh); } catch { setEditing(null); }
+            // Remounting mid-flow would tear down the editor's document bar
+            // (and its version dialog), so its own saves ask to stay mounted —
+            // their local state already matches what came back. A refresh that
+            // found nothing new (a failed photo upload, say) must not discard
+            // what the user has typed either.
+            if (!opts?.keepMounted && fresh && fresh.version !== editing.version) {
+              setEditorSeq(n => n + 1);
+            }
+            load();
+          }}
         />
       )}
+
+      {viewer.modal}
     </div>
   );
 };

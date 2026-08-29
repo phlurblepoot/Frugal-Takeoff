@@ -1068,12 +1068,13 @@ export interface Issue {
   version: number;
   sentAt: number | null;
   createdAt: number;
+  updatedAt: number;
   photos: IssuePhoto[];
 }
 export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
   description: string | null; status: string; version: number; sentAt: number | null;
-  createdAt: number; photoCount: number;
+  createdAt: number; updatedAt: number; photoCount: number;
 }
 
 const issueJson = (method: string, url: string, body?: unknown) =>
@@ -1136,6 +1137,7 @@ export interface Rfi {
   sentAt: number | null;
   answeredAt: number | null;
   createdAt: number;
+  updatedAt: number;
   photos: RfiPhoto[];
 }
 export interface RfiListItem {
@@ -1144,7 +1146,7 @@ export interface RfiListItem {
   attention: string | null; responseNeededBy: string | null;
   responseText: string | null; responseFileId: string | null;
   status: string; version: number; sentAt: number | null; answeredAt: number | null;
-  createdAt: number; photoCount: number;
+  createdAt: number; updatedAt: number; photoCount: number;
 }
 
 const rfiJson = (method: string, url: string, body?: unknown) =>
