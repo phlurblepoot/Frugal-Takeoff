@@ -3,15 +3,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,
-  saveChangeOrder, setChangeOrderStatus, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
-  uploadProjectFile, persistGeneratedDocument, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
+  saveChangeOrder, getChangeOrder, setChangeOrderStatus, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
+  uploadProjectFile, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
-import { EmailComposer } from '../../../components/EmailComposer';
+import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
@@ -22,7 +22,10 @@ import { lineCents, draftTotalCents } from './InvoiceEditor';
 export const ChangeOrderEditor: React.FC<{
   changeOrder: ChangeOrder;
   onClose: () => void;
-  onSaved: () => void;
+  /** keepMounted: refresh the record without re-keying this editor — the
+   *  document bar's save-then-generate flow dies if the modal remounts
+   *  underneath it. */
+  onSaved: (opts?: { keepMounted?: boolean }) => void;
   projectName: string;
   contractor?: string | null;
   address?: string | null;
@@ -40,7 +43,6 @@ export const ChangeOrderEditor: React.FC<{
     co.scheduleImpactDays === null || co.scheduleImpactDays === undefined ? '' : String(co.scheduleImpactDays)
   );
   const [saving, setSaving] = useState(false);
-  const [composing, setComposing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -103,6 +105,13 @@ export const ChangeOrderEditor: React.FC<{
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // One name for the stored document and the email attachment — they upsert
+  // onto the same row, so a differing name would flip it depending on which
+  // ran last. Keyed off the edited number rather than the loaded one because
+  // the bar saves before it generates, so the draft number is the one the
+  // document will carry. The id fallback keeps unnumbered drafts apart.
+  const pdfFileName = `CO-${number || co.id}.pdf`;
+
   const lumpCents = Math.round((Number(lumpSumAmount) || 0) * 100);
   const total = draftTotalCents(lines) + lumpCents;
 
@@ -111,7 +120,7 @@ export const ChangeOrderEditor: React.FC<{
   const addLine = () => setLines(prev => [...prev, { description: '', qty: 1, unitPrice: 0 }]);
   const removeLine = (i: number) => setLines(prev => prev.filter((_, idx) => idx !== i));
 
-  const handleSave = async () => {
+  const handleSave = async (opts?: { keepMounted?: boolean }) => {
     setSaving(true);
     try {
       await saveChangeOrder(co.id, {
@@ -126,12 +135,20 @@ export const ChangeOrderEditor: React.FC<{
         lines: lines.map(l => ({ description: l.description, qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0 })),
       });
       toast('Change order saved', { type: 'success' });
-      onSaved();
+      // A "Keep mine" save adopted a foreign version number; only a remount
+      // clears it, otherwise the next save would post a stale version.
+      onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
     } catch (e) {
       toast(e instanceof Error && e.name === 'ConflictError' ? 'Change order changed elsewhere — reopen it' : 'Save failed', { type: 'error' });
+      throw e;
     } finally {
       setSaving(false);
     }
+  };
+
+  // The bar saves before it generates, so `false` here means "don't build".
+  const saveForDocument = async (): Promise<boolean> => {
+    try { await handleSave({ keepMounted: true }); return true; } catch { return false; }
   };
 
   const handlePhotos = async (list: FileList | null) => {
@@ -155,7 +172,11 @@ export const ChangeOrderEditor: React.FC<{
     try { await removeCOPhoto(co.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
   };
 
+  // Built from the SAVED change order, never the typed-in draft: the bar
+  // commits first, so re-reading the record here is what keeps a generated PDF
+  // and the change order it claims to represent from drifting apart.
   const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
+    const saved = (await getChangeOrder(co.id).catch(() => null)) ?? co;
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;
@@ -180,14 +201,14 @@ export const ChangeOrderEditor: React.FC<{
     }
     // fetch each photo as a dataURL (authenticated content endpoint)
     const photoDataUrls: string[] = [];
-    for (const p of co.photos) {
+    for (const p of saved.photos) {
       try {
         const blob = await fetchFileBlob(p.fileId);
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
     return buildChangeOrderPdf({
-      changeOrder: co,
+      changeOrder: saved,
       projectName,
       contractor,
       address,
@@ -206,26 +227,6 @@ export const ChangeOrderEditor: React.FC<{
     });
   };
 
-  const handleDownloadPdf = async () => {
-    try {
-      const bytes = await buildBytes();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = `CO-${co.number ?? co.id}.pdf`;
-      // Keep a copy in Documents, but never let that failure block the download.
-      try {
-        await persistGeneratedDocument(blob, { projectId, kind: 'change-order', name: fileName, sourceType: 'change-order', sourceId: co.id });
-      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch { toast('PDF generation failed', { type: 'error' }); }
-  };
-
   const changeStatus = async (status: string) => {
     try { await setChangeOrderStatus(co.id, status); onSaved(); } catch { toast('Status update failed', { type: 'error' }); }
   };
@@ -233,9 +234,42 @@ export const ChangeOrderEditor: React.FC<{
   return (
     <Modal open onClose={onClose} title={`Change Order CO-${co.number ?? ''}`} width="lg"
       footer={<>
+        <div className="mr-auto">
+          <DocumentActionsBar
+            source={{ sourceType: 'change-order', sourceId: co.id }}
+            kind="change-order"
+            format="pdf"
+            projectId={projectId}
+            fileName={pdfFileName}
+            build={async ({ headerEmail }) => new Blob([await buildBytes(headerEmail)], { type: 'application/pdf' })}
+            dirty={dirty}
+            save={saveForDocument}
+            updatedAt={co.updatedAt}
+            size="sm"
+            send={{
+              composer: {
+                title: 'Send change order request',
+                defaultTo: emailDefaults.defaultTo || undefined,
+                defaultCc: emailDefaults.defaultCc || undefined,
+                defaultBcc: emailDefaults.defaultBcc || undefined,
+                defaultSubject: `Change Order Request CO-${number} — ${projectName}`,
+                defaultBody: `Hello,\n\nPlease find attached Change Order Request CO-${number} for ${projectName}${description ? ', covering: ' + description : ''}.\n\nPlease review and approve at your convenience.\n\nThank you.`,
+                headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
+                defaultHeaderEmail: emailDefaults.companyEmail || undefined,
+              },
+              sendFn: async (fileId, m) => {
+                await sendChangeOrder(co.id, {
+                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+                  fileId, attachmentFileIds: m.attachmentFileIds,
+                });
+                // The send moves the change order to 'sent' server-side.
+                onSaved({ keepMounted: true });
+              },
+            }}
+          />
+        </div>
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="secondary" onClick={handleDownloadPdf}>Download PDF</Button>
-        <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save change order'}</Button>
+        <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save change order'}</Button>
       </>}
     >
       <EditPresenceBanner state={collab} />
@@ -317,39 +351,6 @@ export const ChangeOrderEditor: React.FC<{
           </div>
         )}
       </div>
-
-      <div className="mt-4 border-t border-edge pt-3">
-        <h4 className="mb-2 text-sm font-semibold text-ink">Send change order request</h4>
-        <Button onClick={() => setComposing(true)}>Send request</Button>
-      </div>
-
-      <EmailComposer
-        open={composing}
-        onClose={() => setComposing(false)}
-        projectId={projectId}
-        title="Send change order request"
-        primaryAttachmentName={`CO-${co.number || 'change-order'}.pdf`}
-        defaultTo={emailDefaults.defaultTo || undefined}
-        defaultCc={emailDefaults.defaultCc || undefined}
-        defaultBcc={emailDefaults.defaultBcc || undefined}
-        defaultSubject={`Change Order Request CO-${co.number} — ${projectName}`}
-        defaultBody={`Hello,\n\nPlease find attached Change Order Request CO-${co.number} for ${projectName}${co.description ? ', covering: ' + co.description : ''}.\n\nPlease review and approve at your convenience.\n\nThank you.`}
-        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
-        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
-        onSend={async (m) => {
-          // Always regenerate with the chosen header email so the PDF contact matches.
-          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
-          const bytes = await buildBytes(effectiveHeaderEmail);
-          const file = new File([bytes], `CO-${co.number || 'change-order'}.pdf`, { type: 'application/pdf' });
-          // The PDF is uploaded as a project document before sending; the source
-          // triple makes the server version this CO's one document rather than pile
-          // up copies, so a failed send + retry (and Download) share one document.
-          const { fileId } = await uploadProjectFile(projectId, file, 'change-order', { sourceType: 'change-order', sourceId: co.id });
-          await sendChangeOrder(co.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
-          toast('Change order request sent', { type: 'success' });
-          onSaved();
-        }}
-      />
     </Modal>
   );
 };

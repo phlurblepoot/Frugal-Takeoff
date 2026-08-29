@@ -865,6 +865,9 @@ export interface Invoice {
   terms: string | null;
   version: number;
   createdAt: number;
+  // Stamped server-side on every write (migration 30) — the "is the generated
+  // PDF still current?" comparison in DocumentActionsBar reads it.
+  updatedAt: number;
   lines: InvoiceLine[];
   payments: Payment[];
   totalCents: number;
@@ -874,6 +877,7 @@ export interface Invoice {
 export interface InvoiceListItem {
   id: string; projectId: string; number: string | null; date: number | null;
   status: string; terms: string | null; version: number; createdAt: number;
+  updatedAt: number;
   totalCents: number; paidCents: number; balanceCents: number;
 }
 export interface ChangeOrderLine {
@@ -899,6 +903,7 @@ export interface ChangeOrder {
   status: string; // draft | sent | approved | rejected (legacy: pending)
   version: number;
   createdAt: number;
+  updatedAt: number;
   amount: number; // canonical rolled-up dollar total (= (Σ line cents + lump-sum cents)/100)
   lines: ChangeOrderLine[];
   photos: COPhoto[];
@@ -917,6 +922,7 @@ export interface ChangeOrderListItem {
   status: string;
   version: number;
   createdAt: number;
+  updatedAt: number;
   amount: number;
   totalCents: number;
 }
