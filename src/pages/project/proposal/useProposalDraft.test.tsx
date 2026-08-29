@@ -33,7 +33,7 @@ const project = {
 
 const getProposal = vi.fn(async () => makeProposal());
 const getProject = vi.fn(async (_id: string) => project);
-const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4 }));
+const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4, updatedAt: 500 }));
 
 vi.mock('../../../utils/store', async () => {
   const actual = await vi.importActual<typeof import('../../../utils/store')>('../../../utils/store');
@@ -119,6 +119,97 @@ describe('useProposalDraft', () => {
     expect(result.current.dirty).toBe(false);
     // The bumped version is adopted, so the next save doesn't 409 against itself.
     expect(result.current.proposal?.version).toBe(4);
+    // …and so is updatedAt: the document bar compares a generated PDF's
+    // createdAt against it, so a stale one would call an old PDF current.
+    expect(result.current.proposal?.updatedAt).toBe(500);
+  });
+
+  it('a save requested while one is in flight waits on it instead of bouncing', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'New notes' }));
+
+    // The Save button starts the write; the document bar's save-then-generate
+    // asks for one a moment later. Returning false for the second would make
+    // the bar report a failure that never happened.
+    let first: Promise<boolean> = Promise.resolve(false);
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => { first = result.current.save(); second = result.current.save(); });
+    await act(async () => { release(); });
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    // Nothing changed between the two calls, so one write covers both.
+    expect(saveProposal).toHaveBeenCalledTimes(1);
+    expect(result.current.dirty).toBe(false);
+  });
+
+  it('chains a second write when the draft moved on while the first was in flight', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'A' }));
+
+    let first: Promise<boolean> = Promise.resolve(false);
+    act(() => { first = result.current.save(); });
+    // The estimator keeps typing while A is going out, then the document bar
+    // asks to save before generating. Resolving that with A's write would let
+    // it render a PDF carrying B against a record that only holds A.
+    act(() => result.current.patchDraft({ coverNotes: 'A+B' }));
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => { second = result.current.save(); });
+
+    await act(async () => { release(); });
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+
+    expect(saveProposal).toHaveBeenCalledTimes(2);
+    expect(saveProposal.mock.calls[0][1]).toMatchObject({ version: 3, coverNotes: 'A' });
+    // The chained write quotes the version the first one just produced, not the
+    // one it superseded, and carries the text on screen.
+    expect(saveProposal.mock.calls[1][1]).toMatchObject({ version: 4, coverNotes: 'A+B' });
+    expect(result.current.dirty).toBe(false);
+  });
+
+  it('a draft edited mid-flight stays dirty when nothing saves it after', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'A' }));
+    let first: Promise<boolean> = Promise.resolve(false);
+    act(() => { first = result.current.save(); });
+    act(() => result.current.patchDraft({ coverNotes: 'A+B' }));
+
+    await act(async () => { release(); });
+    expect(await first).toBe(true);
+    // The write carried A; B is still only on screen, so "Saved" would be a lie.
+    expect(saveProposal).toHaveBeenCalledTimes(1);
+    expect(result.current.dirty).toBe(true);
+  });
+
+  it('stays dirty when the chained write fails', async () => {
+    let release = () => {};
+    saveProposal
+      .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }))
+      .mockRejectedValueOnce(new Error('offline'));
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'A' }));
+    let first: Promise<boolean> = Promise.resolve(false);
+    act(() => { first = result.current.save(); });
+    act(() => result.current.patchDraft({ coverNotes: 'A+B' }));
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => { second = result.current.save(); });
+
+    await act(async () => { release(); });
+    expect(await first).toBe(true);
+    expect(await second).toBe(false);
+    expect(saveProposal).toHaveBeenCalledTimes(2);
+    expect(result.current.dirty).toBe(true);
+    expect(await screen.findByText(/Failed to save the proposal/)).toBeInTheDocument();
   });
 
   it('a stale save reloads the version that won', async () => {

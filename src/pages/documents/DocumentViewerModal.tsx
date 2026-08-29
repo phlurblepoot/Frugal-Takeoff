@@ -43,7 +43,10 @@ export const DocumentViewerModal: React.FC<{
   onOpenInEditor: (row: DocumentRow) => void;
   onDownload: (row: DocumentRow) => void;
   onArchive: (row: DocumentRow, archived: boolean) => Promise<void>;
-}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive }) => {
+  /** Suppress the Archive button for hosts that don't own archiving (e.g. an
+   *  editor's DocumentActionsBar preview). */
+  hideArchive?: boolean;
+}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive, hideArchive = false }) => {
   const kind = previewKindFor(row.mime);
 
   // ── PDF: one document handle for the modal's lifetime, page flips render
@@ -111,7 +114,7 @@ export const DocumentViewerModal: React.FC<{
     return () => { cancelled = true; };
   }, [row.id, kind]);
 
-  const archivable = selectionPolicy([row]).archivable.length > 0;
+  const archivable = !hideArchive && selectionPolicy([row]).archivable.length > 0;
   const [archiving, setArchiving] = useState(false);
 
   const handleArchive = async () => {
@@ -140,9 +143,12 @@ export const DocumentViewerModal: React.FC<{
       if (pdfFailed) return <p className="py-8 text-center text-sm text-ink-faint">Couldn’t render this PDF. Try Download or Open in editor.</p>;
       return (
         <div className="space-y-3">
-          <div className="flex max-h-[65dvh] justify-center overflow-auto rounded-lg bg-sunken p-2">
+          {/* items-start: a flex row stretches children to its height by default,
+              which would squash the page to the box instead of scaling it.
+              The canvas keeps its intrinsic aspect via max-w/max-h + auto. */}
+          <div className="flex max-h-[65dvh] items-start justify-center overflow-auto rounded-lg bg-sunken p-2">
             {numPages === 0 && <Skeleton className="h-[60dvh] w-full max-w-lg" />}
-            <canvas ref={canvasRef} className={`h-auto max-w-full ${numPages === 0 ? 'hidden' : ''}`} />
+            <canvas ref={canvasRef} className={`h-auto w-auto max-h-[63dvh] max-w-full ${numPages === 0 ? 'hidden' : ''}`} />
           </div>
           {numPages > 1 && (
             <div className="flex items-center justify-center gap-3 text-sm text-ink-soft">

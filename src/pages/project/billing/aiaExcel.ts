@@ -7,7 +7,8 @@
 // A separate "template-fill" export mode is intended to live beside this one in
 // the future; keep `buildAiaWorkbook` a pure, side-effect-free builder so an
 // alternate path (e.g. `buildAiaWorkbookFromTemplate`) can be added without
-// touching the download plumbing in `exportAiaXlsx`.
+// touching the delivery plumbing (`buildAiaXlsxBlob` for callers that want the
+// bytes, `exportAiaXlsx` for a straight save-to-disk).
 //
 // Money is stored as INTEGER CENTS everywhere; convert to dollars ONLY at the
 // cell value (cents / 100) paired with a `$#,##0.00` number format.
@@ -17,6 +18,7 @@
 // exports. Types are imported type-only (erased at build time).
 import type ExcelJS from 'exceljs';
 import type { AiaSettings, AiaPayApp, AiaSovLine, AiaG702, AiaG703Row } from '../../../utils/store';
+import { downloadBlob } from '../../../utils/download';
 
 export interface AiaExportCtx {
   projectName: string;
@@ -602,9 +604,28 @@ export function sanitizeFilename(name: string): string {
   return (name || 'project').replace(/[^a-zA-Z0-9 _.-]+/g, '_').replace(/\s+/g, '_').slice(0, 80) || 'project';
 }
 
-// Builds the workbook and triggers a browser download. When a configured
-// template + mapping are supplied, the admin template is filled instead of the
-// built-in recreation; otherwise the recreation is the fallback.
+export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+// Builds the workbook and returns its bytes — no download, no persistence.
+// DocumentActionsBar needs exactly this: it stores the blob as the pay app's
+// living document and decides delivery itself, so a builder that also shoved a
+// file at the browser would fire a stray download on every generate/send.
+// When a configured template + mapping are supplied, the admin template is
+// filled instead of the built-in recreation; otherwise the recreation is used.
+export async function buildAiaXlsxBlob(
+  ctx: AiaExportCtx,
+  template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
+): Promise<Blob> {
+  const wb = template
+    ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
+    : await buildAiaWorkbook(ctx);
+  const buffer = await wb.xlsx.writeBuffer();
+  return new Blob([buffer], { type: XLSX_MIME });
+}
+
+// Build + optional persist + save-to-disk. Still the path for exports that
+// aren't a record's living document (the Schedule of Values' blank-SOV
+// download); pay-app exports go through the document bar instead.
 export async function exportAiaXlsx(
   ctx: AiaExportCtx,
   template?: { templateBuf: ArrayBuffer; mapping: AiaTemplateMapping },
@@ -613,20 +634,7 @@ export async function exportAiaXlsx(
   // a copy in Documents. It owns its own failures — the download always proceeds.
   persist?: (blob: Blob) => Promise<void>,
 ): Promise<void> {
-  const wb = template
-    ? await buildAiaWorkbookFromTemplate(template.templateBuf, template.mapping, ctx)
-    : await buildAiaWorkbook(ctx);
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
+  const blob = await buildAiaXlsxBlob(ctx, template);
   if (persist) await persist(blob);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename ?? `AIA-${sanitizeFilename(ctx.projectName)}-App${ctx.app.number}.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBlob(blob, filename ?? `AIA-${sanitizeFilename(ctx.projectName)}-App${ctx.app.number}.xlsx`);
 }

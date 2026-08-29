@@ -60,7 +60,7 @@ import {
   listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
   customerSummaries, customerOverview,
 } from './customerStore';
-import { listDocuments, patchDocument, deleteDocument, DocumentFilters } from './documents';
+import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes, proposalErr } from './proposalRoutes';
@@ -748,7 +748,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       addDailyPhoto(db, req.params.id, req.body.fileId);
       const row = getDailyReport(db, req.params.id);
       // addPhoto/removePhoto don't bump the daily report's version — attaching
-      // an unbumped version would poison the client's version-dedupe.
+      // an unbumped version would poison the client's version-dedupe — but
+      // they do stamp updatedAt, so the returned row (and the broadcast
+      // below) still lets the document-actions freshness chip notice a photo
+      // change without a version bump confusing the collab merge logic.
       if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { dailyErr(e, res); }
@@ -1019,11 +1022,16 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
           customerId: str(q.customerId),
           sourceType: str(q.sourceType),
           sourceId: str(q.sourceId),
+          mode: str(q.mode) === 'overwrite' ? 'overwrite' : undefined,
         });
         deps.broadcastChange({
           type: 'file', id: result.id, projectId: result.projectId ?? undefined,
           action: result.versioned ? 'updated' : 'created', ...requestMeta(req),
         });
+        // A regenerate (versioned or overwritten in place) replaces the bytes
+        // an open spreadsheet-editor session might still be flushing dirty
+        // edits onto — same reasoning as the delete-route clearSession below.
+        if (result.versioned) deps.sheetStore?.clearSession(result.id);
         res.json({ success: true, fileId: result.id, versioned: result.versioned });
       } catch (e) {
         console.error('Error saving file:', e);
@@ -1131,6 +1139,29 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // non-admins. /api/documents below is the one listing endpoint, and it
   // applies that exclusion.
   // spec docs/superpowers/specs/2026-08-17-unified-documents-design.md §Server
+
+  // Single-entity lookup ("does this invoice already have a generated PDF?")
+  // — either one sourceId (200 SourceDoc | 404) or a batch via sourceIds
+  // (always 200, a map of id -> SourceDoc | null). Placed ahead of
+  // /api/documents purely to keep the two document-query routes adjacent —
+  // the paths never collide, so registration order doesn't matter here.
+  app.get('/api/documents/by-source', authenticateToken, (req, res) => {
+    try {
+      const isAdmin = (req as any).user?.role === 'admin';
+      const { sourceType, kind, sourceId, sourceIds } = req.query as Record<string, string | undefined>;
+      if (!sourceType || !kind) return res.status(400).json({ error: 'sourceType and kind are required' });
+      if (typeof sourceIds === 'string') {
+        return res.json(findDocumentsBySource(db, { sourceType, kind, sourceIds: sourceIds.split(',').map(s => s.trim()).filter(Boolean) }, isAdmin));
+      }
+      if (!sourceId) return res.status(400).json({ error: 'sourceId or sourceIds is required' });
+      const doc = findDocumentBySource(db, { sourceType, sourceId, kind }, isAdmin);
+      if (!doc) return res.status(404).json({ error: 'No document for this source' });
+      res.json(doc);
+    } catch (e) {
+      console.error('Error looking up document by source:', e);
+      res.status(500).json({ error: 'Failed to look up document' });
+    }
+  });
 
   app.get('/api/documents', authenticateToken, (req, res) => {
     try {
@@ -1750,8 +1781,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         text: body ?? message ?? 'Please find the attached invoice.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: `${inv.number || 'invoice'}.pdf` }, attachmentFileIds),
       });
-      // mark sent (best effort) + log
-      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
+      // Mark sent (best effort) — never demote an already-paid invoice back to
+      // sent, and skip the write entirely when it is already 'sent' so a
+      // re-send doesn't stamp updatedAt and mark its own PDF out of date.
+      try {
+        if (inv.status !== 'sent' && inv.status !== 'paid') setInvoiceStatus(db, req.params.id, 'sent');
+      } catch { /* ignore */ }
       logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
       const fresh = getInvoice(db, req.params.id);
       deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: inv.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
@@ -1778,9 +1813,11 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         text: body ?? message ?? 'Please find the attached change order request.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: `CO-${number || 'change-order'}.pdf` }, attachmentFileIds),
       });
-      // Mark sent (best effort) — but never override an already approved/rejected CO.
+      // Mark sent (best effort) — never override an already approved/rejected CO,
+      // and skip a no-op re-send write (it would bump updatedAt and stale the
+      // PDF that was just emailed).
       try {
-        if (co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
+        if (co.status !== 'sent' && co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
       } catch { /* best effort */ }
       logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
       const fresh = getChangeOrder(db, req.params.id);

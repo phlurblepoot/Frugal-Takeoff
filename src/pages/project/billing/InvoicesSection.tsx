@@ -1,6 +1,6 @@
 // src/pages/project/billing/InvoicesSection.tsx
 import React, { useState } from 'react';
-import { FileText, Plus, Trash2 } from 'lucide-react';
+import { Eye, FileText, Plus, Trash2 } from 'lucide-react';
 import {
   Invoice, InvoiceListItem,
   getInvoices, getInvoice, createInvoice, deleteInvoice, setInvoiceStatus,
@@ -17,6 +17,9 @@ import { InvoiceEditor } from './InvoiceEditor';
 import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
+import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
   const { toast } = useToast();
@@ -24,12 +27,28 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
   const { summary: projectSummary } = useProjectOutlet();
   const [invoices, setInvoices] = useState<InvoiceListItem[] | null>(null);
   const [editing, setEditing] = useState<Invoice | null>(null);
+  // Bumped only when an outside change actually moved the record on, re-keying
+  // the modal so it reloads (the collab "review merge" path). A refresh the
+  // editor asked to survive — or one that changed nothing — leaves the user's
+  // typed draft alone.
+  const [editorSeq, setEditorSeq] = useState(0);
 
   const reload = () => {
     if (!projectId) return;
     getInvoices(projectId).then(setInvoices).catch(() => setInvoices([]));
   };
   useLiveQuery(reload, { types: ['invoice', 'payment'], projectId });
+
+  // One batched by-source lookup for the whole list: each row shows whether its
+  // invoice PDF exists and is still current.
+  const rows = invoices ?? [];
+  const docs = useGeneratedDocuments({
+    sourceType: 'invoice',
+    kind: 'invoice',
+    sourceIds: rows.map(r => r.id),
+    updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
+  });
+  const viewer = useDocumentViewer();
 
   const openInvoice = async (id: string) => {
     try { setEditing(await getInvoice(id)); } catch { toast('Failed to open invoice', { type: 'error' }); }
@@ -72,7 +91,23 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
                     <TD title="Click to advance status" onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(inv.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(inv.balanceCents)}</TD>
-                    <TD onClick={e => e.stopPropagation()}><button onClick={() => removeInvoice(inv.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button></TD>
+                    <TD onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1">
+                        {docs.byId[inv.id]?.file && (
+                          <>
+                            <DocumentStatusChip file={docs.byId[inv.id].file} upToDate={docs.byId[inv.id].upToDate} size="sm" />
+                            <button
+                              onClick={() => viewer.open(docs.byId[inv.id].file!, 'invoice', projectId)}
+                              title="Open PDF" aria-label="Open PDF"
+                              className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-ink"
+                            >
+                              <Eye size={14} />
+                            </button>
+                          </>
+                        )}
+                        <button onClick={() => removeInvoice(inv.id)} title="Delete" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
+                      </div>
+                    </TD>
                   </TR>
                 ))}
               </TBody>
@@ -83,12 +118,21 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
 
       {editing && (
         <InvoiceEditor
-          key={`${editing.id}:${editing.version}`}
+          key={`${editing.id}:${editorSeq}`}
           invoice={editing}
           onClose={() => setEditing(null)}
-          onSaved={async () => {
+          onSaved={async (opts) => {
             // reload the open invoice (payments/lines) and the lists
-            try { setEditing(await getInvoice(editing.id)); } catch { setEditing(null); }
+            let fresh: Invoice | null = null;
+            try { fresh = await getInvoice(editing.id); setEditing(fresh); } catch { setEditing(null); }
+            // Remounting mid-flow would tear down the editor's document bar
+            // (and its version dialog), so its own saves ask to stay mounted —
+            // their local state already matches what came back. A refresh that
+            // found nothing new (a failed photo upload, say) must not discard
+            // what the user has typed either.
+            if (!opts?.keepMounted && fresh && fresh.version !== editing.version) {
+              setEditorSeq(n => n + 1);
+            }
             reload();
             onChange?.();
           }}
@@ -98,6 +142,8 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
           projectId={projectId ?? ''}
         />
       )}
+
+      {viewer.modal}
     </>
   );
 };

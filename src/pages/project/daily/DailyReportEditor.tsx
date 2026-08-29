@@ -1,17 +1,18 @@
 // src/pages/project/daily/DailyReportEditor.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { Camera, CloudSun, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
-  saveDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
-  uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
-  fetchFileBlob, persistGeneratedDocument, sendDailyReport,
+  saveDailyReport, getDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
+  getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
+  fetchFileBlob, sendDailyReport,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
-import { EmailComposer } from '../../../components/EmailComposer';
+import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
@@ -24,7 +25,10 @@ export const DailyReportEditor: React.FC<{
   projectName: string;
   contractor?: string | null;
   onClose: () => void;
-  onSaved: () => void;
+  /** keepMounted: refresh the record without re-keying this editor — the
+   *  document bar's save-then-generate flow dies if the modal remounts
+   *  underneath it. */
+  onSaved: (opts?: { keepMounted?: boolean }) => void;
 }> = ({ report, projectId, projectName, onClose, onSaved }) => {
   const { toast } = useToast();
   const [reportDate, setReportDate] = useState(report.reportDate);
@@ -40,8 +44,6 @@ export const DailyReportEditor: React.FC<{
   const [fetchingWeather, setFetchingWeather] = useState(false);
   const [weatherNote, setWeatherNote] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
 
   const isDirty = () =>
     reportDate !== report.reportDate ||
@@ -50,9 +52,16 @@ export const DailyReportEditor: React.FC<{
     weatherSummary !== (report.weatherSummary ?? '') ||
     temperature !== (report.temperature ?? '') ||
     JSON.stringify(weatherHourly) !== JSON.stringify(report.weatherHourly ?? []) ||
-    JSON.stringify(manCounts) !== JSON.stringify(report.manCounts ?? []) ||
+    // Compared post-normalize on both sides: handleSave persists
+    // normalizeManCounts(manCounts) (trims each type, drops blank rows), so
+    // comparing the raw typed state against the raw saved record left a
+    // trailing-space/blank-row edit permanently "dirty" even right after a
+    // save round-tripped it — Send stayed stuck on "Save first" forever.
+    JSON.stringify(normalizeManCounts(manCounts)) !== JSON.stringify(normalizeManCounts(report.manCounts ?? [])) ||
     fieldNotes !== (report.fieldNotes ?? '') ||
     issues !== (report.issues ?? '');
+
+  const dirty = isDirty();
 
   const collab = useCollabEditing({ type: 'dailyReport', id: report.id, isDirty, onFresh: onSaved });
 
@@ -133,33 +142,20 @@ export const DailyReportEditor: React.FC<{
   const addManCountLine = () => setManCounts(cur => [...cur, { type: '', count: 1 }]);
   const removeManCountLine = (i: number) => setManCounts(cur => cur.filter((_, idx) => idx !== i));
 
-  const handlePhotos = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    if (isDirty()) {
-      toast('Save your changes first', { type: 'warning' });
-      if (fileRef.current) fileRef.current.value = '';
-      return;
-    }
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'daily-report-photo', { sourceType: 'dailyReport', sourceId: report.id });
-        await addDailyReportPhoto(report.id, fileId);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onSaved();
-  };
-
   const dropPhoto = async (fileId: string) => {
     try { await removeDailyReportPhoto(report.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
   };
 
-  const buildBytes = async (headerEmail?: string): Promise<ArrayBuffer> => {
+  // Built from the SAVED report, never the typed-in draft: the bar commits
+  // first, so re-reading the record here is what keeps a generated report and
+  // the report it claims to represent from drifting apart (photos included —
+  // an upload that landed after this editor mounted is on the saved record,
+  // not on the prop). A failed re-read throws on purpose — the bar then
+  // reports the failure and keeps the existing document, rather than quietly
+  // storing pre-save bytes and marking them current.
+  const buildDailyReportBytes = async (headerEmail?: string): Promise<ArrayBuffer> => {
+    const saved = await getDailyReport(report.id);
+    if (!saved) throw new Error('Daily report not found');
     const settings = await getSettings();
     let logoDataUrl: string | undefined = settings.logoUrl || undefined;
     if (logoDataUrl && !logoDataUrl.startsWith('data:')) {
@@ -171,14 +167,14 @@ export const DailyReportEditor: React.FC<{
     }
     // fetch each photo as a dataURL (authenticated content endpoint)
     const photoDataUrls: string[] = [];
-    for (const p of report.photos) {
+    for (const p of saved.photos) {
       try {
         const blob = await fetchFileBlob(p.fileId);
         photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
       } catch { /* skip */ }
     }
     return buildDailyReportPdf({
-      report,
+      report: saved,
       photoDataUrls,
       letterhead: {
         brandRgb: hexToRgb(settings.companyBrandColor || '#99CB38'),
@@ -194,42 +190,13 @@ export const DailyReportEditor: React.FC<{
     });
   };
 
-  const handleDownload = async () => {
-    if (isDirty()) {
-      toast('Save your changes first', { type: 'warning' });
-      return;
-    }
-    try {
-      const bytes = await buildBytes();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = dailyReportFileName(report, projectName);
-      // Keep a copy in Documents, but never let that failure block the download.
-      try {
-        await persistGeneratedDocument(blob, { projectId, kind: 'daily-report', name: fileName, sourceType: 'dailyReport', sourceId: report.id });
-      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = fileName;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch { toast('Failed to generate report', { type: 'error' }); }
-  };
-
-  const [composing, setComposing] = useState(false);
-
-  // Save-first guard: don't open the composer with unsaved edits.
-  const openComposer = () => {
-    if (isDirty()) {
-      toast('Save your changes before sending', { type: 'warning' });
-      return;
-    }
-    setComposing(true);
-  };
-
-  const handleSave = async () => {
+  const handleSave = async (opts?: { keepMounted?: boolean }) => {
+    // Thrown rather than returned so the document bar's save-first step can
+    // tell a refused save from a successful one.
     setDateError(null);
     if (!reportDate) {
       setDateError('Enter a date for this report.');
-      return;
+      throw new Error('Enter a date for this report.');
     }
     setSaving(true);
     try {
@@ -246,7 +213,9 @@ export const DailyReportEditor: React.FC<{
         issues,
       });
       toast('Saved', { type: 'success' });
-      onSaved();
+      // A "Keep mine" save adopted a foreign version number; only a remount
+      // clears it, otherwise the next save would post a stale version.
+      onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
     } catch (e) {
       if (e instanceof DateTakenError) {
         setDateError('A report for this date already exists.');
@@ -255,18 +224,55 @@ export const DailyReportEditor: React.FC<{
       } else {
         toast('Save failed', { type: 'error' });
       }
+      throw e;
     } finally {
       setSaving(false);
     }
   };
 
+  // The bar saves before it generates, so `false` here means "don't build".
+  const saveForDocument = async (): Promise<boolean> => {
+    try { await handleSave({ keepMounted: true }); return true; } catch { return false; }
+  };
+
   return (
     <Modal open onClose={onClose} title={`Daily Report — ${formatReportDate(report.reportDate)}`} width="lg"
       footer={<>
+        <div className="mr-auto">
+          <DocumentActionsBar
+            source={{ sourceType: 'dailyReport', sourceId: report.id }}
+            kind="daily-report"
+            format="pdf"
+            projectId={projectId}
+            fileName={dailyReportFileName(report, projectName)}
+            build={async ({ headerEmail }) => new Blob([await buildDailyReportBytes(headerEmail)], { type: 'application/pdf' })}
+            dirty={dirty}
+            save={saveForDocument}
+            updatedAt={report.updatedAt}
+            size="sm"
+            send={{
+              composer: {
+                title: 'Send daily report',
+                defaultTo: emailDefaults.defaultTo || undefined,
+                defaultCc: emailDefaults.defaultCc || undefined,
+                defaultBcc: emailDefaults.defaultBcc || undefined,
+                defaultSubject: `Daily Report — ${formatReportDate(report.reportDate)} — ${projectName}`,
+                defaultBody: `Hello,\n\nPlease find attached the daily report for ${formatReportDate(report.reportDate)} on ${projectName}.\n\nThank you.`,
+                headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
+                defaultHeaderEmail: emailDefaults.companyEmail || undefined,
+              },
+              sendFn: async (fileId, m) => {
+                await sendDailyReport(report.id, {
+                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+                  fileId, attachmentFileIds: m.attachmentFileIds,
+                });
+                onSaved({ keepMounted: true });
+              },
+            }}
+          />
+        </div>
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="ghost" onClick={handleDownload}>Download PDF</Button>
-        <Button variant="ghost" onClick={openComposer}>Send…</Button>
-        <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+        <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
       <EditPresenceBanner state={collab} />
@@ -337,60 +343,22 @@ export const DailyReportEditor: React.FC<{
         </Field>
       </div>
 
-      <div className="mt-4 border-t border-edge pt-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Photos</h4>
-          <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            <Camera size={14} />{uploading ? 'Uploading…' : 'Add photos'}
-          </Button>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
-            onChange={e => handlePhotos(e.target.files)} />
-        </div>
-        {report.photos.length === 0 ? (
-          <p className="text-xs text-ink-faint">No photos. Add before/during/after shots from the field.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {report.photos.map(p => (
-              <div key={p.id} className="group relative">
-                <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-                <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                  className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <EmailComposer
-        open={composing}
-        onClose={() => setComposing(false)}
-        projectId={projectId}
-        title="Send daily report"
-        primaryAttachmentName={dailyReportFileName(report, projectName)}
-        defaultTo={emailDefaults.defaultTo || undefined}
-        defaultCc={emailDefaults.defaultCc || undefined}
-        defaultBcc={emailDefaults.defaultBcc || undefined}
-        defaultSubject={`Daily Report — ${formatReportDate(report.reportDate)} — ${projectName}`}
-        defaultBody={`Hello,\n\nPlease find attached the daily report for ${formatReportDate(report.reportDate)} on ${projectName}.\n\nThank you.`}
-        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
-        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
-        onSend={async (m) => {
-          // Always regenerate with the chosen header email so the PDF contact matches.
-          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
-          const bytes = await buildBytes(effectiveHeaderEmail);
-          const fileName = dailyReportFileName(report, projectName);
-          const file = new File([bytes], fileName, { type: 'application/pdf' });
-          // Uploaded as a project document before sending; the source triple makes the
-          // server version this report's one document rather than pile up copies, so a
-          // failed send + retry (and plain Download) all land on the same document.
-          const { fileId } = await uploadProjectFile(projectId, file, 'daily-report', { sourceType: 'dailyReport', sourceId: report.id });
-          await sendDailyReport(report.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
-          toast('Daily report sent', { type: 'success' });
-          onSaved();
-        }}
+      {/* Adding a photo stamps the report server-side, which re-keys this
+          editor — hence the same save-first gate the status actions use. */}
+      <PhotoDropCard
+        title="Photos"
+        emptyText="No photos. Add before/during/after shots from the field."
+        testId="daily"
+        photos={report.photos}
+        upload={{ kind: 'daily-report-photo', projectId, sourceType: 'dailyReport', sourceId: report.id }}
+        initialProjectIds={[projectId]}
+        link={fileId => addDailyReportPhoto(report.id, fileId)}
+        onRemove={dropPhoto}
+        onDone={onSaved}
+        disabled={dirty}
+        disabledMessage="Save your changes first"
       />
+
     </Modal>
   );
 };

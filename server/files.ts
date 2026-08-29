@@ -83,6 +83,12 @@ export interface PutOpts {
   // stable document — see the upsert-by-source note on `store` below.
   sourceType?: string;
   sourceId?: string;
+  // Only meaningful on an upsert-by-source hit (see `store`). 'version'
+  // (default) archives the prior bytes as history, same as always.
+  // 'overwrite' replaces the live bytes in place — no archived row, id and
+  // versionNumber unchanged — for callers that intentionally don't want the
+  // regenerate to grow the version history (spec 2026-08-29 document actions).
+  mode?: 'version' | 'overwrite';
 }
 
 // A put either created/overwrote the requested id, or landed as a new version
@@ -155,6 +161,36 @@ function findLiveBySource(db: Database.Database, opts: PutOpts): string | null {
   return row?.id ?? null;
 }
 
+// Older migration paths (e.g. images-to-disk, which runs before migration 7
+// creates `drafts`) can reach the store/version path pre-drafts-table.
+function tableExists(db: Database.Database, name: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+}
+
+// Overwrite mode (spec 2026-08-29 document actions): replaces the live row's
+// bytes in place with no archived history row and no versionNumber bump —
+// for regenerate flows that intentionally don't want every re-run to grow the
+// version list (e.g. a draft the user is still iterating on before it's
+// final). Contrast with saveNewVersion, which always archives.
+// Overwrite = "start the history over": the new bytes become version 1 and
+// every archived version of this document (rows + bytes) is discarded.
+// Contrast saveNewVersion, which keeps the old bytes as a history row.
+export function overwriteLive(db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string): void {
+  const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
+  const tx = db.transaction(() => {
+    if (archived.length) db.prepare('DELETE FROM files WHERE parentFileId = ?').run(id);
+    const { size, sha256 } = writeFileContent(dataDir, id, buf); // atomic rename over the same path
+    db.prepare('UPDATE files SET mime = ?, size = ?, sha256 = ?, legacyFormat = NULL, createdAt = ?, archived = 0, versionNumber = 1 WHERE id = ?')
+      .run(mime, size, sha256, Date.now(), id);
+  });
+  tx();
+  // Bytes go after the commit: a failed delete is a storage leak to report,
+  // not a reason to fail the overwrite the caller already asked for.
+  for (const a of archived) {
+    try { deleteFileContent(dataDir, a.id); } catch (e) { console.warn(`[files] could not delete archived version ${a.id}:`, e); }
+  }
+}
+
 // Upsert-by-source (spec 2026-08-17 §Data model): a generate/download flow
 // uploads with the owning entity's source metadata every time, minting a fresh
 // id client-side. When that source already has a live document of the same
@@ -172,7 +208,11 @@ function store(
 ): PutResult {
   const existingId = findLiveBySource(db, opts);
   if (existingId) {
-    saveNewVersion(db, dataDir, existingId, buf, mime);
+    if (opts.mode === 'overwrite') {
+      overwriteLive(db, dataDir, existingId, buf, mime);
+    } else {
+      saveNewVersion(db, dataDir, existingId, buf, mime);
+    }
     // saveNewVersion re-enters putBuffer with no opts, which stamps the
     // dataURL format and keeps the old labels. Replay the caller's actual
     // format (so getDataUrlString still round-trips) and take whichever
@@ -185,6 +225,15 @@ function store(
     if (opts.projectId) { sets.push('projectId = ?'); vals.push(opts.projectId); }
     if (opts.customerId) { sets.push('customerId = ?'); vals.push(opts.customerId); }
     db.prepare(`UPDATE files SET ${sets.join(', ')} WHERE id = ?`).run(...vals, existingId);
+    // A regenerate — versioned or overwritten in place — invalidates any
+    // in-progress editor draft for the old bytes; keeping it around would let
+    // a stale PDF-editor draft silently resurrect content the regenerate just
+    // replaced. drafts (migration 7) postdates files, so older migration
+    // paths that call putBuffer before it exists (e.g. images-to-disk) must
+    // not explode on this.
+    if (tableExists(db, 'drafts')) {
+      db.prepare('DELETE FROM drafts WHERE fileId = ?').run(existingId);
+    }
     return { ...getMeta(db, existingId)!, versioned: true };
   }
   const { size, sha256 } = writeFileContent(dataDir, id, buf);
@@ -278,7 +327,12 @@ export function saveNewVersion(
         archivedVersionId, live.projectId, live.name, live.mime, size, sha256, live.kind, id, live.versionNumber, live.legacyFormat, Date.now()
       );
       putBuffer(db, dataDir, id, buf, mime); // disk write is non-tx but idempotent; row upsert is in-tx
-      db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+      // putBuffer -> upsertRow carries the OLD createdAt forward (it only
+      // defaults createdAt for brand-new rows), so a versioned save must
+      // refresh it explicitly — otherwise the live row's createdAt would
+      // never move past its original creation time, breaking anything that
+      // reads createdAt as "when was this document last produced".
+      db.prepare('UPDATE files SET versionNumber = ?, createdAt = ? WHERE id = ?').run(versionNumber, Date.now(), id);
     });
     tx();
     return { archivedVersionId, versionNumber };
@@ -287,7 +341,7 @@ export function saveNewVersion(
   const versionNumber = live.versionNumber + 1;
   const tx = db.transaction(() => {
     putBuffer(db, dataDir, id, buf, mime);
-    db.prepare('UPDATE files SET versionNumber = ? WHERE id = ?').run(versionNumber, id);
+    db.prepare('UPDATE files SET versionNumber = ?, createdAt = ? WHERE id = ?').run(versionNumber, Date.now(), id);
   });
   tx();
   return { archivedVersionId, versionNumber };

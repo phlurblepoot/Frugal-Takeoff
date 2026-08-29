@@ -17,6 +17,7 @@ import {
 } from '../../../components/ui';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 
 const isCo = (l: AiaSovLine) => !!l.isChangeOrder;
@@ -135,13 +136,13 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
     }
   };
 
-  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target;
-    const file = input.files?.[0];
-    if (!file || !projectId) { input.value = ''; return; }
+  // The parse itself, over bytes — the disk upload and the documents picker
+  // hand it the same ArrayBuffer, so the column A/column B contract (and the
+  // replace-but-keep-change-orders confirmation) lives in exactly one place.
+  const importSovBuffer = async (buf: ArrayBuffer) => {
+    if (!projectId) return;
     setBusy(true);
     try {
-      const buf = await file.arrayBuffer();
       const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       if (!ws) { toast('No sheet found in the file', { type: 'error' }); return; }
@@ -172,8 +173,20 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
     } catch {
       toast('Failed to read sheet', { type: 'error' });
     } finally {
-      input.value = '';
       setBusy(false);
+    }
+  };
+
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file) { input.value = ''; return; }
+    try {
+      await importSovBuffer(await file.arrayBuffer());
+    } catch {
+      toast('Failed to read sheet', { type: 'error' });
+    } finally {
+      input.value = '';
     }
   };
 
@@ -250,6 +263,20 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
             <Button size="sm" variant="secondary" onClick={seedFromEstimate} disabled={busy}>Seed from estimate</Button>
             <Button size="sm" variant="secondary" onClick={syncCos} disabled={busy}>Sync approved change orders</Button>
             <Button size="sm" variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />Upload sheet</Button>
+            <AddFilesButton
+              label="Import from documents"
+              accept="spreadsheet"
+              multi={false}
+              returnBlobs
+              size="sm"
+              initialProjectIds={[projectId]}
+              disabled={busy}
+              title="Import a schedule of values from a workbook already on file"
+              onPickBlobs={async picked => {
+                const p = picked[0];
+                if (p) await importSovBuffer(await p.blob.arrayBuffer());
+              }}
+            />
             <Button size="sm" variant="ghost" onClick={() => setShowHelp(v => !v)} aria-expanded={showHelp} aria-label="Schedule of values upload help"><HelpCircle size={16} /></Button>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUploadFile} />
           </div>

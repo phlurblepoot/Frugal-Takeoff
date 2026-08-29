@@ -1,13 +1,11 @@
 // src/pages/tasks/TaskEditor.tsx
-import { v4 as uuidv4 } from 'uuid';
-import React, { useState, useRef } from 'react';
-import { Camera, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
 import {
   Task, AssignableUser, ProjectSummary, saveTask, setTaskStatus, addTaskPhoto, removeTaskPhoto,
-  saveBinaryFile, getImageUrl,
 } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui';
+import { PhotoDropCard } from '../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../components/EditPresenceBanner';
 
@@ -54,8 +52,17 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
     }
   };
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // A task carries a customer of its own only when it has no project, matching
+  // how the server derives customer from the project when one is set — and
+  // what decides whether a new photo goes through the project upload or
+  // straight into the global file store.
+  const photoUpload = {
+    kind: 'task-photo',
+    sourceType: 'task',
+    sourceId: task.id,
+    ...(task.projectId ? { projectId: task.projectId } : task.customerId ? { customerId: task.customerId } : {}),
+  };
 
   const dirty =
     category !== (task.category ?? '') ||
@@ -92,32 +99,6 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
     if (next === task.status) return;
     if (dirty) { toast('Save your changes first', { type: 'warning' }); return; }
     try { await setTaskStatus(task.id, next); onSaved(); } catch { toast('Failed to update status', { type: 'error' }); }
-  };
-
-  const handlePhotos = async (stage: string, list: FileList | null) => {
-    if (!list || !list.length) return;
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        // Attributed streaming upload into the same file store the display path
-        // (getImageUrl → /api/images/:id/raw) already reads from. A task carries a
-        // customer of its own only when it has no project, matching how the
-        // server derives customer from the project when one is set.
-        const { fileId } = await saveBinaryFile(uuidv4(), f, {
-          kind: 'task-photo', name: f.name,
-          sourceType: 'task', sourceId: task.id,
-          ...(task.projectId ? { projectId: task.projectId } : task.customerId ? { customerId: task.customerId } : {}),
-        });
-        await addTaskPhoto(task.id, fileId, stage);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    const ref = fileRefs.current[stage];
-    if (ref) ref.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onSaved(); // reload the task → photos appear
   };
 
   const dropPhoto = async (fileId: string) => {
@@ -175,37 +156,22 @@ export const TaskEditor: React.FC<Props> = ({ task, users, projects, customers, 
       <div className="mt-3">
         <Field label="Notes" htmlFor="task-notes"><Textarea id="task-notes" value={notes} onChange={e => setNotes(e.target.value)} rows={4} /></Field>
       </div>
-      {STAGES.map(({ stage, label }) => {
-        const photos = task.photos.filter(p => p.stage === stage);
-        return (
-          <div key={stage} className="mt-4 border-t border-edge pt-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-ink">{label}</h4>
-              <Button variant="secondary" size="sm" onClick={() => fileRefs.current[stage]?.click()} disabled={uploading}>
-                <Camera size={14} />{uploading ? 'Uploading…' : 'Add photos'}
-              </Button>
-              {/* capture="environment" opens the rear camera on mobile for field use */}
-              <input ref={el => { fileRefs.current[stage] = el; }} type="file" accept="image/*" capture="environment" multiple className="hidden"
-                onChange={e => handlePhotos(stage, e.target.files)} />
-            </div>
-            {photos.length === 0 ? (
-              <p className="text-xs text-ink-faint">No {label.toLowerCase()} photos.</p>
-            ) : (
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                {photos.map(p => (
-                  <div key={p.id} className="group relative">
-                    <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-                    <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                      className="absolute right-1 top-1 rounded-md bg-black/50 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100">
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* One card per stage: each owns its own picker and drop target, so a
+          photo always lands on the stage it was dropped into. */}
+      {STAGES.map(({ stage, label }) => (
+        <PhotoDropCard
+          key={stage}
+          title={label}
+          emptyText={`No ${label.toLowerCase()} photos.`}
+          testId={`task-${stage}`}
+          photos={task.photos.filter(p => p.stage === stage)}
+          upload={photoUpload}
+          initialProjectIds={task.projectId ? [task.projectId] : undefined}
+          link={fileId => addTaskPhoto(task.id, fileId, stage)}
+          onRemove={dropPhoto}
+          onDone={onSaved}
+        />
+      ))}
     </Modal>
   );
 };

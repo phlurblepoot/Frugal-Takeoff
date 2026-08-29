@@ -27,7 +27,7 @@ const sovLines: AiaSovLine[] = [
 const mkApp = (over: Partial<AiaPayApp> = {}): AiaPayApp => ({
   id: 'app1', projectId: 'p1', number: 1, periodTo: null, applicationDate: null,
   retainagePercent: 10, storedRetainagePercent: 10, releasedRetainagePoints: 0,
-  status: 'finalized', version: 1, createdAt: 0, ...over,
+  status: 'finalized', version: 1, createdAt: 0, updatedAt: 0, ...over,
 });
 
 const settings: AiaSettings = { retainagePercent: 10, retainageMode: 'uniform' };

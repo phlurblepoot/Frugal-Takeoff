@@ -21,7 +21,7 @@ vi.mock('../../../utils/store', async (orig) => ({
   getCustomers: vi.fn(async () => []),
   getDocumentTypes: vi.fn(async () => []),
 }));
-import { addProposalAttachment, removeProposalAttachment, updateProposalAttachment, ProposalLockedError } from '../../../utils/store';
+import { addProposalAttachment, removeProposalAttachment, updateProposalAttachment, uploadProjectFile, ProposalLockedError } from '../../../utils/store';
 import { ProposalAttachmentsCard } from './ProposalAttachmentsCard';
 
 const proposal = {
@@ -53,8 +53,39 @@ describe('ProposalAttachmentsCard', () => {
 
   it('hides the toolbar when read-only', () => {
     renderCard(true);
-    expect(screen.queryByRole('button', { name: /Upload PDF/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add PDFs/i })).toBeNull();
+  });
+
+  // One button now covers both "upload a new PDF" and "reuse an existing
+  // one" — and nothing behind it is a bare file input any more.
+  it('offers a single Add PDFs button and no hidden file input', () => {
+    const { container } = render(
+      <ToastProvider>
+        <ProposalAttachmentsCard proposal={proposal} projectId="p1" readOnly={false} onChanged={vi.fn()} />
+      </ToastProvider>
+    );
+    expect(screen.getByRole('button', { name: /Add PDFs/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Choose existing/i })).toBeNull();
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(0);
+  });
+
+  it('a dropped PDF is uploaded into the project, attached, then resynced', async () => {
+    const onChanged = renderCard();
+    const pdf = new File(['x'], 'spec.pdf', { type: 'application/pdf' });
+    fireEvent.drop(screen.getByTestId('proposal-attachments'), { dataTransfer: { files: [pdf] } });
+
+    await waitFor(() => expect(uploadProjectFile).toHaveBeenCalledWith('p1', pdf, 'document', expect.anything()));
+    await waitFor(() => expect(addProposalAttachment).toHaveBeenCalledWith('pr1', 'f-new'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('a drop on a locked proposal says why instead of uploading', async () => {
+    renderCard(true);
+    fireEvent.drop(screen.getByTestId('proposal-attachments'), {
+      dataTransfer: { files: [new File(['x'], 'spec.pdf', { type: 'application/pdf' })] },
+    });
+    await screen.findByText('This proposal was sent and is now locked');
+    expect(uploadProjectFile).not.toHaveBeenCalled();
   });
 
   it('remove calls the mocked API and reloads', async () => {
@@ -64,9 +95,10 @@ describe('ProposalAttachmentsCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it('"Choose existing" opens the picker and picking calls add per row', async () => {
+  it('the picker\'s Existing tab attaches each picked row', async () => {
     const onChanged = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: /Choose existing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add PDFs/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
     const checkbox = await screen.findByLabelText('spec-sheet.pdf');
     fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole('button', { name: /Add 1 file/i }));
@@ -74,12 +106,13 @@ describe('ProposalAttachmentsCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it('"Choose existing": a partial add failure toasts a warning but still resyncs', async () => {
+  it('a partial add failure toasts a warning but still resyncs', async () => {
     const onChanged = renderCard();
     vi.mocked(addProposalAttachment)
       .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async () => { throw new Error('nope'); });
-    fireEvent.click(screen.getByRole('button', { name: /Choose existing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add PDFs/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
     fireEvent.click(await screen.findByLabelText('spec-sheet.pdf'));
     fireEvent.click(screen.getByLabelText('terms.pdf'));
     fireEvent.click(screen.getByRole('button', { name: /Add 2 files/i }));

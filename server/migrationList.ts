@@ -1459,4 +1459,19 @@ export const migrations: Migration[] = [
         (SELECT MAX(number) FROM proposals WHERE proposals.projectId = projects.id), 0)`);
     },
   },
+  {
+    version: 30,
+    name: 'updated-at-columns',
+    // ADDITIVE. The document-actions bar needs "record changed since the PDF
+    // was generated"; only proposals/daily_reports/projects carried updatedAt.
+    up({ db }) {
+      const hasCol = (t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as any[]).some(x => x.name === c);
+      for (const t of ['invoices', 'change_orders', 'issues', 'rfis', 'aia_pay_apps']) {
+        if (hasCol(t, 'updatedAt')) continue;
+        db.exec(`ALTER TABLE ${t} ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0`);
+        if (hasCol(t, 'createdAt')) db.exec(`UPDATE ${t} SET updatedAt = COALESCE(createdAt, 0)`);
+        db.prepare(`UPDATE ${t} SET updatedAt = ? WHERE updatedAt = 0`).run(Date.now());
+      }
+    },
+  },
 ];

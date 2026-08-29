@@ -220,13 +220,18 @@ export function createProposal(db: Database.Database, projectId: string, input: 
   return { id, number, version: 1 };
 }
 
-export function saveProposal(db: Database.Database, id: string, input: ProposalInput & { version: number }): { version: number } {
+// Returns updatedAt alongside version because the client adopts BOTH: updatedAt
+// is what "is the generated PDF still current?" compares a document's createdAt
+// against (useGeneratedDocument.isUpToDate), so an editor left holding the
+// pre-save timestamp would keep calling a now-stale PDF up to date and email it.
+export function saveProposal(db: Database.Database, id: string, input: ProposalInput & { version: number }): { version: number; updatedAt: number } {
   const row = requireDraft(db, id);
   if (!Number.isInteger(input.version)) throw new ValidationError('version required');
   if (row.version !== input.version) throw new ConflictError('proposal was modified');
   const tx = db.transaction(() => { applyInput(db, id, input, row); bump(db, id); });
   tx();
-  return { version: row.version + 1 };
+  const { updatedAt } = db.prepare('SELECT updatedAt FROM proposals WHERE id = ?').get(id) as { updatedAt: number };
+  return { version: row.version + 1, updatedAt };
 }
 
 export function deleteProposal(db: Database.Database, id: string): void {
@@ -240,9 +245,15 @@ export function deleteProposal(db: Database.Database, id: string): void {
   tx();
 }
 
+// Attaching the document the client just generated is NOT an edit to the
+// proposal: `updatedAt` is what "is this PDF still current?" compares the
+// file's createdAt against (useGeneratedDocument.isUpToDate), so touching it
+// here would stamp every freshly generated PDF as already out of date and make
+// the editor rebuild one on every send. Same reasoning as addPhoto/
+// addAttachment, which also skip bump().
 export function setProposalFile(db: Database.Database, id: string, fileId: string): void {
   requireDraft(db, id);
-  db.prepare('UPDATE proposals SET fileId = ?, updatedAt = ? WHERE id = ?').run(fileId, Date.now(), id);
+  db.prepare('UPDATE proposals SET fileId = ? WHERE id = ?').run(fileId, id);
 }
 
 const requireFile = (db: Database.Database, fileId: unknown) => {
@@ -290,11 +301,18 @@ export function removeAttachment(db: Database.Database, id: string, fileId: stri
   db.prepare('DELETE FROM proposal_attachments WHERE proposalId = ? AND fileId = ?').run(id, fileId);
 }
 
+// Recording that the proposal went out does not change what the proposal SAYS —
+// the PDF carries no status/sentAt — so this deliberately leaves `updatedAt`
+// alone, for the same reason setProposalFile does (see the comment there):
+// updatedAt is the "is this PDF still current?" clock. Bumping it here would
+// leave every sent proposal — permanently locked, so its PDF can never be
+// regenerated — showing "PDF out of date" forever. version still bumps so
+// collaborators reload the new status.
 export function markSent(db: Database.Database, id: string, sentTo: { to: string; cc?: string; subject: string }): { version: number } {
   const row = requireDraft(db, id);
   if (!row.fileId) throw new ValidationError('Generate the proposal PDF before sending');
-  db.prepare(`UPDATE proposals SET status = 'sent', sentAt = ?, sentTo = ?, version = version + 1, updatedAt = ? WHERE id = ?`)
-    .run(Date.now(), JSON.stringify({ to: sentTo.to, cc: sentTo.cc, subject: sentTo.subject }), Date.now(), id);
+  db.prepare(`UPDATE proposals SET status = 'sent', sentAt = ?, sentTo = ?, version = version + 1 WHERE id = ?`)
+    .run(Date.now(), JSON.stringify({ to: sentTo.to, cc: sentTo.cc, subject: sentTo.subject }), id);
   return { version: row.version + 1 };
 }
 

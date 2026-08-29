@@ -970,3 +970,83 @@ describe('retainage release (effective-rate model)', () => {
     expect(getPayApp(db, a3.id)!.storedRetainagePercent).toBe(10);
   });
 });
+
+describe('pay app updatedAt stamping', () => {
+  it('savePayAppLines and setPayApp bump updatedAt', async () => {
+    const { id: sov1 } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', {});
+    const before = (getPayApp(db, app.id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    savePayAppLines(db, app.id, [{ sovLineId: sov1, percentComplete: 10, storedMaterialsCents: 0 }], 1);
+    const afterLines = (getPayApp(db, app.id) as any).updatedAt;
+    expect(afterLines).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    setPayApp(db, app.id, { status: 'finalized' });
+    expect((getPayApp(db, app.id) as any).updatedAt).toBeGreaterThan(afterLines);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updatedAt stamping — every pay app's G702/G703 is computed from the project's
+// SOV, so a SOV edit makes each stored pay-app Excel stale even though no
+// aia_pay_apps row was touched. updatedAt is what the "up to date" chip on the
+// generated document compares against.
+// ---------------------------------------------------------------------------
+describe('SOV edits stamp the project pay apps', () => {
+  const stampOf = (id: string) => (db.prepare('SELECT updatedAt FROM aia_pay_apps WHERE id = ?').get(id) as any).updatedAt;
+  const reset = (id: string) => db.prepare('UPDATE aia_pay_apps SET updatedAt = 1 WHERE id = ?').run(id);
+
+  it('createSovLine, saveSovLine, deleteSovLine and seedSovLines each stamp them', () => {
+    const app = createPayApp(db, 'p1', {});
+    const other = createPayApp(db, 'p2', {});
+
+    reset(app.id); reset(other.id);
+    const { id: lineId } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    expect(stampOf(app.id)).toBeGreaterThan(1);
+    // Another project's applications are untouched.
+    expect(stampOf(other.id)).toBe(1);
+
+    reset(app.id);
+    saveSovLine(db, lineId, { description: 'Framing', scheduledValueCents: 200000, version: 1 });
+    expect(stampOf(app.id)).toBeGreaterThan(1);
+
+    reset(app.id);
+    seedSovLines(db, 'p1', [{ description: 'Seeded', scheduledValueCents: 5000 }]);
+    expect(stampOf(app.id)).toBeGreaterThan(1);
+
+    reset(app.id);
+    deleteSovLine(db, listSovLines(db, 'p1')[0].id);
+    expect(stampOf(app.id)).toBeGreaterThan(1);
+  });
+
+  it('syncChangeOrders stamps only when it actually adds a line', () => {
+    const app = createPayApp(db, 'p1', {});
+    insertChangeOrder('co1', 'p1', '1', 'Extra work', 1000, 'approved');
+
+    reset(app.id);
+    expect(syncChangeOrders(db, 'p1').added).toBe(1);
+    expect(stampOf(app.id)).toBeGreaterThan(1);
+
+    // Idempotent re-run adds nothing, so nothing goes stale.
+    reset(app.id);
+    expect(syncChangeOrders(db, 'p1').added).toBe(0);
+    expect(stampOf(app.id)).toBe(1);
+  });
+
+  it('savePayAppLines stamps the later applications too — their "less previous certificates" moved', () => {
+    const { id: sov } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const a1 = createPayApp(db, 'p1', {});
+    const a2 = createPayApp(db, 'p1', {});
+    const a3 = createPayApp(db, 'p1', {});
+    reset(a1.id); reset(a2.id); reset(a3.id);
+
+    savePayAppLines(db, a2.id, [{ sovLineId: sov, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    expect(stampOf(a2.id)).toBeGreaterThan(1);
+    expect(stampOf(a3.id)).toBeGreaterThan(1);
+    // Earlier applications are already certified against their own period —
+    // nothing about #1 changed.
+    expect(stampOf(a1.id)).toBe(1);
+  });
+});

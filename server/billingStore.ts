@@ -88,8 +88,9 @@ export function createInvoice(db: Database.Database, projectId: string, input: I
   }
   const id = crypto.randomUUID();
   const tx = db.transaction(() => {
-    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
-      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, Date.now());
+    const now = Date.now();
+    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)')
+      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, now, now);
     writeLines(db, id, lines);
   });
   tx();
@@ -110,8 +111,8 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
     if (!row) throw new NotFoundError('Invoice not found');
     if (row.version !== input.version) throw new ConflictError(`Invoice changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
-    db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, newVersion, id);
+    db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, newVersion, Date.now(), id);
     writeLines(db, id, lines);
   });
   tx();
@@ -139,13 +140,38 @@ export function recordPayment(db: Database.Database, targetType: string, targetI
   if (!target) throw new NotFoundError(targetType === 'invoice' ? 'Invoice not found' : 'Pay application not found');
   if (!Number.isFinite(input.amount) || (input.amount as number) <= 0) throw new ValidationError('Payment amount must be a positive number');
   const id = crypto.randomUUID();
-  db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, targetType, targetId, input.date ?? Date.now(), input.amount, input.method ?? null, input.note ?? null, Date.now());
+  const now = Date.now();
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO payments (id, targetType, targetId, date, amount, method, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, targetType, targetId, input.date ?? now, input.amount, input.method ?? null, input.note ?? null, now);
+    touchPaymentTarget(db, targetType, targetId, now);
+  });
+  tx();
   return { id };
 }
 
+// The invoice PDF and the pay-app G702 both print Paid-to-date and Balance, so
+// a payment changes what a generated document should say even though nothing on
+// the invoice/pay-app row itself moved. Without this stamp the up-to-date chip
+// stays green and Send reuses a stored file whose totals are already wrong
+// (spec docs/superpowers/specs/2026-08-29-document-actions-rollout).
+function touchPaymentTarget(db: Database.Database, targetType: string, targetId: string, now: number): void {
+  // targetType is validated against PAYMENT_TARGET_TYPES before it ever reaches
+  // here (and on the way into the row we read back), so the table name is ours.
+  const table = targetType === 'invoice' ? 'invoices' : 'aia_pay_apps';
+  db.prepare(`UPDATE ${table} SET updatedAt = ? WHERE id = ?`).run(now, targetId);
+}
+
 export function deletePayment(db: Database.Database, id: string): void {
-  db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+  const tx = db.transaction(() => {
+    // Read the target before the row goes away — the deletion changes the same
+    // Paid/Balance figures the insert does.
+    const row = db.prepare('SELECT targetType, targetId FROM payments WHERE id = ?').get(id) as
+      { targetType: string; targetId: string } | undefined;
+    db.prepare('DELETE FROM payments WHERE id = ?').run(id);
+    if (row) touchPaymentTarget(db, row.targetType, row.targetId, Date.now());
+  });
+  tx();
 }
 
 // All payments across a project's invoices AND pay applications, with a resolved
@@ -174,10 +200,18 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
   if (!(INVOICE_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid invoice status: ${status}`);
   let out = { version: 0, status };
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM invoices WHERE id = ?').get(id) as { version: number } | undefined;
+    const row = db.prepare('SELECT version, status FROM invoices WHERE id = ?').get(id) as { version: number; status: string } | undefined;
     if (!row) throw new NotFoundError('Invoice not found');
+    // Re-sending an invoice that is already 'sent' asks for the status it
+    // already has. Writing it anyway would bump updatedAt, which is exactly the
+    // "is the stored PDF still current?" clock — the chip would flip to
+    // out-of-date the instant the send succeeded and could never go back.
+    if (row.status === status) {
+      out = { version: row.version, status };
+      return;
+    }
     const newVersion = row.version + 1;
-    db.prepare('UPDATE invoices SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+    db.prepare('UPDATE invoices SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
     out = { version: newVersion, status };
   });
   tx();
@@ -268,8 +302,9 @@ export function createChangeOrder(db: Database.Database, projectId: string, inpu
     const number = input.number ?? nextChangeOrderNumber(db, projectId);
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
-      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
+    const now = Date.now();
+    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)')
+      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, now, now);
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -293,8 +328,8 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
     newVersion = row.version + 1;
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
+    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, Date.now(), id);
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -303,10 +338,13 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
 
 export function setChangeOrderStatus(db: Database.Database, id: string, status: string): { status: string; version: number } {
   if (!(CHANGE_ORDER_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid change order status: ${status}`);
-  const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(id) as { version: number } | undefined;
+  const row = db.prepare('SELECT version, status FROM change_orders WHERE id = ?').get(id) as { version: number; status: string } | undefined;
   if (!row) throw new NotFoundError('Change order not found');
+  // Same no-op guard as setInvoiceStatus: a re-send of an already-sent CO must
+  // not touch updatedAt, or the generated-PDF chip goes stale on every send.
+  if (row.status === status) return { status, version: row.version ?? 1 };
   const newVersion = (row.version ?? 1) + 1;
-  db.prepare('UPDATE change_orders SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+  db.prepare('UPDATE change_orders SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
   return { status, version: newVersion };
 }
 
@@ -320,7 +358,7 @@ export function addChangeOrderPhoto(db: Database.Database, changeOrderId: string
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO change_order_photos (id, changeOrderId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
       .run(crypto.randomUUID(), changeOrderId, fileId, max + 1, Date.now());
-    db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+    db.prepare('UPDATE change_orders SET version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), changeOrderId);
   });
   tx();
 }
@@ -328,7 +366,7 @@ export function addChangeOrderPhoto(db: Database.Database, changeOrderId: string
 export function removeChangeOrderPhoto(db: Database.Database, changeOrderId: string, fileId: string): void {
   const tx = db.transaction(() => {
     const r = db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ? AND fileId = ?').run(changeOrderId, fileId);
-    if (r.changes > 0) db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+    if (r.changes > 0) db.prepare('UPDATE change_orders SET version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), changeOrderId);
   });
   tx();
 }

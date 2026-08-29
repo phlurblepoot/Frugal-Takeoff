@@ -22,6 +22,7 @@ import {
 } from '../utils/store';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { AddFilesButton } from '../components/documents/AddFilesButton';
 import { viewBox } from '../utils/pdfOverlayTransform';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -434,38 +435,7 @@ export const PdfEditor: React.FC = () => {
       const fileIdParam = searchParams.get('fileId');
       if (fileIdParam) {
         if (restoredTabs.length) setTabs(restoredTabs);
-        try {
-          const [meta, blob, draft] = await Promise.all([
-            getFileMeta(fileIdParam),
-            fetchFileBlob(fileIdParam),
-            getDraft(fileIdParam).catch(() => null),
-          ]);
-          const base = meta?.name || `file-${fileIdParam}`;
-          const fname = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
-          const f = new File([blob], fname, { type: 'application/pdf' });
-          const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId: fileIdParam };
-
-          let seed: Annotation[] | undefined;
-          if (draft?.kind === 'pdf') {
-            try {
-              const parsed = JSON.parse(draft.data) as { annotations?: Annotation[] };
-              if (parsed.annotations?.length) {
-                const restore = await confirm({
-                  title: 'Restore draft?',
-                  message: 'You have unsaved annotations on this file from a previous session. Restore them?',
-                  confirmLabel: 'Restore',
-                  cancelLabel: 'Discard',
-                });
-                if (restore) seed = parsed.annotations;
-                else deleteDraft(fileIdParam).catch(() => {});
-              }
-            } catch { /* unreadable draft — ignore */ }
-          }
-          await openPdf(f, null, restoredTabs, src, seed);
-        } catch (e) {
-          console.error('Failed to open file by id:', e);
-          toast('Could not open the file', { type: 'error' });
-        }
+        await openPdfByFileId(fileIdParam, null, restoredTabs);
         return;
       }
 
@@ -956,6 +926,49 @@ export const PdfEditor: React.FC = () => {
       if (!container || !pages.length) return;
       setZoom(clampZoom((container.clientWidth - 48) / pages[0].width));
     });
+  };
+
+  // Open a stored PDF by id, draft-restore prompt and all. Shared by the
+  // ?fileId= entry point (which only runs on mount, so the toolbar picker
+  // can't reach it by pushing a new query string) and the toolbar's
+  // "Open from documents" button.
+  const openPdfByFileId = async (
+    fileId: string,
+    currentTabId: string | null,
+    currentTabs: TabSnapshot[],
+  ) => {
+    try {
+      const [meta, blob, draft] = await Promise.all([
+        getFileMeta(fileId),
+        fetchFileBlob(fileId),
+        getDraft(fileId).catch(() => null),
+      ]);
+      const base = meta?.name || `file-${fileId}`;
+      const fname = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
+      const f = new File([blob], fname, { type: 'application/pdf' });
+      const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId };
+
+      let seed: Annotation[] | undefined;
+      if (draft?.kind === 'pdf') {
+        try {
+          const parsed = JSON.parse(draft.data) as { annotations?: Annotation[] };
+          if (parsed.annotations?.length) {
+            const restore = await confirm({
+              title: 'Restore draft?',
+              message: 'You have unsaved annotations on this file from a previous session. Restore them?',
+              confirmLabel: 'Restore',
+              cancelLabel: 'Discard',
+            });
+            if (restore) seed = parsed.annotations;
+            else deleteDraft(fileId).catch(() => {});
+          }
+        } catch { /* unreadable draft — ignore */ }
+      }
+      await openPdf(f, currentTabId, currentTabs, src, seed);
+    } catch (e) {
+      console.error('Failed to open file by id:', e);
+      toast('Could not open the file', { type: 'error' });
+    }
   };
 
   // ── Konva Event Handlers ──────────────────────────────────────────────────────
@@ -1664,6 +1677,14 @@ export const PdfEditor: React.FC = () => {
         >
           <FolderOpen size={16} /> Open
         </button>
+        <AddFilesButton
+          label="Open from documents"
+          accept="pdf"
+          multi={false}
+          size="sm"
+          title="Open a PDF already filed under Documents"
+          onPick={rows => { const r = rows[0]; if (r) void openPdfByFileId(r.id, activeTabId, tabs); }}
+        />
         <button
           onClick={savePdf}
           disabled={!hasPdf || saving}
@@ -1704,6 +1725,19 @@ export const PdfEditor: React.FC = () => {
         >
           <ImageIcon size={16} />
         </button>
+        <AddFilesButton
+          label="Insert image"
+          accept="image"
+          multi={false}
+          returnBlobs
+          size="sm"
+          variant="ghost"
+          title="Insert an image already filed under Documents"
+          onPickBlobs={picked => {
+            const p = picked[0];
+            if (p) insertImageFile(new File([p.blob], p.row.name ?? 'image', { type: p.row.mime }));
+          }}
+        />
 
         {/* Signature dropdown */}
         <div className="relative" ref={sigMenuRef}>
@@ -1884,15 +1918,31 @@ export const PdfEditor: React.FC = () => {
         {/* ── Page Thumbnail Sidebar ── */}
         {sidebarOpen && (
           <div className="w-44 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pages</span>
-              <button
-                title="Import pages from PDF or image"
-                onClick={() => importPageInputRef.current?.click()}
-                className="p-1 rounded-lg text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-              >
-                <Plus size={14} />
-              </button>
+            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pages</span>
+                <button
+                  title="Import pages from PDF or image"
+                  onClick={() => importPageInputRef.current?.click()}
+                  className="p-1 rounded-lg text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              <AddFilesButton
+                label="Import pages"
+                accept="any"
+                multi={false}
+                returnBlobs
+                size="sm"
+                variant="ghost"
+                className="w-full"
+                title="Import pages from a document already on file"
+                onPickBlobs={picked => {
+                  const p = picked[0];
+                  if (p) void importPages(new File([p.blob], p.row.name ?? 'import', { type: p.row.mime }));
+                }}
+              />
             </div>
             <div
               ref={sidebarListRef}

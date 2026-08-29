@@ -112,6 +112,11 @@ export function deleteDailyReport(db: Database.Database, id: string): void {
   tx();
 }
 
+// addPhoto/removePhoto deliberately leave `version` alone (see routes.ts —
+// bumping it would poison the client's version-dedupe), but they DO stamp
+// `updatedAt` so a photo change still counts as "the record moved on" for
+// anything comparing against it (the document-actions freshness chip / the
+// send-reuses-current-file check).
 export function addPhoto(db: Database.Database, dailyReportId: string, fileId: string): void {
   if (!db.prepare('SELECT id FROM daily_reports WHERE id = ?').get(dailyReportId)) throw new NotFoundError('Daily report not found');
   if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
@@ -120,9 +125,11 @@ export function addPhoto(db: Database.Database, dailyReportId: string, fileId: s
   const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM daily_report_photos WHERE dailyReportId = ?').get(dailyReportId) as any).m;
   db.prepare('INSERT INTO daily_report_photos (id, dailyReportId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
     .run(uuidv4(), dailyReportId, fileId, max + 1, Date.now());
+  db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(Date.now(), dailyReportId);
 }
 
 export function removePhoto(db: Database.Database, dailyReportId: string, fileId: string): void {
   if (!db.prepare('SELECT id FROM daily_reports WHERE id = ?').get(dailyReportId)) throw new NotFoundError('Daily report not found');
   db.prepare('DELETE FROM daily_report_photos WHERE dailyReportId = ? AND fileId = ?').run(dailyReportId, fileId);
+  db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(Date.now(), dailyReportId);
 }

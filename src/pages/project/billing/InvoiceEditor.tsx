@@ -1,13 +1,13 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice, uploadProjectFile, persistGeneratedDocument } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
-import { EmailComposer } from '../../../components/EmailComposer';
+import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
@@ -18,10 +18,27 @@ export const lineCents = (l: { description?: string; qty: number; unitPrice: num
 export const draftTotalCents = (lines: { description?: string; qty: number; unitPrice: number }[]): number =>
   lines.reduce((a, l) => a + lineCents(l), 0);
 
+// Dirty-check key for invoice/change-order line items. Content only: the
+// server re-INSERTs the rows on every save (billingStore's writeLines /
+// writeChangeOrderLines), so a saved record comes back with brand-new line
+// ids — comparing whole objects would leave the editor permanently "dirty"
+// and the document bar permanently blocked on "Save first".
+export const lineContentKey = (
+  lines: { description?: string; qty: number | string; unitPrice: number | string }[],
+): string =>
+  JSON.stringify(lines.map(l => ({
+    description: l.description ?? '',
+    qty: Number(l.qty) || 0,
+    unitPrice: Number(l.unitPrice) || 0,
+  })));
+
 export const InvoiceEditor: React.FC<{
   invoice: Invoice;
   onClose: () => void;
-  onSaved: () => void;
+  /** keepMounted: refresh the record without re-keying this editor — the
+   *  document bar's save-then-generate flow dies if the modal remounts
+   *  underneath it. */
+  onSaved: (opts?: { keepMounted?: boolean }) => void;
   projectName: string;
   contractor?: string | null;
   address?: string | null;
@@ -33,14 +50,13 @@ export const InvoiceEditor: React.FC<{
   const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
-  const [composing, setComposing] = useState(false);
 
   const initialDate = invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '';
   const dirty =
     number !== (invoice.number ?? '') ||
     terms !== (invoice.terms ?? '') ||
     date !== initialDate ||
-    JSON.stringify(lines) !== JSON.stringify(invoice.lines.length ? invoice.lines : []);
+    lineContentKey(lines) !== lineContentKey(invoice.lines);
 
   const collab = useCollabEditing({
     type: 'invoice',
@@ -89,11 +105,13 @@ export const InvoiceEditor: React.FC<{
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // One name for download, upload and the composer attachment: all three upsert
+  // One name for the stored document and the email attachment — they upsert
   // onto the same document row, so a differing name would flip the stored name
-  // depending on which ran last. The id fallback keeps unnumbered drafts from
-  // all landing on the same "invoice.pdf".
-  const pdfFileName = `Invoice-${invoice.number || invoice.id}.pdf`;
+  // depending on which ran last. Keyed off the edited number rather than the
+  // loaded one because the bar saves before it generates, so the draft number
+  // is the one the document will carry. The id fallback keeps unnumbered
+  // drafts from all landing on the same "invoice.pdf".
+  const pdfFileName = `Invoice-${number || invoice.id}.pdf`;
 
   const total = draftTotalCents(lines);
   const paid = invoice.paidCents;
@@ -104,7 +122,7 @@ export const InvoiceEditor: React.FC<{
   const addLine = () => setLines(prev => [...prev, { description: '', qty: 1, unitPrice: 0 }]);
   const removeLine = (i: number) => setLines(prev => prev.filter((_, idx) => idx !== i));
 
-  const handleSave = async () => {
+  const handleSave = async (opts?: { keepMounted?: boolean }) => {
     setSaving(true);
     try {
       await saveInvoice(invoice.id, {
@@ -116,15 +134,31 @@ export const InvoiceEditor: React.FC<{
         lines: lines.map(l => ({ description: l.description, qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0 })),
       });
       toast('Invoice saved', { type: 'success' });
-      onSaved();
+      // A "Keep mine" save adopted a foreign version number; only a remount
+      // clears it, otherwise the next save would post a stale version.
+      onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
     } catch (e) {
       toast(e instanceof Error && e.name === 'ConflictError' ? 'Invoice changed elsewhere — reopen it' : 'Save failed', { type: 'error' });
+      throw e;
     } finally {
       setSaving(false);
     }
   };
 
+  // The bar saves before it generates, so `false` here means "don't build".
+  const saveForDocument = async (): Promise<boolean> => {
+    try { await handleSave({ keepMounted: true }); return true; } catch { return false; }
+  };
+
+  // Built from the SAVED invoice, never the typed-in draft: the bar commits
+  // first, so re-reading the record here is what keeps a generated PDF and the
+  // invoice it claims to represent from drifting apart. A failed re-read
+  // throws on purpose — the bar then reports the failure and keeps the
+  // existing document, rather than quietly storing pre-save bytes and marking
+  // them current.
   const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
+    const saved = await getInvoice(invoice.id);
+    if (!saved) throw new Error('Invoice not found');
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;
@@ -148,7 +182,7 @@ export const InvoiceEditor: React.FC<{
       logoDataUrl = await invertImageDataUrl(logoDataUrl);
     }
     return buildInvoicePdf({
-      invoice,
+      invoice: saved,
       projectName,
       contractor,
       address,
@@ -166,32 +200,45 @@ export const InvoiceEditor: React.FC<{
     });
   };
 
-  const handleDownloadPdf = async () => {
-    try {
-      const bytes = await buildBytes();
-      const blob = new Blob([bytes], { type: 'application/pdf' });
-      const fileName = pdfFileName;
-      // Keep a copy in Documents, but never let that failure block the download.
-      try {
-        await persistGeneratedDocument(blob, { projectId, kind: 'invoice', name: fileName, sourceType: 'invoice', sourceId: invoice.id });
-      } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch { toast('PDF generation failed', { type: 'error' }); }
-  };
-
   return (
     <Modal open onClose={onClose} title={`Invoice ${invoice.number ?? ''}`} width="lg"
       footer={<>
+        <div className="mr-auto">
+          <DocumentActionsBar
+            source={{ sourceType: 'invoice', sourceId: invoice.id }}
+            kind="invoice"
+            format="pdf"
+            projectId={projectId}
+            fileName={pdfFileName}
+            build={async ({ headerEmail }) => new Blob([await buildBytes(headerEmail)], { type: 'application/pdf' })}
+            dirty={dirty}
+            save={saveForDocument}
+            updatedAt={invoice.updatedAt}
+            size="sm"
+            send={{
+              composer: {
+                title: 'Send invoice',
+                defaultTo: emailDefaults.defaultTo || undefined,
+                defaultCc: emailDefaults.defaultCc || undefined,
+                defaultBcc: emailDefaults.defaultBcc || undefined,
+                defaultSubject: `Invoice ${number} — ${projectName}`,
+                defaultBody: `Hello,\n\nPlease find attached Invoice ${number} for ${projectName}.\n\nThank you.`,
+                headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
+                defaultHeaderEmail: emailDefaults.companyEmail || undefined,
+              },
+              sendFn: async (fileId, m) => {
+                await sendInvoice(invoice.id, {
+                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+                  fileId, attachmentFileIds: m.attachmentFileIds,
+                });
+                // The send stamps the invoice 'sent' server-side.
+                onSaved({ keepMounted: true });
+              },
+            }}
+          />
+        </div>
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="secondary" onClick={handleDownloadPdf}>Download PDF</Button>
-        <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>
+        <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving}>{saving ? 'Saving…' : 'Save invoice'}</Button>
       </>}
     >
       <EditPresenceBanner state={collab} />
@@ -230,11 +277,6 @@ export const InvoiceEditor: React.FC<{
         </div>
       </div>
 
-      <div className="mt-4 border-t border-edge pt-3">
-        <h4 className="mb-2 text-sm font-semibold text-ink">Send invoice</h4>
-        <Button onClick={() => setComposing(true)}>Send invoice</Button>
-      </div>
-
       {/* Payments — read-only; recording/deleting happens in the project's
           Billing → Payments tab. */}
       <div className="mt-4 border-t border-edge pt-3">
@@ -264,34 +306,6 @@ export const InvoiceEditor: React.FC<{
           <p className="mt-1 text-xs text-ink-faint">Record payments in the Billing → Payments tab.</p>
         )}
       </div>
-
-      <EmailComposer
-        open={composing}
-        onClose={() => setComposing(false)}
-        projectId={projectId}
-        title="Send invoice"
-        primaryAttachmentName={pdfFileName}
-        defaultTo={emailDefaults.defaultTo || undefined}
-        defaultCc={emailDefaults.defaultCc || undefined}
-        defaultBcc={emailDefaults.defaultBcc || undefined}
-        defaultSubject={`Invoice ${invoice.number} — ${projectName}`}
-        defaultBody={`Hello,\n\nPlease find attached Invoice ${invoice.number} for ${projectName}.\n\nThank you.`}
-        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
-        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
-        onSend={async (m) => {
-          // Always regenerate with the chosen header email so the PDF contact matches.
-          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
-          const bytes = await buildBytes(effectiveHeaderEmail);
-          const file = new File([bytes], pdfFileName, { type: 'application/pdf' });
-          // The PDF is uploaded as a project document before sending; the source
-          // triple makes the server version this invoice's one document rather than
-          // pile up copies, so a failed send + retry (and Download) converge.
-          const { fileId } = await uploadProjectFile(projectId, file, 'invoice', { sourceType: 'invoice', sourceId: invoice.id });
-          await sendInvoice(invoice.id, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
-          toast('Invoice sent', { type: 'success' });
-          onSaved();
-        }}
-      />
     </Modal>
   );
 };

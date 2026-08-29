@@ -2,9 +2,15 @@
 //
 // exceljs is a node-oriented library; the workbook builder is pure (no DOM), so
 // these tests assert STRUCTURE + the reconciling NUMBERS — not pixel layout.
-import { describe, it, expect } from 'vitest';
-import { buildAiaWorkbook, type AiaExportCtx } from './aiaExcel';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { buildAiaWorkbook, buildAiaXlsxBlob, exportAiaXlsx, type AiaExportCtx } from './aiaExcel';
+import { downloadBlob } from '../../../utils/download';
 import type { AiaG702, AiaG703Row, AiaSovLine, AiaPayApp, AiaSettings } from '../../../utils/store';
+
+// The download is the one impure edge of this module; stubbing it keeps the
+// build-vs-deliver split observable without touching jsdom's URL plumbing.
+vi.mock('../../../utils/download', () => ({ downloadBlob: vi.fn() }));
+beforeEach(() => { vi.mocked(downloadBlob).mockReset(); });
 
 // Two SOV lines + one change-order line. Cents chosen so totals reconcile.
 const sovLines: AiaSovLine[] = [
@@ -47,7 +53,7 @@ const app: AiaPayApp = {
   id: 'app1', projectId: 'p1', number: 3,
   periodTo: '2026-06-30', applicationDate: '2026-07-01',
   retainagePercent: 10, storedRetainagePercent: 10, releasedRetainagePoints: 0,
-  status: 'draft', version: 1, createdAt: 0,
+  status: 'draft', version: 1, createdAt: 0, updatedAt: 0,
 };
 
 const aiaSettings: AiaSettings = {
@@ -348,5 +354,48 @@ describe('buildAiaWorkbook', () => {
     // G703 per-row J cells are literals equal to each row's retainageCents.
     expect(g703ws.getCell(`J${CONTRACT_START}`).value).toBe(g703[0].retainageCents / 100);
     expect(formulaOf(g703ws.getCell(`J${CONTRACT_START}`).value)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Build vs. download split (spec
+// docs/superpowers/specs/2026-08-29-document-actions-rollout-design.md).
+// DocumentActionsBar owns delivery now, so it needs the BYTES — the workbook
+// builder must be reachable without a browser download firing as a side
+// effect. `exportAiaXlsx` stays as the "just save it to disk" caller (the
+// blank-SOV export on the Schedule of Values still uses it).
+
+describe('buildAiaXlsxBlob / exportAiaXlsx', () => {
+  it('buildAiaXlsxBlob returns xlsx bytes and downloads nothing', async () => {
+    const blob = await buildAiaXlsxBlob(ctx);
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    // A real workbook: .xlsx is a zip, so the bytes start with "PK".
+    const head = new Uint8Array(await blob.arrayBuffer()).slice(0, 2);
+    expect(Array.from(head)).toEqual([0x50, 0x4b]);
+    expect(downloadBlob).not.toHaveBeenCalled();
+  });
+
+  it('exportAiaXlsx still hands the workbook to the browser, with the default name', async () => {
+    await exportAiaXlsx(ctx);
+
+    expect(downloadBlob).toHaveBeenCalledTimes(1);
+    const [blob, name] = vi.mocked(downloadBlob).mock.calls[0];
+    expect(blob).toBeInstanceOf(Blob);
+    expect(name).toBe('AIA-Test_Project-App3.xlsx');
+  });
+
+  it('exportAiaXlsx persists before it downloads, and honours an explicit filename', async () => {
+    const order: string[] = [];
+    vi.mocked(downloadBlob).mockImplementation(() => { order.push('download'); });
+    const persist = vi.fn(async (_blob: Blob) => { order.push('persist'); });
+
+    await exportAiaXlsx(ctx, undefined, 'Blank-SOV.xlsx', persist);
+
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist.mock.calls[0][0]).toBeInstanceOf(Blob);
+    expect(order).toEqual(['persist', 'download']);
+    expect(vi.mocked(downloadBlob).mock.calls[0][1]).toBe('Blank-SOV.xlsx');
   });
 });

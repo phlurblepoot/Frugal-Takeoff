@@ -910,3 +910,18 @@ describe('migration 29 — proposal counter', () => {
     db.close();
   });
 });
+
+describe('migration 30 — updatedAt columns', () => {
+  it('adds updatedAt to the five tables and backfills from createdAt', () => {
+    const dir = tmpDir(); const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 29));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p1','P',1,1,1,'{}')`).run();
+    db.prepare(`INSERT INTO invoices (id, projectId, number, status, createdAt, version) VALUES ('i1','p1','1','draft',12345,1)`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 30));
+    for (const t of ['invoices', 'change_orders', 'issues', 'rfis', 'aia_pay_apps']) {
+      expect(columnNames(db, t), `missing updatedAt on ${t}`).toContain('updatedAt');
+    }
+    expect((db.prepare('SELECT updatedAt FROM invoices WHERE id = ?').get('i1') as any).updatedAt).toBe(12345);
+    db.close();
+  });
+});

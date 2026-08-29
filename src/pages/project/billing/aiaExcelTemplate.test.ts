@@ -46,7 +46,7 @@ const app: AiaPayApp = {
   id: 'app1', projectId: 'p1', number: 3,
   periodTo: '2026-06-30', applicationDate: '2026-07-01',
   retainagePercent: 10, storedRetainagePercent: 10, releasedRetainagePoints: 0,
-  status: 'draft', version: 1, createdAt: 0,
+  status: 'draft', version: 1, createdAt: 0, updatedAt: 0,
 };
 
 const aiaSettings: AiaSettings = {

@@ -114,7 +114,7 @@ export function buildBlankSovContext(
     retainagePercent,
     storedRetainagePercent: aiaSettings.storedRetainagePercent ?? retainagePercent,
     releasedRetainagePoints: 0,
-    status: 'draft', version: 1, createdAt: 0,
+    status: 'draft', version: 1, createdAt: 0, updatedAt: 0,
   };
   // No pay app exists yet, so nothing has been released: base rate applies
   // in full, mirroring the server's synthesized retainage block for a fresh app.

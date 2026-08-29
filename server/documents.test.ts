@@ -561,3 +561,31 @@ describe('proposal rework kinds', () => {
     expect((await request(app).delete('/api/files/ph')).status).toBe(409);
   });
 });
+
+describe('by-source lookup', () => {
+  it('returns the live document for a source triple, 404 when none', async () => {
+    const fid = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'Invoice-1.pdf', sourceType: 'invoice', sourceId: 'inv-1' });
+    const hit = await request(app).get('/api/documents/by-source?sourceType=invoice&sourceId=inv-1&kind=invoice');
+    expect(hit.status).toBe(200);
+    expect(hit.body).toMatchObject({ id: fid, name: 'Invoice-1.pdf', versionNumber: 1 });
+    expect((await request(app).get('/api/documents/by-source?sourceType=invoice&sourceId=nope&kind=invoice')).status).toBe(404);
+  });
+  it('hides admin-only kinds from non-admins and batches', async () => {
+    await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' });
+    await upload('f2', { projectId: 'p1', kind: 'issue-report', name: 'b', sourceType: 'issue', sourceId: 'is-1' });
+    const user = buildApp('user');
+    expect((await request(user).get('/api/documents/by-source?sourceType=invoice&sourceId=inv-1&kind=invoice')).status).toBe(404);
+    const batch = await request(app).get('/api/documents/by-source?sourceType=invoice&kind=invoice&sourceIds=inv-1,inv-2');
+    expect(batch.body['inv-1'].id).toBe('f1');
+    expect(batch.body['inv-2']).toBeNull();
+    const batchUser = await request(user).get('/api/documents/by-source?sourceType=invoice&kind=invoice&sourceIds=inv-1');
+    expect(batchUser.body['inv-1']).toBeNull();
+  });
+  it('after a versioned regenerate the lookup returns the same id with the new version', async () => {
+    const a = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    const b = await upload('f9', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2');
+    expect(b).toBe(a);
+    const hit = await request(app).get('/api/documents/by-source?sourceType=invoice&sourceId=inv-1&kind=invoice');
+    expect(hit.body.versionNumber).toBe(2);
+  });
+});

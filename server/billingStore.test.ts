@@ -497,3 +497,99 @@ describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contrac
     expect(s.payAppOutstandingCents).toBe(0);
   });
 });
+
+describe('updatedAt stamping', () => {
+  it('saveInvoice and setInvoiceStatus bump updatedAt', async () => {
+    const { id } = createInvoice(db, 'p1', { number: '1', lines: [] });
+    const before = (getInvoice(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveInvoice(db, id, { ...getInvoice(db, id), version: 1, terms: 'net 30' });
+    const afterSave = (getInvoice(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    setInvoiceStatus(db, id, 'sent');
+    expect((getInvoice(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+
+  it('saveChangeOrder and addChangeOrderPhoto bump updatedAt', async () => {
+    const { id } = createChangeOrder(db, 'p1', { number: 'CO-1', lumpSumAmount: 100 });
+    const before = (getChangeOrder(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveChangeOrder(db, id, { ...getChangeOrder(db, id), version: 1, description: 'updated' });
+    const afterSave = (getChangeOrder(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    addChangeOrderPhoto(db, id, 'f1');
+    expect((getChangeOrder(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+
+  // The invoice PDF and the pay-app G702 both print Paid-to-date and Balance,
+  // so a payment is a change to what the stored document should say even though
+  // no field on the invoice/pay-app row itself moved.
+  it('recordPayment and deletePayment bump the target invoice updatedAt', async () => {
+    const { id } = createInvoice(db, 'p1', { number: '1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    const before = (getInvoice(db, id) as any).updatedAt;
+    await new Promise(r => setTimeout(r, 2));
+
+    const pay = recordPayment(db, 'invoice', id, { amount: 40 });
+    const afterAdd = (getInvoice(db, id) as any).updatedAt;
+    expect(afterAdd).toBeGreaterThan(before);
+
+    await new Promise(r => setTimeout(r, 2));
+    deletePayment(db, pay.id);
+    expect((getInvoice(db, id) as any).updatedAt).toBeGreaterThan(afterAdd);
+  });
+
+  it('recordPayment and deletePayment bump the target pay application updatedAt', async () => {
+    db.prepare("INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt, updatedAt) VALUES ('app1', 'p1', 3, 'draft', 1, 1, 1)").run();
+    const readAt = () => (db.prepare("SELECT updatedAt FROM aia_pay_apps WHERE id = 'app1'").get() as any).updatedAt;
+    expect(readAt()).toBe(1);
+
+    const pay = recordPayment(db, 'payapp', 'app1', { amount: 500 });
+    const afterAdd = readAt();
+    expect(afterAdd).toBeGreaterThan(1);
+
+    await new Promise(r => setTimeout(r, 2));
+    deletePayment(db, pay.id);
+    expect(readAt()).toBeGreaterThan(afterAdd);
+  });
+
+  it('deletePayment on an unknown id is a no-op, not a crash', () => {
+    expect(() => deletePayment(db, 'no-such-payment')).not.toThrow();
+  });
+
+  // Re-sending stamps nothing: updatedAt is the clock the "is the stored PDF
+  // current?" chip reads, so a no-op status write would stale the very file the
+  // send just mailed, with no way back to green.
+  it('setInvoiceStatus leaves updatedAt and version alone when the status is unchanged', async () => {
+    const { id } = createInvoice(db, 'p1', { number: '1', lines: [] });
+    setInvoiceStatus(db, id, 'sent');
+    const sent = getInvoice(db, id) as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    const again = setInvoiceStatus(db, id, 'sent');
+    const after = getInvoice(db, id) as any;
+    expect(after.updatedAt).toBe(sent.updatedAt);
+    expect(after.version).toBe(sent.version);
+    expect(again).toEqual({ version: sent.version, status: 'sent' });
+  });
+
+  it('setChangeOrderStatus leaves updatedAt and version alone when the status is unchanged', async () => {
+    const { id } = createChangeOrder(db, 'p1', { number: 'CO-1', lumpSumAmount: 100 });
+    setChangeOrderStatus(db, id, 'sent');
+    const sent = getChangeOrder(db, id) as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    setChangeOrderStatus(db, id, 'sent');
+    const after = getChangeOrder(db, id) as any;
+    expect(after.updatedAt).toBe(sent.updatedAt);
+    expect(after.version).toBe(sent.version);
+
+    // A real transition still stamps.
+    await new Promise(r => setTimeout(r, 2));
+    setChangeOrderStatus(db, id, 'approved');
+    expect((getChangeOrder(db, id) as any).updatedAt).toBeGreaterThan(sent.updatedAt);
+  });
+});

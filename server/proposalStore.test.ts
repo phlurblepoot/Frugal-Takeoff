@@ -107,6 +107,33 @@ describe('save + lock', () => {
     void version;
   });
 
+  it('a save returns the new updatedAt with the new version', () => {
+    // The editor adopts both: updatedAt is what the document bar compares a
+    // generated PDF's createdAt against, so a client left on the pre-save
+    // timestamp would keep calling a now-stale PDF current.
+    const { id, version } = createProposal(db, 'p1', {});
+    const before = getProposal(db, id)!;
+    const r = saveProposal(db, id, { version, title: 'Priced' });
+    const after = getProposal(db, id)!;
+    expect(r.version).toBe(after.version);
+    expect(r.updatedAt).toBe(after.updatedAt);
+    expect(r.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
+  it('attaching the generated document leaves updatedAt alone', () => {
+    // The editor's "is this PDF still current?" check compares the file's
+    // createdAt against the proposal's updatedAt. Bumping updatedAt here would
+    // mark every freshly generated PDF stale the instant it is attached.
+    const { id } = createProposal(db, 'p1', {});
+    const before = getProposal(db, id)!;
+    pdf('gen');
+    setProposalFile(db, id, 'gen');
+    const after = getProposal(db, id)!;
+    expect(after.fileId).toBe('gen');
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.version).toBe(before.version);
+  });
+
   it('legacy proposals are locked even while draft', () => {
     const { id } = createProposal(db, 'p1', {});
     db.prepare('UPDATE proposals SET legacy = 1 WHERE id = ?').run(id);
@@ -129,6 +156,25 @@ describe('status transitions', () => {
     expect(p.signedFileId).toBe('signed');
     expect(p.acceptedAt).toBeGreaterThan(0);
     expect(() => setStatus(db, id, 'declined')).toThrow(ValidationError); // accepted is terminal
+  });
+
+  // Sending doesn't change what the proposal SAYS, and a sent proposal is
+  // locked — it can never regenerate its PDF. Stamping updatedAt here would
+  // leave every sent proposal showing "PDF out of date" forever, so markSent
+  // deliberately leaves that clock alone (same rule as setProposalFile).
+  it('markSent records the send without stamping updatedAt', async () => {
+    const { id } = createProposal(db, 'p1', {});
+    pdf('gen-u'); setProposalFile(db, id, 'gen-u');
+    const before = getProposal(db, id)! as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    markSent(db, id, { to: 'a@b.c', subject: 's' });
+
+    const after = getProposal(db, id)! as any;
+    expect(after.status).toBe('sent');
+    expect(after.sentAt).toBeGreaterThan(0);
+    expect(after.version).toBe(before.version + 1); // collaborators still reload
+    expect(after.updatedAt).toBe(before.updatedAt);
   });
 
   // A legacy row (migration 28) is read-only history: Open PDF and Revise

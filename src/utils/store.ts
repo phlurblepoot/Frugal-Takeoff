@@ -243,6 +243,10 @@ export interface FileUploadOpts {
   customerId?: string;
   sourceType?: string;
   sourceId?: string;
+  // Only meaningful on an upsert-by-source hit — see server/files.ts's
+  // `store`. 'version' (default) keeps prior versions as history; 'overwrite'
+  // replaces the current version in place (regenerate-in-place flows).
+  mode?: 'version' | 'overwrite';
 }
 
 export interface UploadResult {
@@ -258,6 +262,7 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
   if (opts?.customerId) q.set('customerId', opts.customerId);
   if (opts?.sourceType) q.set('sourceType', opts.sourceType);
   if (opts?.sourceId) q.set('sourceId', opts.sourceId);
+  if (opts?.mode) q.set('mode', opts.mode);
   return q;
 };
 
@@ -763,6 +768,37 @@ export const getDocuments = async (
   return await res.json();
 };
 
+// Single-entity lookup keyed by the owning entity (server/documents.ts's
+// SourceDoc) — "does this invoice already have a generated PDF?" without
+// browsing the full Documents list.
+export interface GeneratedDoc {
+  id: string;
+  name: string | null;
+  mime: string;
+  size: number;
+  createdAt: number;
+  versionNumber: number;
+}
+
+export const getDocumentBySource = async (
+  q: { sourceType: string; sourceId: string; kind: string }
+): Promise<GeneratedDoc | null> => {
+  const p = new URLSearchParams({ sourceType: q.sourceType, sourceId: q.sourceId, kind: q.kind });
+  const res = await fetchWithRetry(`/api/documents/by-source?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  if (res.status === 404) return null;
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getDocumentsBySource = async (
+  q: { sourceType: string; sourceIds: string[]; kind: string }
+): Promise<Record<string, GeneratedDoc | null>> => {
+  const p = new URLSearchParams({ sourceType: q.sourceType, kind: q.kind, sourceIds: q.sourceIds.join(',') });
+  const res = await fetchWithRetry(`/api/documents/by-source?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
 // Archive/restore or re-type a file (server/documents.ts's patchDocument
 // guard: kind may only move between direct-upload kinds; archived toggles
 // freely). Returns the updated row's slim metadata.
@@ -829,6 +865,9 @@ export interface Invoice {
   terms: string | null;
   version: number;
   createdAt: number;
+  // Stamped server-side on every write (migration 30) — the "is the generated
+  // PDF still current?" comparison in DocumentActionsBar reads it.
+  updatedAt: number;
   lines: InvoiceLine[];
   payments: Payment[];
   totalCents: number;
@@ -838,6 +877,7 @@ export interface Invoice {
 export interface InvoiceListItem {
   id: string; projectId: string; number: string | null; date: number | null;
   status: string; terms: string | null; version: number; createdAt: number;
+  updatedAt: number;
   totalCents: number; paidCents: number; balanceCents: number;
 }
 export interface ChangeOrderLine {
@@ -863,6 +903,7 @@ export interface ChangeOrder {
   status: string; // draft | sent | approved | rejected (legacy: pending)
   version: number;
   createdAt: number;
+  updatedAt: number;
   amount: number; // canonical rolled-up dollar total (= (Σ line cents + lump-sum cents)/100)
   lines: ChangeOrderLine[];
   photos: COPhoto[];
@@ -881,6 +922,7 @@ export interface ChangeOrderListItem {
   status: string;
   version: number;
   createdAt: number;
+  updatedAt: number;
   amount: number;
   totalCents: number;
 }
@@ -1026,12 +1068,13 @@ export interface Issue {
   version: number;
   sentAt: number | null;
   createdAt: number;
+  updatedAt: number;
   photos: IssuePhoto[];
 }
 export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
   description: string | null; status: string; version: number; sentAt: number | null;
-  createdAt: number; photoCount: number;
+  createdAt: number; updatedAt: number; photoCount: number;
 }
 
 const issueJson = (method: string, url: string, body?: unknown) =>
@@ -1094,6 +1137,7 @@ export interface Rfi {
   sentAt: number | null;
   answeredAt: number | null;
   createdAt: number;
+  updatedAt: number;
   photos: RfiPhoto[];
 }
 export interface RfiListItem {
@@ -1102,7 +1146,7 @@ export interface RfiListItem {
   attention: string | null; responseNeededBy: string | null;
   responseText: string | null; responseFileId: string | null;
   status: string; version: number; sentAt: number | null; answeredAt: number | null;
-  createdAt: number; photoCount: number;
+  createdAt: number; updatedAt: number; photoCount: number;
 }
 
 const rfiJson = (method: string, url: string, body?: unknown) =>
@@ -1285,7 +1329,9 @@ export const createProposal = async (projectId: string, input: { takeoffIds?: st
   const res = await proposalJson('POST', `/api/projects/${projectId}/proposals`, input); await handleResponse(res);
   return res.json() as Promise<{ id: string; number: number; version: number }>;
 };
-export const saveProposal = async (id: string, input: ProposalSaveInput): Promise<{ version: number }> => {
+// updatedAt comes back with version so the editor can adopt both — see the
+// server-side note on saveProposal in server/proposalStore.ts.
+export const saveProposal = async (id: string, input: ProposalSaveInput): Promise<{ version: number; updatedAt: number }> => {
   const res = await proposalJson('PUT', `/api/proposals/${id}`, input); await handleProposalResponse(res, id); return res.json();
 };
 export const deleteProposal = async (id: string): Promise<void> => {
@@ -1460,7 +1506,10 @@ export interface AiaPayApp {
   periodTo: string | null; applicationDate: string | null;
   retainagePercent: number; storedRetainagePercent: number;
   releasedRetainagePoints: number;
-  status: string; version: number; createdAt: number;
+  // updatedAt drives the document bar's "Excel out of date" chip; migration 30
+  // added the column (backfilled from createdAt) and every pay-app read is a
+  // SELECT *, so it comes back on both the list and detail payloads.
+  status: string; version: number; createdAt: number; updatedAt: number;
 }
 // getPayApps list row: adds Amount = G702 L8 (live for drafts, as-billed for
 // finalized apps); Balance = Amount − payments, null for drafts (not yet

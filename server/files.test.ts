@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
+import express from 'express';
+import request from 'supertest';
 import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { registerDataRoutes } from './routes';
 import {
   putDataUrl, putBuffer, getMeta, getDataUrlString, removeFile, saveNewVersion, listVersions,
   setFileFlags, isDirectUploadKind, DIRECT_UPLOAD_KINDS, SYSTEM_KINDS, MULTI_INSTANCE_KINDS,
@@ -14,6 +17,40 @@ import { readFileContent } from './fileStore';
 
 let db: Database.Database;
 let dir: string;
+let app: express.Express;
+
+const buildApp = (role: 'admin' | 'user' = 'admin', userId = 'u1') => {
+  const a = express();
+  a.use(express.json({ limit: '50mb' }));
+  registerDataRoutes(a, {
+    db,
+    dataDir: dir,
+    dbFile: path.join(dir, 'app.db'),
+    authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role }; next(); },
+    requireAdmin: (req: any, res: any, next: any) => (req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' })),
+    verifyToken: () => null,
+    broadcastChange: () => {},
+  });
+  return a;
+};
+
+// Uploads through the real POST /api/files/:id path so tests exercise the
+// same code that production upload/generate call sites use.
+const upload = async (
+  id: string,
+  opts: { projectId?: string; kind?: string; name?: string; customerId?: string; sourceType?: string; sourceId?: string; mode?: string } = {},
+  body = 'x'
+) => {
+  const qs = Object.entries(opts)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`)
+    .join('&');
+  const res = await request(app).post(`/api/files/${id}${qs ? `?${qs}` : ''}`)
+    .set('Content-Type', 'application/octet-stream')
+    .send(Buffer.from(body));
+  expect(res.status).toBe(200);
+  return res.body.fileId as string;
+};
 
 beforeEach(() => {
   dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-files-'));
@@ -21,6 +58,7 @@ beforeEach(() => {
   // Full schema: the files layer reads the source-attribution columns added in
   // migration 23, which the app always has by the time it serves a request.
   runMigrations(db, dir, migrations);
+  app = buildApp('admin');
 });
 
 const PNG_DATAURL = 'data:image/png;base64,' + Buffer.from('fakepng').toString('base64');
@@ -321,5 +359,57 @@ describe('upsert-by-source uploads', () => {
     const verbatim = 'data:text/plain;charset=utf-8;base64,' + Buffer.from('hello').toString('base64');
     expect(putDataUrl(db, dir, 'doc3', verbatim, RESPONSE)).toMatchObject({ id: 'doc1', versioned: true });
     expect(getDataUrlString(db, dir, 'doc1')).toBe(verbatim);
+  });
+});
+
+describe('overwrite mode', () => {
+  it('replaces the live bytes in place: same id, no archived row, versionNumber 1, createdAt refreshed', async () => {
+    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    const before = getMeta(db, id)!;
+    await new Promise(r => setTimeout(r, 2));
+    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1&mode=overwrite`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(res.body.fileId).toBe(id);
+    const after = getMeta(db, id)!;
+    expect(after.versionNumber).toBe(1);
+    expect(after.createdAt).toBeGreaterThan(before.createdAt);
+    expect(readFileContent(dir, id)!.toString()).toBe('v2');
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
+  });
+
+  it('overwrite discards every archived version and resets the live row to V1', async () => {
+    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2'); // version → V2 + 1 archived row
+    await upload('f3', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v3'); // V3 + 2 archived rows
+    const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
+    expect(archived).toHaveLength(2);
+    expect(getMeta(db, id)!.versionNumber).toBe(3);
+    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1&mode=overwrite`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('fresh'));
+    expect(res.body.fileId).toBe(id);
+    expect(getMeta(db, id)!.versionNumber).toBe(1);
+    expect(readFileContent(dir, id)!.toString()).toBe('fresh');
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
+    for (const a of archived) {
+      expect(getMeta(db, a.id)).toBeNull();
+      expect(readFileContent(dir, a.id)).toBeNull();
+    }
+  });
+
+  it('version mode (default) still archives', async () => {
+    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
+    expect(res.body.fileId).toBe(id);
+    const after = getMeta(db, id)!;
+    expect(after.versionNumber).toBe(2);
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 1 });
+  });
+
+  it('both modes clear a pdf draft for the file', async () => {
+    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    db.prepare(`INSERT INTO drafts (userId, fileId, kind, data, updatedAt) VALUES ('u1', ?, 'pdf', '{}', 1)`).run(id);
+    await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2');
+    expect(db.prepare('SELECT COUNT(*) c FROM drafts WHERE fileId = ?').get(id)).toEqual({ c: 0 });
   });
 });
