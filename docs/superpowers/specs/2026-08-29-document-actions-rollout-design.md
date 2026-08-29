@@ -1,6 +1,6 @@
 # Document Actions & File Picker Rollout — Design Spec
 
-**Date:** 2026-08-29 · **Status:** approved by Nathan (brainstorm) · **Migrations:** none
+**Date:** 2026-08-29 · **Status:** approved by Nathan (brainstorm) · **Migrations:** 30 (additive — `updatedAt` on invoices, change_orders, issues, rfis, aia_pay_apps; ruled in during planning because the up-to-date check needs it)
 
 ## 1. Goals
 Roll two patterns from the proposal rework across every document-producing area of the app:
