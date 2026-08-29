@@ -21,7 +21,7 @@ vi.mock('../../../utils/store', async (orig) => ({
   getCustomers: vi.fn(async () => []),
   getDocumentTypes: vi.fn(async () => []),
 }));
-import { addProposalPhoto, removeProposalPhoto, updateProposalPhoto, ProposalLockedError } from '../../../utils/store';
+import { addProposalPhoto, removeProposalPhoto, updateProposalPhoto, uploadProjectFile, ProposalLockedError } from '../../../utils/store';
 import { ProposalPhotosCard } from './ProposalPhotosCard';
 
 const proposal = {
@@ -54,8 +54,37 @@ describe('ProposalPhotosCard', () => {
 
   it('hides the toolbar when read-only', () => {
     renderCard(true);
-    expect(screen.queryByRole('button', { name: /Upload photos/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add photos/i })).toBeNull();
+  });
+
+  // One button now covers both "upload a new shot" and "reuse an existing
+  // one" — and nothing behind it is a bare file input any more.
+  it('offers a single Add photos button and no hidden file input', () => {
+    const { container } = renderCard();
+    expect(screen.getByRole('button', { name: /Add photos/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Choose existing/i })).toBeNull();
+    expect(container.querySelectorAll('input[type="file"]')).toHaveLength(0);
+  });
+
+  it('a dropped image is uploaded into the proposal, added, then resynced', async () => {
+    const { onChanged } = renderCard();
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' });
+    fireEvent.drop(screen.getByTestId('proposal-photos'), { dataTransfer: { files: [shot] } });
+
+    await waitFor(() => expect(uploadProjectFile).toHaveBeenCalledWith(
+      'p1', shot, 'proposal-photo', { sourceType: 'proposal', sourceId: 'pr1' },
+    ));
+    await waitFor(() => expect(addProposalPhoto).toHaveBeenCalledWith('pr1', 'f-new'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('a drop on a locked proposal says why instead of uploading', async () => {
+    renderCard(true);
+    fireEvent.drop(screen.getByTestId('proposal-photos'), {
+      dataTransfer: { files: [new File(['x'], 'shot.png', { type: 'image/png' })] },
+    });
+    await screen.findByText('This proposal was sent and is now locked');
+    expect(uploadProjectFile).not.toHaveBeenCalled();
   });
 
   it('remove calls the mocked API and reloads', async () => {
@@ -65,9 +94,10 @@ describe('ProposalPhotosCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it('"Choose existing" opens the picker and picking calls add per row', async () => {
+  it('the picker\'s Existing tab adds each picked row', async () => {
     const { onChanged } = renderCard();
-    fireEvent.click(screen.getByRole('button', { name: /Choose existing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add photos/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
     const checkbox = await screen.findByLabelText('site.jpg');
     fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole('button', { name: /Add 1 file/i }));
@@ -75,12 +105,13 @@ describe('ProposalPhotosCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it('"Choose existing": a partial add failure toasts a warning but still resyncs', async () => {
+  it('a partial add failure toasts a warning but still resyncs', async () => {
     const { onChanged } = renderCard();
     vi.mocked(addProposalPhoto)
       .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async () => { throw new Error('nope'); });
-    fireEvent.click(screen.getByRole('button', { name: /Choose existing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Add photos/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
     fireEvent.click(await screen.findByLabelText('site.jpg'));
     fireEvent.click(screen.getByLabelText('site2.jpg'));
     fireEvent.click(screen.getByRole('button', { name: /Add 2 files/i }));

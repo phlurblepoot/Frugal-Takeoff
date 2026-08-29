@@ -51,7 +51,10 @@ test('file picker: one click checks a row even while its hover preview is up', a
   await authedPage.goto(`/project/${projectId}/proposal/${proposalId}`);
   const attachments = authedPage.getByTestId('proposal-attachments');
   await expect(attachments).toBeVisible();
-  await attachments.getByRole('button', { name: /Choose existing/ }).click();
+  // One button now covers upload + reuse (AddFilesButton), and it opens on the
+  // Upload tab — the Existing tab is where the row checkboxes live.
+  await attachments.getByRole('button', { name: /Add PDFs/ }).click();
+  await authedPage.getByRole('tab', { name: 'Existing' }).click();
 
   // The attachments picker opens unfiltered by project (initialProjectIds=[]),
   // and this suite shares one DB across spec files, so narrow to the seeded

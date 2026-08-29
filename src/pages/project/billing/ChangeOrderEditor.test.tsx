@@ -11,6 +11,9 @@ const h = vi.hoisted(() => ({
   getChangeOrder: vi.fn(),
   saveChangeOrder: vi.fn(),
   sendChangeOrder: vi.fn(),
+  addCOPhoto: vi.fn(),
+  uploadProjectFile: vi.fn(),
+  pickerProps: { last: null as any },
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildChangeOrderPdf: vi.fn(),
@@ -25,6 +28,8 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getChangeOrder: h.getChangeOrder,
   saveChangeOrder: h.saveChangeOrder,
   sendChangeOrder: h.sendChangeOrder,
+  addCOPhoto: h.addCOPhoto,
+  uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
@@ -37,6 +42,19 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
   getFileMeta: vi.fn(async () => null),
   getImageUrl: (id: string) => `/img/${id}`,
+}));
+
+// Stand-in picker: records the config the editor asked for and hands back one
+// already-uploaded row on demand.
+vi.mock('../../../components/FilePickerModal', () => ({
+  FilePickerModal: (props: any) => {
+    h.pickerProps.last = props;
+    return (
+      <div data-testid="picker">
+        <button data-testid="picker-pick" onClick={() => void props.onPick?.([{ id: 'up-1', name: 'shot.png' }])}>pick</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('./changeOrderPdf', () => ({ buildChangeOrderPdf: h.buildChangeOrderPdf }));
@@ -100,6 +118,9 @@ beforeEach(() => {
   h.getChangeOrder.mockResolvedValue(SAVED);
   h.saveChangeOrder.mockResolvedValue({ version: 3 });
   h.sendChangeOrder.mockResolvedValue(undefined);
+  h.pickerProps.last = null;
+  h.addCOPhoto.mockResolvedValue(undefined);
+  h.uploadProjectFile.mockResolvedValue({ fileId: 'up-photo', versioned: false });
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-7', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildChangeOrderPdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
@@ -113,7 +134,7 @@ describe('ChangeOrderEditor — document actions', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save change order' })).toBeInTheDocument();
-    // The photos card keeps its own uploader (Task 11 swaps the button).
+    // The photos card's uploader is now the shared picker button.
     expect(screen.getByRole('button', { name: /Add photos/i })).toBeInTheDocument();
   });
 
@@ -179,5 +200,38 @@ describe('ChangeOrderEditor — document actions', () => {
     await waitFor(() => expect(h.sendChangeOrder).toHaveBeenCalledTimes(1));
     expect(h.sendChangeOrder.mock.calls[0][0]).toBe('co-1');
     expect(h.sendChangeOrder.mock.calls[0][1]).toMatchObject({ to: 'gc@example.com', fileId: 'file-7' });
+  });
+});
+
+describe('photo card', () => {
+  it('adds a picked photo through the shared picker and reloads', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Add photos/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addCOPhoto).toHaveBeenCalledWith('co-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    expect(h.pickerProps.last).toMatchObject({
+      accept: 'image', defaultTab: 'upload', initialProjectIds: ['p1'],
+      upload: { kind: 'change-order-photo', projectId: 'p1', sourceType: 'change-order', sourceId: 'co-1' },
+    });
+  });
+
+  it('uploads a dropped photo, links it, then reloads', async () => {
+    mount();
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' });
+    fireEvent.drop(await screen.findByTestId('change-order-photo-dropzone'), { dataTransfer: { files: [shot] } });
+
+    await waitFor(() => expect(h.uploadProjectFile).toHaveBeenCalledWith(
+      'p1', shot, 'change-order-photo', { sourceType: 'change-order', sourceId: 'co-1' },
+    ));
+    await waitFor(() => expect(h.addCOPhoto).toHaveBeenCalledWith('co-1', 'up-photo'));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('has no bare file input left', async () => {
+    mount();
+    await screen.findByRole('button', { name: /Add photos/i });
+    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(0);
   });
 });

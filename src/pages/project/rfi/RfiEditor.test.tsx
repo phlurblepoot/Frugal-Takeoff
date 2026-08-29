@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   saveRfi: vi.fn(),
   sendRfi: vi.fn(),
   setRfiResponse: vi.fn(),
+  addRfiPhoto: vi.fn(),
+  uploadProjectFile: vi.fn(),
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildRfiPdf: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   saveRfi: h.saveRfi,
   sendRfi: h.sendRfi,
   setRfiResponse: h.setRfiResponse,
+  addRfiPhoto: h.addRfiPhoto,
+  uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
@@ -124,6 +128,8 @@ beforeEach(() => {
   h.saveRfi.mockResolvedValue({ version: 3 });
   h.sendRfi.mockResolvedValue(undefined);
   h.setRfiResponse.mockResolvedValue(undefined);
+  h.addRfiPhoto.mockResolvedValue(undefined);
+  h.uploadProjectFile.mockResolvedValue({ fileId: 'up-photo', versioned: false });
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildRfiPdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
@@ -214,13 +220,55 @@ describe('RfiEditor — response attachment', () => {
     });
     expect(h.pickerProps.last.initialProjectIds).toBeUndefined();
 
-    // Only the photo grid's camera input remains (the modal renders in a
-    // portal, so this looks at the whole document rather than the container).
-    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(1);
+    // Every uploader on this editor is now the shared picker — no bare file
+    // input is left anywhere (the modal renders in a portal, so this looks at
+    // the whole document rather than the container).
+    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(0);
   });
 
   it('keeps the response download for an RFI that already has one', async () => {
     mount(rfi({ responseFileId: 'resp-1' }));
     expect(await screen.findByRole('button', { name: /Download response/i })).toBeInTheDocument();
+  });
+});
+
+describe('RfiEditor — photos', () => {
+  it('adds a picked photo through the shared picker and reloads', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Add photos/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addRfiPhoto).toHaveBeenCalledWith('rfi-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    expect(h.pickerProps.last).toMatchObject({
+      accept: 'image', defaultTab: 'upload', initialProjectIds: ['p1'],
+      upload: { kind: 'rfi-photo', projectId: 'p1', sourceType: 'rfi', sourceId: 'rfi-1' },
+    });
+  });
+
+  it('uploads a dropped photo, links it, then reloads', async () => {
+    mount();
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' });
+    fireEvent.drop(await screen.findByTestId('rfi-photo-dropzone'), { dataTransfer: { files: [shot] } });
+
+    await waitFor(() => expect(h.uploadProjectFile).toHaveBeenCalledWith(
+      'p1', shot, 'rfi-photo', { sourceType: 'rfi', sourceId: 'rfi-1' },
+    ));
+    await waitFor(() => expect(h.addRfiPhoto).toHaveBeenCalledWith('rfi-1', 'up-photo'));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  // Adding a photo bumps the RFI's version, which re-keys the editor and would
+  // discard whatever is in the form.
+  it('refuses a photo while the form is dirty, and says why', async () => {
+    mount();
+    fireEvent.change(await screen.findByLabelText('Title'), { target: { value: 'Typed title' } });
+    expect(screen.getByRole('button', { name: /Add photos/i })).toBeDisabled();
+
+    fireEvent.drop(screen.getByTestId('rfi-photo-dropzone'), {
+      dataTransfer: { files: [new File(['x'], 'shot.png', { type: 'image/png' })] },
+    });
+    await screen.findByText('Save your changes first');
+    expect(h.uploadProjectFile).not.toHaveBeenCalled();
   });
 });

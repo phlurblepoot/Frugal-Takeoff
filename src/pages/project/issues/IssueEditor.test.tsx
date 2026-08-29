@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
   getIssue: vi.fn(),
   saveIssue: vi.fn(),
   sendIssue: vi.fn(),
+  addIssuePhoto: vi.fn(),
+  uploadProjectFile: vi.fn(),
+  pickerProps: { last: null as any },
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildIssuePdf: vi.fn(),
@@ -29,6 +32,8 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getIssue: h.getIssue,
   saveIssue: h.saveIssue,
   sendIssue: h.sendIssue,
+  addIssuePhoto: h.addIssuePhoto,
+  uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
@@ -41,6 +46,19 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
   getFileMeta: vi.fn(async () => null),
   getImageUrl: (id: string) => `/img/${id}`,
+}));
+
+// Stand-in picker: records the config the editor asked for and hands back one
+// already-uploaded row on demand.
+vi.mock('../../../components/FilePickerModal', () => ({
+  FilePickerModal: (props: any) => {
+    h.pickerProps.last = props;
+    return (
+      <div data-testid="picker">
+        <button data-testid="picker-pick" onClick={() => void props.onPick?.([{ id: 'up-1', name: 'shot.png' }])}>pick</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock('./issuePdf', () => ({ buildIssuePdf: h.buildIssuePdf }));
@@ -105,6 +123,9 @@ beforeEach(() => {
   h.getIssue.mockResolvedValue(SAVED);
   h.saveIssue.mockResolvedValue({ version: 3 });
   h.sendIssue.mockResolvedValue(undefined);
+  h.pickerProps.last = null;
+  h.addIssuePhoto.mockResolvedValue(undefined);
+  h.uploadProjectFile.mockResolvedValue({ fileId: 'up-photo', versioned: false });
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildIssuePdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
@@ -179,5 +200,38 @@ describe('IssueEditor — document actions', () => {
     await waitFor(() => expect(h.sendIssue).toHaveBeenCalledTimes(1));
     expect(h.sendIssue.mock.calls[0][0]).toBe('iss-1');
     expect(h.sendIssue.mock.calls[0][1]).toMatchObject({ to: 'gc@example.com', fileId: 'file-9' });
+  });
+});
+
+describe('photo card', () => {
+  it('adds a picked photo through the shared picker and reloads', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Add photos/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addIssuePhoto).toHaveBeenCalledWith('iss-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    expect(h.pickerProps.last).toMatchObject({
+      accept: 'image', defaultTab: 'upload', initialProjectIds: ['p1'],
+      upload: { kind: 'issue-photo', projectId: 'p1', sourceType: 'issue', sourceId: 'iss-1' },
+    });
+  });
+
+  it('uploads a dropped photo, links it, then reloads', async () => {
+    mount();
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' });
+    fireEvent.drop(await screen.findByTestId('issue-photo-dropzone'), { dataTransfer: { files: [shot] } });
+
+    await waitFor(() => expect(h.uploadProjectFile).toHaveBeenCalledWith(
+      'p1', shot, 'issue-photo', { sourceType: 'issue', sourceId: 'iss-1' },
+    ));
+    await waitFor(() => expect(h.addIssuePhoto).toHaveBeenCalledWith('iss-1', 'up-photo'));
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('has no bare file input left', async () => {
+    mount();
+    await screen.findByRole('button', { name: /Add photos/i });
+    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(0);
   });
 });

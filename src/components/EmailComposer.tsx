@@ -3,11 +3,12 @@
 // issue / proposal). Presentational + owns its own sending state; the parent
 // supplies defaults and an `onSend` that builds/uploads the primary PDF and
 // calls the right store helper.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Loader2, Paperclip, X } from 'lucide-react';
 import { Button, Field, Input, Modal, Textarea } from './ui';
 import { useToast } from './Toast';
-import { uploadProjectFile } from '../utils/store';
+import { AddFilesButton } from './documents/AddFilesButton';
+import { useAttachFiles } from './documents/useAttachFiles';
 import { isValidAddressList, parseAddressList } from '../utils/email';
 import { DocumentGenerationCancelled } from './documents/errors';
 
@@ -70,10 +71,21 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
   const [body, setBody] = useState('');
   const [headerEmail, setHeaderEmail] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);
   const [touched, setTouched] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Extra attachments come from the shared picker: an email is as likely to
+  // need a document already filed in the app as a fresh upload, and a file
+  // dragged onto the dialog takes the same path.
+  const { dragActive, dropProps, busy: uploading, attachRows } = useAttachFiles({
+    upload: { kind: 'email-attachment', projectId },
+    accept: 'any',
+    link: (fileId, meta) => setAttachments(prev => (
+      prev.some(a => a.fileId === fileId) ? prev : [...prev, { fileId, name: meta.name ?? 'attachment' }]
+    )),
+    onDone: () => { /* the chips are local state — nothing to reload */ },
+    noun: 'files',
+  });
 
   // Re-seed every time the dialog opens so each open starts from fresh defaults.
   useEffect(() => {
@@ -89,32 +101,13 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
     setBody(defaultBody);
     setHeaderEmail(defaultHeaderEmail ?? '');
     setAttachments([]);
-    setUploading(false);
     setSending(false);
     setTouched(false);
-    if (fileRef.current) fileRef.current.value = '';
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toTrimmed = to.trim();
   const toValid = parseAddressList(toTrimmed).length > 0 && isValidAddressList(toTrimmed);
   const canSend = toValid && !uploading && !sending;
-
-  const handleFiles = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    setUploading(true);
-    let failed = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'email-attachment');
-        setAttachments(prev => [...prev, { fileId, name: f.name }]);
-      } catch {
-        failed++;
-      }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (failed) toast(`Failed to attach ${failed} file${failed > 1 ? 's' : ''}`, { type: 'error' });
-  };
 
   const removeAttachment = (fileId: string) =>
     setAttachments(prev => prev.filter(a => a.fileId !== fileId));
@@ -226,13 +219,26 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
           <Textarea id="ec-body" rows={6} value={body} onChange={e => setBody(e.target.value)} />
         </Field>
 
-        <div>
+        <div
+          {...dropProps}
+          data-testid="email-attachment-dropzone"
+          className={`rounded-lg transition-shadow ${dragActive ? 'ring-2 ring-accent-500' : ''}`}
+        >
           <div className="mb-2 flex items-center justify-between">
             <span className="block text-sm font-medium text-ink">Attachments</span>
-            <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-              <Paperclip size={14} />{uploading ? 'Uploading…' : 'Add attachment'}
-            </Button>
-            <input ref={fileRef} type="file" multiple className="hidden" onChange={e => handleFiles(e.target.files)} />
+            <AddFilesButton
+              label="Attach files"
+              accept="any"
+              size="sm"
+              // Existing first: most extra attachments are documents the app
+              // already holds. No project pre-filter — an email can carry
+              // anything.
+              defaultTab="existing"
+              upload={{ kind: 'email-attachment', projectId }}
+              excludeFileIds={attachments.map(a => a.fileId)}
+              disabled={uploading}
+              onPick={attachRows}
+            />
           </div>
           <div className="flex flex-wrap gap-2">
             {/* Generated document — always attached, not removable. */}

@@ -1,10 +1,10 @@
 // src/pages/project/billing/ChangeOrderEditor.tsx
-import React, { useEffect, useState, useRef } from 'react';
-import { Camera, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,
   saveChangeOrder, getChangeOrder, setChangeOrderStatus, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
-  uploadProjectFile, addCOPhoto, removeCOPhoto, getImageUrl, fetchFileBlob,
+  addCOPhoto, removeCOPhoto, fetchFileBlob,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
@@ -12,6 +12,7 @@ import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
@@ -43,8 +44,6 @@ export const ChangeOrderEditor: React.FC<{
     co.scheduleImpactDays === null || co.scheduleImpactDays === undefined ? '' : String(co.scheduleImpactDays)
   );
   const [saving, setSaving] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
 
   const initialDate = co.date ? new Date(co.date).toISOString().slice(0, 10) : '';
   // Numbers are compared by value, not by the string in the box: the server
@@ -151,23 +150,6 @@ export const ChangeOrderEditor: React.FC<{
   // The bar saves before it generates, so `false` here means "don't build".
   const saveForDocument = async (): Promise<boolean> => {
     try { await handleSave({ keepMounted: true }); return true; } catch { return false; }
-  };
-
-  const handlePhotos = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'change-order-photo', { sourceType: 'change-order', sourceId: co.id });
-        await addCOPhoto(co.id, fileId);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onSaved(); // reload the CO → photos appear (and version bumps)
   };
 
   const dropPhoto = async (fileId: string) => {
@@ -331,32 +313,17 @@ export const ChangeOrderEditor: React.FC<{
         </div>
       </div>
 
-      <div className="mt-4 border-t border-edge pt-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Photos</h4>
-          <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            <Camera size={14} />{uploading ? 'Uploading…' : 'Add photos'}
-          </Button>
-          {/* capture="environment" opens the rear camera on mobile field use */}
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
-            onChange={e => handlePhotos(e.target.files)} />
-        </div>
-        {co.photos.length === 0 ? (
-          <p className="text-xs text-ink-faint">No photos. Attach reference shots for the change order request.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {co.photos.map(p => (
-              <div key={p.id} className="group relative">
-                <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-                <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                  className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <PhotoDropCard
+        title="Photos"
+        emptyText="No photos. Attach reference shots for the change order request."
+        testId="change-order"
+        photos={co.photos}
+        upload={{ kind: 'change-order-photo', projectId, sourceType: 'change-order', sourceId: co.id }}
+        initialProjectIds={[projectId]}
+        link={fileId => addCOPhoto(co.id, fileId)}
+        onRemove={dropPhoto}
+        onDone={onSaved}
+      />
     </Modal>
   );
 };

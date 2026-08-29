@@ -1,13 +1,13 @@
 // src/pages/project/rfi/RfiEditor.tsx
-import React, { useEffect, useState, useRef } from 'react';
-import { Camera, Trash2 } from 'lucide-react';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
+import React, { useEffect, useState } from 'react';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
+import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { RfiStatusPill, RFI_STATUS_META } from '../../../components/ui/RfiStatusPill';
@@ -34,8 +34,6 @@ export const RfiEditor: React.FC<{
   const [responseNeededBy, setResponseNeededBy] = useState(rfi.responseNeededBy ?? '');
   const [responseDraft, setResponseDraft] = useState(rfi.responseText ?? '');
   const [saving, setSaving] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
 
   const padded = String(rfi.number).padStart(3, '0');
   // One name for the stored document and the email attachment — they upsert
@@ -105,28 +103,6 @@ export const RfiEditor: React.FC<{
     })();
     return () => { cancelled = true; };
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handlePhotos = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    if (isDirty()) {
-      toast('Save your changes first', { type: 'warning' });
-      if (fileRef.current) fileRef.current.value = '';
-      return;
-    }
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'rfi-photo', { sourceType: 'rfi', sourceId: rfi.id });
-        await addRfiPhoto(rfi.id, fileId);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onSaved(); // reload the rfi → photos appear
-  };
 
   const dropPhoto = async (fileId: string) => {
     try { await removeRfiPhoto(rfi.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
@@ -301,32 +277,21 @@ export const RfiEditor: React.FC<{
         <Field label="Spec reference" htmlFor="rfi-spec"><Input id="rfi-spec" value={specRef} onChange={e => setSpecRef(e.target.value)} placeholder="e.g. 09 24 00" /></Field>
         <Field label="Drawing reference" htmlFor="rfi-dwg"><Input id="rfi-dwg" value={drawingRef} onChange={e => setDrawingRef(e.target.value)} placeholder="e.g. A-501" /></Field>
       </div>
-      <div className="mt-4 border-t border-edge pt-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Photos</h4>
-          <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            <Camera size={14} />{uploading ? 'Uploading…' : 'Add photos'}
-          </Button>
-          {/* capture="environment" opens the rear camera on mobile (spec §4.3 field use) */}
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
-            onChange={e => handlePhotos(e.target.files)} />
-        </div>
-        {rfi.photos.length === 0 ? (
-          <p className="text-xs text-ink-faint">No photos. Add before/during/after shots from the field.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {rfi.photos.map(p => (
-              <div key={p.id} className="group relative">
-                <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-                <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                  className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Adding a photo bumps the RFI's version, which re-keys this editor —
+          hence the same save-first gate the response attachment uses. */}
+      <PhotoDropCard
+        title="Photos"
+        emptyText="No photos. Add before/during/after shots from the field."
+        testId="rfi"
+        photos={rfi.photos}
+        upload={{ kind: 'rfi-photo', projectId, sourceType: 'rfi', sourceId: rfi.id }}
+        initialProjectIds={[projectId]}
+        link={fileId => addRfiPhoto(rfi.id, fileId)}
+        onRemove={dropPhoto}
+        onDone={onSaved}
+        disabled={dirty}
+        disabledMessage="Save your changes first"
+      />
       <div className="mt-4 border-t border-edge pt-3">
         <div className="mb-2 flex items-center justify-between">
           <h4 className="text-sm font-semibold text-ink">Response</h4>

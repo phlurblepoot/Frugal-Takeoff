@@ -1,10 +1,10 @@
 // src/pages/project/daily/DailyReportEditor.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { Camera, CloudSun, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
   saveDailyReport, getDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
-  uploadProjectFile, getImageUrl, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
+  getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
   fetchFileBlob, sendDailyReport,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
@@ -12,6 +12,7 @@ import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
@@ -43,8 +44,6 @@ export const DailyReportEditor: React.FC<{
   const [fetchingWeather, setFetchingWeather] = useState(false);
   const [weatherNote, setWeatherNote] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
 
   const isDirty = () =>
     reportDate !== report.reportDate ||
@@ -142,28 +141,6 @@ export const DailyReportEditor: React.FC<{
   };
   const addManCountLine = () => setManCounts(cur => [...cur, { type: '', count: 1 }]);
   const removeManCountLine = (i: number) => setManCounts(cur => cur.filter((_, idx) => idx !== i));
-
-  const handlePhotos = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    if (isDirty()) {
-      toast('Save your changes first', { type: 'warning' });
-      if (fileRef.current) fileRef.current.value = '';
-      return;
-    }
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'daily-report-photo', { sourceType: 'dailyReport', sourceId: report.id });
-        await addDailyReportPhoto(report.id, fileId);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onSaved();
-  };
 
   const dropPhoto = async (fileId: string) => {
     try { await removeDailyReportPhoto(report.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
@@ -366,31 +343,21 @@ export const DailyReportEditor: React.FC<{
         </Field>
       </div>
 
-      <div className="mt-4 border-t border-edge pt-3">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="text-sm font-semibold text-ink">Photos</h4>
-          <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-            <Camera size={14} />{uploading ? 'Uploading…' : 'Add photos'}
-          </Button>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple className="hidden"
-            onChange={e => handlePhotos(e.target.files)} />
-        </div>
-        {report.photos.length === 0 ? (
-          <p className="text-xs text-ink-faint">No photos. Add before/during/after shots from the field.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {report.photos.map(p => (
-              <div key={p.id} className="group relative">
-                <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-                <button onClick={() => dropPhoto(p.fileId)} title="Remove"
-                  className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Adding a photo stamps the report server-side, which re-keys this
+          editor — hence the same save-first gate the status actions use. */}
+      <PhotoDropCard
+        title="Photos"
+        emptyText="No photos. Add before/during/after shots from the field."
+        testId="daily"
+        photos={report.photos}
+        upload={{ kind: 'daily-report-photo', projectId, sourceType: 'dailyReport', sourceId: report.id }}
+        initialProjectIds={[projectId]}
+        link={fileId => addDailyReportPhoto(report.id, fileId)}
+        onRemove={dropPhoto}
+        onDone={onSaved}
+        disabled={dirty}
+        disabledMessage="Save your changes first"
+      />
 
     </Modal>
   );

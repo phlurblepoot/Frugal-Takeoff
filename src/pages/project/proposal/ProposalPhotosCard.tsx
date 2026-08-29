@@ -3,15 +3,15 @@
 // mutated straight through the API (no dirty state) — every action calls
 // onChanged() so the editor reloads the proposal with the fresh photo list.
 // Draft-only: the server rejects photo edits on a locked (non-draft) proposal.
-import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Camera, FolderOpen, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 import {
-  type Proposal, type ProposalPhoto, type DocumentRow,
-  addProposalPhoto, updateProposalPhoto, removeProposalPhoto,
-  uploadProjectFile, getImageUrl,
+  type Proposal, type ProposalPhoto,
+  addProposalPhoto, updateProposalPhoto, removeProposalPhoto, getImageUrl,
 } from '../../../utils/store';
 import { Button, Card, CardBody, CardHeader, Input } from '../../../components/ui';
-import { FilePickerModal } from '../../../components/FilePickerModal';
+import { AddFilesButton } from '../../../components/documents/AddFilesButton';
+import { useAttachFiles } from '../../../components/documents/useAttachFiles';
 import { useToast } from '../../../components/Toast';
 import { handleProposalCardError, toastProposalCardError } from './proposalCardErrors';
 
@@ -72,40 +72,23 @@ export const ProposalPhotosCard: React.FC<{
   onChanged: () => void;
 }> = ({ proposal, projectId, readOnly, onChanged }) => {
   const { toast } = useToast();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [picking, setPicking] = useState(false);
 
   const photos = [...proposal.photos].sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const handleUpload = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    setUploading(true);
-    let ok = 0;
-    for (const f of Array.from(list)) {
-      try {
-        const { fileId } = await uploadProjectFile(projectId, f, 'proposal-photo', { sourceType: 'proposal', sourceId: proposal.id });
-        await addProposalPhoto(proposal.id, fileId);
-        ok++;
-      } catch { /* keep going */ }
-    }
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-    if (ok < list.length) toast(`Uploaded ${ok} of ${list.length} photos`, { type: ok ? 'warning' : 'error' });
-    onChanged();
-  };
-
-  // Mirrors handleUpload's count-and-summarize: a per-row failure (a stale
-  // fileId, or the proposal locking mid-pick) must not be swallowed silently
-  // — the picker can select many rows in one go.
-  const handlePick = async (rows: DocumentRow[]) => {
-    let ok = 0;
-    for (const row of rows) {
-      try { await addProposalPhoto(proposal.id, row.id); ok++; } catch { /* keep going */ }
-    }
-    if (ok < rows.length) toast(`Added ${ok} of ${rows.length} photos`, { type: ok ? 'warning' : 'error' });
-    if (ok > 0) onChanged();
-  };
+  // One affordance for both "upload a new shot" and "reuse one already filed"
+  // — and the same wiring for a photo dropped onto the card. A per-row failure
+  // (a stale fileId, or the proposal locking mid-pick) is summarised rather
+  // than swallowed: a pick or a drop can carry many files at once.
+  const photoUpload = { kind: 'proposal-photo', projectId, sourceType: 'proposal', sourceId: proposal.id };
+  const { dragActive, dropProps, busy, attachRows } = useAttachFiles({
+    upload: photoUpload,
+    accept: 'image',
+    link: fileId => addProposalPhoto(proposal.id, fileId),
+    onDone: onChanged,
+    disabled: readOnly,
+    disabledMessage: 'This proposal was sent and is now locked',
+    noun: 'photos',
+  });
 
   const handleCaption = async (photo: ProposalPhoto, caption: string) => {
     try {
@@ -141,18 +124,27 @@ export const ProposalPhotosCard: React.FC<{
   };
 
   return (
-    <Card data-testid="proposal-photos">
+    <Card
+      data-testid="proposal-photos"
+      {...dropProps}
+      className={dragActive ? 'ring-2 ring-accent-500' : ''}
+    >
       <CardHeader
         title="Photos"
         actions={!readOnly && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-              <Camera size={14} />{uploading ? 'Uploading…' : 'Upload photos'}
-            </Button>
-            <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleUpload(e.target.files)} />
-            <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>
-              <FolderOpen size={14} />Choose existing
-            </Button>
+            {busy && <span className="text-xs text-ink-faint">Uploading…</span>}
+            <AddFilesButton
+              label="Add photos"
+              accept="image"
+              size="sm"
+              defaultTab="upload"
+              upload={{ ...photoUpload, accept: 'image/*', capture: 'environment' }}
+              initialProjectIds={[projectId]}
+              excludeFileIds={proposal.photos.map(p => p.fileId)}
+              disabled={busy}
+              onPick={attachRows}
+            />
           </div>
         )}
       />
@@ -176,15 +168,6 @@ export const ProposalPhotosCard: React.FC<{
           </div>
         )}
       </CardBody>
-      <FilePickerModal
-        open={picking}
-        onClose={() => setPicking(false)}
-        onPick={handlePick}
-        accept="image"
-        excludeFileIds={proposal.photos.map(p => p.fileId)}
-        initialProjectIds={[projectId]}
-        title="Choose photos"
-      />
     </Card>
   );
 };
