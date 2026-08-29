@@ -1,6 +1,6 @@
 // src/pages/project/billing/AiaPayApplications.tsx
 import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Eye, Plus, Trash2 } from 'lucide-react';
 import { AiaPayAppListItem, getPayApps, createPayApp, deletePayApp } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
@@ -13,6 +13,9 @@ import type { PillTone } from '../../../components/ui';
 import { AiaPayAppEditor } from './AiaPayAppEditor';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
+import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -37,6 +40,17 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
     getPayApps(projectId).then(setApps).catch(() => setApps([]));
   };
   useLiveQuery(reload, { types: ['aiaPayApp', 'payment'], projectId });
+
+  // One batched by-source lookup for the whole list: each row shows whether its
+  // G702/G703 workbook exists and still matches the application.
+  const rows = apps ?? [];
+  const docs = useGeneratedDocuments({
+    sourceType: 'payapp',
+    kind: 'payapp-export',
+    sourceIds: rows.map(a => a.id),
+    updatedAtById: Object.fromEntries(rows.map(a => [a.id, a.updatedAt])),
+  });
+  const viewer = useDocumentViewer();
 
   const startCreate = () => {
     setNPeriodTo('');
@@ -100,6 +114,18 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
                     <TD className="text-right tabular-nums text-ink-soft">{app.balanceCents == null ? '—' : formatMoney(app.balanceCents)}</TD>
                     <TD onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
+                        {docs.byId[app.id]?.file && (
+                          <>
+                            <DocumentStatusChip file={docs.byId[app.id].file} upToDate={docs.byId[app.id].upToDate} format="xlsx" size="sm" />
+                            <button
+                              onClick={() => viewer.open(docs.byId[app.id].file!, 'payapp-export', projectId)}
+                              title="Open Excel" aria-label="Open Excel"
+                              className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-ink"
+                            >
+                              <Eye size={14} />
+                            </button>
+                          </>
+                        )}
                         <Button size="sm" variant="ghost" onClick={() => setOpenId(app.id)}>Open</Button>
                         <button onClick={() => removeApp(app)} title="Delete" className="rounded-md p-1 text-ink-faint hover:bg-hover hover:text-red-600"><Trash2 size={14} /></button>
                       </div>
@@ -131,6 +157,8 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
           onSaved={reload}
         />
       )}
+
+      {viewer.modal}
     </Card>
   );
 };

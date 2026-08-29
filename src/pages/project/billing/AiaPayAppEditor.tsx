@@ -2,9 +2,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AiaPayAppDetail, AiaPayAppLine, AiaG703Row, AiaG702,
-  getPayApp, savePayAppLines, setPayApp, persistGeneratedDocument,
+  getPayApp, savePayAppLines, setPayApp,
 } from '../../../utils/store';
-import { exportAiaXlsx } from './aiaExcel';
+import { buildAiaXlsxBlob } from './aiaExcel';
 import { resolveAiaExportEnv } from './aiaExportShared';
 import { formatMoney, dollarsToCents, centsToDollars } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
@@ -15,6 +15,7 @@ import {
 import type { PillTone } from '../../../components/ui';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
+import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
   draft:     { label: 'Draft',     tone: 'slate' },
@@ -31,6 +32,20 @@ const fmtPts = (n: number): string => String(+n.toFixed(4));
 // Local editable per-line state, keyed by sovLineId.
 interface EditLine { percentComplete: string; storedMaterials: string }
 
+// handleSave parses every numeric box before it persists it (a blank or
+// unparseable box saves as 0), so the dirty check has to compare the same
+// parsed values. A raw string compare made "5" → "5.0" — or a percentage
+// retyped to the identical number — look like an unsaved edit, which made the
+// document bar save before every generate.
+const numOrZero = (v: string): number => {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const normalizeLines = (edits: Record<string, EditLine>): string =>
+  JSON.stringify(Object.keys(edits).sort().map(k => [
+    k, numOrZero(edits[k].percentComplete), dollarsToCents(edits[k].storedMaterials),
+  ]));
+
 export const AiaPayAppEditor: React.FC<{
   payAppId: string;
   onClose: () => void;
@@ -40,7 +55,6 @@ export const AiaPayAppEditor: React.FC<{
 
   const [data, setData] = useState<{ app: AiaPayAppDetail; lines: AiaPayAppLine[]; g703: AiaG703Row[]; g702: AiaG702 } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [exporting, setExporting] = useState(false);
 
   // Editable per-line inputs, seeded once per load (re-seeded on reload).
   const [edits, setEdits] = useState<Record<string, EditLine>>({});
@@ -94,12 +108,19 @@ export const AiaPayAppEditor: React.FC<{
 
   useEffect(() => { load(); }, [load]);
 
+  // Mirrors handleSave's own rule for the release box: an unparseable value
+  // is skipped there rather than saved, so it isn't an edit here either —
+  // otherwise a typo would leave the editor permanently "unsaved".
+  const releaseNum = releasedRetainagePoints.trim() === '' ? 0 : parseFloat(releasedRetainagePoints);
+  const releaseDirty =
+    Number.isFinite(releaseNum) && releaseNum !== numOrZero(pristineRef.current.releasedRetainagePoints);
+
   const dirty =
     periodTo !== pristineRef.current.periodTo ||
     applicationDate !== pristineRef.current.applicationDate ||
-    releasedRetainagePoints !== pristineRef.current.releasedRetainagePoints ||
+    releaseDirty ||
     status !== pristineRef.current.status ||
-    JSON.stringify(edits) !== JSON.stringify(pristineRef.current.edits);
+    normalizeLines(edits) !== normalizeLines(pristineRef.current.edits);
 
   const collab = useCollabEditing({
     type: 'aiaPayApp',
@@ -113,8 +134,10 @@ export const AiaPayAppEditor: React.FC<{
   const setEdit = (sovLineId: string, patch: Partial<EditLine>) =>
     setEdits(prev => ({ ...prev, [sovLineId]: { ...prev[sovLineId], ...patch } }));
 
+  // Throws rather than swallowing, so the document bar's save-first step can
+  // tell a refused save from a successful one and skip generating.
   const handleSave = async () => {
-    if (!data) return;
+    if (!data) throw new Error('Pay application not loaded');
     setSaving(true);
     try {
       // Persist app-level field changes first (date/retainage-release/status).
@@ -159,9 +182,15 @@ export const AiaPayAppEditor: React.FC<{
       toast(e instanceof Error && e.name === 'ConflictError'
         ? 'Pay application changed elsewhere — reopen it'
         : 'Save failed', { type: 'error' });
+      throw e;
     } finally {
       setSaving(false);
     }
+  };
+
+  // The bar saves before it generates, so `false` here means "don't build".
+  const saveForDocument = async (): Promise<boolean> => {
+    try { await handleSave(); return true; } catch { return false; }
   };
 
   const handleFinalize = async () => {
@@ -176,42 +205,35 @@ export const AiaPayAppEditor: React.FC<{
     }
   };
 
-  // AIA G702/G703 export. If the admin has configured an app-wide template
-  // (settings.aiaTemplateFileId + aiaTemplateMapping), that template's cells
-  // are filled; otherwise the built-in recreation is used. A template that's
-  // configured but fails to load falls back to the recreation with a toast.
-  const handleExport = async () => {
-    if (!data) return;
-    setExporting(true);
-    try {
-      const projectId = data.app.projectId;
-      const env = await resolveAiaExportEnv(projectId);
-      if (env.templateLoadFailed) {
-        toast('AIA template failed to load — exporting standard G702/G703 instead', { type: 'error' });
-      }
-      await exportAiaXlsx({
-        projectName: env.project?.name ?? 'Project',
-        contractor: env.project?.contractor ?? undefined,
-        company: env.company,
-        aiaSettings: env.aiaSettings,
-        app: data.app,
-        sovLines: env.sovLines,
-        g702: data.g702,
-        g703: data.g703,
-      }, env.template, undefined, async (blob) => {
-        // Keep a copy in Documents, but never let that failure block the export.
-        try {
-          await persistGeneratedDocument(blob, {
-            projectId, kind: 'payapp-export', name: `Pay App #${data.app.number} — G702.xlsx`,
-            sourceType: 'payapp', sourceId: data.app.id,
-          });
-        } catch { toast('Exported, but saving to Documents failed', { type: 'warning' }); }
-      });
-    } catch {
-      toast('Excel export failed', { type: 'error' });
-    } finally {
-      setExporting(false);
+  // The G702/G703 workbook the document bar stores as this pay app's living
+  // Excel document. Built from a FRESH read of the saved pay app — the bar
+  // commits first, and re-reading here is what keeps the stored workbook from
+  // disagreeing with the record it claims to represent (the server recomputes
+  // D/E/G/retainage on save, so this component's loaded copy is stale the
+  // moment anything changes). A failed re-read throws on purpose: the bar
+  // reports it and keeps the existing document rather than quietly storing
+  // pre-save numbers and marking them current.
+  //
+  // If the admin has configured an app-wide template (settings.aiaTemplateFileId
+  // + aiaTemplateMapping) its cells are filled; otherwise the built-in
+  // recreation is used, including when a configured template fails to load.
+  const buildPayAppXlsx = async (): Promise<Blob> => {
+    const saved = await getPayApp(payAppId);
+    if (!saved?.app) throw new Error('Pay application not found');
+    const env = await resolveAiaExportEnv(saved.app.projectId);
+    if (env.templateLoadFailed) {
+      toast('AIA template failed to load — exporting the standard G702/G703 instead', { type: 'warning' });
     }
+    return buildAiaXlsxBlob({
+      projectName: env.project?.name ?? 'Project',
+      contractor: env.project?.contractor ?? undefined,
+      company: env.company,
+      aiaSettings: env.aiaSettings,
+      app: saved.app,
+      sovLines: env.sovLines,
+      g702: saved.g702,
+      g703: saved.g703,
+    }, env.template);
   };
 
   // Light client-side preview of Total to Date (G = scheduled*% /100 + stored).
@@ -248,12 +270,30 @@ export const AiaPayAppEditor: React.FC<{
       title={data ? `Application for payment #${data.app.number}` : 'Application for payment'}
       width="full"
       footer={<>
+        {/* Mounted only once the pay app has loaded: the bar needs the record's
+            project, number and updatedAt, and persisting against a half-known
+            record would file the workbook under the wrong project. */}
+        {data && (
+          <div className="mr-auto">
+            <DocumentActionsBar
+              source={{ sourceType: 'payapp', sourceId: data.app.id }}
+              kind="payapp-export"
+              format="xlsx"
+              projectId={data.app.projectId}
+              fileName={`Pay App #${data.app.number} — G702.xlsx`}
+              build={buildPayAppXlsx}
+              dirty={dirty}
+              save={saveForDocument}
+              updatedAt={data.app.updatedAt}
+              size="sm"
+            />
+          </div>
+        )}
         <Button variant="secondary" onClick={onClose}>Close</Button>
-        <Button variant="secondary" onClick={handleExport} disabled={exporting}>{exporting ? 'Exporting…' : 'Export AIA Excel'}</Button>
         {!isFinalized && (
           <Button variant="secondary" onClick={handleFinalize} disabled={saving}>Finalize</Button>
         )}
-        <Button onClick={handleSave} disabled={saving || isFinalized}>{saving ? 'Saving…' : 'Save'}</Button>
+        <Button onClick={() => { void handleSave().catch(() => {}); }} disabled={saving || isFinalized}>{saving ? 'Saving…' : 'Save'}</Button>
       </>}
     >
       <EditPresenceBanner state={collab} />

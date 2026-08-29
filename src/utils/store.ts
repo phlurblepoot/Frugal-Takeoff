@@ -1504,7 +1504,10 @@ export interface AiaPayApp {
   periodTo: string | null; applicationDate: string | null;
   retainagePercent: number; storedRetainagePercent: number;
   releasedRetainagePoints: number;
-  status: string; version: number; createdAt: number;
+  // updatedAt drives the document bar's "Excel out of date" chip; migration 30
+  // added the column (backfilled from createdAt) and every pay-app read is a
+  // SELECT *, so it comes back on both the list and detail payloads.
+  status: string; version: number; createdAt: number; updatedAt: number;
 }
 // getPayApps list row: adds Amount = G702 L8 (live for drafts, as-billed for
 // finalized apps); Balance = Amount − payments, null for drafts (not yet
