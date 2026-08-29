@@ -1750,8 +1750,10 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         text: body ?? message ?? 'Please find the attached invoice.',
         attachments: buildSendAttachments(db, { fileId, attachmentName: `${inv.number || 'invoice'}.pdf` }, attachmentFileIds),
       });
-      // mark sent (best effort) + log
-      try { db.prepare("UPDATE invoices SET status = 'sent', version = version + 1 WHERE id = ?").run(req.params.id); } catch { /* ignore */ }
+      // Mark sent (best effort) — but never demote an already-paid invoice back to sent.
+      try {
+        if (inv.status !== 'paid') setInvoiceStatus(db, req.params.id, 'sent');
+      } catch { /* ignore */ }
       logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
       const fresh = getInvoice(db, req.params.id);
       deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: inv.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });

@@ -100,10 +100,11 @@ export function addPhoto(db: Database.Database, rfiId: string, fileId: string): 
   const exists = db.prepare('SELECT id FROM rfi_photos WHERE rfiId = ? AND fileId = ?').get(rfiId, fileId);
   if (exists) return; // idempotent
   const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM rfi_photos WHERE rfiId = ?').get(rfiId) as any).m;
+  const now = Date.now();
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO rfi_photos (id, rfiId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-      .run(crypto.randomUUID(), rfiId, fileId, max + 1, Date.now());
-    db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(Date.now(), rfiId);
+      .run(crypto.randomUUID(), rfiId, fileId, max + 1, now);
+    db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(now, rfiId);
   });
   tx();
 }

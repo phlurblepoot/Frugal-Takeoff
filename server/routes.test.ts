@@ -1304,6 +1304,8 @@ describe('email send routes', () => {
 
   it('invoice send: accepts cc/bcc/subject/body + multiple attachments; forwards them; marks sent', async () => {
     const id = await makeInvoice();
+    const before = (await request(app).get(`/api/invoices/${id}`)).body.updatedAt;
+    await new Promise(r => setTimeout(r, 2));
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({
       to: 'client@example.com',
       cc: ' cc@example.com ',
@@ -1328,7 +1330,9 @@ describe('email send routes', () => {
     expect(m.attachments[1].contentType).toBe('application/pdf');
     expect(m.attachments[2].contentType).toBe('image/jpeg');
     // status side-effect fired
-    expect((await request(app).get(`/api/invoices/${id}`)).body.status).toBe('sent');
+    const after = (await request(app).get(`/api/invoices/${id}`)).body;
+    expect(after.status).toBe('sent');
+    expect(after.updatedAt).toBeGreaterThan(before);
   });
 
   it('invoice send: omits cc/bcc when blank; falls back to default subject/body; single attachment', async () => {

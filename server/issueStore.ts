@@ -87,10 +87,11 @@ export function addPhoto(db: Database.Database, issueId: string, fileId: string)
   const exists = db.prepare('SELECT id FROM issue_photos WHERE issueId = ? AND fileId = ?').get(issueId, fileId);
   if (exists) return; // idempotent
   const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM issue_photos WHERE issueId = ?').get(issueId) as any).m;
+  const now = Date.now();
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO issue_photos (id, issueId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-      .run(crypto.randomUUID(), issueId, fileId, max + 1, Date.now());
-    db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(Date.now(), issueId);
+      .run(crypto.randomUUID(), issueId, fileId, max + 1, now);
+    db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(now, issueId);
   });
   tx();
 }
