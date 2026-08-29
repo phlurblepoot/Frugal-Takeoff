@@ -3,7 +3,13 @@
 // they come in, and which page each one STARTS on. Placement is asserted
 // through the generator's `sections` map (1-based page index per section) plus
 // the final page count; `textByPage` below adds the drawn strings for the
-// assertions (section bands) that a page index alone can't express.
+// assertions (section dividers/bands, and ordering WITHIN a page) that a page
+// index alone can't express.
+//
+// Two rules drive nearly every number here:
+//   • the grand total leads on the cover, ahead of the itemised pricing;
+//   • sections flow on from wherever the previous one ended, separated by an
+//     inline divider — a page break only happens when the content won't fit.
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { generateProposalPdf, proposalFileName } from './proposalGenerator';
@@ -52,10 +58,19 @@ const textByPage = (bytes: ArrayBuffer): Map<number, string[]> => {
   return byPage;
 };
 
-const BAND = /^(Pricing|Inclusions & Exclusions|Notes|Alternates|Cost Detail|Terms & Conditions|Photos)( \(cont\.\))?$/;
+const BAND = /^(Pricing|Payment Schedule|Inclusions & Exclusions|Notes|Alternates|Cost Detail|Terms & Conditions|Photos)( \(cont\.\))?$/;
 /** The section band printed at the top of a given 1-based page, if any. */
 const bandOnPage = (bytes: ArrayBuffer, page: number): string | undefined =>
   textByPage(bytes).get(page)?.find(t => BAND.test(t));
+
+/** Inline dividers print the section title in upper case, so they are trivially
+ *  distinguishable from the title-case band a page break draws. */
+const dividerOnPage = (bytes: ArrayBuffer, page: number, title: string): boolean =>
+  !!textByPage(bytes).get(page)?.includes(title.toUpperCase());
+
+/** Index of a drawn string within a page, for asserting order on one sheet. */
+const indexOnPage = (bytes: ArrayBuffer, page: number, text: string): number =>
+  textByPage(bytes).get(page)?.indexOf(text) ?? -1;
 
 const pages = async (bytes: ArrayBuffer) => (await PDFDocument.load(bytes)).getPageCount();
 const makePdf = async (n: number) => {
@@ -81,20 +96,45 @@ describe('proposal layout', () => {
     expect(sections.grandTotal).toBe(1);
   });
 
+  it('leads the cover with the grand total, ahead of the itemised pricing', async () => {
+    const { pdfBytes, sections } = await generateProposalPdf(input(base({
+      validUntil: '2026-12-31',
+      lines: [
+        line({ id: 'a', kind: 'takeoff', takeoffId: 't1', description: 'Stucco', measurementSummary: '100.00 sq ft', amountCents: 40000 }),
+        line({ id: 'b', description: 'Mobilization', amountCents: 25000 }),
+      ],
+    })));
+    expect(sections.grandTotal).toBe(1);
+
+    // Cover order: prepared-on line → total box → validity → pricing tables.
+    const at = (t: string) => indexOnPage(pdfBytes, 1, t);
+    expect(at('TOTAL PROPOSAL VALUE')).toBeGreaterThan(-1);
+    expect(at('TOTAL PROPOSAL VALUE')).toBeGreaterThan(at('Prepared ' + new Date().toLocaleDateString()));
+    expect(at('$650.00')).toBe(at('TOTAL PROPOSAL VALUE') + 1);
+    expect(at('This proposal is valid until 12/31/2026.')).toBeGreaterThan(at('$650.00'));
+    expect(at('TAKEOFF PRICING')).toBeGreaterThan(at('This proposal is valid until 12/31/2026.'));
+    expect(at('ADDITIONAL PRICING')).toBeGreaterThan(at('TAKEOFF PRICING'));
+    // …and the pricing itself is introduced by its own inline divider.
+    expect(at('PRICING')).toBeGreaterThan(at('$650.00'));
+    expect(at('PRICING')).toBeLessThan(at('TAKEOFF PRICING'));
+  });
+
   it('omits the grand total box when showGrandTotal is false', async () => {
     const { sections } = await generateProposalPdf(input(base({ lines: [line({})], showGrandTotal: false })));
     expect(sections.grandTotal).toBeUndefined();
   });
 
-  it('alternates add a separate page; attachments append their pages untouched', async () => {
+  it('alternates flow on under a divider, not onto a page of their own', async () => {
     const p = base({ lines: [line({ id: 'a' }), line({ id: 'b', isAlternate: true })] });
     const plain = await generateProposalPdf(input(p));
-    expect(await pages(plain.pdfBytes)).toBe(2);
-    expect(plain.sections.alternates).toBe(2);
+    expect(await pages(plain.pdfBytes)).toBe(1);
+    expect(plain.sections.alternates).toBe(1);
+    expect(dividerOnPage(plain.pdfBytes, 1, 'Alternates')).toBe(true);
+    expect(bandOnPage(plain.pdfBytes, 1)).toBeUndefined(); // no forced break, so no band
 
     const withAtt = await generateProposalPdf(input(p, { attachments: [await makePdf(3), await makePdf(2)] }));
-    expect(await pages(withAtt.pdfBytes)).toBe(7);
-    expect(withAtt.sections.attachmentsStart).toBe(3);
+    expect(await pages(withAtt.pdfBytes)).toBe(6);
+    expect(withAtt.sections.attachmentsStart).toBe(2);
   });
 
   it('skips an unreadable attachment instead of failing the whole render', async () => {
@@ -114,51 +154,77 @@ describe('proposal layout', () => {
     expect(sections.notes).toBe(1);
   });
 
-  it('a section pushed onto a fresh page by its opening ensure() is banded plainly, not "(cont.)"', async () => {
-    // 60 price lines fill pages 1-2 and spill the total onto page 3, where the
-    // inclusions still fit; the notes then open with a page break onto page 5.
-    // That page is where Notes STARTS — it must not claim to be a continuation.
-    const p = base({
+  it('a section pushed onto a fresh page by its opening divider is banded plainly, not "(cont.)"', async () => {
+    // 60 price lines and 30 inclusions run well past one sheet, so several
+    // sections do get pushed over. Wherever a section STARTS it must carry its
+    // plain title band — only genuine continuations may say "(cont.)".
+    const long = (inclusions: number) => base({
       lines: Array.from({ length: 60 }, (_, i) => line({ id: `l${i}`, description: `Item number ${i}` })),
-      inclusions: Array.from({ length: 30 }, (_, i) => `Inclusion ${i}`),
+      inclusions: Array.from({ length: inclusions }, (_, i) => `Inclusion ${i}`),
       exclusions: ['Paint'],
       coverNotes: 'Hello there.',
     });
-    const { pdfBytes, sections } = await generateProposalPdf(input(p));
 
-    expect(bandOnPage(pdfBytes, sections.notes)).toBe('Notes');
-    // Pricing really did continue from the cover, and the inclusions from the
-    // page the pricing ended on — those bands stay marked as continuations.
-    expect(bandOnPage(pdfBytes, 2)).toBe('Pricing (cont.)');
-    expect(bandOnPage(pdfBytes, sections.inclusions + 1)).toBe('Inclusions & Exclusions (cont.)');
+    // 28 inclusions leave no room for the Notes divider, so Notes opens on a
+    // fresh page — that page is where it STARTS and must be banded plainly.
+    const a = await generateProposalPdf(input(long(28)));
+    expect(a.sections.notes).toBeGreaterThan(a.sections.inclusions);
+    expect(bandOnPage(a.pdfBytes, a.sections.notes)).toBe('Notes');
+    // Pricing really did continue from the cover — that band stays a "(cont.)".
+    expect(bandOnPage(a.pdfBytes, 2)).toBe('Pricing (cont.)');
+
+    // 30 inclusions overrun their own section instead, so the next page is a
+    // genuine continuation of Inclusions.
+    const b = await generateProposalPdf(input(long(30)));
+    expect(bandOnPage(b.pdfBytes, b.sections.inclusions + 1)).toBe('Inclusions & Exclusions (cont.)');
   });
 
   it('inclusions/exclusions sit between the pricing and the notes', async () => {
     const p = base({ lines: [line({})], inclusions: ['Stucco', 'Lath'], exclusions: ['Paint'], coverNotes: 'Hello.' });
     const { sections } = await generateProposalPdf(input(p));
-    expect(sections.inclusions).toBe(1);
-    expect(sections.notes).toBe(1);
+    expect(sections.inclusions).toBe(1); // flows on from the pricing, same sheet
     expect(sections.inclusions).toBeLessThanOrEqual(sections.notes);
   });
 
-  it('photos render 2-up with captions; terms add a page', async () => {
+  it('terms share the cover page; only the photo grid needs a second sheet', async () => {
     const p = base({ lines: [line({})], terms: 'Pay on time.' });
     const { pdfBytes, sections } = await generateProposalPdf(input(p, {
       photos: [{ dataUrl: JPEG, caption: 'North' }, { dataUrl: JPEG, caption: null }, { dataUrl: JPEG, caption: 'x' }],
     }));
-    expect(await pages(pdfBytes)).toBe(3); // cover/pricing, terms, photos
-    expect(sections.terms).toBe(2);
-    expect(sections.photos).toBe(3);
+    // Cover + pricing + terms all fit on one sheet; a photo row does not.
+    expect(await pages(pdfBytes)).toBe(2);
+    expect(sections.terms).toBe(1);
+    expect(dividerOnPage(pdfBytes, 1, 'Terms & Conditions')).toBe(true);
+    expect(sections.photos).toBe(2);
+    expect(bandOnPage(pdfBytes, 2)).toBe('Photos');
   });
 
-  it('a signature-only proposal still gets the terms page', async () => {
+  it('alternates, terms and a small photo set stay within two sheets', async () => {
+    const p = base({
+      lines: [line({ id: 'a' }), line({ id: 'b', isAlternate: true })],
+      terms: 'Net 30.',
+    });
+    const { pdfBytes, sections } = await generateProposalPdf(input(p, {
+      photos: [{ dataUrl: JPEG, caption: 'North' }, { dataUrl: JPEG, caption: 'South' }],
+    }));
+    // Four sections that each used to claim a sheet now occupy two.
+    expect(await pages(pdfBytes)).toBeLessThanOrEqual(2);
+    // Alternates flows on under a divider on the pricing's own sheet…
+    expect(sections.alternates).toBe(1);
+    expect(dividerOnPage(pdfBytes, 1, 'Alternates')).toBe(true);
+    // …and Photos shares the sheet Terms opens, again under a divider.
+    expect(sections.photos).toBe(sections.terms);
+    expect(dividerOnPage(pdfBytes, sections.photos, 'Photos')).toBe(true);
+  });
+
+  it('a signature-only proposal keeps the terms block on the cover page', async () => {
     const p = base({ lines: [line({})], terms: '', includeSignature: true });
     const { pdfBytes, sections } = await generateProposalPdf(input(p));
-    expect(await pages(pdfBytes)).toBe(2);
-    expect(sections.terms).toBe(2);
+    expect(await pages(pdfBytes)).toBe(1);
+    expect(sections.terms).toBe(1);
   });
 
-  it('cost detail is its own page and only covers takeoff lines', async () => {
+  it('cost detail flows inline and only covers takeoff lines', async () => {
     const takeoff = {
       id: 't1', name: 'Stucco', color: '#000', type: 'area', unit: 'sq ft',
       costPerUnit: 4, totalRealValue: 100, pageBreakdown: [],
@@ -168,7 +234,8 @@ describe('proposal layout', () => {
       lines: [line({ id: 'a', kind: 'takeoff', takeoffId: 't1', description: 'Stucco', measurementSummary: '100.00 sq ft' })],
     });
     const withDetail = await generateProposalPdf(input(p, { takeoffTotals: [takeoff] }));
-    expect(withDetail.sections.costDetail).toBe(2);
+    expect(withDetail.sections.costDetail).toBe(1);
+    expect(dividerOnPage(withDetail.pdfBytes, 1, 'Cost Detail')).toBe(true);
 
     // Manual-only proposals have nothing to detail — no page.
     const manualOnly = await generateProposalPdf(input(base({ includeCostDetail: true, lines: [line({})] })));
@@ -186,7 +253,24 @@ describe('proposal layout', () => {
     const { pdfBytes, sections } = await generateProposalPdf(input(p));
     expect(await pages(pdfBytes)).toBe(1);
     expect(sections.paymentSchedule).toBe(1);
+    // The total is on the cover above; the schedule stays with the pricing that
+    // breaks it down, under its own divider.
+    expect(indexOnPage(pdfBytes, 1, 'PAYMENT SCHEDULE'))
+      .toBeGreaterThan(indexOnPage(pdfBytes, 1, 'TOTAL PROPOSAL VALUE'));
+    expect(indexOnPage(pdfBytes, 1, 'PAYMENT SCHEDULE'))
+      .toBeGreaterThan(indexOnPage(pdfBytes, 1, 'ADDITIONAL PRICING'));
   });
+  it('a section too long for one sheet still breaks with a "(cont.)" band', async () => {
+    // Flowing inline is a default, not a promise to cram: content that genuinely
+    // overruns still paginates, and the overflow pages say so.
+    const terms = Array.from({ length: 120 }, (_, i) => `Clause ${i}: the contractor shall do the thing.`).join('\n');
+    const p = base({ lines: [line({})], terms });
+    const { pdfBytes, sections } = await generateProposalPdf(input(p));
+    expect(await pages(pdfBytes)).toBeGreaterThan(2);
+    expect(sections.terms).toBe(1);                     // starts inline on the cover
+    expect(bandOnPage(pdfBytes, 2)).toBe('Terms & Conditions (cont.)');
+  });
+
   it('renders every section, in spec order, on non-decreasing pages', async () => {
     const takeoff = {
       id: 't1', name: 'Stucco', color: '#000', type: 'area', unit: 'sq ft',

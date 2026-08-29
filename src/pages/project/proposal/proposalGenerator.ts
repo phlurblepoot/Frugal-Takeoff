@@ -598,6 +598,9 @@ export const proposalFileName = (project: Project, when: Date = new Date()): str
   return `Proposal – ${project.name} – ${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
 };
 
+/** Vertical space one inline section divider consumes (pad + rule + title + pad). */
+const DIVIDER_H = 43;
+
 export async function generateProposalPdf(
   input: ProposalRenderInput,
   onProgress?: (msg: string) => void,
@@ -654,26 +657,22 @@ export async function generateProposalPdf(
   // the break scrolled off (column heads, table rules).
   //
   // Banding: a section's FIRST page carries its plain title and only genuine
-  // continuations get "(cont.)". `sectionOpen` is what tells the two apart — a
-  // section that opens with `ensure()` (Inclusions, Notes) may break before it
-  // has drawn anything, and that fresh page is where the section STARTS.
+  // continuations get "(cont.)". `sectionOpen` is what tells the two apart —
+  // every section opens with `sectionDivider()`, whose `ensure()` may break
+  // before anything has been drawn, and that fresh page is where the section
+  // STARTS, so it gets the plain band.
   let y = 0;
   let bandTitle = '';
   let sectionOpen = false;
   /** Begin a section that flows on from the current page. */
-  const startSection = (title: string, alreadyOnPage = false) => {
+  const startSection = (title: string) => {
     bandTitle = title;
-    sectionOpen = alreadyOnPage;
+    sectionOpen = false;
   };
   const newPage = (title: string) => {
     pdf.addPage();
     drawFrame();
     y = drawSectionBand(title);
-  };
-  /** Begin a section on a page of its own. */
-  const openSection = (title: string) => {
-    startSection(title, true);
-    newPage(title);
   };
   const ensure = (h: number, onBreak?: () => void) => {
     if (y + h > pageBottom - 12) {
@@ -683,6 +682,33 @@ export async function generateProposalPdf(
     // Whatever the caller reserved is drawn right after this returns, so the
     // section now owns content on this page.
     sectionOpen = true;
+  };
+
+  /**
+   * Opens a section INLINE, on the page the previous one ended on: a full-width
+   * brand rule with the section title in brand small-caps under it, generously
+   * padded so it reads as a hard separator without costing a whole sheet.
+   *
+   * `reserve` is the room the section needs before it is worth starting here
+   * (divider + a meaningful first chunk of content). When that doesn't fit, the
+   * `ensure` breaks to a fresh page — which already carries the section's plain
+   * title band — and the inline divider is skipped so the two never double up.
+   */
+  const sectionDivider = (title: string, reserve = DIVIDER_H + 24) => {
+    startSection(title);
+    const before = pageNo();
+    ensure(reserve);
+    if (pageNo() !== before) return; // the page band introduces the section
+    y += 14; // padding above
+    pdf.setDrawColor(hR, hG, hB);
+    pdf.setLineWidth(0.75);
+    pdf.line(M, y, W - M, y);
+    y += 15;
+    pdf.setFontSize(11);
+    pdf.setFont(font, 'bold');
+    pdf.setTextColor(hR, hG, hB);
+    pdf.text(title.toUpperCase(), M, y);
+    y += 14; // padding below
   };
 
   // ── Cover ──────────────────────────────────────────────────────────────────
@@ -718,10 +744,49 @@ export async function generateProposalPdf(
   pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, coverY, { align: 'center' });
   y = coverY + 34;
 
+  // ── Cover: the number the client actually opens the document for ───────────
+  // The total leads, immediately under the cover block and ahead of the itemised
+  // pricing, so page 1 answers "how much?" before it explains "for what?".
+  // The cover block has fixed geometry and always leaves room, so this draws
+  // straight onto page 1 without a break check.
+  if (proposal.showGrandTotal) {
+    sections.grandTotal = pageNo();
+    const boxTop = y;
+    pdf.setFillColor(241, 245, 249);
+    pdf.setDrawColor(accentR, accentG, accentB);
+    pdf.setLineWidth(0.75);
+    pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
+    pdf.setFillColor(hR, hG, hB);
+    pdf.rect(W / 2 - 115, boxTop, 4, 84, 'F');
+    pdf.setFontSize(9);
+    pdf.setFont(font, 'bold');
+    pdf.setTextColor(100, 116, 139);
+    pdf.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
+    pdf.setFontSize(28);
+    pdf.setFont(font, 'bold');
+    pdf.setTextColor(15, 23, 42);
+    pdf.text(money(totals.totalCents), W / 2, boxTop + 60, { align: 'center' });
+    y = boxTop + 100;
+  }
+
+  // Printed whether or not the total box is shown — an expiry the client can't
+  // see is worthless.
+  if (proposal.validUntil) {
+    pdf.setFontSize(9);
+    pdf.setFont(font, 'italic');
+    pdf.setTextColor(100, 116, 139);
+    pdf.text(
+      `This proposal is valid until ${new Date(proposal.validUntil + 'T00:00:00').toLocaleDateString()}.`,
+      W / 2, y, { align: 'center' },
+    );
+    y += 20;
+  }
+
   // ── Pricing ────────────────────────────────────────────────────────────────
-  // `alreadyOnPage`: the cover IS this section's first page, so the next page
-  // of a long price list is a genuine continuation and reads "Pricing (cont.)".
-  startSection('Pricing', true);
+  // Every section from here down flows on from the current cursor and is
+  // introduced by an inline divider; nothing claims a page of its own unless
+  // the content genuinely doesn't fit.
+  sectionDivider('Pricing');
 
   /** One priced table (heading + rows + subtotal). `withSummary` prints each
    *  takeoff line's measurement totals under its description. */
@@ -774,56 +839,13 @@ export async function generateProposalPdf(
   drawLineTable('Takeoff pricing', totals.takeoffLines, true);
   drawLineTable('Additional pricing', totals.manualLines, false);
 
-  if (proposal.showGrandTotal) {
-    ensure(110);
-    sections.grandTotal = pageNo();
-    const boxTop = y;
-    pdf.setFillColor(241, 245, 249);
-    pdf.setDrawColor(accentR, accentG, accentB);
-    pdf.setLineWidth(0.75);
-    pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(W / 2 - 115, boxTop, 4, 84, 'F');
-    pdf.setFontSize(9);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(100, 116, 139);
-    pdf.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
-    pdf.setFontSize(28);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(15, 23, 42);
-    pdf.text(money(totals.totalCents), W / 2, boxTop + 60, { align: 'center' });
-    y = boxTop + 100;
-  }
-
-  // Printed whether or not the total box is shown — an expiry the client can't
-  // see is worthless.
-  if (proposal.validUntil) {
-    ensure(20);
-    pdf.setFontSize(9);
-    pdf.setFont(font, 'italic');
-    pdf.setTextColor(100, 116, 139);
-    pdf.text(
-      `This proposal is valid until ${new Date(proposal.validUntil + 'T00:00:00').toLocaleDateString()}.`,
-      W / 2, y, { align: 'center' },
-    );
-    y += 20;
-  }
-
+  // Stays with the pricing — it prices out the total the cover already stated.
   if (proposal.paymentSchedule?.length) {
     const schedule = proposal.paymentSchedule;
-    ensure(24 + schedule.length * 16);
+    sectionDivider('Payment Schedule', DIVIDER_H + 32);
     sections.paymentSchedule = pageNo();
-    const drawScheduleHead = () => {
-      styleHeading();
-      pdf.text('PAYMENT SCHEDULE', M, y);
-      pdf.setDrawColor(accentR, accentG, accentB);
-      pdf.setLineWidth(0.5);
-      pdf.line(M, y + 5, W - M, y + 5);
-      y += 20;
-    };
-    drawScheduleHead();
     for (const row of schedule) {
-      ensure(16, drawScheduleHead);
+      ensure(16);
       styleBody();
       const label = row.percent != null ? `${row.description} (${row.percent}%)` : row.description;
       pdf.text(label, M, y);
@@ -837,7 +859,6 @@ export async function generateProposalPdf(
 
   // ── Inclusions / Exclusions ────────────────────────────────────────────────
   if (proposal.inclusions.length || proposal.exclusions.length) {
-    startSection('Inclusions & Exclusions');
     const colW = (W - 100) / 2;
     const colX = [M, M + colW + 20];
     const drawColumnHeads = () => {
@@ -850,7 +871,7 @@ export async function generateProposalPdf(
       pdf.line(colX[1], y + 5, colX[1] + colW, y + 5);
       y += 20;
     };
-    ensure(60);
+    sectionDivider('Inclusions & Exclusions', DIVIDER_H + 40);
     sections.inclusions = pageNo();
     drawColumnHeads();
 
@@ -874,18 +895,8 @@ export async function generateProposalPdf(
 
   // ── Notes (flowing) ────────────────────────────────────────────────────────
   if (proposal.coverNotes?.trim()) {
-    startSection('Notes');
-    const drawNotesHead = () => {
-      styleHeading();
-      pdf.text('NOTES', M, y);
-      pdf.setDrawColor(accentR, accentG, accentB);
-      pdf.setLineWidth(0.5);
-      pdf.line(M, y + 5, W - M, y + 5);
-      y += 20;
-    };
-    ensure(50);
+    sectionDivider('Notes', DIVIDER_H + 20);
     sections.notes = pageNo();
-    drawNotesHead();
     styleBody();
     for (const t of pdf.splitTextToSize(proposal.coverNotes.trim(), W - 80) as string[]) {
       ensure(16, styleBody);
@@ -900,7 +911,7 @@ export async function generateProposalPdf(
   // Their own page, same takeoff/manual split, no grand total — they are priced
   // separately and must never read as part of the contract sum.
   if (totals.altTakeoff.length || totals.altManual.length) {
-    openSection('Alternates');
+    sectionDivider('Alternates', DIVIDER_H + 60);
     sections.alternates = pageNo();
     pdf.setFontSize(9);
     pdf.setFont(font, 'italic');
@@ -919,7 +930,7 @@ export async function generateProposalPdf(
     const byId = new Map(takeoffTotals.map(t => [t.id, t]));
     const detailed = totals.takeoffLines.filter(l => l.takeoffId && byId.has(l.takeoffId));
     if (detailed.length) {
-      openSection('Cost Detail');
+      sectionDivider('Cost Detail', DIVIDER_H + 34);
       sections.costDetail = pageNo();
       for (const l of detailed) {
         const t = byId.get(l.takeoffId as string) as TakeoffTotals;
@@ -954,7 +965,7 @@ export async function generateProposalPdf(
 
   // ── Terms + signature ──────────────────────────────────────────────────────
   if (proposal.terms?.trim() || proposal.includeSignature) {
-    openSection('Terms & Conditions');
+    sectionDivider('Terms & Conditions', DIVIDER_H + 20);
     sections.terms = pageNo();
     if (proposal.terms?.trim()) {
       styleBody();
@@ -966,7 +977,9 @@ export async function generateProposalPdf(
       }
     }
     if (proposal.includeSignature) {
-      ensure(100);
+      // Just the block itself (rules + labels) — it is allowed to sit tight
+      // under the terms rather than demanding a whole page's worth of room.
+      ensure(70);
       // Sit the block low on the page when there's room, but never under the
       // letterhead footer banner.
       const sigY = Math.min(Math.max(y + 40, pageBottom - 110), pageBottom - 40);
@@ -992,9 +1005,11 @@ export async function generateProposalPdf(
   // ── Photos (2-up, captions under each) ─────────────────────────────────────
   if (photos.length) {
     onProgress?.('Adding photos…');
-    openSection('Photos');
-    sections.photos = pageNo();
     const gap = 12, cellW = (W - 2 * M - gap) / 2, cellH = 150, capH = 14;
+    // The grid is only worth starting here if a whole row of it fits under the
+    // divider; otherwise the divider's ensure() takes the photos to a fresh page.
+    sectionDivider('Photos', DIVIDER_H + cellH + capH);
+    sections.photos = pageNo();
     let col = 0;
     for (const ph of photos) {
       if (y + cellH + capH > pageBottom) { newPage('Photos (cont.)'); col = 0; }
