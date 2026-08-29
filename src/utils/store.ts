@@ -1329,7 +1329,9 @@ export const createProposal = async (projectId: string, input: { takeoffIds?: st
   const res = await proposalJson('POST', `/api/projects/${projectId}/proposals`, input); await handleResponse(res);
   return res.json() as Promise<{ id: string; number: number; version: number }>;
 };
-export const saveProposal = async (id: string, input: ProposalSaveInput): Promise<{ version: number }> => {
+// updatedAt comes back with version so the editor can adopt both — see the
+// server-side note on saveProposal in server/proposalStore.ts.
+export const saveProposal = async (id: string, input: ProposalSaveInput): Promise<{ version: number; updatedAt: number }> => {
   const res = await proposalJson('PUT', `/api/proposals/${id}`, input); await handleProposalResponse(res, id); return res.json();
 };
 export const deleteProposal = async (id: string): Promise<void> => {

@@ -33,7 +33,7 @@ const project = {
 
 const getProposal = vi.fn(async () => makeProposal());
 const getProject = vi.fn(async (_id: string) => project);
-const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4 }));
+const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4, updatedAt: 500 }));
 
 vi.mock('../../../utils/store', async () => {
   const actual = await vi.importActual<typeof import('../../../utils/store')>('../../../utils/store');
@@ -119,6 +119,30 @@ describe('useProposalDraft', () => {
     expect(result.current.dirty).toBe(false);
     // The bumped version is adopted, so the next save doesn't 409 against itself.
     expect(result.current.proposal?.version).toBe(4);
+    // …and so is updatedAt: the document bar compares a generated PDF's
+    // createdAt against it, so a stale one would call an old PDF current.
+    expect(result.current.proposal?.updatedAt).toBe(500);
+  });
+
+  it('a save requested while one is in flight waits on it instead of bouncing', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    const { result } = await mount();
+    act(() => result.current.patchDraft({ coverNotes: 'New notes' }));
+
+    // The Save button starts the write; the document bar's save-then-generate
+    // asks for one a moment later. Returning false for the second would make
+    // the bar report a failure that never happened.
+    let first: Promise<boolean> = Promise.resolve(false);
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => { first = result.current.save(); second = result.current.save(); });
+    await act(async () => { release(); });
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(saveProposal).toHaveBeenCalledTimes(1);
+    expect(result.current.dirty).toBe(false);
   });
 
   it('a stale save reloads the version that won', async () => {

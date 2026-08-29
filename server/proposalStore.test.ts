@@ -107,6 +107,19 @@ describe('save + lock', () => {
     void version;
   });
 
+  it('a save returns the new updatedAt with the new version', () => {
+    // The editor adopts both: updatedAt is what the document bar compares a
+    // generated PDF's createdAt against, so a client left on the pre-save
+    // timestamp would keep calling a now-stale PDF current.
+    const { id, version } = createProposal(db, 'p1', {});
+    const before = getProposal(db, id)!;
+    const r = saveProposal(db, id, { version, title: 'Priced' });
+    const after = getProposal(db, id)!;
+    expect(r.version).toBe(after.version);
+    expect(r.updatedAt).toBe(after.updatedAt);
+    expect(r.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
+  });
+
   it('attaching the generated document leaves updatedAt alone', () => {
     // The editor's "is this PDF still current?" check compares the file's
     // createdAt against the proposal's updatedAt. Bumping updatedAt here would

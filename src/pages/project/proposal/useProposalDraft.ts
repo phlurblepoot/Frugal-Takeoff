@@ -85,9 +85,11 @@ export interface ProposalDraftState {
   applyOptions: (patch: Partial<ProposalOptionsValue>) => void;
   /**
    * Writes the draft. Resolves true only when the server took it; false when
-   * the save did not happen at all — nothing editable (no draft / read-only),
-   * a save already in flight, or the server rejected it (lock/conflict, which
-   * also reloads).
+   * the save did not happen at all — nothing editable (no draft / read-only)
+   * or the server rejected it (lock/conflict, which also reloads). Called while
+   * a write is already in flight it returns THAT write's promise rather than
+   * bouncing, so the Save button and the document bar's save-then-generate
+   * never race into a spurious "save failed".
    */
   save: () => Promise<boolean>;
   reload: () => void;
@@ -261,11 +263,16 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
     } catch { /* non-fatal */ }
   };
 
-  const save = async (): Promise<boolean> => {
-    if (!draft || !proposal || readOnly || saving) return false;
+  // The Save button is no longer the only caller: the document bar saves first
+  // before it generates. A second call while a write is in flight must not
+  // report a failure that never happened, so both callers await the same write.
+  const inFlightRef = useRef<Promise<boolean> | null>(null);
+
+  const runSave = async (): Promise<boolean> => {
+    if (!draft || !proposal) return false;
     setSaving(true);
     try {
-      const { version } = await saveProposal(proposal.id, {
+      const { version, updatedAt } = await saveProposal(proposal.id, {
         // "Keep mine" adopts the foreign version so this save overwrites it
         // deliberately instead of bouncing off a stale-version 409.
         version: collab.keepMineVersion ?? proposal.version,
@@ -285,7 +292,11 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
         // print order.
         lines: draft.lines.map(({ id: _id, sortOrder: _sortOrder, ...rest }) => rest),
       });
-      setProposal(prev => (prev ? { ...prev, version } : prev));
+      // updatedAt matters as much as version here: it is what the document bar
+      // compares a generated PDF's createdAt against, so keeping the pre-save
+      // timestamp would leave a just-edited proposal claiming its old PDF is
+      // still current — and Send would email that stale PDF.
+      setProposal(prev => (prev ? { ...prev, version, updatedAt } : prev));
       setDirty(false);
       toast('Proposal saved', { type: 'success' });
       void recordMemories(draft);
@@ -304,6 +315,17 @@ export function useProposalDraft(projectId?: string, proposalId?: string): Propo
     } finally {
       setSaving(false);
     }
+  };
+
+  const save = (): Promise<boolean> => {
+    if (inFlightRef.current) return inFlightRef.current;
+    if (!draft || !proposal || readOnly) return Promise.resolve(false);
+    // runSave never rejects (every failure path returns false), so the cleanup
+    // below cannot leave an unhandled rejection behind.
+    const run = runSave();
+    inFlightRef.current = run;
+    void run.finally(() => { inFlightRef.current = null; });
+    return run;
   };
 
   return {

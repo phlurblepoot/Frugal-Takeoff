@@ -220,13 +220,18 @@ export function createProposal(db: Database.Database, projectId: string, input: 
   return { id, number, version: 1 };
 }
 
-export function saveProposal(db: Database.Database, id: string, input: ProposalInput & { version: number }): { version: number } {
+// Returns updatedAt alongside version because the client adopts BOTH: updatedAt
+// is what "is the generated PDF still current?" compares a document's createdAt
+// against (useGeneratedDocument.isUpToDate), so an editor left holding the
+// pre-save timestamp would keep calling a now-stale PDF up to date and email it.
+export function saveProposal(db: Database.Database, id: string, input: ProposalInput & { version: number }): { version: number; updatedAt: number } {
   const row = requireDraft(db, id);
   if (!Number.isInteger(input.version)) throw new ValidationError('version required');
   if (row.version !== input.version) throw new ConflictError('proposal was modified');
   const tx = db.transaction(() => { applyInput(db, id, input, row); bump(db, id); });
   tx();
-  return { version: row.version + 1 };
+  const { updatedAt } = db.prepare('SELECT updatedAt FROM proposals WHERE id = ?').get(id) as { updatedAt: number };
+  return { version: row.version + 1, updatedAt };
 }
 
 export function deleteProposal(db: Database.Database, id: string): void {

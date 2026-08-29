@@ -34,7 +34,7 @@ const storedDoc = (over: Partial<GeneratedDoc> = {}): GeneratedDoc => ({
   createdAt: 5, versionNumber: 1, ...over,
 });
 
-const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4 }));
+const saveProposal = vi.fn(async (_id: string, _input: ProposalSaveInput) => ({ version: 4, updatedAt: 500 }));
 const saveUserPreferences = vi.fn(async (_prefs: Record<string, string>) => {});
 const getProposal = vi.fn(async () => proposal);
 const getProject = vi.fn(async (_id: string) => ({
@@ -253,6 +253,51 @@ describe('ProposalEditor smoke', () => {
     // …but the estimator's editor is untouched.
     expect(screen.getByLabelText('Cover notes')).toHaveValue('Ready to print');
     expect(screen.getByTestId('proposal-state')).toHaveTextContent('Saved');
+  });
+
+  it('a Save after Generate makes the stored PDF stale, so Send rebuilds', async () => {
+    // The regression this pins: the editor used to keep the pre-save
+    // updatedAt, so the chip still read "up to date" after an edit and Send
+    // happily emailed the PDF of the OLD price.
+    getDocumentBySource.mockImplementation(async () => storedDoc({ createdAt: 100 }));
+    renderEditor();
+    await screen.findByText('#2');
+    await waitFor(() => expect(screen.getByTestId('proposal-status')).toHaveTextContent('PDF up to date'));
+
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'Revised price' } });
+    fireEvent.click(screen.getByTestId('btn-save-proposal'));
+    // saveProposal returns updatedAt 500, which is newer than the document.
+    await waitFor(() => expect(screen.getByTestId('proposal-status')).toHaveTextContent('PDF out of date'));
+
+    fireEvent.click(screen.getByTestId('proposal-send'));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+    fireEvent.click(await screen.findByTestId('proposal-version-new'));
+
+    await waitFor(() => expect(sendProposal).toHaveBeenCalled());
+    expect(buildProposalPdf).toHaveBeenCalledTimes(1);
+    expect(buildProposalPdf.mock.calls[0][0].proposal.coverNotes).toBe('Revised price');
+    expect(sendProposal.mock.calls[0][1]).toMatchObject({ fileId: 'f-generated' });
+  });
+
+  it('Generate during an in-flight save waits for it instead of reporting a failure', async () => {
+    let release = () => {};
+    saveProposal.mockImplementationOnce(
+      () => new Promise(resolve => { release = () => resolve({ version: 4, updatedAt: 500 }); }));
+    renderEditor();
+    await screen.findByText('#2');
+    fireEvent.change(screen.getByLabelText('Cover notes'), { target: { value: 'in flight' } });
+    fireEvent.click(screen.getByTestId('btn-save-proposal'));
+    await waitFor(() => expect(screen.getByTestId('btn-save-proposal')).toHaveTextContent('Saving…'));
+
+    fireEvent.click(screen.getByTestId('proposal-generate'));
+    await act(async () => { release(); });
+
+    await waitFor(() => expect(setProposalFile).toHaveBeenCalledWith('p1', 'f-generated'));
+    // One write, not two, and no "Save failed" for a save that succeeded.
+    expect(saveProposal).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Save failed — nothing generated')).toBeNull();
   });
 
   it('a save that bounces off a lock aborts the generate', async () => {
