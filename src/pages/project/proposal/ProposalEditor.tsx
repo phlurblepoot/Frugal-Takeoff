@@ -3,16 +3,21 @@
 // useProposalDraft); every card below it is controlled. Only a DRAFT (and
 // non-legacy) proposal is editable — once sent, a proposal is a historical
 // record and must be revised instead.
+//
+// Generate / Open / Download / Email belong to the shared DocumentActionsBar
+// (spec docs/superpowers/specs/2026-08-29-document-actions-rollout); this file
+// only supplies the wiring — what to render, what to save first, and where the
+// resulting file id goes.
 import React, { useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileText, Save, Send } from 'lucide-react';
+import { ArrowLeft, Save } from 'lucide-react';
 import {
-  ProposalLockedError, persistGeneratedDocument, sendProposal, setProposalFile,
+  ProposalLockedError, sendProposal, setProposalFile,
   type Proposal,
 } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
-import { EmailComposer } from '../../../components/EmailComposer';
+import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { Button, Card, CardBody, CardHeader, Skeleton, StatusPill, Textarea } from '../../../components/ui';
 import { formatCurrency, proposalFileName } from './proposalGenerator';
 import { STATUS_TONE, proposalLabel } from './proposalPresentation';
@@ -42,9 +47,7 @@ export const ProposalEditor: React.FC = () => {
   // Highlighted plan pages are a generate-time choice, not a stored proposal
   // column — the same option the old page carried.
   const [includeHighlights, setIncludeHighlights] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
-  const [composing, setComposing] = useState(false);
   const emailDefaults = useProposalEmailDefaults(projectId);
 
   // The PDF renders the draft as it stands on screen — Generate saves first, so
@@ -59,77 +62,19 @@ export const ProposalEditor: React.FC = () => {
     onSkippedAttachment: name => toast(`Skipped unreadable attachment ${name}`, { type: 'warning' }),
   });
 
-  /** Renders, stores as the proposal's document, and returns the new file id. */
-  const renderAndStore = async (headerEmail?: string): Promise<string> => {
-    const { pdfBytes, suggestedName, overBudget } = await renderPdf(headerEmail);
-    const { fileId } = await persistGeneratedDocument(
-      new Blob([pdfBytes], { type: 'application/pdf' }),
-      { projectId: proposal!.projectId, kind: 'proposal', name: suggestedName, sourceType: 'proposal', sourceId: proposal!.id },
-    );
-    await setProposalFile(proposal!.id, fileId);
-    if (overBudget) {
-      toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target`, { type: 'warning' });
-    }
-    return fileId;
-  };
-
-  const handleGenerate = async () => {
-    if (!draft || !proposal || !project) return;
-    if (draft.lines.length === 0) { toast('Add at least one price line', { type: 'warning' }); return; }
-    if (dirty && saving) { toast('Save in progress — try again in a moment', { type: 'warning' }); return; }
-    setBusy(true);
+  /** The bar's build(): the on-screen draft as PDF bytes, wrapped for storage. */
+  const buildPdfBlob = async ({ headerEmail }: { headerEmail?: string }): Promise<Blob> => {
     try {
-      // Generate always saves first; a save that bounced (lock/conflict) has
-      // already reloaded someone else's version, so there is nothing to render.
-      if (dirty && !(await save())) return;
-      await renderAndStore();
-      toast('Proposal PDF generated', { type: 'success' });
-      reload();
-    } catch (e) {
-      console.error(e);
-      toast('Failed to generate proposal PDF', { type: 'error' });
+      const { pdfBytes, overBudget } = await renderPdf(headerEmail);
+      if (overBudget) {
+        toast(`Proposal is ${(pdfBytes.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target`, { type: 'warning' });
+      }
+      return new Blob([pdfBytes], { type: 'application/pdf' });
     } finally {
-      setBusy(false);
+      // The bar owns the busy label from here; the per-page progress line is
+      // only meaningful while a render is actually running.
       setProgress('');
     }
-  };
-
-  const handleSend = async (m: {
-    to: string; cc?: string; bcc?: string; subject: string; body: string;
-    attachmentFileIds: string[]; headerEmail?: string;
-  }) => {
-    if (!proposal || !project) return;
-    // ALWAYS render at send time. A stored fileId goes stale the moment anything
-    // is saved or a photo/attachment changes, and emailing last week's price is
-    // the one failure this section cannot have. Generate is the preview path;
-    // this is the one that goes to the client, stamped with their chosen
-    // from-address. A render that fails aborts the send rather than falling
-    // back to the old document. `busy` covers this render phase too — same
-    // as Generate — so the two can't race each other into overlapping renders.
-    let fileId: string;
-    setBusy(true);
-    try {
-      fileId = await renderAndStore(m.headerEmail);
-    } catch (e) {
-      console.error(e);
-      // The composer reports the failed send itself; this says which step broke.
-      toast('Could not generate the proposal PDF — nothing was sent', { type: 'error' });
-      throw e;
-    } finally {
-      setBusy(false);
-      setProgress('');
-    }
-    try {
-      await sendProposal(proposal.id, {
-        to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-        fileId, attachmentFileIds: m.attachmentFileIds,
-      });
-      toast('Proposal sent', { type: 'success' });
-    } catch (e) {
-      if (!(e instanceof ProposalLockedError)) throw e;
-      toast('This proposal was already sent — revise it to send again', { type: 'error' });
-    }
-    reload();
   };
 
   // Every hook above runs unconditionally; the gate is the last thing before
@@ -139,16 +84,10 @@ export const ProposalEditor: React.FC = () => {
   const statusText = readOnly
     ? (proposal?.legacy ? 'Imported — revise to change' : 'Locked — revise to change')
     : dirty ? 'Unsaved changes' : 'Saved';
-  // No project means no takeoffs to price and nothing to address the email to —
-  // the render would be wrong rather than merely incomplete, so both actions
-  // are blocked with a reason rather than silently doing nothing.
-  const noProject = !project ? "Couldn't load the project — reload the page" : undefined;
-  const generateBlockedReason = noProject;
-  // Send renders its own PDF, so it needs no prior Generate — only a draft that
-  // is actually on the server and has something to price.
-  const sendBlockedReason = noProject
-    ?? (draft && draft.lines.length === 0 ? 'Add at least one price line' : undefined)
-    ?? (dirty ? 'Save first' : undefined);
+  // Send needs no prior Generate — the bar renders one when the stored
+  // document is stale — but a proposal with no prices is not a proposal.
+  // ('Save first' for a dirty draft is the bar's own fallback.)
+  const sendBlockedReason = draft && draft.lines.length === 0 ? 'Add at least one price line' : undefined;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
@@ -169,36 +108,73 @@ export const ProposalEditor: React.FC = () => {
           {progress && <span className="text-sm text-ink-faint" data-testid="proposal-progress">{progress}</span>}
           {totals && <span className="mr-1 text-sm font-semibold text-ink">{formatCurrency(totals.totalCents / 100)}</span>}
           {!readOnly && (
-            <>
-              <Button onClick={save} disabled={saving || !dirty} data-testid="btn-save-proposal">
-                <Save size={16} />{saving ? 'Saving…' : 'Save'}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={handleGenerate}
-                disabled={busy || !draft || !!generateBlockedReason}
-                title={generateBlockedReason}
-                data-testid="btn-generate-proposal"
-              >
-                <FileText size={16} />{busy ? 'Generating…' : 'Generate PDF'}
-              </Button>
-            </>
-          )}
-          {proposal?.fileId && (
-            <Button variant="secondary" onClick={() => navigate(`/tools/pdf?fileId=${proposal.fileId}`)}>
-              <FileText size={16} />Open PDF
+            <Button onClick={save} disabled={saving || !dirty} data-testid="btn-save-proposal">
+              <Save size={16} />{saving ? 'Saving…' : 'Save'}
             </Button>
           )}
-          {!readOnly && (
-            <Button
-              onClick={() => setComposing(true)}
-              disabled={busy || !!sendBlockedReason}
-              title={sendBlockedReason}
-              data-testid="btn-send-proposal"
-            >
-              <Send size={16} />Send
-            </Button>
-          )}
+          {proposal && (project ? (
+            <DocumentActionsBar
+              source={{ sourceType: 'proposal', sourceId: proposal.id }}
+              kind="proposal"
+              format="pdf"
+              projectId={proposal.projectId}
+              fileName={`${proposalFileName(project)}.pdf`}
+              build={buildPdfBlob}
+              dirty={dirty}
+              save={save}
+              updatedAt={proposal.updatedAt}
+              readOnly={readOnly}
+              testIdPrefix="proposal"
+              // The proposal row carries its own fileId column (the list and the
+              // send route read it), so it follows whatever the bar just stored.
+              // refreshMedia, not reload: re-deriving the draft here would throw
+              // away whatever the estimator has typed since the save.
+              onGenerated={async fileId => {
+                await setProposalFile(proposal.id, fileId);
+                refreshMedia();
+              }}
+              send={{
+                blockedReason: sendBlockedReason,
+                composer: {
+                  title: 'Send proposal',
+                  defaultTo: emailDefaults.defaultTo || project.email?.from || '',
+                  defaultCc: emailDefaults.defaultCc || undefined,
+                  defaultBcc: emailDefaults.defaultBcc || undefined,
+                  defaultSubject: project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`,
+                  defaultBody: "Please find our proposal attached. Don't hesitate to reach out with any questions.",
+                  headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
+                  defaultHeaderEmail: emailDefaults.companyEmail || undefined,
+                },
+                sendFn: async (fileId, m) => {
+                  try {
+                    await sendProposal(proposal.id, {
+                      to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+                      fileId, attachmentFileIds: m.attachmentFileIds,
+                    });
+                  } catch (e) {
+                    // Someone else sent this proposal first. Say which failure
+                    // it was, then rethrow — swallowing it would let the bar
+                    // toast "Sent" for an email that never left.
+                    if (e instanceof ProposalLockedError) {
+                      toast('This proposal was already sent — revise it to send again', { type: 'error' });
+                      reload();
+                    }
+                    throw e;
+                  }
+                  // The send stamps the proposal 'sent' server-side, which makes
+                  // it read-only — the whole record has to come back.
+                  reload();
+                },
+              }}
+            />
+          ) : (
+            // No project means no takeoffs to price and nothing to address the
+            // email to: the render would be wrong rather than merely
+            // incomplete, so say why instead of offering a broken bar.
+            <span className="text-sm text-ink-faint" data-testid="proposal-doc-blocked">
+              Couldn&apos;t load the project — reload the page
+            </span>
+          ))}
         </div>
       </div>
 
@@ -307,24 +283,6 @@ export const ProposalEditor: React.FC = () => {
             onChanged={refreshMedia}
           />
         </div>
-      )}
-
-      {proposal && project && (
-        <EmailComposer
-          open={composing}
-          onClose={() => setComposing(false)}
-          projectId={project.id}
-          title="Send proposal"
-          primaryAttachmentName={`${proposalFileName(project)}.pdf`}
-          defaultTo={emailDefaults.defaultTo || project.email?.from || ''}
-          defaultCc={emailDefaults.defaultCc || undefined}
-          defaultBcc={emailDefaults.defaultBcc || undefined}
-          defaultSubject={project.email?.subject ? `Re: ${project.email.subject}` : `Proposal — ${project.name}`}
-          defaultBody={"Please find our proposal attached. Don't hesitate to reach out with any questions."}
-          headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
-          defaultHeaderEmail={emailDefaults.companyEmail || undefined}
-          onSend={handleSend}
-        />
       )}
     </div>
   );

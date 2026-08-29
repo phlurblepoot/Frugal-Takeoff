@@ -107,6 +107,20 @@ describe('save + lock', () => {
     void version;
   });
 
+  it('attaching the generated document leaves updatedAt alone', () => {
+    // The editor's "is this PDF still current?" check compares the file's
+    // createdAt against the proposal's updatedAt. Bumping updatedAt here would
+    // mark every freshly generated PDF stale the instant it is attached.
+    const { id } = createProposal(db, 'p1', {});
+    const before = getProposal(db, id)!;
+    pdf('gen');
+    setProposalFile(db, id, 'gen');
+    const after = getProposal(db, id)!;
+    expect(after.fileId).toBe('gen');
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.version).toBe(before.version);
+  });
+
   it('legacy proposals are locked even while draft', () => {
     const { id } = createProposal(db, 'p1', {});
     db.prepare('UPDATE proposals SET legacy = 1 WHERE id = ?').run(id);

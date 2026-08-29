@@ -15,10 +15,13 @@ import type { Page } from '@playwright/test';
 //    the specific input, never `.toContainText()` on the card container
 //    (textContent does not include input values).
 //
-//  • The Save button (`btn-save-proposal`) and Generate PDF button
-//    (`btn-generate-proposal`) render ONLY when the draft is NOT read-only
-//    (`{!readOnly && (...)}` in ProposalEditor.tsx) — Save is additionally
-//    `disabled` while `!dirty`. A proposal created via
+//  • The Save button (`btn-save-proposal`) and the shared document bar's
+//    Generate PDF / Email buttons (`proposal-generate` / `proposal-send`,
+//    DocumentActionsBar with testIdPrefix="proposal") render ONLY when the
+//    draft is NOT read-only (`{!readOnly && (...)}` in ProposalEditor.tsx and
+//    in the bar) — Save is additionally `disabled` while `!dirty`. The bar's
+//    status chip (`proposal-status`) and Open/Download appear only once a
+//    document exists. A proposal created via
 //    `POST /api/projects/:id/proposals` with an empty body has zero lines and
 //    nothing to re-derive against, so `dirty` starts false and Save starts
 //    DISABLED (not absent) — the button being present/visible is what proves
@@ -70,8 +73,12 @@ test('select takeoffs → Proposal → editor seeded; add manual + alternate; ge
 
   await authedPage.getByRole('button', { name: 'Save' }).click();
   await expect(authedPage.getByTestId('proposal-state')).toHaveText('Saved');
-  await authedPage.getByRole('button', { name: /Generate PDF/ }).click();
-  await expect(authedPage.getByText('Proposal PDF generated')).toBeVisible({ timeout: 30_000 });
+  await expect(authedPage.getByTestId('proposal-status')).toHaveText('No PDF yet');
+  await authedPage.getByTestId('proposal-generate').click();
+  await expect(authedPage.getByText('PDF generated')).toBeVisible({ timeout: 30_000 });
+  // The bar now holds a current document: the chip flips and Open/Download appear.
+  await expect(authedPage.getByTestId('proposal-status')).toHaveText('PDF up to date');
+  await expect(authedPage.getByTestId('proposal-open')).toBeVisible();
 
   await authedPage.goto(`/project/${projectId}/proposal`);
   const row = authedPage.getByTestId('proposal-row-1');
@@ -104,7 +111,10 @@ test('a draft proposal opens editable; a sent one opens read-only', async ({ aut
   // editable (readOnly hides the button outright; see the note atop this
   // file), not its enabled state.
   await expect(authedPage.getByTestId('btn-save-proposal')).toBeVisible();
+  await expect(authedPage.getByTestId('proposal-generate')).toBeVisible();
   await expect(authedPage.getByTestId('proposal-state')).toHaveText('Saved');
+  // Nothing to price yet, so the bar names the reason rather than just greying out.
+  await expect(authedPage.getByTestId('proposal-send')).toHaveAttribute('title', 'Add at least one price line');
   await expect(authedPage.getByTestId('pricing-lines').getByRole('button', { name: /Add manual line/ })).toBeVisible();
 
   // Takeoffs are picked from an inline CHECKLIST, not a <select> — a proposal

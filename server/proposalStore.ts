@@ -240,9 +240,15 @@ export function deleteProposal(db: Database.Database, id: string): void {
   tx();
 }
 
+// Attaching the document the client just generated is NOT an edit to the
+// proposal: `updatedAt` is what "is this PDF still current?" compares the
+// file's createdAt against (useGeneratedDocument.isUpToDate), so touching it
+// here would stamp every freshly generated PDF as already out of date and make
+// the editor rebuild one on every send. Same reasoning as addPhoto/
+// addAttachment, which also skip bump().
 export function setProposalFile(db: Database.Database, id: string, fileId: string): void {
   requireDraft(db, id);
-  db.prepare('UPDATE proposals SET fileId = ?, updatedAt = ? WHERE id = ?').run(fileId, Date.now(), id);
+  db.prepare('UPDATE proposals SET fileId = ? WHERE id = ?').run(fileId, id);
 }
 
 const requireFile = (db: Database.Database, fileId: unknown) => {
