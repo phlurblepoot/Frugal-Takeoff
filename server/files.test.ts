@@ -363,7 +363,7 @@ describe('upsert-by-source uploads', () => {
 });
 
 describe('overwrite mode', () => {
-  it('replaces the live bytes in place: same id, no archived row, versionNumber unchanged, createdAt refreshed', async () => {
+  it('replaces the live bytes in place: same id, no archived row, versionNumber 1, createdAt refreshed', async () => {
     const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
     const before = getMeta(db, id)!;
     await new Promise(r => setTimeout(r, 2));
@@ -371,10 +371,29 @@ describe('overwrite mode', () => {
       .set('Content-Type', 'application/pdf').send(Buffer.from('v2'));
     expect(res.body.fileId).toBe(id);
     const after = getMeta(db, id)!;
-    expect(after.versionNumber).toBe(before.versionNumber);
+    expect(after.versionNumber).toBe(1);
     expect(after.createdAt).toBeGreaterThan(before.createdAt);
     expect(readFileContent(dir, id)!.toString()).toBe('v2');
     expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
+  });
+
+  it('overwrite discards every archived version and resets the live row to V1', async () => {
+    const id = await upload('f1', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v1');
+    await upload('f2', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v2'); // version → V2 + 1 archived row
+    await upload('f3', { projectId: 'p1', kind: 'invoice', name: 'a', sourceType: 'invoice', sourceId: 'inv-1' }, 'v3'); // V3 + 2 archived rows
+    const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
+    expect(archived).toHaveLength(2);
+    expect(getMeta(db, id)!.versionNumber).toBe(3);
+    const res = await request(app).post(`/api/files/zzz?projectId=p1&kind=invoice&name=a&sourceType=invoice&sourceId=inv-1&mode=overwrite`)
+      .set('Content-Type', 'application/pdf').send(Buffer.from('fresh'));
+    expect(res.body.fileId).toBe(id);
+    expect(getMeta(db, id)!.versionNumber).toBe(1);
+    expect(readFileContent(dir, id)!.toString()).toBe('fresh');
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId = ?').get(id)).toEqual({ c: 0 });
+    for (const a of archived) {
+      expect(getMeta(db, a.id)).toBeNull();
+      expect(readFileContent(dir, a.id)).toBeNull();
+    }
   });
 
   it('version mode (default) still archives', async () => {

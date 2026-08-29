@@ -83,6 +83,18 @@ describe('DocumentViewerModal', () => {
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
+  it('lays the pdf canvas out so it keeps its aspect ratio (no flex stretch)', async () => {
+    renderModal(makeRow());
+    await waitFor(() => expect(renderPdfPage).toHaveBeenCalled());
+    const canvas = document.querySelector('canvas')!; // Modal portals to document.body
+    const wrap = canvas.parentElement!;
+    // A flex row stretches its children by default (align-items: stretch), which
+    // forces the canvas to the container height regardless of its width cap.
+    expect(wrap.className).toMatch(/\bitems-start\b/);
+    expect(canvas.className).toMatch(/\bmax-h-\[/);
+    expect(canvas.className).toMatch(/\bw-auto\b/);
+  });
+
   it('hides page navigation for a single-page pdf', async () => {
     loadPdfDoc.mockResolvedValue({ numPages: 1, getPage: vi.fn(), destroy });
     renderModal(makeRow());

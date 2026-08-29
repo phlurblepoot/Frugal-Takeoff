@@ -172,10 +172,23 @@ function tableExists(db: Database.Database, name: string): boolean {
 // for regenerate flows that intentionally don't want every re-run to grow the
 // version list (e.g. a draft the user is still iterating on before it's
 // final). Contrast with saveNewVersion, which always archives.
+// Overwrite = "start the history over": the new bytes become version 1 and
+// every archived version of this document (rows + bytes) is discarded.
+// Contrast saveNewVersion, which keeps the old bytes as a history row.
 export function overwriteLive(db: Database.Database, dataDir: string, id: string, buf: Buffer, mime: string): void {
-  const { size, sha256 } = writeFileContent(dataDir, id, buf); // atomic rename over the same path
-  db.prepare('UPDATE files SET mime = ?, size = ?, sha256 = ?, legacyFormat = NULL, createdAt = ?, archived = 0 WHERE id = ?')
-    .run(mime, size, sha256, Date.now(), id);
+  const archived = db.prepare('SELECT id FROM files WHERE parentFileId = ?').all(id) as { id: string }[];
+  const tx = db.transaction(() => {
+    if (archived.length) db.prepare('DELETE FROM files WHERE parentFileId = ?').run(id);
+    const { size, sha256 } = writeFileContent(dataDir, id, buf); // atomic rename over the same path
+    db.prepare('UPDATE files SET mime = ?, size = ?, sha256 = ?, legacyFormat = NULL, createdAt = ?, archived = 0, versionNumber = 1 WHERE id = ?')
+      .run(mime, size, sha256, Date.now(), id);
+  });
+  tx();
+  // Bytes go after the commit: a failed delete is a storage leak to report,
+  // not a reason to fail the overwrite the caller already asked for.
+  for (const a of archived) {
+    try { deleteFileContent(dataDir, a.id); } catch (e) { console.warn(`[files] could not delete archived version ${a.id}:`, e); }
+  }
 }
 
 // Upsert-by-source (spec 2026-08-17 §Data model): a generate/download flow
