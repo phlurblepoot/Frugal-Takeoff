@@ -186,6 +186,19 @@ describe('rfiStore', () => {
     expect(rfi.version).toBe(beforeVersion + 1);
   });
 
+  it('saveRfi and setRfiResponse bump updatedAt', async () => {
+    const { id } = createRfi(db, 'p1', { title: 'A' });
+    const before = (getRfi(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveRfi(db, id, { title: 'A2', version: 1 });
+    const afterSave = (getRfi(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    setRfiResponse(db, id, { text: 'Answer' });
+    expect((getRfi(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+
   describe('setRfiResponse', () => {
     it('requires fileId or text', () => {
       const { id } = createRfi(db, 'p1', { title: 'A' });

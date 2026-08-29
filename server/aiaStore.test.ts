@@ -970,3 +970,19 @@ describe('retainage release (effective-rate model)', () => {
     expect(getPayApp(db, a3.id)!.storedRetainagePercent).toBe(10);
   });
 });
+
+describe('pay app updatedAt stamping', () => {
+  it('savePayAppLines and setPayApp bump updatedAt', async () => {
+    const { id: sov1 } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    const app = createPayApp(db, 'p1', {});
+    const before = (getPayApp(db, app.id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    savePayAppLines(db, app.id, [{ sovLineId: sov1, percentComplete: 10, storedMaterialsCents: 0 }], 1);
+    const afterLines = (getPayApp(db, app.id) as any).updatedAt;
+    expect(afterLines).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    setPayApp(db, app.id, { status: 'finalized' });
+    expect((getPayApp(db, app.id) as any).updatedAt).toBeGreaterThan(afterLines);
+  });
+});

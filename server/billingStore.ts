@@ -88,8 +88,9 @@ export function createInvoice(db: Database.Database, projectId: string, input: I
   }
   const id = crypto.randomUUID();
   const tx = db.transaction(() => {
-    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
-      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, Date.now());
+    const now = Date.now();
+    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)')
+      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, now, now);
     writeLines(db, id, lines);
   });
   tx();
@@ -110,8 +111,8 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
     if (!row) throw new NotFoundError('Invoice not found');
     if (row.version !== input.version) throw new ConflictError(`Invoice changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
-    db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, newVersion, id);
+    db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, newVersion, Date.now(), id);
     writeLines(db, id, lines);
   });
   tx();
@@ -177,7 +178,7 @@ export function setInvoiceStatus(db: Database.Database, id: string, status: stri
     const row = db.prepare('SELECT version FROM invoices WHERE id = ?').get(id) as { version: number } | undefined;
     if (!row) throw new NotFoundError('Invoice not found');
     const newVersion = row.version + 1;
-    db.prepare('UPDATE invoices SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+    db.prepare('UPDATE invoices SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
     out = { version: newVersion, status };
   });
   tx();
@@ -268,8 +269,9 @@ export function createChangeOrder(db: Database.Database, projectId: string, inpu
     const number = input.number ?? nextChangeOrderNumber(db, projectId);
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)')
-      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, Date.now());
+    const now = Date.now();
+    db.prepare('INSERT INTO change_orders (id, projectId, number, title, description, amount, status, version, lumpSumAmount, scheduleImpactDays, date, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)')
+      .run(id, projectId, number, normalizeTitle(input.title), input.description ?? null, amount, input.status ?? 'draft', Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, input.date ?? null, now, now);
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -293,8 +295,8 @@ export function saveChangeOrder(db: Database.Database, id: string, input: Change
     newVersion = row.version + 1;
     const lumpSumCents = toCents(input.lumpSumAmount);
     const amount = (sumCents(lines) + lumpSumCents) / 100;
-    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, id);
+    db.prepare('UPDATE change_orders SET number = ?, date = ?, title = ?, description = ?, lumpSumAmount = ?, scheduleImpactDays = ?, amount = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(input.number ?? null, input.date ?? null, normalizeTitle(input.title), input.description ?? null, Number(input.lumpSumAmount) || 0, input.scheduleImpactDays ?? null, amount, newVersion, Date.now(), id);
     writeChangeOrderLines(db, id, lines);
   });
   tx();
@@ -306,7 +308,7 @@ export function setChangeOrderStatus(db: Database.Database, id: string, status: 
   const row = db.prepare('SELECT version FROM change_orders WHERE id = ?').get(id) as { version: number } | undefined;
   if (!row) throw new NotFoundError('Change order not found');
   const newVersion = (row.version ?? 1) + 1;
-  db.prepare('UPDATE change_orders SET status = ?, version = ? WHERE id = ?').run(status, newVersion, id);
+  db.prepare('UPDATE change_orders SET status = ?, version = ?, updatedAt = ? WHERE id = ?').run(status, newVersion, Date.now(), id);
   return { status, version: newVersion };
 }
 
@@ -320,7 +322,7 @@ export function addChangeOrderPhoto(db: Database.Database, changeOrderId: string
   const tx = db.transaction(() => {
     db.prepare('INSERT INTO change_order_photos (id, changeOrderId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
       .run(crypto.randomUUID(), changeOrderId, fileId, max + 1, Date.now());
-    db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+    db.prepare('UPDATE change_orders SET version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), changeOrderId);
   });
   tx();
 }
@@ -328,7 +330,7 @@ export function addChangeOrderPhoto(db: Database.Database, changeOrderId: string
 export function removeChangeOrderPhoto(db: Database.Database, changeOrderId: string, fileId: string): void {
   const tx = db.transaction(() => {
     const r = db.prepare('DELETE FROM change_order_photos WHERE changeOrderId = ? AND fileId = ?').run(changeOrderId, fileId);
-    if (r.changes > 0) db.prepare('UPDATE change_orders SET version = version + 1 WHERE id = ?').run(changeOrderId);
+    if (r.changes > 0) db.prepare('UPDATE change_orders SET version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), changeOrderId);
   });
   tx();
 }

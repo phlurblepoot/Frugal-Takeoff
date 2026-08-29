@@ -497,3 +497,31 @@ describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contrac
     expect(s.payAppOutstandingCents).toBe(0);
   });
 });
+
+describe('updatedAt stamping', () => {
+  it('saveInvoice and setInvoiceStatus bump updatedAt', async () => {
+    const { id } = createInvoice(db, 'p1', { number: '1', lines: [] });
+    const before = (getInvoice(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveInvoice(db, id, { ...getInvoice(db, id), version: 1, terms: 'net 30' });
+    const afterSave = (getInvoice(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    setInvoiceStatus(db, id, 'sent');
+    expect((getInvoice(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+
+  it('saveChangeOrder and addChangeOrderPhoto bump updatedAt', async () => {
+    const { id } = createChangeOrder(db, 'p1', { number: 'CO-1', lumpSumAmount: 100 });
+    const before = (getChangeOrder(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveChangeOrder(db, id, { ...getChangeOrder(db, id), version: 1, description: 'updated' });
+    const afterSave = (getChangeOrder(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    addChangeOrderPhoto(db, id, 'f1');
+    expect((getChangeOrder(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+});

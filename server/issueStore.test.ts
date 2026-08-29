@@ -110,4 +110,17 @@ describe('photos + sent', () => {
     expect(countOpenIssues(db, 'p1')).toBe(1);
     expect(countOpenIssues(db, 'p2')).toBe(0);
   });
+
+  it('saveIssue and addPhoto bump updatedAt', async () => {
+    const { id } = createIssue(db, 'p1', { title: 'A' });
+    const before = (getIssue(db, id) as any).updatedAt;
+    expect(typeof before).toBe('number');
+    await new Promise(r => setTimeout(r, 2));
+    saveIssue(db, id, { title: 'A2', description: 'second', version: 1 });
+    const afterSave = (getIssue(db, id) as any).updatedAt;
+    expect(afterSave).toBeGreaterThan(before);
+    await new Promise(r => setTimeout(r, 2));
+    addPhoto(db, id, 'f1');
+    expect((getIssue(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
 });

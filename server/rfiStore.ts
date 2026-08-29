@@ -48,12 +48,13 @@ export function createRfi(db: Database.Database, projectId: string, input: RfiIn
     const counter = (db.prepare('SELECT rfiCounter c FROM projects WHERE id = ?').get(projectId) as any).c;
     const max = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM rfis WHERE projectId = ?').get(projectId) as any).m;
     number = Math.max(counter, max) + 1;
+    const now = Date.now();
     db.prepare(`INSERT INTO rfis (id, projectId, number, title, question, specRef, drawingRef, attention, responseNeededBy,
-                responseText, responseFileId, status, version, sentAt, answeredAt, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?)`)
+                responseText, responseFileId, status, version, sentAt, answeredAt, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, 1, NULL, NULL, ?, ?)`)
       .run(id, projectId, number, input.title!.trim(), input.question ?? null, input.specRef ?? null,
            input.drawingRef ?? null, input.attention ?? null, input.responseNeededBy ?? null,
-           input.status ?? 'open', Date.now());
+           input.status ?? 'open', now, now);
     db.prepare('UPDATE projects SET rfiCounter = ? WHERE id = ?').run(number, projectId);
   });
   tx();
@@ -69,9 +70,9 @@ export function saveRfi(db: Database.Database, id: string, input: RfiInput & { v
     if (!row) throw new NotFoundError('RFI not found');
     if (row.version !== input.version) throw new ConflictError(`RFI changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
-    db.prepare('UPDATE rfis SET title = ?, question = ?, specRef = ?, drawingRef = ?, attention = ?, responseNeededBy = ?, version = ? WHERE id = ?')
+    db.prepare('UPDATE rfis SET title = ?, question = ?, specRef = ?, drawingRef = ?, attention = ?, responseNeededBy = ?, version = ?, updatedAt = ? WHERE id = ?')
       .run(input.title!.trim(), input.question ?? null, input.specRef ?? null, input.drawingRef ?? null,
-           input.attention ?? null, input.responseNeededBy ?? null, newVersion, id);
+           input.attention ?? null, input.responseNeededBy ?? null, newVersion, Date.now(), id);
   });
   tx();
   return { version: newVersion };
@@ -81,7 +82,7 @@ export function setRfiStatus(db: Database.Database, id: string, status: string):
   if (!(RFI_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid RFI status: ${status}`);
   const row = db.prepare('SELECT id FROM rfis WHERE id = ?').get(id);
   if (!row) throw new NotFoundError('RFI not found');
-  db.prepare('UPDATE rfis SET status = ?, version = version + 1 WHERE id = ?').run(status, id);
+  db.prepare('UPDATE rfis SET status = ?, version = version + 1, updatedAt = ? WHERE id = ?').run(status, Date.now(), id);
   return { status };
 }
 
@@ -99,12 +100,20 @@ export function addPhoto(db: Database.Database, rfiId: string, fileId: string): 
   const exists = db.prepare('SELECT id FROM rfi_photos WHERE rfiId = ? AND fileId = ?').get(rfiId, fileId);
   if (exists) return; // idempotent
   const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM rfi_photos WHERE rfiId = ?').get(rfiId) as any).m;
-  db.prepare('INSERT INTO rfi_photos (id, rfiId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-    .run(crypto.randomUUID(), rfiId, fileId, max + 1, Date.now());
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO rfi_photos (id, rfiId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), rfiId, fileId, max + 1, Date.now());
+    db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(Date.now(), rfiId);
+  });
+  tx();
 }
 
 export function removePhoto(db: Database.Database, rfiId: string, fileId: string): void {
-  db.prepare('DELETE FROM rfi_photos WHERE rfiId = ? AND fileId = ?').run(rfiId, fileId);
+  const tx = db.transaction(() => {
+    const r = db.prepare('DELETE FROM rfi_photos WHERE rfiId = ? AND fileId = ?').run(rfiId, fileId);
+    if (r.changes > 0) db.prepare('UPDATE rfis SET updatedAt = ? WHERE id = ?').run(Date.now(), rfiId);
+  });
+  tx();
 }
 
 // Advances status to 'sent' only from 'open'; answered/closed are never demoted
@@ -113,7 +122,8 @@ export function markRfiSent(db: Database.Database, id: string): void {
   const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
   if (!row) throw new NotFoundError('RFI not found');
   const nextStatus = row.status === 'open' ? 'sent' : row.status;
-  db.prepare('UPDATE rfis SET status = ?, sentAt = ?, version = version + 1 WHERE id = ?').run(nextStatus, Date.now(), id);
+  const now = Date.now();
+  db.prepare('UPDATE rfis SET status = ?, sentAt = ?, version = version + 1, updatedAt = ? WHERE id = ?').run(nextStatus, now, now, id);
 }
 
 // Records the answer. Usually the response arrives as a PDF (fileId of an
@@ -130,8 +140,9 @@ export function setRfiResponse(db: Database.Database, id: string, input: { fileI
   const tx = db.transaction(() => {
     if (hasFile) db.prepare('UPDATE rfis SET responseFileId = ? WHERE id = ?').run(input.fileId!.trim(), id);
     if (hasText) db.prepare('UPDATE rfis SET responseText = ? WHERE id = ?').run(input.text!.trim(), id);
-    db.prepare('UPDATE rfis SET status = ?, answeredAt = COALESCE(answeredAt, ?), version = version + 1 WHERE id = ?')
-      .run(nextStatus, Date.now(), id);
+    const now = Date.now();
+    db.prepare('UPDATE rfis SET status = ?, answeredAt = COALESCE(answeredAt, ?), version = version + 1, updatedAt = ? WHERE id = ?')
+      .run(nextStatus, now, now, id);
   });
   tx();
   return { status: nextStatus };

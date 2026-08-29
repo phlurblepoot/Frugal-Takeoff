@@ -41,8 +41,9 @@ export function createIssue(db: Database.Database, projectId: string, input: Iss
   const tx = db.transaction(() => {
     const max = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM issues WHERE projectId = ?').get(projectId) as any).m;
     number = max + 1;
-    db.prepare('INSERT INTO issues (id, projectId, number, title, description, status, version, sentAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)')
-      .run(id, projectId, number, input.title!.trim(), input.description ?? null, input.status ?? 'open', Date.now());
+    const now = Date.now();
+    db.prepare('INSERT INTO issues (id, projectId, number, title, description, status, version, sentAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)')
+      .run(id, projectId, number, input.title!.trim(), input.description ?? null, input.status ?? 'open', now, now);
   });
   tx();
   return { id, number };
@@ -57,8 +58,8 @@ export function saveIssue(db: Database.Database, id: string, input: IssueInput &
     if (!row) throw new NotFoundError('Issue not found');
     if (row.version !== input.version) throw new ConflictError(`Issue changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
-    db.prepare('UPDATE issues SET title = ?, description = ?, version = ? WHERE id = ?')
-      .run(input.title!.trim(), input.description ?? null, newVersion, id);
+    db.prepare('UPDATE issues SET title = ?, description = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(input.title!.trim(), input.description ?? null, newVersion, Date.now(), id);
   });
   tx();
   return { version: newVersion };
@@ -68,7 +69,7 @@ export function setIssueStatus(db: Database.Database, id: string, status: string
   if (!(ISSUE_STATUSES as readonly string[]).includes(status)) throw new ValidationError(`Invalid issue status: ${status}`);
   const row = db.prepare('SELECT id FROM issues WHERE id = ?').get(id);
   if (!row) throw new NotFoundError('Issue not found');
-  db.prepare('UPDATE issues SET status = ?, version = version + 1 WHERE id = ?').run(status, id);
+  db.prepare('UPDATE issues SET status = ?, version = version + 1, updatedAt = ? WHERE id = ?').run(status, Date.now(), id);
   return { status };
 }
 
@@ -86,16 +87,25 @@ export function addPhoto(db: Database.Database, issueId: string, fileId: string)
   const exists = db.prepare('SELECT id FROM issue_photos WHERE issueId = ? AND fileId = ?').get(issueId, fileId);
   if (exists) return; // idempotent
   const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM issue_photos WHERE issueId = ?').get(issueId) as any).m;
-  db.prepare('INSERT INTO issue_photos (id, issueId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-    .run(crypto.randomUUID(), issueId, fileId, max + 1, Date.now());
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO issue_photos (id, issueId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), issueId, fileId, max + 1, Date.now());
+    db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(Date.now(), issueId);
+  });
+  tx();
 }
 
 export function removePhoto(db: Database.Database, issueId: string, fileId: string): void {
-  db.prepare('DELETE FROM issue_photos WHERE issueId = ? AND fileId = ?').run(issueId, fileId);
+  const tx = db.transaction(() => {
+    const r = db.prepare('DELETE FROM issue_photos WHERE issueId = ? AND fileId = ?').run(issueId, fileId);
+    if (r.changes > 0) db.prepare('UPDATE issues SET updatedAt = ? WHERE id = ?').run(Date.now(), issueId);
+  });
+  tx();
 }
 
 export function markIssueSent(db: Database.Database, id: string): void {
-  db.prepare("UPDATE issues SET status = 'sent', sentAt = ?, version = version + 1 WHERE id = ?").run(Date.now(), id);
+  const now = Date.now();
+  db.prepare("UPDATE issues SET status = 'sent', sentAt = ?, version = version + 1, updatedAt = ? WHERE id = ?").run(now, now, id);
 }
 
 export function countOpenIssues(db: Database.Database, projectId: string): number {

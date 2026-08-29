@@ -236,8 +236,8 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
   const tx = db.transaction(() => {
     number = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM aia_pay_apps WHERE projectId = ?').get(projectId) as any).m + 1;
     db.prepare(
-      'INSERT INTO aia_pay_apps (id, projectId, number, periodTo, applicationDate, retainagePercent, storedRetainagePercent, status, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)'
-    ).run(id, projectId, number, input.periodTo ?? null, input.applicationDate ?? null, retainagePercent, storedRetainagePercent, 'draft', now);
+      'INSERT INTO aia_pay_apps (id, projectId, number, periodTo, applicationDate, retainagePercent, storedRetainagePercent, status, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+    ).run(id, projectId, number, input.periodTo ?? null, input.applicationDate ?? null, retainagePercent, storedRetainagePercent, 'draft', now, now);
 
     // Prior app (number-1) lines indexed by sovLineId for carry-forward.
     const prior = db.prepare('SELECT id FROM aia_pay_apps WHERE projectId = ? AND number = ?').get(projectId, number - 1) as { id: string } | undefined;
@@ -329,7 +329,7 @@ export function savePayAppLines(db: Database.Database, payAppId: string, lines: 
       }
     }
     newVersion = app.version + 1;
-    db.prepare('UPDATE aia_pay_apps SET version = ? WHERE id = ?').run(newVersion, payAppId);
+    db.prepare('UPDATE aia_pay_apps SET version = ?, updatedAt = ? WHERE id = ?').run(newVersion, now, payAppId);
   });
   tx();
   return { version: newVersion };
@@ -366,8 +366,8 @@ export function setPayApp(db: Database.Database, id: string, patch: PayAppPatch)
     const releasedRetainagePoints = patch.releasedRetainagePoints !== undefined
       ? patch.releasedRetainagePoints : app.releasedRetainagePoints;
     newVersion = app.version + 1;
-    db.prepare('UPDATE aia_pay_apps SET status = ?, periodTo = ?, applicationDate = ?, retainagePercent = ?, storedRetainagePercent = ?, releasedRetainagePoints = ?, version = ? WHERE id = ?')
-      .run(status, periodTo, applicationDate, retainagePercent, storedRetainagePercent, releasedRetainagePoints, newVersion, id);
+    db.prepare('UPDATE aia_pay_apps SET status = ?, periodTo = ?, applicationDate = ?, retainagePercent = ?, storedRetainagePercent = ?, releasedRetainagePoints = ?, version = ?, updatedAt = ? WHERE id = ?')
+      .run(status, periodTo, applicationDate, retainagePercent, storedRetainagePercent, releasedRetainagePoints, newVersion, Date.now(), id);
   });
   tx();
   return { version: newVersion };
