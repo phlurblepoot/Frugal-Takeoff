@@ -748,7 +748,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       addDailyPhoto(db, req.params.id, req.body.fileId);
       const row = getDailyReport(db, req.params.id);
       // addPhoto/removePhoto don't bump the daily report's version — attaching
-      // an unbumped version would poison the client's version-dedupe.
+      // an unbumped version would poison the client's version-dedupe — but
+      // they do stamp updatedAt, so the returned row (and the broadcast
+      // below) still lets the document-actions freshness chip notice a photo
+      // change without a version bump confusing the collab merge logic.
       if (row) deps.broadcastChange({ type: 'dailyReport', id: req.params.id, projectId: row.projectId, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { dailyErr(e, res); }

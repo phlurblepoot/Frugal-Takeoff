@@ -112,6 +112,23 @@ describe('photos', () => {
   it('removePhoto throws NotFoundError for a missing report id', () => {
     expect(() => removePhoto(db, 'nope', 'f1')).toThrow(NotFoundError);
   });
+  it('addPhoto and removePhoto stamp updatedAt (without touching version)', () => {
+    const { id } = createDailyReport(db, 'p1', { reportDate: '2026-08-26' });
+    // Force a stale updatedAt so the bump is unambiguous even on a fast clock.
+    const stale = getDailyReport(db, id).updatedAt - 1000;
+    db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(stale, id);
+
+    addPhoto(db, id, 'f1');
+    let row = getDailyReport(db, id);
+    expect(row.updatedAt).toBeGreaterThan(stale);
+    expect(row.version).toBe(1);
+
+    db.prepare('UPDATE daily_reports SET updatedAt = ? WHERE id = ?').run(stale, id);
+    removePhoto(db, id, 'f1');
+    row = getDailyReport(db, id);
+    expect(row.updatedAt).toBeGreaterThan(stale);
+    expect(row.version).toBe(1);
+  });
 });
 
 describe('deleteDailyReport', () => {

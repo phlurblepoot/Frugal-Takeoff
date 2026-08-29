@@ -53,7 +53,12 @@ export const DailyReportEditor: React.FC<{
     weatherSummary !== (report.weatherSummary ?? '') ||
     temperature !== (report.temperature ?? '') ||
     JSON.stringify(weatherHourly) !== JSON.stringify(report.weatherHourly ?? []) ||
-    JSON.stringify(manCounts) !== JSON.stringify(report.manCounts ?? []) ||
+    // Compared post-normalize on both sides: handleSave persists
+    // normalizeManCounts(manCounts) (trims each type, drops blank rows), so
+    // comparing the raw typed state against the raw saved record left a
+    // trailing-space/blank-row edit permanently "dirty" even right after a
+    // save round-tripped it — Send stayed stuck on "Save first" forever.
+    JSON.stringify(normalizeManCounts(manCounts)) !== JSON.stringify(normalizeManCounts(report.manCounts ?? [])) ||
     fieldNotes !== (report.fieldNotes ?? '') ||
     issues !== (report.issues ?? '');
 

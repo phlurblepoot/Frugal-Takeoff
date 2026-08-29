@@ -176,6 +176,27 @@ describe('DailyReportEditor — document actions', () => {
     expect(send).not.toHaveAttribute('title', 'Save first');
   });
 
+  it('does not stay dirty over a man-count row that only differs by the trim/blank-row normalize handleSave applies', async () => {
+    // Regression: isDirty() used to compare the raw typed manCounts against
+    // the raw saved record, but handleSave persists normalizeManCounts(...)
+    // (trims each type, drops blank rows). A raw compare never saw those two
+    // sides agree — even right after a keepMounted save handed back the
+    // trimmed record — so Send stayed permanently stuck on "Save first".
+    const { rerender } = mount();
+    expect(await screen.findByTestId('doc-send')).toBeEnabled();
+
+    fireEvent.change(screen.getByPlaceholderText('Trade / role'), { target: { value: 'Plasterer ' } });
+
+    // Server hands back the save's result, normalized (trimmed) — the local
+    // input still holds the untrimmed 'Plasterer ' the user typed, so a raw
+    // (non-normalized) compare of the two would disagree forever.
+    rerender(tree(report({ manCounts: [{ type: 'Plasterer', count: 3 }], version: 3, updatedAt: 20 })));
+
+    const send = screen.getByTestId('doc-send');
+    expect(send).toBeEnabled();
+    expect(send).not.toHaveAttribute('title', 'Save first');
+  });
+
   it('sends the generated file through sendDailyReport', async () => {
     mount();
     fireEvent.click(await screen.findByTestId('doc-send'));
