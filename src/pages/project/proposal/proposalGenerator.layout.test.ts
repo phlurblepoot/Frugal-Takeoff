@@ -96,6 +96,32 @@ describe('proposal layout', () => {
     expect(sections.grandTotal).toBe(1);
   });
 
+  // The cover lays out address / "Prepared …" / the 84pt total box from
+  // titleLines.length, so an unbounded title would walk the box down into the
+  // footer (~11 wrapped lines clears pageBottom). The title is clamped to 3
+  // lines so the geometry below it is genuinely fixed.
+  it('clamps a runaway title to 3 lines and keeps the total box on page 1', async () => {
+    const { pdfBytes, sections } = await generateProposalPdf(input(base({
+      title: 'Comprehensive exterior envelope restoration '.repeat(13).slice(0, 600),
+      lines: [line({})],
+    })));
+
+    expect(await pages(pdfBytes)).toBe(1);
+    expect(sections.grandTotal).toBe(1);
+
+    const page1 = textByPage(pdfBytes).get(1) ?? [];
+    // The clamp truncated the third line. ASCII '...' rather than '…' —
+    // jsPDF's standard-font encoding drops U+2026 outright.
+    expect(page1.some(t => t.endsWith('...'))).toBe(true);
+    // ...and the box still landed on the cover, below the title.
+    expect(page1).toContain('TOTAL PROPOSAL VALUE');
+    // Exactly 3 title lines: every drawn string before the total label that
+    // came from the title itself.
+    const totalAt = page1.indexOf('TOTAL PROPOSAL VALUE');
+    const titleLines = page1.slice(0, totalAt).filter(t => t.includes('Comprehensive'));
+    expect(titleLines).toHaveLength(3);
+  });
+
   it('leads the cover with the grand total, ahead of the itemised pricing', async () => {
     const { pdfBytes, sections } = await generateProposalPdf(input(base({
       validUntil: '2026-12-31',

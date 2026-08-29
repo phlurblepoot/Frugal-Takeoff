@@ -726,7 +726,28 @@ export async function generateProposalPdf(
   pdf.setFontSize(22);
   pdf.setFont(font, 'bold');
   pdf.setTextColor(15, 23, 42);
-  const titleLines = pdf.splitTextToSize(title, W - 80) as string[];
+  // Clamped to 3 lines, the last one truncated with an ellipsis. Everything
+  // below on the cover — address, "Prepared …", and the 84pt total box — is
+  // positioned from titleLines.length, so an unbounded title walks the box
+  // down into the footer (~11 wrapped lines clears pageBottom) and spills the
+  // cover onto a second page. ProposalOptionsCard also caps the field at 120
+  // characters; this is the backstop for titles already stored.
+  // ASCII '...', not '…': jsPDF's standard-font encoding silently DROPS U+2026
+  // (verified against the output bytes — the line rendered with no marker at
+  // all), which would leave a clamped title looking arbitrarily cut off.
+  const MAX_TITLE_LINES = 3;
+  const ELLIPSIS = '...';
+  const wrapped = pdf.splitTextToSize(title, W - 80) as string[];
+  const titleLines = wrapped.length <= MAX_TITLE_LINES ? wrapped : [
+    ...wrapped.slice(0, MAX_TITLE_LINES - 1),
+    // Trim the last kept line until it fits WITH the marker at this font size —
+    // appending blind would push it past the wrap width.
+    (() => {
+      let last = wrapped[MAX_TITLE_LINES - 1].trimEnd();
+      while (last.length > 1 && pdf.getTextWidth(last + ELLIPSIS) > W - 80) last = last.slice(0, -1).trimEnd();
+      return last + ELLIPSIS;
+    })(),
+  ];
   pdf.text(titleLines, W / 2, 265, { align: 'center' });
   let coverY = 265 + titleLines.length * 28;
 
@@ -747,7 +768,8 @@ export async function generateProposalPdf(
   // ── Cover: the number the client actually opens the document for ───────────
   // The total leads, immediately under the cover block and ahead of the itemised
   // pricing, so page 1 answers "how much?" before it explains "for what?".
-  // The cover block has fixed geometry and always leaves room, so this draws
+  // The cover block has fixed geometry — the title is clamped to 3 lines above,
+  // which bounds everything below it — so this always leaves room and draws
   // straight onto page 1 without a break check.
   if (proposal.showGrandTotal) {
     sections.grandTotal = pageNo();

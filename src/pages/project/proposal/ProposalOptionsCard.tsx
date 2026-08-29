@@ -33,6 +33,9 @@ export const ProposalOptionsCard: React.FC<{
           id="proposal-title"
           value={value.title ?? ''}
           placeholder="Proposal"
+          // The cover clamps the title to 3 wrapped lines; this stops a title
+          // being silently truncated in the PDF rather than at the keyboard.
+          maxLength={120}
           disabled={readOnly}
           onChange={e => onChange({ title: e.target.value })}
         />
