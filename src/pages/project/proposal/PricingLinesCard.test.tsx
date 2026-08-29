@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { PricingLinesCard } from './PricingLinesCard';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 
@@ -65,6 +65,83 @@ describe('PricingLinesCard', () => {
     fireEvent.blur(amt);
     await waitFor(() => expect(screen.getByDisplayValue('10000.00')).toBeInTheDocument());
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // Takeoff picking is a checklist, not a <select>: proposals routinely pull
+  // in several takeoffs at once.
+  describe('add-takeoffs checklist', () => {
+    const totals = [t('t1', 'Stucco'), t('t2', 'Lath'), t('t3', 'Trim')];
+    const openPanel = (onChange = vi.fn(), lines: any[] = []) => {
+      wrap(<PricingLinesCard lines={lines} onChange={onChange} readOnly={false} takeoffTotals={totals} missingTakeoffIds={[]} showGrandTotal onShowGrandTotalChange={() => {}} lineLibrary={[]} />);
+      fireEvent.click(screen.getByLabelText('Add takeoff'));
+      return onChange;
+    };
+
+    it('the toggle opens a panel listing every available takeoff with its measurement summary', () => {
+      openPanel();
+      const panel = screen.getByTestId('add-takeoffs-panel');
+      expect(panel).toBeInTheDocument();
+      for (const name of ['Stucco', 'Lath', 'Trim']) {
+        expect(screen.getByLabelText(name)).toBeInTheDocument();
+      }
+      expect(within(panel).getAllByText('10,000.00 sq ft')).toHaveLength(3);
+      // The toggle itself is replaced by the panel, so "Add takeoff" is
+      // unambiguous while it is open.
+      expect(screen.queryByLabelText('Add takeoff')).toBeNull();
+    });
+
+    it('checking two and confirming fires ONE onChange with both lines appended', () => {
+      // Seeded with an existing t1 line, so t1 is not offered and the two new
+      // lines must land AFTER it.
+      const onChange = openPanel(vi.fn(), [takeoffLine]);
+      expect(screen.queryByLabelText('Stucco')).toBeNull();
+
+      fireEvent.click(screen.getByLabelText('Lath'));
+      fireEvent.click(screen.getByLabelText('Trim'));
+      fireEvent.click(screen.getByRole('button', { name: 'Add 2 takeoffs' }));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'l1', sortOrder: 0 }),
+        expect.objectContaining({ kind: 'takeoff', takeoffId: 't2', description: 'Lath', sortOrder: 1 }),
+        expect.objectContaining({ kind: 'takeoff', takeoffId: 't3', description: 'Trim', sortOrder: 2 }),
+      ]);
+      // ...and the panel closes.
+      expect(screen.queryByTestId('add-takeoffs-panel')).toBeNull();
+    });
+
+    it('the confirm button counts the selection and is disabled with none picked', () => {
+      openPanel();
+      expect(screen.getByRole('button', { name: 'Add 0 takeoffs' })).toBeDisabled();
+      fireEvent.click(screen.getByLabelText('Stucco'));
+      expect(screen.getByRole('button', { name: 'Add 1 takeoff' })).toBeEnabled();
+    });
+
+    it('Select all picks every row and Clear empties the selection', () => {
+      openPanel();
+      fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
+      expect(screen.getByRole('button', { name: 'Add 3 takeoffs' })).toBeEnabled();
+      expect(screen.getByLabelText('Trim')).toBeChecked();
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(screen.getByLabelText('Trim')).not.toBeChecked();
+      expect(screen.getByRole('button', { name: 'Add 0 takeoffs' })).toBeDisabled();
+    });
+
+    it('Cancel closes the panel without adding, and forgets the selection', () => {
+      const onChange = openPanel();
+      fireEvent.click(screen.getByLabelText('Stucco'));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('add-takeoffs-panel')).toBeNull();
+
+      fireEvent.click(screen.getByLabelText('Add takeoff'));
+      expect(screen.getByLabelText('Stucco')).not.toBeChecked();
+    });
+
+    it('read-only hides the toggle entirely', () => {
+      wrap(<PricingLinesCard lines={[]} onChange={() => {}} readOnly takeoffTotals={totals} missingTakeoffIds={[]} showGrandTotal onShowGrandTotalChange={() => {}} lineLibrary={[]} />);
+      expect(screen.queryByLabelText('Add takeoff')).toBeNull();
+    });
   });
 
   it('flags a missing takeoff and offers removal', () => {

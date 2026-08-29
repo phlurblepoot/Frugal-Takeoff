@@ -9,7 +9,7 @@ import type { ProposalLine } from '../../../utils/store';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { Button, Card, CardBody, CardHeader, Checkbox, Input, Select } from '../../../components/ui';
 import { formatCurrency, type TakeoffTotals } from './proposalGenerator';
-import { isOverridden, lineFromTakeoff, proposalTotals, toCents } from './proposalMath';
+import { isOverridden, lineFromTakeoff, measurementSummary, proposalTotals, toCents } from './proposalMath';
 import type { ManualLineMemory } from './proposalPrefs';
 
 const money = (cents: number) => formatCurrency(cents / 100);
@@ -189,8 +189,30 @@ export const PricingLinesCard: React.FC<{
   };
 
   const availableTakeoffs = takeoffTotals.filter(t => !takeoffLines.some(l => l.takeoffId === t.id));
-  const addTakeoff = (t: TakeoffTotals) =>
-    reorder([...lines, { id: uuidv4(), sortOrder: lines.length, ...lineFromTakeoff(t) } as ProposalLine]);
+
+  // Picking takeoffs is a checklist, not a dropdown: a proposal usually wants
+  // several of them, and a <select> forced one round-trip per takeoff (open,
+  // pick, the list re-renders one shorter, open again).
+  const [addingTakeoffs, setAddingTakeoffs] = useState(false);
+  const [pickedTakeoffIds, setPickedTakeoffIds] = useState<Set<string>>(new Set());
+  const closeTakeoffPicker = () => { setAddingTakeoffs(false); setPickedTakeoffIds(new Set()); };
+  const togglePicked = (id: string) => setPickedTakeoffIds(prev => {
+    const next = new Set(prev);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
+  // ONE onChange with every new line appended — N separate addTakeoff() calls
+  // would each read the same stale `lines` prop (the parent has not re-rendered
+  // in between), so all but the last would be lost.
+  const addPickedTakeoffs = () => {
+    const chosen = availableTakeoffs.filter(t => pickedTakeoffIds.has(t.id));
+    if (!chosen.length) return;
+    reorder([
+      ...lines,
+      ...chosen.map((t, i) => ({ id: uuidv4(), sortOrder: lines.length + i, ...lineFromTakeoff(t) } as ProposalLine)),
+    ]);
+    closeTakeoffPicker();
+  };
   const addManual = (mem?: ManualLineMemory) =>
     reorder([...lines, {
       id: uuidv4(), sortOrder: lines.length, kind: 'manual', takeoffId: null,
@@ -229,18 +251,50 @@ export const PricingLinesCard: React.FC<{
         <Group title="Takeoff lines" empty="No takeoff lines. Add one from the project's takeoffs." count={takeoffLines.length}>
           {rowsFor(takeoffLines)}
           {!readOnly && availableTakeoffs.length > 0 && (
-            <Select
-              className="max-w-xs"
-              aria-label="Add takeoff"
-              value=""
-              onChange={e => {
-                const t = availableTakeoffs.find(x => x.id === e.target.value);
-                if (t) addTakeoff(t);
-              }}
-            >
-              <option value="">+ Add takeoff…</option>
-              {availableTakeoffs.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </Select>
+            addingTakeoffs ? (
+              <div data-testid="add-takeoffs-panel" className="space-y-2 rounded-lg border border-edge bg-sunken p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h5 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Add takeoffs</h5>
+                  <div className="flex items-center gap-3 text-xs">
+                    <button type="button" className="font-medium text-accent-600 hover:underline"
+                            onClick={() => setPickedTakeoffIds(new Set(availableTakeoffs.map(t => t.id)))}>
+                      Select all
+                    </button>
+                    <button type="button" className="font-medium text-accent-600 hover:underline"
+                            onClick={() => setPickedTakeoffIds(new Set())}>
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-60 space-y-0.5 overflow-y-auto">
+                  {availableTakeoffs.map(t => (
+                    <div key={t.id} className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-hover">
+                      <span aria-hidden className="size-3 shrink-0 rounded-full border border-edge" style={{ backgroundColor: t.color }} />
+                      <Checkbox
+                        className="min-w-0 flex-1"
+                        label={t.name}
+                        checked={pickedTakeoffIds.has(t.id)}
+                        onChange={() => togglePicked(t.id)}
+                      />
+                      <span className="shrink-0 text-xs text-ink-faint">{measurementSummary(t)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 border-t border-edge pt-2">
+                  <Button variant="secondary" size="sm" onClick={closeTakeoffPicker}>Cancel</Button>
+                  <Button size="sm" disabled={pickedTakeoffIds.size === 0} onClick={addPickedTakeoffs}>
+                    Add {pickedTakeoffIds.size} takeoff{pickedTakeoffIds.size === 1 ? '' : 's'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              // aria-label stays "Add takeoff" (singular) — it is what the
+              // pre-checklist <select> exposed, and existing callers/tests
+              // reach the control by that name.
+              <Button variant="secondary" size="sm" aria-label="Add takeoff" onClick={() => setAddingTakeoffs(true)}>
+                <Plus size={14} />Add takeoffs
+              </Button>
+            )
           )}
         </Group>
 

@@ -93,7 +93,7 @@ test('select takeoffs → Proposal → editor seeded; add manual + alternate; ge
 
 test('a draft proposal opens editable; a sent one opens read-only', async ({ authedPage, apiToken, request }) => {
   const { token } = apiToken;
-  const { projectId } = await seedProjectWithTakeoffMeasurement(request, token);
+  const { projectId, takeoffName } = await seedProjectWithTakeoffMeasurement(request, token);
   const auth = { Authorization: `Bearer ${token}` };
   const created = await request.post(`/api/projects/${projectId}/proposals`, { headers: auth, data: {} });
   const { id } = await created.json();
@@ -106,6 +106,19 @@ test('a draft proposal opens editable; a sent one opens read-only', async ({ aut
   await expect(authedPage.getByTestId('btn-save-proposal')).toBeVisible();
   await expect(authedPage.getByTestId('proposal-state')).toHaveText('Saved');
   await expect(authedPage.getByTestId('pricing-lines').getByRole('button', { name: /Add manual line/ })).toBeVisible();
+
+  // Takeoffs are picked from an inline CHECKLIST, not a <select> — a proposal
+  // usually wants several at once. The toggle keeps aria-label="Add takeoff"
+  // (singular) from the dropdown it replaced.
+  const pricing = authedPage.getByTestId('pricing-lines');
+  await pricing.getByLabel('Add takeoff').click();
+  const panel = authedPage.getByTestId('add-takeoffs-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Add 0 takeoffs' })).toBeDisabled();
+  await panel.getByLabel(takeoffName).check();
+  await panel.getByRole('button', { name: 'Add 1 takeoff' }).click();
+  await expect(panel).toBeHidden();
+  await expect(pricing.getByLabel('Description').first()).toHaveValue(takeoffName);
 
   // Lock path: needs a "sent" proposal. Sending requires SMTP; there is no
   // SMTP stub anywhere under e2e/ (confirmed: no "buildTransporter"/"smtp"
