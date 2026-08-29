@@ -21,8 +21,13 @@ vi.mock('../../../utils/store', async (orig) => ({
   getSov: vi.fn(async () => []),
   createSovLine: vi.fn(async () => ({ id: 's1' })),
   getUserPreferences: vi.fn(async () => userPrefs),
+  getFileMeta: vi.fn(async (id: string) => ({ id, projectId: 'p1', name: `${id}.pdf`, mime: 'application/pdf', size: 10, kind: 'proposal', parentFileId: null, versionNumber: 2, createdAt: 5 })),
 }));
-import { createProposal, createSovLine, deleteProposal, getProposal, setProposalStatus } from '../../../utils/store';
+const viewerOpen = vi.fn();
+vi.mock('../../../components/documents/useDocumentViewer', () => ({
+  useDocumentViewer: () => ({ open: viewerOpen, modal: <div data-testid="viewer-modal-mock" /> }),
+}));
+import { createProposal, createSovLine, deleteProposal, getFileMeta, getProposal, setProposalStatus } from '../../../utils/store';
 import { ProposalsList } from './ProposalsList';
 
 const base: ProposalSummary = {
@@ -189,5 +194,17 @@ describe('ProposalsList', () => {
     localStorage.setItem('user', JSON.stringify({ id: 'u2', role: 'user' }));
     renderList();
     expect(await screen.findByText('project overview')).toBeInTheDocument();
+  });
+
+  it('Open PDF and Signed copy open the preview modal (not the editor) with the file metadata', async () => {
+    rows = [{ ...base, status: 'sent', fileId: 'f-pdf', signedFileId: 'f-signed' }];
+    renderList();
+    fireEvent.click(await screen.findByLabelText('Open PDF'));
+    await waitFor(() => expect(viewerOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'f-pdf', name: 'f-pdf.pdf', mime: 'application/pdf', versionNumber: 2 }), 'proposal', 'p1'));
+    expect(getFileMeta).toHaveBeenCalledWith('f-pdf');
+    fireEvent.click(screen.getByLabelText('Signed copy'));
+    await waitFor(() => expect(viewerOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'f-signed' }), 'proposal-signed', 'p1'));
+    expect(screen.getByTestId('viewer-modal-mock')).toBeInTheDocument();
   });
 });

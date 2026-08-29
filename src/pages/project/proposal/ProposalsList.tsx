@@ -9,6 +9,7 @@ import {
   ProposalSummary,
   createProposal, createSovLine, deleteProposal, getProposal, getProposals, getSov,
   getUserPreferences, setProposalStatus,
+  getFileMeta,
 } from '../../../utils/store';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { useToast } from '../../../components/Toast';
@@ -22,12 +23,14 @@ import { STATUS_TONE, expiryText, proposalLabel } from './proposalPresentation';
 import { optionDefaultsFromPrefs } from './proposalPrefs';
 import { ReviseDialog } from './ReviseDialog';
 import { AcceptDialog } from './AcceptDialog';
+import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
 
 export const ProposalsList: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const viewer = useDocumentViewer();
   const { toast } = useToast();
   const confirm = useConfirm();
   const [rows, setRows] = useState<ProposalSummary[] | null>(null);
@@ -124,6 +127,16 @@ export const ProposalsList: React.FC = () => {
     if (wantsPrefill) await prefillSov(target);
   };
 
+  // Open PDF / Signed copy peek in the shared viewer modal first (same as every
+  // other list); its "Open in editor" link is the path into /tools/pdf.
+  const openFile = async (fileId: string, kind: 'proposal' | 'proposal-signed') => {
+    try {
+      const meta = await getFileMeta(fileId);
+      if (!meta) { toast('That document is no longer available', { type: 'warning' }); return; }
+      viewer.open({ id: meta.id, name: meta.name, mime: meta.mime, size: meta.size, createdAt: meta.createdAt, versionNumber: meta.versionNumber }, kind, projectId ?? null);
+    } catch { toast('Failed to open document', { type: 'error' }); }
+  };
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -194,11 +207,11 @@ export const ProposalsList: React.FC = () => {
                         <div className="flex items-center justify-end gap-1">
                           {p.fileId && (
                             <Button variant="ghost" size="sm" title="Open PDF" aria-label="Open PDF"
-                              onClick={() => navigate(`/tools/pdf?fileId=${p.fileId}`)}><FileText size={15} /></Button>
+                              onClick={() => openFile(p.fileId!, 'proposal')}><FileText size={15} /></Button>
                           )}
                           {p.signedFileId && (
                             <Button variant="ghost" size="sm" title="Signed copy" aria-label="Signed copy"
-                              onClick={() => navigate(`/tools/pdf?fileId=${p.signedFileId}`)}><Check size={15} /></Button>
+                              onClick={() => openFile(p.signedFileId!, 'proposal-signed')}><Check size={15} /></Button>
                           )}
                           <Button variant="ghost" size="sm" title="Revise (new proposal from this one)"
                             aria-label="Revise" onClick={() => setRevising(p)}><Copy size={15} /></Button>
@@ -232,6 +245,7 @@ export const ProposalsList: React.FC = () => {
         </CardBody>
       </Card>
 
+      {viewer.modal}
       <ReviseDialog open={!!revising} source={revising} onClose={() => setRevising(null)} onConfirm={handleRevise} />
       <AcceptDialog
         open={!!accepting}
