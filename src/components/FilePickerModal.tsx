@@ -1,9 +1,27 @@
-// src/components/FilePickerModal.tsx — pick files already on the server.
+// src/components/FilePickerModal.tsx — pick files already on the server, or
+// upload new ones without leaving the dialog.
 // Reuses the Documents page's filter bar + row presentation
 // (spec docs/superpowers/specs/2026-08-28-proposal-rework-design.md §5).
+//
+// Two things worth knowing before changing this:
+//  - The Upload tab only exists when the caller passes an `upload` config,
+//    because only the caller knows where a new file belongs (kind + project /
+//    customer + source triple). No config, no tabs at all.
+//  - `returnBlobs` exists for the callers that need bytes rather than rows
+//    (EmailComposer attachments, the SOV importer, plan-set upload). Picking
+//    from the Existing tab then fetches each file's content first; an upload
+//    hands back the File the user just chose, which is the same bytes without
+//    the round trip.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+import { Upload as UploadIcon } from 'lucide-react';
 import { Customer } from '../types';
-import { DocumentRow, ProjectSummary, getCustomers, getDocumentTypes, getDocuments, getProjectsSummary } from '../utils/store';
+import {
+  DocumentRow, ProjectFile, ProjectSummary, fetchFileBlob, getCustomers, getDocumentTypes,
+  getDocuments, getFileMeta, getProjectsSummary, saveBinaryFile, uploadProjectFile,
+} from '../utils/store';
+import { useDropZone } from '../hooks/useDropZone';
+import { useToast } from './Toast';
 import { Button, Modal, Skeleton, StatusPill } from './ui';
 import { DocumentsFilterBar } from '../pages/documents/DocumentsFilterBar';
 import { DocumentHoverPreview } from '../pages/documents/DocumentHoverPreview';
@@ -12,23 +30,92 @@ import { CustomDocType, KIND_OPTIONS, kindLabel, kindTone } from '../pages/docum
 import { MultiSelectOption } from '../pages/documents/MultiSelectDropdown';
 
 const PAGE_SIZE = 100;
-const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = { pdf: ['application/pdf'], image: ['image/'], any: undefined };
+const MIMES: Record<NonNullable<FilePickerModalProps['accept']>, string[] | undefined> = {
+  pdf: ['application/pdf'],
+  image: ['image/'],
+  spreadsheet: [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+  ],
+  any: undefined,
+};
+// Default `accept` attribute for the file input when the upload config
+// doesn't override it — keeps the OS file dialog in step with what the
+// dropzone would accept.
+const INPUT_ACCEPT: Record<NonNullable<FilePickerModalProps['accept']>, string | undefined> = {
+  pdf: 'application/pdf,.pdf',
+  image: 'image/*',
+  spreadsheet: '.xlsx,.xls,.csv',
+  any: undefined,
+};
 const fmtSize = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+export interface FilePickerUploadConfig {
+  kind: string;
+  projectId?: string;
+  customerId?: string;
+  sourceType?: string;
+  sourceId?: string;
+  /** Overrides the input's `accept` attribute (defaults from the modal's accept). */
+  accept?: string;
+  /** Overrides the modal's `multi` for the upload input only. */
+  multi?: boolean;
+  /** Passed through to the input so a phone can open the camera directly. */
+  capture?: 'user' | 'environment';
+}
+
+export type FilePickerTab = 'existing' | 'upload';
 
 export interface FilePickerModalProps {
   open: boolean;
   onClose: () => void;
-  onPick: (rows: DocumentRow[]) => void | Promise<void>;
-  accept?: 'pdf' | 'image' | 'any';
+  /** Optional because a `returnBlobs` caller uses onPickBlobs instead. */
+  onPick?: (rows: DocumentRow[]) => void | Promise<void>;
+  accept?: 'pdf' | 'image' | 'spreadsheet' | 'any';
   multi?: boolean;
   excludeFileIds?: string[];
   initialProjectIds?: string[];
   title?: string;
+  /** Presence of this enables the Upload tab. */
+  upload?: FilePickerUploadConfig;
+  defaultTab?: FilePickerTab;
+  /** When true, onPickBlobs is called with the bytes instead of onPick. */
+  returnBlobs?: boolean;
+  onPickBlobs?: (picked: { row: DocumentRow; blob: Blob }[]) => void | Promise<void>;
 }
 
+type UploadStatus = 'pending' | 'uploading' | 'done' | 'error';
+const STATUS_WORD: Record<UploadStatus, string> = {
+  pending: 'Waiting', uploading: 'Uploading…', done: 'Uploaded', error: 'Failed',
+};
+
+// The server is the source of truth for a stored file, but a picker row needs
+// fields (/documents joins) that /files/:id/meta doesn't carry — those are
+// filled from what the caller already told us, or left null.
+const rowFromUpload = (
+  fileId: string, meta: ProjectFile | null, file: File, cfg: FilePickerUploadConfig,
+): DocumentRow => ({
+  id: fileId,
+  name: meta?.name ?? file.name,
+  mime: meta?.mime ?? file.type ?? 'application/octet-stream',
+  size: meta?.size ?? file.size,
+  kind: meta?.kind ?? cfg.kind,
+  createdAt: meta?.createdAt ?? Date.now(),
+  versionNumber: meta?.versionNumber ?? 1,
+  archived: false,
+  projectId: meta?.projectId ?? cfg.projectId ?? null,
+  projectName: null,
+  customerId: cfg.customerId ?? null,
+  customerName: null,
+  source: null,
+});
+
 export const FilePickerModal: React.FC<FilePickerModalProps> = ({
-  open, onClose, onPick, accept = 'any', multi = true, excludeFileIds = [], initialProjectIds = [], title = 'Choose files',
+  open, onClose, onPick, accept = 'any', multi = true, excludeFileIds = [], initialProjectIds = [],
+  title = 'Choose files', upload, defaultTab = 'existing', returnBlobs = false, onPickBlobs,
 }) => {
+  const { toast } = useToast();
   const [q, setQ] = useState('');
   const [projectIds, setProjectIds] = useState<string[]>(initialProjectIds);
   const [customerIds, setCustomerIds] = useState<string[]>([]);
@@ -45,11 +132,18 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
   const [hover, setHover] = useState<{ row: DocumentRow; x: number; y: number } | null>(null);
   const [hoverCapable] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia('(hover: hover)').matches);
   const [picking, setPicking] = useState(false);
+  const [tab, setTab] = useState<FilePickerTab>(upload ? defaultTab : 'existing');
+  const [progress, setProgress] = useState<{ name: string; status: UploadStatus }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setSelected(new Map());
     setProjectIds(initialProjectIds);
+    setTab(upload ? defaultTab : 'existing');
+    setProgress([]);
+    setUploading(false);
     getProjectsSummary().then(setProjects).catch(() => setProjects([]));
     getCustomers().then(setCustomers).catch(() => setCustomers([]));
     getDocumentTypes().then(setCustomTypes).catch(() => setCustomTypes([]));
@@ -129,51 +223,184 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
 
   const confirm = async () => {
     setPicking(true);
-    try { await onPick([...selected.values()]); onClose(); } finally { setPicking(false); }
+    try {
+      const picked = [...selected.values()];
+      if (returnBlobs) {
+        const withBlobs: { row: DocumentRow; blob: Blob }[] = [];
+        for (const row of picked) withBlobs.push({ row, blob: await fetchFileBlob(row.id) });
+        await onPickBlobs?.(withBlobs);
+      } else {
+        await onPick?.(picked);
+      }
+      onClose();
+    } catch {
+      // Leave the dialog open on a failed read/hand-off so the selection
+      // isn't silently lost.
+      toast('Could not add those files', { type: 'error' });
+    } finally {
+      setPicking(false);
+    }
   };
+
+  // Files chosen on the Upload tab are stored immediately — there's no second
+  // confirm step, because the dialog's whole job is "give me these files".
+  const runUpload = async (files: File[]) => {
+    if (!upload || !files.length || uploading) return;
+    setUploading(true);
+    setProgress(files.map(f => ({ name: f.name, status: 'pending' as UploadStatus })));
+    const mark = (i: number, status: UploadStatus) =>
+      setProgress(prev => prev.map((p, j) => (j === i ? { ...p, status } : p)));
+
+    const done: { row: DocumentRow; blob: Blob }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      mark(i, 'uploading');
+      try {
+        const res = upload.projectId
+          ? await uploadProjectFile(upload.projectId, file, upload.kind, { sourceType: upload.sourceType, sourceId: upload.sourceId })
+          : await saveBinaryFile(uuidv4(), file, {
+              kind: upload.kind, name: file.name, customerId: upload.customerId,
+              sourceType: upload.sourceType, sourceId: upload.sourceId,
+            });
+        // Best-effort enrichment: a meta read that fails still leaves a usable
+        // row built from the File itself, so one flaky GET can't lose an
+        // upload that actually succeeded.
+        const meta = await getFileMeta(res.fileId).catch(() => null);
+        done.push({ row: rowFromUpload(res.fileId, meta, file, upload), blob: file });
+        mark(i, 'done');
+      } catch {
+        mark(i, 'error');
+      }
+    }
+    setUploading(false);
+
+    if (done.length < files.length) {
+      toast(`Uploaded ${done.length} of ${files.length} files`, { type: done.length ? 'warning' : 'error' });
+    }
+    // Every upload failed: stay open on the failure list rather than handing
+    // the caller an empty batch and closing.
+    if (!done.length) return;
+    if (returnBlobs) await onPickBlobs?.(done);
+    else await onPick?.(done.map(d => d.row));
+    onClose();
+  };
+
+  const { dragActive, dropProps } = useDropZone(
+    files => { void runUpload(files); },
+    { accept, disabled: !upload || uploading },
+  );
+
+  const uploadTab = tab === 'upload' && !!upload;
 
   return (
     <Modal open={open} onClose={onClose} title={title} width="xl"
-      footer={<>
+      footer={uploadTab ? (
+        <Button variant="secondary" onClick={onClose} disabled={uploading}>Cancel</Button>
+      ) : (<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button onClick={confirm} disabled={selected.size === 0 || picking}>Add {selected.size} file{selected.size === 1 ? '' : 's'}</Button>
-      </>}>
-      <DocumentsFilterBar
-        q={q} onQChange={setQ}
-        projectOptions={projectOptions} projectIds={projectIds} onProjectIdsChange={setProjectIds}
-        customerOptions={customerOptions} customerIds={customerIds} onCustomerIdsChange={setCustomerIds}
-        kindOptions={kindOptions} kinds={kinds} onKindsChange={setKinds}
-        archived={archived} onArchivedChange={setArchived}
-        isAdmin={false} unassigned={false} onUnassignedChange={() => {}}
-      />
-      <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-edge">
-        {loading && rows.length === 0 ? (
-          <div className="space-y-2 p-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-8" />)}</div>
-        ) : visible.length === 0 ? (
-          <p className="p-4 text-sm text-ink-faint">No files match.</p>
-        ) : (
-          <ul className="divide-y divide-edge">
-            {visible.map(row => (
-              <li key={row.id} className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2"
-                  onMouseEnter={hoverCapable ? (e) => setHover({ row, x: e.clientX, y: e.clientY }) : undefined}
-                  onMouseLeave={hoverCapable ? () => setHover(null) : undefined}>
-                <input type="checkbox" aria-label={row.name ?? row.id} checked={selected.has(row.id)} onChange={() => toggle(row)} className="h-4 w-4 accent-accent-600" />
-                <MimeIcon mime={row.mime} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink">{row.name ?? row.id}</p>
-                  <p className="truncate text-xs text-ink-faint">{row.projectName ?? row.customerName ?? '—'} · {new Date(row.createdAt).toLocaleDateString()} · {fmtSize(row.size)}</p>
-                </div>
-                <StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill>
-              </li>
-            ))}
-          </ul>
-        )}
-        {rows.length < total && (
-          <div className="p-2 text-center"><Button variant="ghost" onClick={loadMore} disabled={loading || loadingMore}>Load more</Button></div>
-        )}
-      </div>
+      </>)}>
+      {upload && (
+        <div role="tablist" aria-label="File source" className="mb-3 inline-flex gap-1 rounded-lg border border-edge bg-surface-2 p-1">
+          {(['existing', 'upload'] as const).map(t => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                tab === t ? 'bg-raised text-ink shadow-sm' : 'text-ink-faint hover:text-ink'
+              }`}
+            >
+              {t === 'existing' ? 'Existing' : 'Upload'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {uploadTab ? (
+        <div data-testid="picker-upload-panel" className="space-y-3">
+          <div
+            data-testid="picker-dropzone"
+            {...dropProps}
+            onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
+            className={`cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+              dragActive ? 'border-accent-500 bg-accent-500/5' : 'border-edge'
+            } ${uploading ? 'cursor-not-allowed opacity-60' : ''}`}
+          >
+            <input
+              ref={fileInputRef}
+              data-testid="picker-upload-input"
+              type="file"
+              className="hidden"
+              accept={upload!.accept ?? INPUT_ACCEPT[accept]}
+              multiple={upload!.multi ?? multi}
+              capture={upload!.capture}
+              disabled={uploading}
+              onChange={e => {
+                const files = Array.from(e.target.files ?? []);
+                // Reset first: picking the same file twice in a row fires no
+                // change event otherwise.
+                e.target.value = '';
+                void runUpload(files);
+              }}
+            />
+            <UploadIcon size={22} className="mx-auto mb-2 text-ink-faint" />
+            <p className="text-sm text-ink">Drag files here or click to browse</p>
+          </div>
+
+          {progress.length > 0 && (
+            <ul className="divide-y divide-edge rounded-lg border border-edge" data-testid="picker-upload-progress">
+              {progress.map((p, i) => (
+                <li key={`${p.name}-${i}`} className="flex items-center gap-3 px-3 py-2">
+                  <p className="min-w-0 flex-1 truncate text-sm text-ink">{p.name}</p>
+                  <span className={`text-xs ${p.status === 'error' ? 'text-red-600 dark:text-red-400' : 'text-ink-faint'}`}>
+                    {STATUS_WORD[p.status]}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (<>
+        <DocumentsFilterBar
+          q={q} onQChange={setQ}
+          projectOptions={projectOptions} projectIds={projectIds} onProjectIdsChange={setProjectIds}
+          customerOptions={customerOptions} customerIds={customerIds} onCustomerIdsChange={setCustomerIds}
+          kindOptions={kindOptions} kinds={kinds} onKindsChange={setKinds}
+          archived={archived} onArchivedChange={setArchived}
+          isAdmin={false} unassigned={false} onUnassignedChange={() => {}}
+        />
+        <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-edge">
+          {loading && rows.length === 0 ? (
+            <div className="space-y-2 p-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-8" />)}</div>
+          ) : visible.length === 0 ? (
+            <p className="p-4 text-sm text-ink-faint">No files match.</p>
+          ) : (
+            <ul className="divide-y divide-edge">
+              {visible.map(row => (
+                <li key={row.id} className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2"
+                    onMouseEnter={hoverCapable ? (e) => setHover({ row, x: e.clientX, y: e.clientY }) : undefined}
+                    onMouseLeave={hoverCapable ? () => setHover(null) : undefined}>
+                  <input type="checkbox" aria-label={row.name ?? row.id} checked={selected.has(row.id)} onChange={() => toggle(row)} className="h-4 w-4 accent-accent-600" />
+                  <MimeIcon mime={row.mime} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-ink">{row.name ?? row.id}</p>
+                    <p className="truncate text-xs text-ink-faint">{row.projectName ?? row.customerName ?? '—'} · {new Date(row.createdAt).toLocaleDateString()} · {fmtSize(row.size)}</p>
+                  </div>
+                  <StatusPill tone={kindTone(row.kind)}>{kindLabel(row.kind, customTypes)}</StatusPill>
+                </li>
+              ))}
+            </ul>
+          )}
+          {rows.length < total && (
+            <div className="p-2 text-center"><Button variant="ghost" onClick={loadMore} disabled={loading || loadingMore}>Load more</Button></div>
+          )}
+        </div>
+      </>)}
       {/* z-[260]: above the Modal overlay's z-[250], below ConfirmDialog's z-[300]. */}
-      {hover && (
+      {hover && !uploadTab && (
         <DocumentHoverPreview
           row={hover.row} startX={hover.x} startY={hover.y}
           customTypes={customTypes} onHide={hideHover} zIndexClass="z-[260]"
