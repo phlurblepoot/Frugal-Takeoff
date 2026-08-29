@@ -29,9 +29,15 @@ export const DocumentHoverPreview: React.FC<{
   startX: number;
   startY: number;
   customTypes: CustomDocType[];
-  /** Asks the owner to unmount the card (scroll / right-click / click). */
+  /** Asks the owner to unmount the card (scroll / right-click / press). */
   onHide: () => void;
-}> = ({ row, startX, startY, customTypes, onHide }) => {
+  /**
+   * Stacking context for the portalled card. Defaults to the Documents-page
+   * value; a caller that renders the card inside a Modal (overlay z-[250])
+   * must pass something higher or the card is painted behind the modal.
+   */
+  zIndexClass?: string;
+}> = ({ row, startX, startY, customTypes, onHide, zIndexClass = 'z-[240]' }) => {
   const [cursor, setCursor] = useState({ x: startX, y: startY });
   const [shown, setShown] = useState(false);
   const [thumb, setThumb] = useState<Thumb | null>(null);
@@ -73,14 +79,25 @@ export const DocumentHoverPreview: React.FC<{
   // Anything that changes what's under the cursor kills the card. Mouse-leave
   // is handled by the row itself (it unmounts us); these are the cases the row
   // never sees. Capture phase so a scroll inside any container counts.
+  //
+  // MOUSEDOWN, not click, for the press case. A checkbox's `checked` is
+  // toggled by the browser BEFORE the click event is dispatched, so a
+  // capture-phase click listener that schedules a React render runs while the
+  // DOM is already toggled: the render flushes in the microtask checkpoint
+  // between listeners and re-applies the controlled `checked={false}`, so
+  // React's own onChange plugin — which reads the toggled value later, at the
+  // root — sees no change and swallows the click. Users saw checkboxes in the
+  // file picker needing 1-3 clicks. mousedown fires before the toggle, so the
+  // render lands first and onChange sees the change (proved by
+  // e2e/file-picker.spec.ts, which fails on `click`).
   useEffect(() => {
     window.addEventListener('scroll', onHide, true);
     window.addEventListener('contextmenu', onHide, true);
-    window.addEventListener('click', onHide, true);
+    window.addEventListener('mousedown', onHide, true);
     return () => {
       window.removeEventListener('scroll', onHide, true);
       window.removeEventListener('contextmenu', onHide, true);
-      window.removeEventListener('click', onHide, true);
+      window.removeEventListener('mousedown', onHide, true);
     };
   }, [onHide]);
 
@@ -113,7 +130,7 @@ export const DocumentHoverPreview: React.FC<{
     <div
       ref={cardRef}
       data-testid="doc-hover-preview"
-      className="pointer-events-none fixed z-[240] w-[220px] overflow-hidden rounded-xl border border-edge bg-raised shadow-xl"
+      className={`pointer-events-none fixed ${zIndexClass} w-[220px] overflow-hidden rounded-xl border border-edge bg-raised shadow-xl`}
       style={{ left, top }}
     >
       <div className="flex min-h-[110px] items-center justify-center bg-sunken p-2">

@@ -1,7 +1,7 @@
 // src/components/FilePickerModal.tsx — pick files already on the server.
 // Reuses the Documents page's filter bar + row presentation
 // (spec docs/superpowers/specs/2026-08-28-proposal-rework-design.md §5).
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Customer } from '../types';
 import { DocumentRow, ProjectSummary, getCustomers, getDocumentTypes, getDocuments, getProjectsSummary } from '../utils/store';
 import { Button, Modal, Skeleton, StatusPill } from './ui';
@@ -116,6 +116,11 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
   const customerOptions: MultiSelectOption[] = customers.map(c => ({ id: c.id, label: c.name }));
   const kindOptions: MultiSelectOption[] = [...KIND_OPTIONS, ...customTypes.map(t => ({ id: `custom:${t.id}`, label: t.label }))];
 
+  // Stable identity (like DocumentsTable's hideHover): an inline arrow makes
+  // DocumentHoverPreview tear down and re-register its window listeners on
+  // every render, including the render its own mousemove handler causes.
+  const hideHover = useCallback(() => setHover(null), []);
+
   const toggle = (row: DocumentRow) => setSelected(prev => {
     const next = multi ? new Map(prev) : new Map<string, DocumentRow>();
     if (prev.has(row.id) && multi) next.delete(row.id); else next.set(row.id, row);
@@ -167,7 +172,13 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
           <div className="p-2 text-center"><Button variant="ghost" onClick={loadMore} disabled={loading || loadingMore}>Load more</Button></div>
         )}
       </div>
-      {hover && <DocumentHoverPreview row={hover.row} startX={hover.x} startY={hover.y} customTypes={customTypes} onHide={() => setHover(null)} />}
+      {/* z-[260]: above the Modal overlay's z-[250], below ConfirmDialog's z-[300]. */}
+      {hover && (
+        <DocumentHoverPreview
+          row={hover.row} startX={hover.x} startY={hover.y}
+          customTypes={customTypes} onHide={hideHover} zIndexClass="z-[260]"
+        />
+      )}
     </Modal>
   );
 };

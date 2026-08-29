@@ -3,6 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { FilePickerModal } from './FilePickerModal';
 
+// previewEngine (pulled in by DocumentHoverPreview) imports pdfjs at module
+// load, which jsdom can't execute.
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn() }));
+vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({ default: 'worker-url' }));
+
 vi.mock('../utils/store', async (orig) => ({
   ...(await orig<typeof import('../utils/store')>()),
   getDocuments: vi.fn(async (f: any) => ({
@@ -47,6 +52,24 @@ describe('FilePickerModal', () => {
     await screen.findByText('Spec.pdf');
     fireEvent.change(screen.getByLabelText('Search documents'), { target: { value: 'warr' } });
     await waitFor(() => expect((getDocuments as any).mock.calls.at(-1)[0].q).toBe('warr'), { timeout: 2000 });
+  });
+
+  // The hover card is portalled to document.body as `fixed z-[240]` by
+  // default, which is BEHIND the Modal overlay's z-[250] — inside the picker
+  // it must be raised or it renders behind the dialog it belongs to.
+  it('renders the hover preview above the modal overlay', async () => {
+    // jsdom's matchMedia has no implementation; the picker only mounts the
+    // preview when '(hover: hover)' matches.
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }) as never;
+
+    render(<FilePickerModal open onClose={() => {}} onPick={() => {}} />);
+    const row = (await screen.findByText('Spec.pdf')).closest('li')!;
+    fireEvent.mouseEnter(row, { clientX: 10, clientY: 10 });
+
+    const card = await screen.findByTestId('doc-hover-preview', undefined, { timeout: 2000 });
+    expect(card).toHaveClass('z-[260]');
+    expect(card).not.toHaveClass('z-[240]');
+    expect(Number(screen.getByTestId('modal-overlay').className.match(/z-\[(\d+)\]/)![1])).toBeLessThan(260);
   });
 
   it('drops a stale response when the filters change again before it resolves', async () => {

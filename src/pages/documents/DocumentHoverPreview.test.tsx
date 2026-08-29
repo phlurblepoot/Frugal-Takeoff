@@ -132,8 +132,8 @@ describe('DocumentHoverPreview', () => {
     expect(fetchFileBlob).not.toHaveBeenCalled();
   });
 
-  it('hides itself on scroll, right-click and click', async () => {
-    for (const event of ['scroll', 'contextmenu', 'click'] as const) {
+  it('hides itself on scroll, right-click and mousedown', async () => {
+    for (const event of ['scroll', 'contextmenu', 'mousedown'] as const) {
       const onHide = vi.fn();
       const { unmount } = render(
         <DocumentHoverPreview row={makeRow('a')} startX={10} startY={10} customTypes={[]} onHide={onHide} />
@@ -143,5 +143,36 @@ describe('DocumentHoverPreview', () => {
       expect(onHide, event).toHaveBeenCalled();
       unmount();
     }
+  });
+
+  // Regression guard: hiding on `click` re-applied a controlled checkbox's
+  // `checked` between the browser's pre-click toggle and React's onChange
+  // plugin, swallowing the click (file-picker checkboxes needed 1-3 clicks).
+  // mousedown covers the same dismissal cases and lands the render first.
+  it('does NOT hide on click — the press is handled by mousedown instead', async () => {
+    const onHide = vi.fn();
+    render(<DocumentHoverPreview row={makeRow('a')} startX={10} startY={10} customTypes={[]} onHide={onHide} />);
+    await settle(HOVER_DELAY_MS);
+    await act(async () => { window.dispatchEvent(new Event('click')); });
+    expect(onHide).not.toHaveBeenCalled();
+  });
+
+  it('defaults to z-[240] and honours an explicit zIndexClass', async () => {
+    const { unmount } = render(
+      <DocumentHoverPreview row={makeRow('a')} startX={10} startY={10} customTypes={[]} onHide={vi.fn()} />
+    );
+    await settle(HOVER_DELAY_MS);
+    expect(card()).toHaveClass('z-[240]');
+    unmount();
+
+    // Inside a Modal (overlay z-[250]) the default would paint behind it.
+    render(
+      <DocumentHoverPreview
+        row={makeRow('a')} startX={10} startY={10} customTypes={[]} onHide={vi.fn()} zIndexClass="z-[260]"
+      />
+    );
+    await settle(HOVER_DELAY_MS);
+    expect(card()).toHaveClass('z-[260]');
+    expect(card()).not.toHaveClass('z-[240]');
   });
 });
