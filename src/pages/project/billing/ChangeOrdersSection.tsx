@@ -27,8 +27,10 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
   const { summary: projectSummary } = useProjectOutlet();
   const [changeOrders, setChangeOrders] = useState<ChangeOrderListItem[] | null>(null);
   const [editing, setEditing] = useState<ChangeOrder | null>(null);
-  // Only a refresh the editor did NOT ask to survive bumps this, re-keying the
-  // modal so it reloads from the fresh record (the collab "review merge" path).
+  // Bumped only when an outside change actually moved the record on, re-keying
+  // the modal so it reloads (the collab "review merge" path). A refresh the
+  // editor asked to survive — or one that changed nothing — leaves the user's
+  // typed draft alone.
   const [editorSeq, setEditorSeq] = useState(0);
 
   const reload = () => {
@@ -123,11 +125,16 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
           onClose={() => setEditing(null)}
           onSaved={async (opts) => {
             // reload the open change order (lines/photos/version) and the list
-            try { setEditing(await getChangeOrder(editing.id)); } catch { setEditing(null); }
+            let fresh: ChangeOrder | null = null;
+            try { fresh = await getChangeOrder(editing.id); setEditing(fresh); } catch { setEditing(null); }
             // Remounting mid-flow would tear down the editor's document bar
             // (and its version dialog), so its own saves ask to stay mounted —
-            // their local state already matches what came back.
-            if (!opts?.keepMounted) setEditorSeq(n => n + 1);
+            // their local state already matches what came back. A refresh that
+            // found nothing new (a failed photo upload, say) must not discard
+            // what the user has typed either.
+            if (!opts?.keepMounted && fresh && fresh.version !== editing.version) {
+              setEditorSeq(n => n + 1);
+            }
             reload();
             onChange?.();
           }}

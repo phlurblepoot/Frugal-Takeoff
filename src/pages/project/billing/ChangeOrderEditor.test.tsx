@@ -79,20 +79,21 @@ const SAVED = co({ title: 'SERVER TITLE', version: 3, updatedAt: 20 });
 
 const onSaved = vi.fn();
 
-const mount = () =>
-  render(
-    <MemoryRouter>
-      <ToastProvider>
-        <ChangeOrderEditor
-          changeOrder={co()}
-          onClose={vi.fn()}
-          onSaved={onSaved}
-          projectName="Big Job"
-          projectId="p1"
-        />
-      </ToastProvider>
-    </MemoryRouter>
-  );
+const tree = (order: ChangeOrder) => (
+  <MemoryRouter>
+    <ToastProvider>
+      <ChangeOrderEditor
+        changeOrder={order}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+        projectName="Big Job"
+        projectId="p1"
+      />
+    </ToastProvider>
+  </MemoryRouter>
+);
+
+const mount = (order: ChangeOrder = co()) => render(tree(order));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -133,6 +134,41 @@ describe('ChangeOrderEditor — document actions', () => {
       projectId: 'p1', kind: 'change-order', sourceType: 'change-order', sourceId: 'co-1',
     });
     expect(onSaved).toHaveBeenCalledWith({ keepMounted: true });
+  });
+
+  it('reports a failed re-read instead of storing pre-save bytes', async () => {
+    h.getChangeOrder.mockRejectedValue(new Error('offline'));
+    mount();
+
+    fireEvent.click(await screen.findByTestId('doc-generate'));
+
+    expect(await screen.findByText('Failed to generate the PDF')).toBeInTheDocument();
+    expect(h.buildChangeOrderPdf).not.toHaveBeenCalled();
+    expect(h.persistGeneratedDocument).not.toHaveBeenCalled();
+  });
+
+  it('stops reading as dirty once the saved record comes back', async () => {
+    // billingStore re-INSERTs change_order_lines on every save, so the same
+    // line returns with a brand-new id, and a typed "500.50" comes back as the
+    // number 500.5. Neither is an unsaved edit — if either reads as one, Email
+    // stays disabled on "Save first" forever.
+    const loaded = co({
+      lines: [{ id: 'line-old', description: 'framing', qty: 1, unitPrice: 100 }],
+      lumpSumAmount: 0,
+    });
+    const { rerender } = mount(loaded);
+    fireEvent.change(screen.getByLabelText('Lump sum'), { target: { value: '500.50' } });
+
+    rerender(tree(co({
+      version: 3,
+      updatedAt: 20,
+      lines: [{ id: 'line-new', description: 'framing', qty: 1, unitPrice: 100 }],
+      lumpSumAmount: 500.5,
+    })));
+
+    const send = await screen.findByTestId('doc-send');
+    expect(send).toBeEnabled();
+    expect(send).not.toHaveAttribute('title', 'Save first');
   });
 
   it('sends the generated file through sendChangeOrder', async () => {

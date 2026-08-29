@@ -18,6 +18,9 @@ const h = vi.hoisted(() => ({
     body: 'Attached',
     attachmentFileIds: [] as string[],
   } as Record<string, unknown>,
+  // Whatever the composer's onSend rejected with — how a test observes that an
+  // awaited version choice actually settled.
+  sendErrors: [] as unknown[],
   toast: vi.fn(),
 }));
 
@@ -67,7 +70,7 @@ vi.mock('../EmailComposer', () => ({
             and stays open (message intact) when onSend rejects. */}
         <button
           data-testid="composer-send"
-          onClick={() => { void onSend(h.sendMsg).then(() => onClose()).catch(() => {}); }}
+          onClick={() => { void onSend(h.sendMsg).then(() => onClose()).catch((e: unknown) => { h.sendErrors.push(e); }); }}
         >
           send
         </button>
@@ -78,6 +81,7 @@ vi.mock('../EmailComposer', () => ({
 
 import { persistGeneratedDocument, fetchFileBlob, getFileMeta } from '../../utils/store';
 import { downloadBlob } from '../../utils/download';
+import { DocumentGenerationCancelled } from './errors';
 
 const FILE = { id: 'f1', name: 'Invoice-12.pdf', mime: 'application/pdf', size: 10, createdAt: 5, versionNumber: 2 };
 
@@ -116,6 +120,7 @@ beforeEach(() => {
   h.state.file = null;
   h.state.upToDate = null;
   h.sendMsg = { to: 'client@example.com', subject: 'Invoice 12', body: 'Attached', attachmentFileIds: [] };
+  h.sendErrors.length = 0;
   save.mockResolvedValue(true);
   (persistGeneratedDocument as any).mockResolvedValue({ fileId: 'new-file', versioned: true });
 });
@@ -239,6 +244,25 @@ describe('DocumentActionsBar — send', () => {
     await waitFor(() => expect(sendFn.mock.calls[0][0]).toBe('new-file'));
   });
 
+  it('settles the awaited version choice when the bar unmounts mid-send', async () => {
+    h.state.file = FILE;
+    h.state.upToDate = false;
+    const { unmount } = renderBar({ send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+    await screen.findByText('Replace the existing PDF?');
+
+    // The host went away (an editor remount, a closed modal) while the choice
+    // was pending: the promise must settle as a cancel, not dangle forever.
+    unmount();
+
+    await waitFor(() => expect(h.sendErrors).toHaveLength(1));
+    expect(h.sendErrors[0]).toBeInstanceOf(DocumentGenerationCancelled);
+    expect(build).not.toHaveBeenCalled();
+    expect(sendFn).not.toHaveBeenCalled();
+  });
+
   it('keeps the composer open when the version dialog is cancelled mid-send', async () => {
     h.state.file = FILE;
     h.state.upToDate = false;
@@ -299,13 +323,15 @@ describe('DocumentActionsBar — open / download / formats', () => {
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'Invoice-12.pdf'));
   });
 
-  it('opens the viewer modal on a DocumentRow built from the file meta', async () => {
+  it('opens the viewer straight from the file it already holds', async () => {
     h.state.file = FILE;
     h.state.upToDate = true;
     renderBar();
     fireEvent.click(screen.getByTestId('doc-open'));
-    await waitFor(() => expect(getFileMeta).toHaveBeenCalledWith('f1'));
-    await screen.findByTestId('viewer');
+    // The by-source lookup already returned name/mime/size/version, so the
+    // shared viewer hook opens without a second metadata round trip.
+    expect(await screen.findByTestId('viewer')).toHaveTextContent('Invoice-12.pdf');
+    expect(getFileMeta).not.toHaveBeenCalled();
   });
 
   it('labels the chip for the xlsx format', () => {

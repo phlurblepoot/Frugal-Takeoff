@@ -18,6 +18,20 @@ export const lineCents = (l: { description?: string; qty: number; unitPrice: num
 export const draftTotalCents = (lines: { description?: string; qty: number; unitPrice: number }[]): number =>
   lines.reduce((a, l) => a + lineCents(l), 0);
 
+// Dirty-check key for invoice/change-order line items. Content only: the
+// server re-INSERTs the rows on every save (billingStore's writeLines /
+// writeChangeOrderLines), so a saved record comes back with brand-new line
+// ids — comparing whole objects would leave the editor permanently "dirty"
+// and the document bar permanently blocked on "Save first".
+export const lineContentKey = (
+  lines: { description?: string; qty: number | string; unitPrice: number | string }[],
+): string =>
+  JSON.stringify(lines.map(l => ({
+    description: l.description ?? '',
+    qty: Number(l.qty) || 0,
+    unitPrice: Number(l.unitPrice) || 0,
+  })));
+
 export const InvoiceEditor: React.FC<{
   invoice: Invoice;
   onClose: () => void;
@@ -42,7 +56,7 @@ export const InvoiceEditor: React.FC<{
     number !== (invoice.number ?? '') ||
     terms !== (invoice.terms ?? '') ||
     date !== initialDate ||
-    JSON.stringify(lines) !== JSON.stringify(invoice.lines.length ? invoice.lines : []);
+    lineContentKey(lines) !== lineContentKey(invoice.lines);
 
   const collab = useCollabEditing({
     type: 'invoice',
@@ -138,9 +152,13 @@ export const InvoiceEditor: React.FC<{
 
   // Built from the SAVED invoice, never the typed-in draft: the bar commits
   // first, so re-reading the record here is what keeps a generated PDF and the
-  // invoice it claims to represent from drifting apart.
+  // invoice it claims to represent from drifting apart. A failed re-read
+  // throws on purpose — the bar then reports the failure and keeps the
+  // existing document, rather than quietly storing pre-save bytes and marking
+  // them current.
   const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
-    const saved = await getInvoice(invoice.id).catch(() => null);
+    const saved = await getInvoice(invoice.id);
+    if (!saved) throw new Error('Invoice not found');
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;
@@ -164,7 +182,7 @@ export const InvoiceEditor: React.FC<{
       logoDataUrl = await invertImageDataUrl(logoDataUrl);
     }
     return buildInvoicePdf({
-      invoice: saved ?? invoice,
+      invoice: saved,
       projectName,
       contractor,
       address,

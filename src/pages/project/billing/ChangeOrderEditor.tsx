@@ -17,7 +17,7 @@ import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { ChangeOrderStatusPill } from '../../../components/ui/BillingPills';
 import { buildChangeOrderPdf } from './changeOrderPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
-import { lineCents, draftTotalCents } from './InvoiceEditor';
+import { lineCents, draftTotalCents, lineContentKey } from './InvoiceEditor';
 
 export const ChangeOrderEditor: React.FC<{
   changeOrder: ChangeOrder;
@@ -47,16 +47,18 @@ export const ChangeOrderEditor: React.FC<{
   const [uploading, setUploading] = useState(false);
 
   const initialDate = co.date ? new Date(co.date).toISOString().slice(0, 10) : '';
-  const initialScheduleImpactDays =
-    co.scheduleImpactDays === null || co.scheduleImpactDays === undefined ? '' : String(co.scheduleImpactDays);
+  // Numbers are compared by value, not by the string in the box: the server
+  // hands back 500.5 for a typed "500.50", which a text compare would read as
+  // an edit that never goes away.
+  const numOrNull = (v: string) => (v.trim() === '' ? null : Number(v) || 0);
   const dirty =
     number !== (co.number ?? '') ||
     date !== initialDate ||
     title !== (co.title ?? '') ||
     description !== (co.description ?? '') ||
-    lumpSumAmount !== String(co.lumpSumAmount ?? 0) ||
-    scheduleImpactDays !== initialScheduleImpactDays ||
-    JSON.stringify(lines) !== JSON.stringify(co.lines.length ? co.lines : []);
+    (Number(lumpSumAmount) || 0) !== (Number(co.lumpSumAmount) || 0) ||
+    numOrNull(scheduleImpactDays) !== (co.scheduleImpactDays ?? null) ||
+    lineContentKey(lines) !== lineContentKey(co.lines);
 
   const collab = useCollabEditing({
     type: 'changeOrder',
@@ -174,9 +176,13 @@ export const ChangeOrderEditor: React.FC<{
 
   // Built from the SAVED change order, never the typed-in draft: the bar
   // commits first, so re-reading the record here is what keeps a generated PDF
-  // and the change order it claims to represent from drifting apart.
+  // and the change order it claims to represent from drifting apart. A failed
+  // re-read throws on purpose — the bar then reports the failure and keeps the
+  // existing document, rather than quietly storing pre-save bytes and marking
+  // them current.
   const buildBytes = async (headerEmail?: string): Promise<Uint8Array> => {
-    const saved = (await getChangeOrder(co.id).catch(() => null)) ?? co;
+    const saved = await getChangeOrder(co.id);
+    if (!saved) throw new Error('Change order not found');
     const settings = await getSettings();
     let logoDataUrl: string | undefined;
     const logoUrl = settings.logoUrl;

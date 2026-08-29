@@ -82,20 +82,21 @@ const SAVED = invoice({ number: 'SERVER-9', version: 3, updatedAt: 20 });
 
 const onSaved = vi.fn();
 
-const mount = () =>
-  render(
-    <MemoryRouter>
-      <ToastProvider>
-        <InvoiceEditor
-          invoice={invoice()}
-          onClose={vi.fn()}
-          onSaved={onSaved}
-          projectName="Big Job"
-          projectId="p1"
-        />
-      </ToastProvider>
-    </MemoryRouter>
-  );
+const tree = (inv: Invoice) => (
+  <MemoryRouter>
+    <ToastProvider>
+      <InvoiceEditor
+        invoice={inv}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+        projectName="Big Job"
+        projectId="p1"
+      />
+    </ToastProvider>
+  </MemoryRouter>
+);
+
+const mount = (inv: Invoice = invoice()) => render(tree(inv));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -138,6 +139,36 @@ describe('InvoiceEditor — document actions', () => {
     // The parent refreshes without re-keying the editor, so the bar survives
     // its own save-then-generate flow.
     expect(onSaved).toHaveBeenCalledWith({ keepMounted: true });
+  });
+
+  it('reports a failed re-read instead of storing pre-save bytes', async () => {
+    h.getInvoice.mockRejectedValue(new Error('offline'));
+    mount();
+
+    fireEvent.click(await screen.findByTestId('doc-generate'));
+
+    expect(await screen.findByText('Failed to generate the PDF')).toBeInTheDocument();
+    expect(h.buildInvoicePdf).not.toHaveBeenCalled();
+    expect(h.persistGeneratedDocument).not.toHaveBeenCalled();
+  });
+
+  it('stops reading as dirty when the saved record comes back with re-minted line ids', async () => {
+    // billingStore re-INSERTs invoice_lines on every save, so the same line
+    // returns with a brand-new id — which must not read as an unsaved edit, or
+    // Email stays disabled on "Save first" forever.
+    const loaded = invoice({ lines: [{ id: 'line-old', description: 'work', qty: 1, unitPrice: 100 }] });
+    const { rerender } = mount(loaded);
+    expect(await screen.findByTestId('doc-send')).toBeEnabled();
+
+    rerender(tree(invoice({
+      version: 3,
+      updatedAt: 20,
+      lines: [{ id: 'line-new', description: 'work', qty: 1, unitPrice: 100 }],
+    })));
+
+    const send = screen.getByTestId('doc-send');
+    expect(send).toBeEnabled();
+    expect(send).not.toHaveAttribute('title', 'Save first');
   });
 
   it('sends the generated file through sendInvoice', async () => {

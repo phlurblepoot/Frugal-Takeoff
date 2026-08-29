@@ -131,6 +131,12 @@ describe('InvoicesSection — editor remounting', () => {
     expect(h.getInvoice).toHaveBeenCalledTimes(2); // open + reload
     expect(mounts.count).toBe(1);
 
+    // A refresh that found nothing new must not throw away a typed draft.
+    await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
+    expect(mounts.count).toBe(1);
+
+    // A record that actually moved on does re-key the editor.
+    h.getInvoice.mockResolvedValue({ ...row({ version: 2 }), lines: [], payments: [] });
     await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
     expect(mounts.count).toBe(2);
   });

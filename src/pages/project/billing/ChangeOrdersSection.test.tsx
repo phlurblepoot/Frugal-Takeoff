@@ -121,6 +121,12 @@ describe('ChangeOrdersSection — editor remounting', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('save-kept')); });
     expect(mounts.count).toBe(1);
 
+    // A refresh that found nothing new must not throw away a typed draft.
+    await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
+    expect(mounts.count).toBe(1);
+
+    // A record that actually moved on does re-key the editor.
+    h.getChangeOrder.mockResolvedValue({ ...row({ version: 2 }), lines: [], photos: [], lumpSumCents: 0 });
     await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
     expect(mounts.count).toBe(2);
   });

@@ -14,22 +14,17 @@
 //    header email wasn't overridden in the composer; anything else rebuilds,
 //    so the recipient always gets bytes that match the record.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Download, ExternalLink, FileText, Mail } from 'lucide-react';
-import {
-  CustomDocType, DocumentRow, GeneratedDoc, fetchFileBlob, getDocumentTypes, getFileMeta,
-  persistGeneratedDocument,
-} from '../../utils/store';
+import { GeneratedDoc, fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
 import { useGeneratedDocument } from '../../hooks/useGeneratedDocument';
 import { downloadBlob } from '../../utils/download';
-import { DocumentViewerModal } from '../../pages/documents/DocumentViewerModal';
-import { openTargetFor } from '../../pages/documents/openTarget';
 import { EmailComposer, EmailComposerProps } from '../EmailComposer';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
 import { DocFormat, DocumentStatusChip, FORMAT_WORD } from './DocumentStatusChip';
 import { DocumentGenerationCancelled } from './errors';
 import { VersionOrOverwriteDialog } from './VersionOrOverwriteDialog';
+import { useDocumentViewer } from './useDocumentViewer';
 
 export type { DocFormat };
 
@@ -81,7 +76,9 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   readOnly = false, onGenerated, send, size, testIdPrefix = 'doc',
 }) => {
   const { toast } = useToast();
-  const navigate = useNavigate();
+  // Same peek-then-decide viewer the list rows open; it owns the modal, the
+  // custom-type labels and the open-in-editor routing.
+  const viewer = useDocumentViewer();
   const { file, upToDate, refresh } = useGeneratedDocument({
     sourceType: source.sourceType, sourceId: source.sourceId, kind, updatedAt,
     enabled: !!source.sourceId,
@@ -93,13 +90,20 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingChoice | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
-  const [viewerRow, setViewerRow] = useState<DocumentRow | null>(null);
-  const [customTypes, setCustomTypes] = useState<CustomDocType[]>([]);
 
+  // The awaited version/overwrite choice, mirrored in a ref so unmounting can
+  // settle it — a dangling promise would strand the generate/send flow that is
+  // waiting on it (and, for send, EmailComposer's `sending` state with it).
+  const pendingRef = useRef<PendingChoice | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      const p = pendingRef.current;
+      pendingRef.current = null;
+      p?.resolve(null);
+    };
   }, []);
   const set = useCallback(<T,>(fn: (v: T) => void, v: T) => { if (mountedRef.current) fn(v); }, []);
 
@@ -111,9 +115,15 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   // top-to-bottom instead of splintering into callbacks per branch.
   const askMode = (existing: GeneratedDoc) =>
     new Promise<'version' | 'overwrite' | null>(resolve => {
-      setPending({ fileName: existing.name ?? fileName, versionNumber: existing.versionNumber, resolve });
+      // Unmounted before we could ask: treat it as a cancel rather than
+      // waiting on a dialog that will never render.
+      if (!mountedRef.current) { resolve(null); return; }
+      const next = { fileName: existing.name ?? fileName, versionNumber: existing.versionNumber, resolve };
+      pendingRef.current = next;
+      setPending(next);
     });
   const settle = (mode: 'version' | 'overwrite' | null) => {
+    pendingRef.current = null;
     pending?.resolve(mode);
     setPending(null);
   };
@@ -188,49 +198,9 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     }
   };
 
-  const handleOpen = async () => {
+  const handleOpen = () => {
     if (!file) return;
-    set(setBusy, 'Opening…');
-    try {
-      const [meta, types] = await Promise.all([
-        getFileMeta(file.id),
-        getDocumentTypes().catch(() => [] as CustomDocType[]),
-      ]);
-      if (!meta) {
-        toast('That document is no longer available', { type: 'error' });
-        return;
-      }
-      set(setCustomTypes, types);
-      // The bar knows its own record, so the row it hands the viewer carries
-      // the bar's kind/project rather than a second lookup; the viewer only
-      // reads these for its detail rows.
-      set(setViewerRow, {
-        id: meta.id,
-        name: meta.name,
-        mime: meta.mime,
-        size: meta.size,
-        kind,
-        createdAt: meta.createdAt,
-        versionNumber: meta.versionNumber,
-        archived: false,
-        projectId,
-        projectName: null,
-        customerId: null,
-        customerName: null,
-        source: null,
-      });
-    } catch {
-      toast('Could not open that document', { type: 'error' });
-    } finally {
-      set(setBusy, null);
-    }
-  };
-
-  const openInEditor = (row: DocumentRow) => {
-    const target = openTargetFor(row);
-    if (!target.url) { void handleDownload(); return; }
-    if (target.type === 'image') { window.open(target.url, '_blank', 'noopener'); return; }
-    navigate(target.url);
+    viewer.open(file, kind, projectId);
   };
 
   const handleSend = async (m: SendMessage & { headerEmail?: string }) => {
@@ -300,7 +270,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
             size={btnSize}
             data-testid={`${p}-open`}
             disabled={!!busy}
-            onClick={() => { void handleOpen(); }}
+            onClick={handleOpen}
           >
             <ExternalLink size={15} />Open
           </Button>
@@ -360,18 +330,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         />
       )}
 
-      {viewerRow && (
-        <DocumentViewerModal
-          row={viewerRow}
-          customTypes={customTypes}
-          hideArchive
-          onClose={() => setViewerRow(null)}
-          onOpenInEditor={openInEditor}
-          onDownload={() => { void handleDownload(); }}
-          // The bar never archives — the Documents page owns that.
-          onArchive={async () => {}}
-        />
-      )}
+      {viewer.modal}
     </>
   );
 };
