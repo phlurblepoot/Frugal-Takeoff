@@ -50,8 +50,17 @@ vi.mock('../../pages/documents/DocumentViewerModal', () => ({
 }));
 
 vi.mock('../EmailComposer', () => ({
-  EmailComposer: ({ open, onSend, onClose, primaryAttachmentName }: any) =>
-    open ? (
+  // Mirrors the real composer closely enough for the flows under test: it
+  // closes only when onSend resolves, and (like every Modal) closes on a
+  // window-level Escape — which is exactly the collision the bar has to guard.
+  EmailComposer: ({ open, onSend, onClose, primaryAttachmentName }: any) => {
+    React.useEffect(() => {
+      if (!open) return;
+      const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [open, onClose]);
+    return open ? (
       <div data-testid="composer">
         <span data-testid="composer-attachment">{primaryAttachmentName}</span>
         {/* Mirrors the real composer: it closes only when onSend resolves,
@@ -63,7 +72,8 @@ vi.mock('../EmailComposer', () => ({
           send
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 import { persistGeneratedDocument, fetchFileBlob, getFileMeta } from '../../utils/store';
@@ -262,6 +272,23 @@ describe('DocumentActionsBar — send', () => {
   });
 });
 
+  it('Escape during the version dialog closes only the dialog, not the composer', async () => {
+    h.state.file = FILE;
+    h.state.upToDate = false;
+    renderBar({ send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+    await screen.findByText('Replace the existing PDF?');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByText('Replace the existing PDF?')).toBeNull());
+    expect(screen.getByTestId('composer')).toBeInTheDocument();
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(h.toast).not.toHaveBeenCalledWith('Failed to send', expect.anything());
+  });
+
 describe('DocumentActionsBar — open / download / formats', () => {
   it('downloads the stored file', async () => {
     h.state.file = FILE;
@@ -305,6 +332,24 @@ describe('DocumentActionsBar — open / download / formats', () => {
     expect(screen.getByTestId('doc-download')).toBeInTheDocument();
     expect(screen.queryByTestId('doc-generate')).toBeNull();
     expect(screen.queryByTestId('doc-send')).toBeNull();
+  });
+
+  it('words the version dialog for the xlsx format', async () => {
+    h.state.file = { ...FILE, name: 'PayApp-3.xlsx' };
+    h.state.upToDate = true;
+    renderBar({ format: 'xlsx', fileName: 'PayApp-3.xlsx' });
+    fireEvent.click(screen.getByTestId('doc-generate'));
+    await screen.findByText('Replace the existing Excel file?');
+  });
+
+  it('blocks Generate and Send until the record has an id', () => {
+    renderBar({ source: { sourceType: 'invoice', sourceId: undefined }, send: sendProp() });
+    const gen = screen.getByTestId('doc-generate');
+    expect(gen).toBeDisabled();
+    expect(gen).toHaveAttribute('title', 'Save first');
+    const snd = screen.getByTestId('doc-send');
+    expect(snd).toBeDisabled();
+    expect(snd).toHaveAttribute('title', 'Save first');
   });
 
   it('honours a custom testIdPrefix', () => {

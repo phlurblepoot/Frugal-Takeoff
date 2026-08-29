@@ -9,6 +9,7 @@ import { Button, Field, Input, Modal, Textarea } from './ui';
 import { useToast } from './Toast';
 import { uploadProjectFile } from '../utils/store';
 import { isValidAddressList, parseAddressList } from '../utils/email';
+import { DocumentGenerationCancelled } from './documents/errors';
 
 interface Attachment {
   fileId: string;
@@ -144,8 +145,10 @@ export const EmailComposer: React.FC<EmailComposerProps> = ({
         headerEmail: headerEmail || undefined,
       });
       onClose();
-    } catch {
-      toast('Failed to send', { type: 'error' });
+    } catch (e) {
+      // Backing out of the "version or overwrite?" prompt that onSend may put
+      // up isn't a failure: stay open with the message intact and say nothing.
+      if (!(e instanceof DocumentGenerationCancelled)) toast('Failed to send', { type: 'error' });
     } finally {
       setSending(false);
     }

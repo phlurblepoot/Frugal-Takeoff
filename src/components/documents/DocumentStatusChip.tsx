@@ -9,7 +9,7 @@ import { StatusPill } from '../ui';
 
 export type DocFormat = 'pdf' | 'xlsx';
 
-const FORMAT_WORD: Record<DocFormat, string> = { pdf: 'PDF', xlsx: 'Excel' };
+export const FORMAT_WORD: Record<DocFormat, string> = { pdf: 'PDF', xlsx: 'Excel' };
 
 export const DocumentStatusChip: React.FC<{
   file: GeneratedDoc | null;

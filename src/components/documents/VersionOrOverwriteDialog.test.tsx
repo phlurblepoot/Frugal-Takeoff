@@ -45,6 +45,21 @@ describe('VersionOrOverwriteDialog', () => {
     expect(onChoose).not.toHaveBeenCalled();
   });
 
+  it('words the title and body for the xlsx format', () => {
+    setup({ format: 'xlsx', fileName: 'PayApp-3.xlsx' });
+    expect(screen.getByText('Replace the existing Excel file?')).toBeInTheDocument();
+    expect(
+      screen.getByText(/PayApp-3\.xlsx already exists \(version 2\)\. Save the new Excel file as version 3, or overwrite it\?/)
+    ).toBeInTheDocument();
+  });
+
+  it('takes the host bar\'s test id prefix', () => {
+    setup({ testIdPrefix: 'aia' });
+    expect(screen.getByTestId('aia-version-cancel')).toBeInTheDocument();
+    expect(screen.getByTestId('aia-version-overwrite')).toBeInTheDocument();
+    expect(screen.getByTestId('aia-version-new')).toBeInTheDocument();
+  });
+
   it('renders nothing when closed', () => {
     setup({ open: false });
     expect(screen.queryByText('Replace the existing PDF?')).toBeNull();

@@ -27,7 +27,8 @@ import { openTargetFor } from '../../pages/documents/openTarget';
 import { EmailComposer, EmailComposerProps } from '../EmailComposer';
 import { useToast } from '../Toast';
 import { Button } from '../ui';
-import { DocFormat, DocumentStatusChip } from './DocumentStatusChip';
+import { DocFormat, DocumentStatusChip, FORMAT_WORD } from './DocumentStatusChip';
+import { DocumentGenerationCancelled } from './errors';
 import { VersionOrOverwriteDialog } from './VersionOrOverwriteDialog';
 
 export type { DocFormat };
@@ -42,7 +43,9 @@ type SendMessage = {
 };
 
 export interface DocumentActionsBarProps {
-  source: { sourceType: string; sourceId: string };
+  /** sourceId may be absent while the record is still unsaved — the bar then
+   *  shows Generate/Send as blocked ('Save first') instead of guessing an id. */
+  source: { sourceType: string; sourceId?: string };
   /** Document kind for persistGeneratedDocument (invoice, issue-report, …). */
   kind: string;
   format: DocFormat;
@@ -67,18 +70,11 @@ export interface DocumentActionsBarProps {
   testIdPrefix?: string;
 }
 
-const FORMAT_WORD: Record<DocFormat, string> = { pdf: 'PDF', xlsx: 'Excel' };
-
 type PendingChoice = {
   fileName: string;
   versionNumber: number;
   resolve: (mode: 'version' | 'overwrite' | null) => void;
 };
-
-// Thrown when the user backs out of the version/overwrite dialog mid-send: it
-// propagates out of EmailComposer's onSend so the composer stays open with the
-// message intact rather than closing on a send that never happened.
-const cancelled = () => new Error('document-generation-cancelled');
 
 export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   source, kind, format, projectId, fileName, build, dirty, save, updatedAt,
@@ -88,7 +84,11 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const navigate = useNavigate();
   const { file, upToDate, refresh } = useGeneratedDocument({
     sourceType: source.sourceType, sourceId: source.sourceId, kind, updatedAt,
+    enabled: !!source.sourceId,
   });
+
+  // Nothing to attach a document to yet.
+  const unsaved = !source.sourceId;
 
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingChoice | null>(null);
@@ -139,7 +139,9 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   };
 
   const handleGenerate = async () => {
-    if (busy) return;
+    // Guarded by the disabled button too; belt and braces, since persisting
+    // against a missing sourceId would orphan the document.
+    if (busy || unsaved) return;
     if (dirty) {
       let saved = false;
       set(setBusy, 'Saving…');
@@ -246,8 +248,9 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
       if (file) {
         const choice = await askMode(file);
         // Rethrown, not swallowed: EmailComposer keeps the dialog (and the
-        // typed message) open when onSend rejects.
-        if (!choice) throw cancelled();
+        // typed message) open when onSend rejects, and skips its error toast
+        // for this sentinel — a cancel isn't a failed send.
+        if (!choice) throw new DocumentGenerationCancelled();
         mode = choice;
       }
       set(setBusy, `Generating ${word}…`);
@@ -267,7 +270,10 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     toast('Sent', { type: 'success' });
   };
 
-  const sendBlocked = send ? (send.blockedReason ?? (dirty ? 'Save first' : undefined)) : undefined;
+  const sendBlocked = send
+    ? (send.blockedReason ?? (dirty || unsaved ? 'Save first' : undefined))
+    : undefined;
+  const generateBlocked = unsaved ? 'Save first' : undefined;
 
   return (
     <>
@@ -280,7 +286,8 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
           <Button
             size={btnSize}
             data-testid={`${p}-generate`}
-            disabled={!!busy}
+            disabled={!!busy || !!generateBlocked}
+            title={generateBlocked}
             onClick={() => { void handleGenerate(); }}
           >
             <FileText size={15} />{file ? `Regenerate ${word}` : `Generate ${word}`}
@@ -332,6 +339,8 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
           open
           fileName={pending.fileName}
           versionNumber={pending.versionNumber}
+          format={format}
+          testIdPrefix={p}
           onChoose={settle}
           onCancel={() => settle(null)}
         />
@@ -341,7 +350,10 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         <EmailComposer
           {...send.composer}
           open={composerOpen}
-          onClose={() => setComposerOpen(false)}
+          // Both Modals listen for Escape on window, so an Escape aimed at the
+          // version dialog would otherwise also close the composer and lose the
+          // typed message. While a choice is pending, only the dialog closes.
+          onClose={() => { if (!pending) setComposerOpen(false); }}
           projectId={projectId}
           primaryAttachmentName={fileName}
           onSend={handleSend}
