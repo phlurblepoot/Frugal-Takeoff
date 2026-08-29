@@ -1,10 +1,10 @@
 // src/pages/project/ProjectPunch.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { CheckSquare, Plus, Download, ImageIcon, Send } from 'lucide-react';
+import { CheckSquare, Plus, ImageIcon } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport, uploadProjectFile, persistGeneratedDocument,
+  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport,
 } from '../../utils/store';
 import { Customer } from '../../types';
 import { resolveRecipient } from '../../utils/recipients';
@@ -12,7 +12,7 @@ import { useToast } from '../../components/Toast';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, ProgressBar, Skeleton,
 } from '../../components/ui';
-import { EmailComposer } from '../../components/EmailComposer';
+import { DocumentActionsBar } from '../../components/documents/DocumentActionsBar';
 import { PunchItemEditor } from './punch/PunchItemEditor';
 import { EditingChip } from '../../components/EditingChip';
 import { buildPunchPdf } from './punch/punchPdf';
@@ -32,7 +32,6 @@ export const ProjectPunch: React.FC = () => {
   const [editing, setEditing] = useState<PunchItem | null>(null);
   const [newArea, setNewArea] = useState('');
   const [newDesc, setNewDesc] = useState('');
-  const [composing, setComposing] = useState(false);
 
   // Email defaults: resolved recipient, always-CC, header-email options.
   const [emailDefaults, setEmailDefaults] = useState<{
@@ -171,30 +170,51 @@ export const ProjectPunch: React.FC = () => {
     });
   };
 
-  const handleDownload = async () => {
-    try {
-      const projectName = summary?.name || 'project';
-      const doc = await buildPunchDoc();
-      const fileName = `${projectName}-punch-list.pdf`;
-      // Keep a copy in Documents, but never let that failure block the download.
-      if (projectId) {
-        try {
-          const pdfBlob = new Blob([new Uint8Array(doc.output('arraybuffer'))], { type: 'application/pdf' });
-          await persistGeneratedDocument(pdfBlob, { projectId, kind: 'punch-report', name: fileName, sourceType: 'punch', sourceId: projectId });
-        } catch { toast('Downloaded, but saving to Documents failed', { type: 'warning' }); }
-      }
-      doc.save(fileName);
-    } catch { toast('Failed to generate report', { type: 'error' }); }
-  };
+  const punchFileName = `${summary?.name || 'project'}-punch-list.pdf`;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
       <div className="mb-4 flex items-center justify-between gap-2">
         <h1 className="text-xl font-bold text-ink">Punch list</h1>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={handleDownload}><Download size={15} />Download report</Button>
-          <Button variant="secondary" onClick={() => setComposing(true)} disabled={list.length === 0}><Send size={15} />Send report</Button>
-        </div>
+        <DocumentActionsBar
+          source={{ sourceType: 'punch', sourceId: projectId }}
+          kind="punch-report"
+          format="pdf"
+          projectId={projectId ?? ''}
+          fileName={punchFileName}
+          build={async ({ headerEmail }) => {
+            const doc = await buildPunchDoc(headerEmail);
+            return new Blob([doc.output('arraybuffer')], { type: 'application/pdf' });
+          }}
+          dirty={false}
+          save={async () => true}
+          // PunchItem/PunchListItem carry no updatedAt (only createdAt) — the
+          // "current" comparison in useGeneratedDocument treats a missing
+          // updatedAt as always up to date, so the chip just tracks whether a
+          // report file exists rather than staleness against edits.
+          updatedAt={null}
+          size="sm"
+          send={{
+            blockedReason: list.length === 0 ? 'No punch items' : undefined,
+            composer: {
+              title: 'Send punch list report',
+              defaultTo: emailDefaults.defaultTo || undefined,
+              defaultCc: emailDefaults.defaultCc || undefined,
+              defaultBcc: emailDefaults.defaultBcc || undefined,
+              defaultSubject: `Punch List Report — ${summary?.name || 'Project'}`,
+              defaultBody: `Hello,\n\nPlease find attached the punch list report for ${summary?.name || 'the project'}.\n\nThank you.`,
+              headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
+              defaultHeaderEmail: emailDefaults.companyEmail || undefined,
+            },
+            sendFn: async (fileId, m) => {
+              if (!projectId) return;
+              await sendPunchReport(projectId, {
+                to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
+                fileId, attachmentFileIds: m.attachmentFileIds,
+              });
+            },
+          }}
+        />
       </div>
 
       {total > 0 && (
@@ -279,36 +299,6 @@ export const ProjectPunch: React.FC = () => {
           onSaved={async () => { try { setEditing(await getPunchItem(editing.id)); } catch { setEditing(null); } reload(); }}
         />
       )}
-
-      <EmailComposer
-        open={composing}
-        onClose={() => setComposing(false)}
-        projectId={projectId ?? ''}
-        title="Send punch list report"
-        primaryAttachmentName={`${summary?.name || 'project'}-punch-list.pdf`}
-        defaultTo={emailDefaults.defaultTo || undefined}
-        defaultCc={emailDefaults.defaultCc || undefined}
-        defaultBcc={emailDefaults.defaultBcc || undefined}
-        defaultSubject={`Punch List Report — ${summary?.name || 'Project'}`}
-        defaultBody={`Hello,\n\nPlease find attached the punch list report for ${summary?.name || 'the project'}.\n\nThank you.`}
-        headerEmailOptions={emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined}
-        defaultHeaderEmail={emailDefaults.companyEmail || undefined}
-        onSend={async (m) => {
-          if (!projectId) return;
-          // Always regenerate with the chosen header email so the PDF contact matches.
-          const effectiveHeaderEmail = m.headerEmail || emailDefaults.companyEmail || undefined;
-          const doc = await buildPunchDoc(effectiveHeaderEmail);
-          const arrayBuf = doc.output('arraybuffer');
-          const pdfBlob = new Blob([new Uint8Array(arrayBuf)], { type: 'application/pdf' });
-          const projectName = summary?.name || 'project';
-          const file = new File([pdfBlob], `${projectName}-punch-list.pdf`, { type: 'application/pdf' });
-          // Source triple = the project's one punch report, so Send and Download
-          // version a single document instead of piling up copies.
-          const { fileId } = await uploadProjectFile(projectId, file, 'punch-report', { sourceType: 'punch', sourceId: projectId });
-          await sendPunchReport(projectId, { to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body, fileId, attachmentFileIds: m.attachmentFileIds });
-          toast('Punch list report sent', { type: 'success' });
-        }}
-      />
     </div>
   );
 };
