@@ -1,6 +1,6 @@
 // src/pages/documents/docTypes.test.ts
 import { describe, it, expect } from 'vitest';
-import { kindLabel, kindTone, KIND_OPTIONS } from './docTypes';
+import { kindLabel, kindTone, KIND_OPTIONS, isDeletableGeneratedKind, isDirectUploadKind } from './docTypes';
 
 describe('kindLabel', () => {
   it('resolves canonical kinds to their display label', () => {
@@ -55,5 +55,35 @@ describe('KIND_OPTIONS', () => {
   it('has a unique id per option', () => {
     const ids = KIND_OPTIONS.map(o => o.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('proposal-rework kinds', () => {
+  it('knows the proposal-rework kinds and treats company-document as a direct upload', () => {
+    expect(kindLabel('takeoff-print')).toBe('Takeoff Print');
+    expect(kindLabel('takeoff-export')).toBe('Takeoff Export');
+    expect(kindLabel('proposal-signed')).toBe('Signed Proposal');
+    expect(kindLabel('company-document')).toBe('Company Document');
+    expect(isDirectUploadKind('company-document')).toBe(true);
+    expect(isDirectUploadKind('takeoff-print')).toBe(false);
+    expect(KIND_OPTIONS.map(o => o.id)).not.toContain('printout');
+  });
+
+  // Migration 28 relabels every legacy 'printout' row, but a database that
+  // hasn't run it yet would otherwise show a raw 'printout' badge — so the
+  // kind keeps a label and a tone while staying unselectable.
+  it('still labels the retired printout kind, but never offers it as a filter', () => {
+    expect(kindLabel('printout')).toBe('Printout');
+    expect(kindTone('printout')).toBe('slate');
+    expect(KIND_OPTIONS.map(o => o.id)).not.toContain('printout');
+    expect(isDirectUploadKind('printout')).toBe(false);
+  });
+
+  it('marks takeoff prints/exports — and nothing else — as deletable generated kinds', () => {
+    expect(isDeletableGeneratedKind('takeoff-print')).toBe(true);
+    expect(isDeletableGeneratedKind('takeoff-export')).toBe(true);
+    expect(isDeletableGeneratedKind('proposal')).toBe(false);
+    expect(isDeletableGeneratedKind('invoice')).toBe(false);
+    expect(isDeletableGeneratedKind('document')).toBe(false);
   });
 });

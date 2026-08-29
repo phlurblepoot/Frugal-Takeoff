@@ -77,14 +77,6 @@ export interface PlanSet {
   createdAt: number;
 }
 
-export interface Printout {
-  id: string;
-  name: string;
-  fileId: string;
-  createdAt: number;
-  type?: 'pdf' | 'excel';
-}
-
 export interface ScaleRegion {
   id: string;
   name: string;
@@ -197,7 +189,6 @@ export interface Project {
   planSets?: PlanSet[];
   pages: ProjectPage[];
   takeoffs: MeasurementTakeoff[];
-  printouts?: Printout[];
   submitted?: boolean;
   responded?: boolean;
   accepted?: boolean;
@@ -206,16 +197,6 @@ export interface Project {
   // Email thread the project was created from (moved from the bid pipeline on conversion)
   email?: BidEmail;
   emails?: BidEmail[];
-  proposalFileId?: string;
-  proposalSentAt?: number;
-  // Photo attachment ids (from the file store) appended to the generated proposal PDF.
-  proposalPhotoIds?: string[];
-  // Last-saved proposal cover notes / terms — rides in project meta the same
-  // way proposalPhotoIds does (no migration). Used to prefill the proposal
-  // editor on this project; see proposalTextHistory.ts for the separate
-  // per-user "last used" history.
-  proposalCoverNotes?: string;
-  proposalTerms?: string;
   // Optimistic-concurrency version — echoed back on save; the server rejects
   // stale saves with 409. Assigned by the server (1 on create).
   version?: number;

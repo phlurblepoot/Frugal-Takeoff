@@ -1248,4 +1248,215 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 28,
+    name: 'proposals',
+    // DATA-TRANSFORMING (supervised). Proposals become first-class rows
+    // (spec 2026-08-28 §3). Legacy project-meta proposals/printouts are
+    // converted: proposal printouts → numbered `legacy=1` proposal rows;
+    // remaining printouts → takeoff-print/takeoff-export documents; the six
+    // legacy meta keys are stripped. File bytes are never touched.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE proposals (
+          id TEXT PRIMARY KEY,
+          projectId TEXT NOT NULL,
+          number INTEGER NOT NULL,
+          revisedFromId TEXT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          legacy INTEGER NOT NULL DEFAULT 0,
+          title TEXT,
+          validUntil TEXT,
+          fontFamily TEXT,
+          coverNotes TEXT,
+          terms TEXT,
+          inclusions TEXT NOT NULL DEFAULT '[]',
+          exclusions TEXT NOT NULL DEFAULT '[]',
+          paymentSchedule TEXT,
+          showGrandTotal INTEGER NOT NULL DEFAULT 1,
+          includeCostDetail INTEGER NOT NULL DEFAULT 0,
+          includeSignature INTEGER NOT NULL DEFAULT 1,
+          highlightQuality TEXT NOT NULL DEFAULT 'best',
+          fileId TEXT,
+          signedFileId TEXT,
+          sentAt INTEGER,
+          sentTo TEXT,
+          acceptedAt INTEGER,
+          declinedAt INTEGER,
+          version INTEGER NOT NULL DEFAULT 1,
+          createdBy TEXT,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          UNIQUE(projectId, number)
+        );
+        CREATE INDEX idx_proposals_project ON proposals(projectId);
+        CREATE INDEX idx_proposals_status ON proposals(status);
+        CREATE TABLE proposal_lines (
+          id TEXT PRIMARY KEY,
+          proposalId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          kind TEXT NOT NULL,
+          takeoffId TEXT,
+          description TEXT NOT NULL DEFAULT '',
+          amountCents INTEGER NOT NULL DEFAULT 0,
+          derivedAmountCents INTEGER,
+          measurementSummary TEXT,
+          isAlternate INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_proposal_lines_proposal ON proposal_lines(proposalId);
+        CREATE TABLE proposal_photos (
+          id TEXT PRIMARY KEY,
+          proposalId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          caption TEXT,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(proposalId, fileId)
+        );
+        CREATE INDEX idx_proposal_photos_proposal ON proposal_photos(proposalId);
+        CREATE TABLE proposal_attachments (
+          id TEXT PRIMARY KEY,
+          proposalId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(proposalId, fileId)
+        );
+        CREATE INDEX idx_proposal_attachments_proposal ON proposal_attachments(proposalId);
+      `);
+
+      const LEGACY_KEYS = ['printouts', 'proposalFileId', 'proposalSentAt', 'proposalPhotoIds', 'proposalCoverNotes', 'proposalTerms'];
+      // LOCAL y-m-d, matching src/utils/takeoffPrintNames.ts and
+      // proposalFileName — an ISO slice shows tomorrow's (or yesterday's) date
+      // either side of UTC midnight, so a print made at 8pm would be dated the
+      // next day.
+      const isoDate = (ts: number) => {
+        const d = new Date(Number.isFinite(ts) ? ts : Date.now());
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      };
+      const fileKind = db.prepare('SELECT kind, name FROM files WHERE id = ?');
+      const setFile = db.prepare('UPDATE files SET kind = ?, name = ?, sourceType = ?, sourceId = ? WHERE id = ?');
+      const setFileSource = db.prepare('UPDATE files SET sourceType = ?, sourceId = ? WHERE id = ?');
+      const insProposal = db.prepare(`INSERT INTO proposals
+        (id, projectId, number, status, legacy, coverNotes, terms, fileId, sentAt, version, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 1, ?, ?)`);
+      const insPhoto = db.prepare('INSERT OR IGNORE INTO proposal_photos (id, proposalId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)');
+
+      const rows = db.prepare('SELECT id, name, meta FROM projects ORDER BY createdAt, id').all() as { id: string; name: string | null; meta: string | null }[];
+      let proposalsMade = 0, printsRelabeled = 0, photosMoved = 0;
+      for (const row of rows) {
+        let p: any = null;
+        try { p = row.meta ? JSON.parse(row.meta) : null; } catch { console.warn(`[migrations] 28: project ${row.id} has unparseable meta (skipped)`); continue; }
+        if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
+        if (!LEGACY_KEYS.some(k => k in p)) continue; // already migrated / never had proposals
+
+        const projectName = (row.name && row.name.trim()) || 'Untitled';
+        // Two guards on the legacy list before anything is created from it:
+        //  - a printout whose file row is gone (bytes reclaimed, project
+        //    partially deleted) must NOT become a proposal — it would be a
+        //    numbered row pointing at a dangling fileId, unopenable forever.
+        //  - the same fileId can appear twice (an old re-save appended rather
+        //    than replaced); keeping the first occurrence avoids two proposals
+        //    (or two relabels) fighting over one file row.
+        const seenFileIds = new Set<string>();
+        const printouts: any[] = (Array.isArray(p.printouts) ? p.printouts : [])
+          .filter((x: any) => x && typeof x === 'object' && typeof x.fileId === 'string')
+          .filter((x: any) => {
+            if (!fileKind.get(x.fileId)) return false;
+            if (seenFileIds.has(x.fileId)) return false;
+            seenFileIds.add(x.fileId);
+            return true;
+          });
+        const isProposalPrintout = (po: any) => {
+          // A printout whose fileId IS the sent proposal is always a proposal
+          // printout, even if its own kind/name heuristics don't say so —
+          // otherwise it gets classified as sent-proposal AND relabeled as a
+          // takeoff print below, leaving proposals.fileId pointing at a
+          // mislabeled file.
+          if (typeof p.proposalFileId === 'string' && po.fileId === p.proposalFileId) return true;
+          const f = fileKind.get(po.fileId) as { kind: string; name: string | null } | undefined;
+          if (f?.kind === 'proposal') return true;
+          const nm = String(po.name ?? f?.name ?? '');
+          return /^Proposal\b/i.test(nm);
+        };
+        const proposalPrintouts = printouts.filter(isProposalPrintout).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+        const otherPrintouts = printouts.filter(po => !isProposalPrintout(po));
+
+        let lastProposalId: string | null = null;
+        proposalPrintouts.forEach((po, i) => {
+          const id = crypto.randomUUID();
+          const createdAt = Number.isFinite(po.createdAt) ? po.createdAt : Date.now();
+          const isSent = typeof p.proposalFileId === 'string' && p.proposalFileId === po.fileId;
+          insProposal.run(id, row.id, i + 1, isSent ? 'sent' : 'draft',
+            typeof p.proposalCoverNotes === 'string' ? p.proposalCoverNotes : null,
+            typeof p.proposalTerms === 'string' ? p.proposalTerms : null,
+            po.fileId, isSent && Number.isFinite(p.proposalSentAt) ? p.proposalSentAt : null,
+            createdAt, createdAt);
+          const f = fileKind.get(po.fileId) as { kind: string; name: string | null } | undefined;
+          if (f) setFile.run('proposal', f.name ?? po.name ?? null, 'proposal', id, po.fileId);
+          lastProposalId = id;
+          proposalsMade++;
+        });
+        // proposalFileId not among the printouts (sent via regenerate path) —
+        // still becomes its own sent proposal so the sent PDF isn't orphaned.
+        if (typeof p.proposalFileId === 'string' && p.proposalFileId && !proposalPrintouts.some(po => po.fileId === p.proposalFileId) && fileKind.get(p.proposalFileId)) {
+          const id = crypto.randomUUID();
+          const ts = Number.isFinite(p.proposalSentAt) ? p.proposalSentAt : Date.now();
+          insProposal.run(id, row.id, proposalPrintouts.length + 1, 'sent',
+            typeof p.proposalCoverNotes === 'string' ? p.proposalCoverNotes : null,
+            typeof p.proposalTerms === 'string' ? p.proposalTerms : null,
+            p.proposalFileId, ts, ts, ts);
+          const f = fileKind.get(p.proposalFileId) as { kind: string; name: string | null };
+          setFile.run('proposal', f.name, 'proposal', id, p.proposalFileId);
+          lastProposalId = id;
+          proposalsMade++;
+        }
+
+        const photoIds: string[] = Array.isArray(p.proposalPhotoIds) ? p.proposalPhotoIds.filter((x: any) => typeof x === 'string' && x) : [];
+        if (lastProposalId && photoIds.length) {
+          photoIds.forEach((fid, i) => {
+            if (!fileKind.get(fid)) return;
+            insPhoto.run(crypto.randomUUID(), lastProposalId, fid, i, Date.now());
+            setFileSource.run('proposal', lastProposalId, fid);
+            photosMoved++;
+          });
+        }
+        // No proposal to hang them on: photos stay as proposal-photo uploads
+        // attributed to the project (sourceType cleared so they're loose).
+        if (!lastProposalId && photoIds.length) {
+          photoIds.forEach(fid => { if (fileKind.get(fid)) setFileSource.run(null, null, fid); });
+        }
+
+        for (const po of otherPrintouts) {
+          const f = fileKind.get(po.fileId) as { kind: string; name: string | null } | undefined;
+          if (!f) continue;
+          const isExcel = po.type === 'excel' || /\.xlsx$/i.test(String(po.name ?? f.name ?? ''));
+          const kind = isExcel ? 'takeoff-export' : 'takeoff-print';
+          const name = `${isExcel ? 'Takeoff Export' : 'Takeoff Print'} – ${projectName} – ${isoDate(po.createdAt)}`;
+          const srcId = typeof po.id === 'string' && po.id ? po.id : crypto.randomUUID();
+          setFile.run(kind, name, 'takeoff-print', srcId, po.fileId);
+          printsRelabeled++;
+        }
+
+        for (const k of LEGACY_KEYS) delete p[k];
+        db.prepare('UPDATE projects SET meta = ? WHERE id = ?').run(JSON.stringify(p), row.id);
+      }
+      console.log(`[migrations] 28: ${proposalsMade} legacy proposals, ${photosMoved} photos moved, ${printsRelabeled} takeoff prints relabeled`);
+    },
+  },
+  {
+    version: 29,
+    name: 'proposal-counter',
+    // ADDITIVE. Same fix as migration 20 (rfi-counter): a proposal number is
+    // referenced once sent, so it must never be reused after a delete.
+    // Numbering moves from MAX(number)+1 to a per-project high-water counter,
+    // backfilled to each project's current max (including legacy rows from
+    // migration 28, which already occupy numbers).
+    up({ db }) {
+      db.exec('ALTER TABLE projects ADD COLUMN proposalCounter INTEGER NOT NULL DEFAULT 0;');
+      db.exec(`UPDATE projects SET proposalCounter = COALESCE(
+        (SELECT MAX(number) FROM proposals WHERE proposals.projectId = projects.id), 0)`);
+    },
+  },
 ];

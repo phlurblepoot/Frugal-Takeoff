@@ -108,20 +108,22 @@ test('email-mode printout of a 60MB plan set lands under the 18MB target', async
   await authedPage.getByTestId('print-quality-select').selectOption('email');
   await authedPage.getByTestId('btn-print').click();
 
-  await expect(authedPage).toHaveURL(new RegExp(`/project/${projectId}/proposal`), {
-    timeout: 480_000,
-  });
-  await expect(authedPage.getByText(/^Printout - /).first()).toBeVisible({ timeout: 15_000 });
+  // Print saves a `takeoff-print` document and lands on the filtered Documents
+  // view (spec 2026-08-28-proposal-rework Task 9 — project.printouts[] is gone).
+  await expect(authedPage).toHaveURL(
+    new RegExp(`/documents\\?projectIds=${projectId}&kinds=takeoff-print(,|%2C)takeoff-export`),
+    { timeout: 480_000 },
+  );
+  await expect(authedPage.getByText(/^Takeoff Print – /).first()).toBeVisible({ timeout: 15_000 });
 
-  // 4. Fetch the recorded printout's raw bytes and assert the budget.
-  const projectRes = await request.get(`/api/projects/${projectId}`, { headers: auth });
-  expect(projectRes.ok()).toBeTruthy();
-  const savedProject = await projectRes.json();
-  const printouts: { id: string; fileId: string; createdAt: number }[] = savedProject.printouts ?? [];
-  expect(printouts.length).toBeGreaterThan(0);
-  const printout = printouts[printouts.length - 1];
+  // 4. Fetch the recorded print's raw bytes and assert the budget.
+  const docsRes = await request.get(
+    `/api/documents?projectIds=${projectId}&kinds=takeoff-print`, { headers: auth });
+  expect(docsRes.ok()).toBeTruthy();
+  const rows = (await docsRes.json()).rows as { id: string }[];
+  expect(rows.length).toBeGreaterThan(0);
 
-  const head = await request.head(`/api/images/${printout.fileId}/raw`);
+  const head = await request.head(`/api/images/${rows[0].id}/raw`);
   expect(head.ok()).toBeTruthy();
   const size = Number(head.headers()['content-length']);
   expect(size).toBeLessThanOrEqual(18 * 1024 * 1024);

@@ -73,7 +73,7 @@ test('documents page: project + kind multi-select filters, search narrows, real 
   // Type badges — server-canonical kind -> UI label (docTypes.ts KIND_META).
   await expect(rowFor(authedPage, seeded.invoiceFileName).getByText('Invoice', { exact: true })).toBeVisible();
   await expect(rowFor(authedPage, seeded.payAppFileName).getByText('Pay App Export', { exact: true })).toBeVisible();
-  await expect(rowFor(authedPage, seeded.printoutFileName).getByText('Printout', { exact: true })).toBeVisible();
+  await expect(rowFor(authedPage, seeded.printoutFileName).getByText('Takeoff Print', { exact: true })).toBeVisible();
   await expect(tableRows(authedPage).filter({ hasText: 'site-photo-' }).getByText('Issue Photo', { exact: true })).toBeVisible();
 
   // Real source links (server/documents.ts SIMPLE_RESOLVERS href templates) —
@@ -84,7 +84,7 @@ test('documents page: project + kind multi-select filters, search narrows, real 
   await expect(rowFor(authedPage, seeded.payAppFileName).locator('a'))
     .toHaveAttribute('href', `/project/${seeded.inProgressProjectId}/billing?tab=pay-apps`);
   await expect(rowFor(authedPage, seeded.printoutFileName).locator('a'))
-    .toHaveAttribute('href', `/project/${seeded.inProgressProjectId}/proposal`);
+    .toHaveAttribute('href', `/project/${seeded.inProgressProjectId}/takeoff`);
   await expect(tableRows(authedPage).filter({ hasText: 'site-photo-' }).locator('a'))
     .toHaveAttribute('href', `/project/${seeded.inProgressProjectId}/issues`);
 
@@ -97,7 +97,7 @@ test('documents page: project + kind multi-select filters, search narrows, real 
   const typePanel = authedPage.getByTestId('doc-filter-type').locator('..');
   await typePanel.getByText('Invoice', { exact: true }).click();
   await expect(authedPage).toHaveURL(/kinds=invoice/); // see the project multi-select comment above — same race
-  await typePanel.getByText('Printout', { exact: true }).click();
+  await typePanel.getByText('Takeoff Print', { exact: true }).click();
   await heading.click(); // close the popover
   await expect(tableRows(authedPage)).toHaveCount(2);
   await expect(rowFor(authedPage, seeded.invoiceFileName)).toHaveCount(1);

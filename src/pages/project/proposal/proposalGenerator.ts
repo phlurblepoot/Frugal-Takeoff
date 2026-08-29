@@ -7,13 +7,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 import { jsPDF } from 'jspdf';
 import { Project, MeasurementTakeoff } from '../../../types';
 import { getFile, getImage } from '../../../utils/store';
+import type { Proposal, ProposalLine } from '../../../utils/store';
+import { proposalTotals, scheduleAmountCents } from './proposalMath';
 import { viewBox, overlayPlacement } from '../../../utils/pdfOverlayTransform';
 import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './shrinkPdf';
 import {
   LetterheadContext,
   drawLetterheadHeader,
   drawLetterheadFooter,
-  hexToRgb as letterheadHexToRgb,
 } from '../../../utils/documentLetterhead';
 import {
   calculatePolylineLength,
@@ -22,9 +23,7 @@ import {
   calculateSurfaceAreaPx,
   convertUnit,
   UNIT_LABELS,
-  calculateTakeoffTotalCost,
   calculateTakeoffCostDetails,
-  roundUpTo100,
   expandArcPoints,
   measurementAreaPx,
   measurementRings,
@@ -441,16 +440,6 @@ export function normalizeHighlightQuality(value: unknown): HighlightQuality {
   return value === 'email' || value === 'best' ? value : 'best';
 }
 
-// ── Per-user localStorage key for proposal preferences ───────────────────────
-export function getProposalPrefsKey(): string {
-  try {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    return `proposal-prefs-${user.id || 'default'}`;
-  } catch {
-    return 'proposal-prefs-default';
-  }
-}
-
 // Per-takeoff totals as produced by ProjectView's getTakeoffTotals(): the base
 // takeoff augmented with computed totals + per-page breakdown.
 export type TakeoffTotals = MeasurementTakeoff & {
@@ -566,542 +555,647 @@ export function computeTakeoffTotals(
   });
 }
 
-export interface ProposalOptions {
-  includeCostDetail: boolean; includeHighlights: boolean;
-  coverNotes: string;
-  fontFamily: 'helvetica' | 'times' | 'courier';
-  validUntil: string; terms: string;
-  includeSignature: boolean; includeTakeoffList: boolean;
-  customTitle: string; highlightQuality: HighlightQuality;
-  // Pricing mode. 'takeoffs' (default when undefined) sums per-takeoff costs;
-  // 'fixed' uses a single lump-sum total and suppresses the takeoff table.
-  priceMode?: 'takeoffs' | 'fixed';
-  // Lump-sum total in DOLLARS, used only when priceMode === 'fixed'.
-  fixedPriceTotal?: number;
-  // JPEG data URLs appended as photo pages after the Terms page.
-  photoDataUrls?: string[];
-  // Branded letterhead (header + footer on every page). The brand colour also
-  // drives the proposal's accents, so client PDFs reflect the company brand.
-  letterhead?: LetterheadContext;
-  // When provided and non-empty, overrides the company email shown in the document header.
-  headerEmail?: string;
+// ── Proposal PDF renderer ────────────────────────────────────────────────────
+// Everything below renders a SAVED proposal snapshot. The generator never looks
+// at live takeoff data for pricing — the snapshot's lines are the record — so a
+// proposal re-rendered a year later reproduces exactly what the client saw.
+// `takeoffTotals` is consulted only for the optional cost-detail page.
+
+/** Everything the renderer needs. Resolved by the caller (files → bytes/data URLs). */
+export interface ProposalRenderInput {
+  /** The saved snapshot: lines, inclusions, terms, options… */
+  proposal: Proposal;
+  project: Project;
+  /** Live per-takeoff totals — cost-detail page only. */
+  takeoffTotals: TakeoffTotals[];
+  /** Current (non-superseded) page ids, for the highlights merge. */
+  currentPageIds: Set<string>;
+  letterhead: LetterheadContext;
+  photos: { dataUrl: string; caption: string | null }[];
+  /** Attachment PDF bytes, in arranged order — appended untouched. */
+  attachments: ArrayBuffer[];
+  includeHighlights: boolean;
 }
 
-export interface ProposalGenResult { pdfBytes: ArrayBuffer; suggestedName: string; overBudget?: boolean }
+export interface ProposalGenResult {
+  pdfBytes: ArrayBuffer;
+  suggestedName: string;
+  overBudget?: boolean;
+  /** 1-based page index where each section STARTS (absent when not rendered). */
+  sections: Record<string, number>;
+}
 
 export const formatCurrency = (n: number) =>
   '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Resolves the grand total shown on the cover (and summary). In 'fixed' mode it
-// returns the user-supplied lump sum (0 when undefined); otherwise it sums the
-// per-takeoff costs exactly as before. Pure — no side effects.
-export function resolveGrandTotal(options: ProposalOptions, selectedTakeoffs: TakeoffTotals[]): number {
-  return options.priceMode === 'fixed'
-    ? (options.fixedPriceTotal || 0)
-    : selectedTakeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
-}
+/**
+ * `Proposal – <project> – <YYYY-MM-DD>`. The proposal NUMBER is internal and
+ * never appears in the filename (spec §2). Uses the LOCAL date — an ISO slice
+ * would show tomorrow's (or yesterday's) date either side of UTC midnight.
+ */
+export const proposalFileName = (project: Project, when: Date = new Date()): string => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `Proposal – ${project.name} – ${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+};
+
+/** Vertical space one inline section divider consumes (pad + rule + title + pad). */
+const DIVIDER_H = 43;
 
 export async function generateProposalPdf(
-  project: Project,
-  takeoffTotals: TakeoffTotals[],
-  selectedTakeoffIds: Set<string>,
-  currentPageIds: Set<string>,
-  options: ProposalOptions,
-  settings: Record<string, string>,
+  input: ProposalRenderInput,
   onProgress?: (msg: string) => void,
 ): Promise<ProposalGenResult> {
-  const {
-    includeCostDetail,
-    includeHighlights,
-    coverNotes,
-    fontFamily,
-    validUntil,
-    terms,
-    includeSignature,
-    includeTakeoffList,
-    customTitle: proposalCustomTitle,
-    highlightQuality,
-  } = options;
-
-  const selectedTakeoffs = takeoffTotals.filter(t => selectedTakeoffIds.has(t.id));
+  const { proposal, project, takeoffTotals, currentPageIds, letterhead: lc, photos, attachments, includeHighlights } = input;
+  const font = proposal.fontFamily ?? 'helvetica';
 
   // Letter portrait so the shared (Letter-based) letterhead fits exactly.
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const W = pdf.internal.pageSize.getWidth();
-  const H = pdf.internal.pageSize.getHeight();
+  const M = 40; // body margin
 
-  // Branded letterhead. The brand colour drives the proposal's accents on
-  // every generated PDF. `letterhead` is only absent in unit tests that call
-  // this function directly — production callers always pass it (see
-  // ProjectProposal.tsx), so the fallback below only needs a sane default
-  // brand colour, not a user preference.
-  const baseLc: LetterheadContext = options.letterhead ?? {
-    brandRgb: letterheadHexToRgb(''),
-    company: {
-      name: settings.companyName || settings.appName,
-      phone: settings.companyPhone,
-      email: settings.companyEmail,
-      address: settings.companyAddress,
-    },
-  };
-  const lc: LetterheadContext = options.headerEmail
-    ? { ...baseLc, company: { ...baseLc.company, email: options.headerEmail } }
-    : baseLc;
   const [hR, hG, hB] = lc.brandRgb;
   // Lighter accent tint (60% brand + 40% white) for thin rules / sub-accents.
-  const accentR = Math.round(hR + (255 - hR) * 0.4);
-  const accentG = Math.round(hG + (255 - hG) * 0.4);
-  const accentB = Math.round(hB + (255 - hB) * 0.4);
-  const font = fontFamily;
+  const [accentR, accentG, accentB] = lc.brandRgb.map(c => Math.round(c + (255 - c) * 0.4));
 
-  // Draws the branded header + footer on the current page; returns contentTop.
-  // Each page's body must start at `pageTop` and stay above `pageBottom`.
+  // The letterhead banners bracket the body on every page.
+  const pageBottom = drawLetterheadFooter(pdf, lc); // also draws the first footer
+  const pageTop = drawLetterheadHeader(pdf, lc);
   const drawFrame = (): number => {
     const t = drawLetterheadHeader(pdf, lc);
     drawLetterheadFooter(pdf, lc);
     return t;
   };
-  const pageBottom = drawLetterheadFooter(pdf, lc); // also draws the first footer
-  const pageTop = drawLetterheadHeader(pdf, lc);
 
-  // ── COVER PAGE ──────────────────────────────────────────────────────
-  // "PROPOSAL" heading — 38pt with branded accent bar (in the body area)
-  pdf.setTextColor(hR, hG, hB);
-  pdf.setFontSize(38);
-  pdf.setFont(font, 'bold');
-  pdf.text('PROPOSAL', W / 2, 210, { align: 'center' });
-  // Short bold accent bar
-  pdf.setFillColor(hR, hG, hB);
-  pdf.rect(W / 2 - 50, 220, 100, 3, 'F');
-  // Thin tinted full-width rule
-  pdf.setDrawColor(accentR, accentG, accentB);
-  pdf.setLineWidth(0.5);
-  pdf.line(40, 230, W - 40, 230);
-  void pageTop;
+  const pageNo = () => (pdf as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
+  const sections: Record<string, number> = {};
+  const totals = proposalTotals(proposal.lines);
+  const money = (cents: number) => formatCurrency(cents / 100);
+  const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
 
-  // Project name
-  const title = proposalCustomTitle || project.name;
-  pdf.setFontSize(22);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(15, 23, 42);
-  const titleLines = pdf.splitTextToSize(title, W - 80) as string[];
-  pdf.text(titleLines, W / 2, 265, { align: 'center' });
+  // Sections are MEASURED before they are drawn (see `keepTogether`) so that
+  // none of them gets cut by a page break it could have stepped over. The
+  // measuring pass replays a section's own draw code against this scratch
+  // document — same format and fonts, so splitTextToSize wraps identically —
+  // with `measuring` set, which makes ensure() stop breaking and newPage()
+  // inert. `doc` is what every section actually draws through: the real output
+  // normally, the scratch while measuring, so a measured pass leaves no ink.
+  const scratch = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  let doc: jsPDF = pdf;
+  let measuring = false;
+  /** Deepest Y any ensure() reserved during the current measuring pass. */
+  let measurePeak = 0;
+
+  // ── Text styles ────────────────────────────────────────────────────────────
+  const styleHeading = () => { doc.setFontSize(9); doc.setFont(font, 'bold'); doc.setTextColor(hR, hG, hB); };
+  const styleBody = () => { doc.setFontSize(10); doc.setFont(font, 'normal'); doc.setTextColor(71, 85, 105); };
+  const styleStrong = () => { doc.setFontSize(10); doc.setFont(font, 'bold'); doc.setTextColor(15, 23, 42); };
+  const styleMuted = () => { doc.setFontSize(8); doc.setFont(font, 'normal'); doc.setTextColor(100, 116, 139); };
+
+  /** Section title band in the BODY area. Returns the Y where content may begin. */
+  const drawSectionBand = (titleText: string): number => {
+    doc.setFillColor(hR, hG, hB);
+    doc.rect(0, pageTop, W, 30, 'F');
+    doc.setFontSize(13);
+    doc.setFont(font, 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text(titleText, M, pageTop + 20);
+    doc.setFontSize(10);
+    doc.setFont(font, 'normal');
+    doc.text(projNameTrunc, W - M, pageTop + 20, { align: 'right' });
+    return pageTop + 30 + 18;
+  };
+
+  // Cursor-based flow: `y` is the next free baseline. `ensure(h)` starts a fresh
+  // framed page when h points won't fit; `onBreak` lets a caller redraw whatever
+  // the break scrolled off (column heads, table rules).
+  //
+  // Banding: a section's FIRST page carries its plain title and only genuine
+  // continuations get "(cont.)". `sectionOpen` is what tells the two apart — a
+  // section that `keepTogether` moves to a fresh page STARTS there, so it gets
+  // the plain band and no inline divider; anything that breaks after content
+  // has landed is a continuation.
+  let y = 0;
+  let bandTitle = '';
+  let sectionOpen = false;
+  /** Begin a section that flows on from the current page. */
+  const startSection = (title: string) => {
+    bandTitle = title;
+    sectionOpen = false;
+  };
+  const newPage = (title: string) => {
+    if (measuring) return; // measurement flows as though the sheet were endless
+    pdf.addPage();
+    drawFrame();
+    y = drawSectionBand(title);
+  };
+  const ensure = (h: number, onBreak?: () => void) => {
+    // A reserve can exceed what the caller then draws (a table head asks for 60
+    // and a row's worth of room), and it is the RESERVE that triggers a break —
+    // so measurement has to remember the deepest one, or a section could be
+    // measured as fitting and still break on a reserve once drawn.
+    if (measuring) measurePeak = Math.max(measurePeak, y + h);
+    if (!measuring && y + h > pageBottom - 12) {
+      newPage(sectionOpen ? `${bandTitle} (cont.)` : bandTitle);
+      onBreak?.();
+    }
+    // Whatever the caller reserved is drawn right after this returns, so the
+    // section now owns content on this page.
+    sectionOpen = true;
+  };
+
+  /**
+   * Opens a section INLINE, on the page the previous one ended on: a full-width
+   * brand rule with the section title in brand small-caps under it, generously
+   * padded so it reads as a hard separator without costing a whole sheet.
+   *
+   * Room is the caller's problem: `keepTogether` only reaches for this once it
+   * has measured that the divider — and content worth putting under it — fits.
+   */
+  const drawDivider = (title: string) => {
+    y += 14; // padding above
+    doc.setDrawColor(hR, hG, hB);
+    doc.setLineWidth(0.75);
+    doc.line(M, y, W - M, y);
+    y += 15;
+    doc.setFontSize(11);
+    doc.setFont(font, 'bold');
+    doc.setTextColor(hR, hG, hB);
+    doc.text(title.toUpperCase(), M, y);
+    y += 14; // padding below
+    sectionOpen = true; // the section owns content on this page now
+  };
+
+  /** First content baseline on a freshly banded page, and the room below it. */
+  const FRESH_TOP = pageTop + 48;
+  const USABLE_H = pageBottom - 12 - FRESH_TOP;
+  /** A chunk this small is not worth stranding at the foot of a page. */
+  const ORPHAN_MIN = 48;
+
+  /**
+   * Height `draw` would consume with no page breaks in its way. Runs against
+   * the scratch document from a fresh-page cursor, restores every cursor/band
+   * variable afterwards, and draws nothing into the real output. A section that
+   * throws while measuring reports Infinity, which simply falls back to the old
+   * flow-and-split behaviour rather than losing the section.
+   */
+  const measureSection = (draw: () => void): number => {
+    const saved = { y, doc, measuring, sectionOpen, bandTitle };
+    let h = Infinity;
+    doc = scratch;
+    measuring = true;
+    measurePeak = FRESH_TOP;
+    y = FRESH_TOP;
+    try {
+      draw();
+      h = Math.max(y, measurePeak) - FRESH_TOP;
+    } catch (e) {
+      console.warn('[proposal] section measurement failed; flowing it inline', e);
+    }
+    ({ y, doc, measuring, sectionOpen, bandTitle } = saved);
+    return h;
+  };
+
+  /**
+   * Draws one section, whole wherever whole is possible. Three outcomes:
+   *   • it fits under an inline divider here            → draw it here;
+   *   • it doesn't, but would fit a sheet of its own    → start it on the next
+   *     page, introduced by that page's plain title band (no inline divider —
+   *     the two must never double up);
+   *   • it is taller than any sheet                     → start it here and let
+   *     it paginate under "(cont.)" bands, UNLESS so little of it would land
+   *     here that the break would leave an orphan, in which case it starts on
+   *     the next page too.
+   * The reason the whole thing exists: a section that almost fits should not
+   * spill one stranded line onto the following sheet.
+   */
+  const keepTogether = (title: string, key: string | null, draw: () => void) => {
+    const h = measureSection(draw);
+    const room = pageBottom - 12 - y;
+    startSection(title);
+    if (h + DIVIDER_H <= room) {
+      drawDivider(title);
+    } else if (h <= USABLE_H || room - DIVIDER_H < ORPHAN_MIN) {
+      newPage(title);
+      sectionOpen = true; // the band introduced it; any later break is a cont.
+    } else {
+      drawDivider(title);
+    }
+    // Only the real pass records where a section starts — the measuring pass
+    // must not touch the map (or the progress callback).
+    if (key) sections[key] = pageNo();
+    draw();
+  };
+
+  // ── Cover ──────────────────────────────────────────────────────────────────
+  doc.setTextColor(hR, hG, hB);
+  doc.setFontSize(38);
+  doc.setFont(font, 'bold');
+  doc.text('PROPOSAL', W / 2, 210, { align: 'center' });
+  doc.setFillColor(hR, hG, hB);
+  doc.rect(W / 2 - 50, 220, 100, 3, 'F'); // short bold accent bar
+  doc.setDrawColor(accentR, accentG, accentB);
+  doc.setLineWidth(0.5);
+  doc.line(M, 230, W - M, 230);
+
+  const title = proposal.title?.trim() || project.name;
+  doc.setFontSize(22);
+  doc.setFont(font, 'bold');
+  doc.setTextColor(15, 23, 42);
+  // Clamped to 3 lines, the last one truncated with an ellipsis. Everything
+  // below on the cover — address, "Prepared …", and the 84pt total box — is
+  // positioned from titleLines.length, so an unbounded title walks the box
+  // down into the footer (~11 wrapped lines clears pageBottom) and spills the
+  // cover onto a second page. ProposalOptionsCard also caps the field at 120
+  // characters; this is the backstop for titles already stored.
+  // ASCII '...', not '…': jsPDF's standard-font encoding silently DROPS U+2026
+  // (verified against the output bytes — the line rendered with no marker at
+  // all), which would leave a clamped title looking arbitrarily cut off.
+  const MAX_TITLE_LINES = 3;
+  const ELLIPSIS = '...';
+  const wrapped = doc.splitTextToSize(title, W - 80) as string[];
+  const titleLines = wrapped.length <= MAX_TITLE_LINES ? wrapped : [
+    ...wrapped.slice(0, MAX_TITLE_LINES - 1),
+    // Trim the last kept line until it fits WITH the marker at this font size —
+    // appending blind would push it past the wrap width.
+    (() => {
+      let last = wrapped[MAX_TITLE_LINES - 1].trimEnd();
+      while (last.length > 1 && doc.getTextWidth(last + ELLIPSIS) > W - 80) last = last.slice(0, -1).trimEnd();
+      return last + ELLIPSIS;
+    })(),
+  ];
+  doc.text(titleLines, W / 2, 265, { align: 'center' });
   let coverY = 265 + titleLines.length * 28;
 
   if (project.address) {
-    pdf.setFontSize(12);
-    pdf.setFont(font, 'normal');
-    pdf.setTextColor(71, 85, 105);
-    pdf.text(project.address, W / 2, coverY + 10, { align: 'center' });
-    coverY += 30;
+    doc.setFontSize(12);
+    doc.setFont(font, 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(project.address, W / 2, coverY, { align: 'center' });
+    coverY += 22;
   }
 
-  // ── COVER PAGE: notes (context) first, then grand total ─────────────
-  // In 'fixed' mode the grand total is a lump sum and the takeoff table is
-  // suppressed; in (default) 'takeoffs' mode it sums per-takeoff costs.
-  const isFixedMode = options.priceMode === 'fixed';
-  const grandTotal = resolveGrandTotal(options, selectedTakeoffs);
+  doc.setFontSize(9);
+  doc.setFont(font, 'italic');
+  doc.setTextColor(148, 163, 184);
+  doc.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, coverY, { align: 'center' });
+  y = coverY + 34;
 
-  let boxTop: number;
-
-  if (coverNotes.trim()) {
-    // Notes box first — sets context for the reader
-    const notesX = 60;
-    const notesMaxW = W - 120;
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'normal');
-    const notesLines = pdf.splitTextToSize(coverNotes.trim(), notesMaxW - 20) as string[];
-    const lineH = 15;
-    const padV = 14;
-    const notesBH = notesLines.length * lineH + padV * 2;
-    const notesBoxTop = Math.max(coverY + 40, 380);
-
-    pdf.setFillColor(248, 250, 252);
-    pdf.setDrawColor(accentR, accentG, accentB);
-    pdf.setLineWidth(0.75);
-    pdf.roundedRect(notesX, notesBoxTop, notesMaxW, notesBH, 4, 4, 'FD');
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(notesX, notesBoxTop, 3, notesBH, 'F');
-    pdf.setTextColor(71, 85, 105);
-    pdf.text(notesLines, notesX + 14, notesBoxTop + padV + 10);
-
-    // Total box below notes
-    boxTop = notesBoxTop + notesBH + 24;
-  } else {
-    boxTop = Math.max(coverY + 40, 400);
+  // ── Cover: the number the client actually opens the document for ───────────
+  // The total leads, immediately under the cover block and ahead of the itemised
+  // pricing, so page 1 answers "how much?" before it explains "for what?".
+  // The cover block has fixed geometry — the title is clamped to 3 lines above,
+  // which bounds everything below it — so this always leaves room and draws
+  // straight onto page 1 without a break check.
+  if (proposal.showGrandTotal) {
+    sections.grandTotal = pageNo();
+    const boxTop = y;
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(accentR, accentG, accentB);
+    doc.setLineWidth(0.75);
+    doc.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
+    doc.setFillColor(hR, hG, hB);
+    doc.rect(W / 2 - 115, boxTop, 4, 84, 'F');
+    doc.setFontSize(9);
+    doc.setFont(font, 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
+    doc.setFontSize(28);
+    doc.setFont(font, 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(money(totals.totalCents), W / 2, boxTop + 60, { align: 'center' });
+    y = boxTop + 100;
   }
 
-  // Grand total box
-  pdf.setFillColor(241, 245, 249);
-  pdf.setDrawColor(accentR, accentG, accentB);
-  pdf.setLineWidth(0.75);
-  pdf.roundedRect(W / 2 - 115, boxTop, 230, 84, 8, 8, 'FD');
-  pdf.setFillColor(hR, hG, hB);
-  pdf.rect(W / 2 - 115, boxTop, 4, 84, 'F');
-  pdf.setFontSize(9);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(100, 116, 139);
-  pdf.text('TOTAL PROPOSAL VALUE', W / 2, boxTop + 24, { align: 'center' });
-  pdf.setFontSize(28);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(15, 23, 42);
-  pdf.text(formatCurrency(roundUpTo100(grandTotal)), W / 2, boxTop + 60, { align: 'center' });
-
-  // Valid until
-  if (validUntil) {
-    const validY = boxTop + 100;
-    pdf.setFontSize(9);
-    pdf.setFont(font, 'italic');
-    pdf.setTextColor(100, 116, 139);
-    pdf.text(`This proposal is valid until ${new Date(validUntil + 'T00:00:00').toLocaleDateString()}.`, W / 2, Math.min(validY, H - 90), { align: 'center' });
+  // Printed whether or not the total box is shown — an expiry the client can't
+  // see is worthless.
+  if (proposal.validUntil) {
+    doc.setFontSize(9);
+    doc.setFont(font, 'italic');
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `This proposal is valid until ${new Date(proposal.validUntil + 'T00:00:00').toLocaleDateString()}.`,
+      W / 2, y, { align: 'center' },
+    );
+    y += 20;
   }
 
-  // Signature block — kept above the letterhead footer banner.
-  if (includeSignature) {
-    const sigY = Math.min(H - 130, pageBottom - 40);
-    pdf.setDrawColor(accentR, accentG, accentB);
-    pdf.setLineWidth(0.5);
-    // Authorized signature
-    pdf.line(40, sigY, 220, sigY);
-    pdf.setFontSize(8);
-    pdf.setFont(font, 'normal');
-    pdf.setTextColor(100, 116, 139);
-    pdf.text('Authorized Signature', 40, sigY + 12);
-    // Date
-    pdf.line(260, sigY, 380, sigY);
-    pdf.text('Date', 260, sigY + 12);
-    // Printed name
-    pdf.line(W / 2 + 20, sigY, W - 40, sigY);
-    pdf.text('Printed Name', W / 2 + 20, sigY + 12);
-    // "Accepted by" label above
-    pdf.setFontSize(9);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(hR, hG, hB);
-    pdf.text('ACCEPTED BY', 40, sigY - 14);
-  }
+  // ── Pricing ────────────────────────────────────────────────────────────────
+  // Every section from here down flows on from the current cursor and is
+  // introduced by an inline divider; a section claims the next page only when
+  // it would otherwise be split, and only when it fits a page whole.
 
-  // Cover page footer — above the letterhead footer banner.
-  pdf.setFontSize(9);
-  pdf.setTextColor(148, 163, 184);
-  pdf.setFont(font, 'normal');
-  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
+  /** One priced table (heading + rows + subtotal). `withSummary` prints each
+   *  takeoff line's measurement totals under its description. */
+  const drawLineTable = (heading: string, lines: ProposalLine[], withSummary: boolean) => {
+    if (!lines.length) return;
+    ensure(60);
+    const drawHead = () => {
+      styleHeading();
+      doc.text(heading.toUpperCase(), M, y);
+      doc.setDrawColor(accentR, accentG, accentB);
+      doc.setLineWidth(0.5);
+      doc.line(M, y + 5, W - M, y + 5);
+      y += 20;
+    };
+    drawHead();
 
-  const projNameTrunc = project.name.length > 45 ? project.name.substring(0, 45) + '…' : project.name;
+    for (const l of lines) {
+      styleStrong();
+      const descLines = doc.splitTextToSize(l.description || '—', W - 260) as string[];
+      const summary = withSummary && l.measurementSummary ? l.measurementSummary : '';
+      const rowH = 18 + (summary ? 12 : 0) + (descLines.length - 1) * 12;
+      ensure(rowH + 6, drawHead);
 
-  // Draws a section title band in the BODY area (below the letterhead header).
-  // Returns the Y where section content may begin. Each new section/continuation
-  // page must first call drawFrame() so the letterhead is on every page.
-  const drawSectionBand = (titleText: string): number => {
-    const bandY = pageTop;
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(0, bandY, W, 30, 'F');
-    pdf.setFontSize(13);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(255, 255, 255);
-    pdf.text(titleText, 40, bandY + 20);
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'normal');
-    pdf.text(projNameTrunc, W - 40, bandY + 20, { align: 'right' });
-    return bandY + 30 + 18;
+      styleStrong();
+      descLines.forEach((t, i) => doc.text(t, M, y + i * 12));
+      doc.text(money(l.amountCents), W - M, y, { align: 'right' });
+      if (summary) {
+        styleMuted();
+        doc.text(summary, M, y + descLines.length * 12);
+      }
+      y += rowH;
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.3);
+      doc.line(M, y - 6, W - M, y - 6);
+    }
+
+    // A single line IS its own subtotal — only worth a row once there are two.
+    if (lines.length >= 2) {
+      ensure(24);
+      styleMuted();
+      doc.setFont(font, 'bold');
+      doc.text('Subtotal', M, y + 6);
+      doc.setTextColor(15, 23, 42);
+      doc.text(money(lines.reduce((s, l) => s + l.amountCents, 0)), W - M, y + 6, { align: 'right' });
+      y += 24;
+    }
+    y += 10;
   };
 
-  // ── TAKEOFF SUMMARY PAGE ────────────────────────────────────────────
-  // Fixed (lump-sum) mode shows only the cover total + notes — no cost detail.
-  if (includeTakeoffList && !isFixedMode) {
-  onProgress?.('Adding scope details…');
-  pdf.addPage();
-  drawFrame();
+  // Both tables and their subtotals are ONE section here: breaking the pricing
+  // between a heading and its numbers is exactly what this rule exists to stop.
+  keepTogether('Pricing', null, () => {
+    drawLineTable('Takeoff pricing', totals.takeoffLines, true);
+    drawLineTable('Additional pricing', totals.manualLines, false);
+  });
 
-  const sectionTop = drawSectionBand('Takeoff Summary');
-
-  // Table columns
-  const COL = { swatch: 40, name: 62, type: 258, qty: 330, unit: 400, cost: W - 40 };
-  const tableTop = sectionTop + 12;
-  const rowH = 28;
-
-  // Table header — bottom border line instead of fill
-  pdf.setDrawColor(accentR, accentG, accentB);
-  pdf.setLineWidth(0.5);
-  pdf.line(40, tableTop - 1, W - 40, tableTop - 1);
-  pdf.setFontSize(8);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(hR, hG, hB);
-  pdf.text('TAKEOFF', COL.name, tableTop - 4);
-  pdf.text('TYPE', COL.type, tableTop - 4);
-  pdf.text('QTY', COL.qty, tableTop - 4);
-  pdf.text('UNIT', COL.unit, tableTop - 4);
-  pdf.text('COST', COL.cost, tableTop - 4, { align: 'right' });
-
-  let y = tableTop + 10;
-
-  // Build grouped structure matching the project view
-  const packageOrder: string[] = [];
-  const packageMap: Record<string, typeof selectedTakeoffs> = {};
-  const ungrouped: typeof selectedTakeoffs = [];
-  for (const t of selectedTakeoffs) {
-    if (t.pricePackage) {
-      if (!packageMap[t.pricePackage]) {
-        packageMap[t.pricePackage] = [];
-        packageOrder.push(t.pricePackage);
+  // Stays with the pricing — it prices out the total the cover already stated.
+  if (proposal.paymentSchedule?.length) {
+    const schedule = proposal.paymentSchedule;
+    keepTogether('Payment Schedule', 'paymentSchedule', () => {
+      for (const row of schedule) {
+        ensure(16);
+        styleBody();
+        const label = row.percent != null ? `${row.description} (${row.percent}%)` : row.description;
+        doc.text(label, M, y);
+        doc.setFont(font, 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(money(scheduleAmountCents(row, totals.totalCents)), W - M, y, { align: 'right' });
+        y += 16;
       }
-      packageMap[t.pricePackage].push(t);
-    } else {
-      ungrouped.push(t);
-    }
+      y += 10;
+    });
   }
 
-  // Helper: draw a single takeoff row (and optional cost-detail sub-rows)
-  let rowIndex = 0;
-  const drawTakeoffRow = (t: typeof selectedTakeoffs[0]) => {
-    const totalCost = calculateTakeoffTotalCost(t, t.totalRealValue);
-    const unitLabel = UNIT_LABELS[t.unit || ''] || t.unit ||
-      (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
+  // ── Inclusions / Exclusions ────────────────────────────────────────────────
+  if (proposal.inclusions.length || proposal.exclusions.length) {
+    const colW = (W - 100) / 2;
+    const colX = [M, M + colW + 20];
+    const drawColumnHeads = () => {
+      styleHeading();
+      doc.text('INCLUDED', colX[0], y);
+      doc.text('EXCLUDED', colX[1], y);
+      doc.setDrawColor(accentR, accentG, accentB);
+      doc.setLineWidth(0.5);
+      doc.line(colX[0], y + 5, colX[0] + colW, y + 5);
+      doc.line(colX[1], y + 5, colX[1] + colW, y + 5);
+      y += 20;
+    };
+    keepTogether('Inclusions & Exclusions', 'inclusions', () => {
+      drawColumnHeads();
 
-    // New page if near bottom (keep clear of the letterhead footer).
-    if (y > pageBottom - 24) {
-      pdf.addPage();
-      drawFrame();
-      y = drawSectionBand('Takeoff Summary (cont.)') + 12;
-      rowIndex = 0;
-    }
+      // Walked row-wise so the two columns stay aligned across page breaks.
+      const rowCount = Math.max(proposal.inclusions.length, proposal.exclusions.length);
+      for (let i = 0; i < rowCount; i++) {
+        styleBody();
+        doc.setFontSize(9);
+        const cells = [proposal.inclusions[i], proposal.exclusions[i]].map(text =>
+          text ? (doc.splitTextToSize(`•  ${text}`, colW - 6) as string[]) : []);
+        const rowH = Math.max(cells[0].length, cells[1].length) * 13 + 4;
+        ensure(rowH, drawColumnHeads);
+        styleBody();
+        doc.setFontSize(9);
+        cells.forEach((cellLines, col) =>
+          cellLines.forEach((t, j) => doc.text(t, colX[col], y + j * 13)));
+        y += rowH;
+      }
+      y += 12;
+    });
+  }
 
-    rowIndex++;
+  // ── Notes (flowing) ───────────────────────────────────────────────────────
+  const coverNotes = proposal.coverNotes?.trim();
+  if (coverNotes) {
+    keepTogether('Notes', 'notes', () => {
+      styleBody();
+      for (const t of doc.splitTextToSize(coverNotes, W - 80) as string[]) {
+        ensure(16, styleBody);
+        styleBody();
+        doc.text(t, M, y);
+        y += 16;
+      }
+      y += 12;
+    });
+  }
 
-    // Color swatch
-    const hex = (t.color || '#3b82f6').replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    pdf.setFillColor(r, g, b);
-    pdf.roundedRect(COL.swatch, y - 9, 13, 13, 2, 2, 'F');
+  // ── Alternates ────────────────────────────────────────────────────────────
+  // Same takeoff/manual split as the pricing, no grand total — they are priced
+  // separately and must never read as part of the contract sum.
+  if (totals.altTakeoff.length || totals.altManual.length) {
+    keepTogether('Alternates', 'alternates', () => {
+      doc.setFontSize(9);
+      doc.setFont(font, 'italic');
+      doc.setTextColor(100, 116, 139);
+      const intro = doc.splitTextToSize(
+        'The following are optional add-ons priced separately and not included in the total above.',
+        W - 80) as string[];
+      intro.forEach((t, i) => doc.text(t, M, y + i * 13));
+      y += intro.length * 13 + 14;
+      drawLineTable('Takeoff alternates', totals.altTakeoff, true);
+      drawLineTable('Additional alternates', totals.altManual, false);
+    });
+  }
 
-    // Name
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(15, 23, 42);
-    const name = t.name.length > 28 ? t.name.substring(0, 27) + '…' : t.name;
-    pdf.text(name, COL.name, y);
+  // ── Cost detail (takeoff lines only) ──────────────────────────────────────
+  if (proposal.includeCostDetail && totals.takeoffLines.length) {
+    const byId = new Map(takeoffTotals.map(t => [t.id, t]));
+    const detailed = totals.takeoffLines.filter(l => l.takeoffId && byId.has(l.takeoffId));
+    if (detailed.length) {
+      keepTogether('Cost Detail', 'costDetail', () => {
+        for (const l of detailed) {
+          const t = byId.get(l.takeoffId as string) as TakeoffTotals;
+          ensure(34);
+          styleStrong();
+          doc.text(l.description || t.name, M, y);
+          doc.text(money(l.amountCents), W - M, y, { align: 'right' });
+          y += 16;
 
-    // Type / Qty / Unit
-    pdf.setFont(font, 'normal');
-    pdf.setTextColor(71, 85, 105);
-    pdf.text(t.type, COL.type, y);
-    pdf.text(t.totalRealValue.toFixed(2), COL.qty, y);
-    pdf.text(unitLabel, COL.unit, y);
-
-    // Cost
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(15, 23, 42);
-    pdf.text(formatCurrency(roundUpTo100(totalCost)), COL.cost, y, { align: 'right' });
-
-    // Subtle bottom separator line
-    pdf.setDrawColor(226, 232, 240);
-    pdf.setLineWidth(0.3);
-    pdf.line(62, y + 13, W - 40, y + 13);
-
-    y += rowH;
-
-    // Cost detail sub-rows
-    if (includeCostDetail) {
-      if (t.isAdvancedCost && t.customCosts?.length) {
-        const details = calculateTakeoffCostDetails(t, t.totalRealValue);
-        for (const detail of details) {
-          if (y > pageBottom - 18) {
-            pdf.addPage();
-            drawFrame();
-            y = drawSectionBand('Takeoff Summary (cont.)') + 12;
-            rowIndex = 0;
+          const subRow = (label: string, amount?: string) => {
+            ensure(16);
+            doc.setFontSize(8);
+            doc.setFont(font, 'normal');
+            doc.setTextColor(148, 163, 184);
+            doc.text(label, M + 12, y);
+            if (amount) doc.text(amount, W - M, y, { align: 'right' });
+            y += 14;
+          };
+          if (t.isAdvancedCost && t.customCosts?.length) {
+            for (const d of calculateTakeoffCostDetails(t, t.totalRealValue)) {
+              subRow(`·  ${d.name}`, formatCurrency(d.costValue));
+            }
+          } else if (t.costPerUnit) {
+            const unit = UNIT_LABELS[t.unit || ''] || t.unit ||
+              (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
+            subRow(`·  ${formatCurrency(t.costPerUnit)} / ${unit}`);
           }
-          pdf.setFontSize(8);
-          pdf.setFont(font, 'normal');
-          pdf.setTextColor(148, 163, 184);
-          pdf.text(`  · ${detail.name}`, COL.name, y);
-          pdf.text(formatCurrency(detail.costValue), COL.cost, y, { align: 'right' });
-          y += 18;
+          y += 10;
         }
-      } else if (t.costPerUnit) {
-        pdf.setFontSize(8);
-        pdf.setFont(font, 'normal');
-        pdf.setTextColor(148, 163, 184);
-        const unitLabel2 = UNIT_LABELS[t.unit || ''] || t.unit ||
-          (t.type === 'area' ? 'sq ft' : t.type === 'length' ? 'ft' : 'ea');
-        pdf.text(`  · ${formatCurrency(t.costPerUnit)} / ${unitLabel2}`, COL.name, y);
-        y += 18;
+      });
+    }
+  }
+
+  // ── Terms + signature ─────────────────────────────────────────────────────
+  const terms = proposal.terms?.trim();
+  if (terms || proposal.includeSignature) {
+    keepTogether('Terms & Conditions', 'terms', () => {
+      if (terms) {
+        styleBody();
+        for (const t of doc.splitTextToSize(terms, W - 80) as string[]) {
+          ensure(16, styleBody);
+          styleBody();
+          doc.text(t, M, y);
+          y += 16;
+        }
       }
-    }
-  };
-
-  // Helper: draw a package group header + its takeoffs + subtotal
-  const drawPackageGroup = (pkg: string, takeoffs: typeof selectedTakeoffs) => {
-    // Ensure there's room for at least the header + one row
-    if (y > pageBottom - 54) {
-      pdf.addPage();
-      drawFrame();
-      y = drawSectionBand('Takeoff Summary (cont.)') + 12;
-      rowIndex = 0;
-    }
-
-    // Package header — left accent bar + subtle background
-    pdf.setFillColor(hR, hG, hB);
-    pdf.rect(40, y - 12, 3, 20, 'F');
-    pdf.setFillColor(241, 245, 249);
-    pdf.rect(43, y - 12, W - 83, 20, 'F');
-    pdf.setFontSize(8);
-    pdf.setFont(font, 'bold');
-    pdf.setTextColor(hR, hG, hB);
-    pdf.text(pkg.toUpperCase(), COL.name, y + 2);
-
-    // Package subtotal (right-aligned in header)
-    const pkgTotal = takeoffs.reduce((sum, t) => sum + calculateTakeoffTotalCost(t, t.totalRealValue), 0);
-    pdf.setTextColor(100, 116, 139);
-    pdf.text(formatCurrency(roundUpTo100(pkgTotal)), COL.cost, y + 2, { align: 'right' });
-
-    y += 22;
-    rowIndex = 0; // reset alternating stripes per group
-
-    for (const t of takeoffs) {
-      drawTakeoffRow(t);
-    }
-  };
-
-  // Render grouped takeoffs
-  for (const pkg of packageOrder) {
-    drawPackageGroup(pkg, packageMap[pkg]);
-  }
-
-  // Render ungrouped takeoffs (no package label)
-  if (ungrouped.length > 0) {
-    if (packageOrder.length > 0) {
-      // Add a small spacer if there were grouped items above
-      y += 4;
-    }
-    for (const t of ungrouped) {
-      drawTakeoffRow(t);
-    }
-  }
-
-  // Grand total row
-  y += 8;
-  pdf.setDrawColor(accentR, accentG, accentB);
-  pdf.setLineWidth(0.75);
-  pdf.line(40, y, W - 40, y);
-  y += 18;
-  pdf.setFontSize(11);
-  pdf.setFont(font, 'bold');
-  pdf.setTextColor(15, 23, 42);
-  pdf.text('TOTAL', COL.name, y);
-  pdf.text(formatCurrency(roundUpTo100(grandTotal)), COL.cost, y, { align: 'right' });
-
-  // Footer on last takeoff page — above the letterhead banner.
-  pdf.setFontSize(9);
-  pdf.setTextColor(148, 163, 184);
-  pdf.setFont(font, 'normal');
-  pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
-  } // end includeTakeoffList
-
-  // ── TERMS & CONDITIONS PAGE ─────────────────────────────────────────
-  if (terms.trim()) {
-    onProgress?.('Adding terms…');
-    pdf.addPage();
-    drawFrame();
-    let ty = drawSectionBand('Terms & Conditions');
-    pdf.setFontSize(10);
-    pdf.setFont(font, 'normal');
-    pdf.setTextColor(71, 85, 105);
-    const termLines = pdf.splitTextToSize(terms.trim(), W - 80) as string[];
-    for (const line of termLines) {
-      if (ty > pageBottom - 18) {
-        pdf.addPage();
-        drawFrame();
-        ty = drawSectionBand('Terms & Conditions (cont.)');
-        pdf.setFontSize(10);
-        pdf.setFont(font, 'normal');
-        pdf.setTextColor(71, 85, 105);
+      if (proposal.includeSignature) {
+        // Just the block itself (rules + labels) — it is allowed to sit tight
+        // under the terms rather than demanding a whole page's worth of room.
+        ensure(70);
+        if (measuring) {
+          // Only the block's own height counts here. Its drawn Y is pinned near
+          // the foot of whatever page it lands on, and measuring that pin from a
+          // fresh-page cursor would price a lone signature at half a sheet and
+          // send every signed proposal onto a page of its own.
+          y += 70;
+        } else {
+          // Sit the block low on the page when there's room, but never under the
+          // letterhead footer banner.
+          const sigY = Math.min(Math.max(y + 40, pageBottom - 110), pageBottom - 40);
+          doc.setFontSize(9);
+          doc.setFont(font, 'bold');
+          doc.setTextColor(hR, hG, hB);
+          doc.text('ACCEPTED BY', M, sigY - 14);
+          doc.setDrawColor(accentR, accentG, accentB);
+          doc.setLineWidth(0.5);
+          doc.line(M, sigY, 220, sigY);
+          doc.line(260, sigY, 380, sigY);
+          doc.line(W / 2 + 20, sigY, W - M, sigY);
+          doc.setFontSize(8);
+          doc.setFont(font, 'normal');
+          doc.setTextColor(100, 116, 139);
+          doc.text('Authorized Signature', M, sigY + 12);
+          doc.text('Date', 260, sigY + 12);
+          doc.text('Printed Name', W / 2 + 20, sigY + 12);
+          y = sigY + 24;
+        }
       }
-      pdf.text(line, 40, ty);
-      ty += 16;
-    }
-    pdf.setFontSize(9);
-    pdf.setTextColor(148, 163, 184);
-    pdf.setFont(font, 'normal');
-    pdf.text(`Prepared ${new Date().toLocaleDateString()}`, W / 2, pageBottom + 4, { align: 'center' });
+    });
   }
 
-  // ── PHOTO PAGES ─────────────────────────────────────────────────────
-  // Appended after Terms (and before page numbering, so the new pages are
-  // included in the "Page x of y" stamp). Works in both price modes.
-  if (options.photoDataUrls?.length) {
+  // ── Photos (2-up, captions under each) ────────────────────────────────────
+  if (photos.length) {
     onProgress?.('Adding photos…');
-    pdf.addPage();
-    drawFrame();
-    let py = drawSectionBand('Photos');
-    const M = 40;
-    const cellW = (W - 2 * M - 12) / 2, cellH = 150;
-    let col = 0;
-    for (const url of options.photoDataUrls) {
-      if (py + cellH > pageBottom) { pdf.addPage(); drawFrame(); py = drawSectionBand('Photos (cont.)'); col = 0; }
-      const x = M + col * (cellW + 12);
-      try { pdf.addImage(url, 'JPEG', x, py, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
-      col++;
-      if (col === 2) { col = 0; py += cellH + 12; }
-    }
+    const gap = 12, cellW = (W - 2 * M - gap) / 2, cellH = 150, capH = 14;
+    keepTogether('Photos', 'photos', () => {
+      let col = 0;
+      for (const ph of photos) {
+        // Only the START of a row may break, so an image never parts company
+        // with its caption. A grid taller than a sheet fills rows and continues.
+        if (col === 0) ensure(cellH + capH);
+        const x = M + col * (cellW + gap);
+        if (!measuring) {
+          try {
+            doc.addImage(ph.dataUrl, 'JPEG', x, y, cellW, cellH, undefined, 'FAST');
+          } catch (e) {
+            console.warn('[proposal] skipped unreadable photo', e);
+          }
+        }
+        if (ph.caption) {
+          doc.setFontSize(8);
+          doc.setFont(font, 'italic');
+          doc.setTextColor(71, 85, 105);
+          doc.text((doc.splitTextToSize(ph.caption, cellW) as string[])[0], x, y + cellH + 10);
+        }
+        col++;
+        if (col === 2) { col = 0; y += cellH + capH + gap; }
+      }
+      if (col === 1) y += cellH + capH + gap; // a lone trailing image owns its row
+    });
   }
 
-  // ── PAGE NUMBERS ────────────────────────────────────────────────────
+  // ── Page numbers ───────────────────────────────────────────────────────────
   // Stamped just above the letterhead footer banner so they don't sit under it.
-  const totalPages = (pdf as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
+  // Attachment pages are appended AFTER this and stay untouched (spec §6.10).
+  const totalPages = pageNo();
   for (let i = 1; i <= totalPages; i++) {
     pdf.setPage(i);
     pdf.setFontSize(8);
     pdf.setFont(font, 'normal');
     pdf.setTextColor(148, 163, 184);
-    pdf.text(`Page ${i} of ${totalPages}`, W - 40, pageBottom + 4, { align: 'right' });
+    pdf.text(`Page ${i} of ${totalPages}`, W - M, pageBottom + 4, { align: 'right' });
   }
 
-  // ── SAVE (merge with highlights if requested) ────────────────────────
-  let pdfBytes: ArrayBuffer;
+  // ── Merge: highlights, then attachments ────────────────────────────────────
+  onProgress?.('Assembling…');
+  const { PDFDocument } = await import('pdf-lib');
+  const merged = await PDFDocument.create();
+  const body = await PDFDocument.load(pdf.output('arraybuffer') as ArrayBuffer);
+  (await merged.copyPages(body, body.getPageIndices())).forEach(p => merged.addPage(p));
+
   if (includeHighlights) {
-    // Generate the highlights PDF using the exact same path as the Print button,
-    // then merge it with the proposal using pdf-lib.
-    const { PDFDocument } = await import('pdf-lib');
-    const highlightsBuffer = await buildHighlightsPdf(
-      project,
-      selectedTakeoffIds,
-      (msg) => onProgress?.(msg),
-      currentPageIds,
-    );
-    const proposalBuffer = pdf.output('arraybuffer') as ArrayBuffer;
-
-    const mergedDoc = await PDFDocument.create();
-
-    const proposalDoc = await PDFDocument.load(proposalBuffer);
-    const proposalPages = await mergedDoc.copyPages(proposalDoc, proposalDoc.getPageIndices());
-    proposalPages.forEach(p => mergedDoc.addPage(p));
-
-    if (highlightsBuffer) {
-      const highlightsDoc = await PDFDocument.load(highlightsBuffer);
-      const highlightsPages = await mergedDoc.copyPages(highlightsDoc, highlightsDoc.getPageIndices());
-      highlightsPages.forEach(p => mergedDoc.addPage(p));
+    const takeoffIds = new Set(
+      [...totals.takeoffLines, ...totals.altTakeoff]
+        .map(l => l.takeoffId)
+        .filter((id): id is string => !!id));
+    const hl = await buildHighlightsPdf(project, takeoffIds, msg => onProgress?.(msg), currentPageIds);
+    if (hl) {
+      sections.highlightsStart = merged.getPageCount() + 1;
+      const d = await PDFDocument.load(hl);
+      (await merged.copyPages(d, d.getPageIndices())).forEach(p => merged.addPage(p));
     }
-
-    const mergedBytes = await mergedDoc.save();
-    pdfBytes = mergedBytes.buffer.slice(mergedBytes.byteOffset, mergedBytes.byteOffset + mergedBytes.byteLength) as ArrayBuffer;
-  } else {
-    pdfBytes = pdf.output('arraybuffer') as ArrayBuffer;
   }
 
-  // Email-ready mode post-shrinks the final (possibly merged) PDF down to the
-  // attachment target regardless of whether highlights were included.
+  if (attachments.length) sections.attachmentsStart = merged.getPageCount() + 1;
+  for (const bytes of attachments) {
+    try {
+      const d = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      (await merged.copyPages(d, d.getPageIndices())).forEach(p => merged.addPage(p));
+    } catch (e) {
+      console.warn('[proposal] skipped unreadable attachment', e);
+    }
+  }
+
+  const out = await merged.save();
+  let pdfBytes = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
+
+  // Email-ready mode post-shrinks the final (merged) PDF to the attachment
+  // budget — attachments and highlights count toward it.
   let overBudget = false;
-  if (highlightQuality === 'email') {
+  if (proposal.highlightQuality === 'email') {
     const shrunk = await shrinkPdfToBudget(pdfBytes, EMAIL_TARGET_BYTES, onProgress);
     pdfBytes = shrunk.bytes;
     overBudget = shrunk.overBudget;
   }
 
-  const suggestedName = (proposalCustomTitle || project.name).trim()
-    ? `Proposal – ${proposalCustomTitle || project.name}`
-    : `Proposal – ${new Date().toLocaleString()}`;
-
-  return { pdfBytes, suggestedName, overBudget };
+  return { pdfBytes, suggestedName: proposalFileName(project), overBudget, sections };
 }

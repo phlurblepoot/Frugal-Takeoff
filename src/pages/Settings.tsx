@@ -21,6 +21,17 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.0',
+    date: 'August 28, 2026',
+    changes: [
+      'Proposals reworked into first-class, numbered project records: multi-line pricing that mixes takeoff-derived lines with hand-typed manual lines, an Alternate flag per line with its own subtotal, an optional grand-total, inclusions/exclusions lists, an optional payment schedule, photos with captions, and existing-PDF attachments (upload or pick from the project\'s documents). Revising a proposal clones it into a new numbered draft (e.g. "#2 (rev. of #1)") with the choice to carry photos and attachments along, and the original stays exactly as sent. Accepting a sent proposal can attach a signed copy and offer to prefill the schedule of values from its lines; declining is one click. Proposals live under a new Proposals section per project (admin-only), and the Dashboard gained an "Outstanding proposals" card for sent-but-unanswered proposals sorted by expiry.',
+      'Takeoff Print and Excel exports moved off the old proposal page: selecting takeoffs on the Takeoffs tab and printing/exporting now saves the result straight into the project\'s Documents list (as a Takeoff Print / Takeoff Export document) instead of living on a proposal. The Proposal button on that same toolbar starts a new proposal pre-seeded with the selected takeoffs.',
+      'New shared "choose an existing file" picker (used by proposal photos/attachments) lets you search and filter the project\'s documents instead of only uploading fresh ones.',
+      'Documents gained a "Company document" type for files that aren\'t tied to any project — the upload popup\'s Project and Customer fields both grey out and clear for that type.',
+      'Note for self-hosters: this update includes a data-transforming migration (28) that converts every project\'s old proposal history (stored printouts, sent PDF, photos, cover notes/terms) into the new numbered proposal records and relabels old takeoff printouts as Documents entries — back up before pulling this update. A second, additive migration (29) adds a per-project proposal-numbering counter so a deleted proposal\'s number is never reused.',
+    ],
+  },
+  {
     version: '2.7.2',
     date: 'August 27, 2026',
     changes: [

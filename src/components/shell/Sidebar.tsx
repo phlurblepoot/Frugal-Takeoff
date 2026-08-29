@@ -47,7 +47,7 @@ const PROJECT_NAV: {
 }[] = [
   { id: 'overview',  label: 'Overview',           Icon: LayoutGrid,  path: '',           match: (p, b) => p === b },
   { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,       path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
-  { id: 'proposal',  label: 'Proposal',           Icon: FileText,    path: '/proposal',  match: (p, b) => p.startsWith(`${b}/proposal`) },
+  { id: 'proposal',  label: 'Proposal',           Icon: FileText,    path: '/proposal',  match: (p, b) => p.startsWith(`${b}/proposal`), adminOnly: true },
   { id: 'documents', label: 'Documents',          Icon: FolderOpen,  path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
   { id: 'punch',     label: 'Punch & Checklists', Icon: ClipboardCheck, path: '/punch',  match: (p, b) => p.startsWith(`${b}/punch`) },
   { id: 'notes',     label: 'Notes',              Icon: StickyNote,  path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },

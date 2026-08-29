@@ -3,8 +3,8 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity as ActivityIcon, Calendar, Clock, FolderKanban, Plus } from 'lucide-react';
 import {
-  ProjectSummary, ActivityItem, TimeEntryLite, TaskListItem,
-  getProjectsSummary, getActivity, getMyTimeEntries, getTasks,
+  ProjectSummary, ActivityItem, TimeEntryLite, TaskListItem, OutstandingProposal,
+  getProjectsSummary, getActivity, getMyTimeEntries, getTasks, getOutstandingProposals,
 } from '../utils/store';
 import {
   Button, Card, CardBody, CardHeader, EmptyState, ProjectStatusPill, Skeleton,
@@ -14,6 +14,8 @@ import { UpcomingTasksCard, upcomingTaskItems } from '../components/tasks/Upcomi
 import { GROUP_DEFS } from './ProjectsPage';
 import { useLiveQuery } from '../hooks/useLiveQuery';
 import { activityTarget } from '../utils/activityLink';
+import { formatCurrency } from './project/proposal/proposalGenerator';
+import { expiryText } from './project/proposal/proposalPresentation';
 
 const DAY = 86_400_000;
 
@@ -58,6 +60,7 @@ export const Dashboard: React.FC = () => {
   const [hours, setHours] = useState<number | null>(null);
   const [tasks, setTasks] = useState<TaskListItem[] | null>(null);
   const [taskScope, setTaskScope] = useState<'mine' | 'all'>('mine');
+  const [outstanding, setOutstanding] = useState<OutstandingProposal[] | null>(null);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const load = () => {
@@ -65,8 +68,9 @@ export const Dashboard: React.FC = () => {
     getActivity(10).then(setActivity).catch(() => setActivity([]));
     getMyTimeEntries().then(e => setHours(hoursThisWeek(e))).catch(() => setHours(0));
     getTasks().then(setTasks).catch(() => setTasks([]));
+    if (isAdmin) getOutstandingProposals().then(setOutstanding).catch(() => setOutstanding([]));
   };
-  useLiveQuery(load, { types: ['project', 'task', 'issue', 'rfi', 'punch', 'invoice', 'changeOrder', 'payment', 'timeEntry', 'customer', 'file'] });
+  useLiveQuery(load, { types: ['project', 'task', 'issue', 'rfi', 'punch', 'invoice', 'changeOrder', 'payment', 'timeEntry', 'customer', 'file', 'proposal'] });
 
   const visible = (summaries ?? []).filter(s => !s.archived);
   const upcoming = visible
@@ -125,6 +129,50 @@ export const Dashboard: React.FC = () => {
             )}
           </CardBody>
         </Card>
+
+        {/* Outstanding proposals */}
+        {isAdmin && (
+          <Card>
+            <CardHeader
+              title="Outstanding proposals"
+              /* There is no cross-project proposals list — proposals live per
+                 project — so "View all" goes to the nearest thing: every
+                 proposal document in one place. /projects was just wrong. */
+              actions={<Link to="/documents?kinds=proposal" className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
+            />
+            <CardBody className="p-0">
+              {outstanding === null ? (
+                <div className="space-y-2 p-4">{[0, 1, 2].map(i => <Skeleton key={i} className="h-9" />)}</div>
+              ) : outstanding.length === 0 ? (
+                <EmptyState title="No proposals awaiting a response." />
+              ) : (
+                <ul className="divide-y divide-edge">
+                  {outstanding.slice(0, 6).map(p => {
+                    const expiry = expiryText(p);
+                    const expired = expiry?.startsWith('expired') ?? false;
+                    return (
+                      <li key={p.id}>
+                        <Link to={`/project/${p.projectId}/proposal/${p.id}`} className="flex items-center justify-between gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium text-ink">
+                              {p.projectName ?? '—'} · #{p.number}{p.title ? ` — ${p.title}` : ''}
+                            </span>
+                            {expiry && (
+                              <span className={`block truncate text-xs ${expired ? 'text-red-600 dark:text-red-400' : 'text-ink-faint'}`}>
+                                {expiry}
+                              </span>
+                            )}
+                          </span>
+                          <span className="shrink-0 text-xs font-medium text-ink-soft">{formatCurrency(p.totalCents / 100)}</span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
+        )}
 
         {/* Upcoming task deadlines */}
         <UpcomingTasksCard

@@ -78,10 +78,25 @@ export const UploadDocumentsModal: React.FC<{
 
   const removeEntry = (id: string) => setEntries(prev => prev.filter(e => e.id !== id));
 
+  // Company documents aren't tied to a project (spec §Decisions): a project
+  // pick from a prior batch would silently carry over otherwise.
+  const isCompanyDocOnly = perFileType
+    ? entries.length > 0 && entries.every(e => e.kind === 'company-document')
+    : sharedKind === 'company-document';
+
   const changeSharedKind = (kind: string) => {
     setSharedKind(kind);
     if (!perFileType) setEntries(prev => prev.map(e => ({ ...e, kind })));
   };
+
+  // Clears whatever Project/Customer was picked (even from a prior batch) the
+  // moment the batch becomes company-document-only, from any of the paths
+  // that can get there: the shared Type select, toggling per-file typing, or
+  // editing an individual chip's type.
+  useEffect(() => {
+    if (isCompanyDocOnly) { setProjectId(''); setCustomerId(''); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCompanyDocOnly]);
 
   const togglePerFileType = (checked: boolean) => {
     setPerFileType(checked);
@@ -105,12 +120,17 @@ export const UploadDocumentsModal: React.FC<{
     setUploading(true);
     const uploaded = new Set<string>();
     for (const e of entries) {
+      // A per-file company-document in an otherwise project/customer-tagged
+      // batch must not inherit either — company documents aren't tied to a
+      // project (or its customer), regardless of what the rest of the batch
+      // picked.
+      const tagged = e.kind !== 'company-document';
       try {
         await saveBinaryFile(uuidv4(), e.file, {
           kind: e.kind,
           name: e.file.name,
-          ...(projectId ? { projectId } : {}),
-          ...(customerId ? { customerId } : {}),
+          ...(tagged && projectId ? { projectId } : {}),
+          ...(tagged && customerId ? { customerId } : {}),
         });
         uploaded.add(e.id);
       } catch { /* keep going, report the count below */ }
@@ -223,14 +243,22 @@ export const UploadDocumentsModal: React.FC<{
               onChange={e => togglePerFileType(e.target.checked)}
             />
           </div>
-          <Field label="Project" htmlFor="upload-project" hint="Optional.">
-            <Select id="upload-project" value={projectId} onChange={e => onProjectChange(e.target.value)}>
+          <Field
+            label="Project"
+            htmlFor="upload-project"
+            hint={isCompanyDocOnly ? "Company documents aren't tied to a project." : 'Optional.'}
+          >
+            <Select id="upload-project" value={projectId} disabled={isCompanyDocOnly} onChange={e => onProjectChange(e.target.value)}>
               <option value="">— none —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           </Field>
-          <Field label="Customer" htmlFor="upload-customer" hint={projectId ? 'Set by the selected project.' : undefined}>
-            <Select id="upload-customer" value={customerId} disabled={!!projectId} onChange={e => setCustomerId(e.target.value)}>
+          <Field
+            label="Customer"
+            htmlFor="upload-customer"
+            hint={isCompanyDocOnly ? "Company documents aren't tied to a customer." : projectId ? 'Set by the selected project.' : undefined}
+          >
+            <Select id="upload-customer" value={customerId} disabled={isCompanyDocOnly || !!projectId} onChange={e => setCustomerId(e.target.value)}>
               <option value="">— none —</option>
               {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>

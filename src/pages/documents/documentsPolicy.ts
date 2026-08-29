@@ -16,7 +16,7 @@
 // call would still 409 server-side since deleteDocument checks the raw
 // sourceType column directly.
 import { DocumentRow } from '../../utils/store';
-import { isDirectUploadKind } from './docTypes';
+import { isDeletableGeneratedKind, isDirectUploadKind } from './docTypes';
 
 export interface SelectionPolicy {
   downloadable: DocumentRow[];
@@ -30,5 +30,8 @@ export interface SelectionPolicy {
 export const selectionPolicy = (rows: DocumentRow[]): SelectionPolicy => ({
   downloadable: rows,
   archivable: rows.filter(r => r.kind !== 'plan-source'),
-  deletable: rows.filter(r => !r.source && isDirectUploadKind(r.kind)),
+  // Takeoff prints/exports are generated (so they always have a `source`) but
+  // no record owns them — there is nowhere else to delete them from, so they
+  // are deletable here. Mirrors server/documents.ts DELETABLE_GENERATED_KINDS.
+  deletable: rows.filter(r => (!r.source && isDirectUploadKind(r.kind)) || isDeletableGeneratedKind(r.kind)),
 });

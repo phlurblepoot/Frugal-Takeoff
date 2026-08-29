@@ -910,20 +910,20 @@ export interface SeedDocumentsPortfolioResult extends SeedCustomerPortfolioResul
  *    PDF/XLSX render — the bytes themselves don't matter here, only that the
  *    row lands with a resolvable source (real invoice/pay-app ids from the
  *    base portfolio seed) so GET /api/documents can label + link it;
- *  - a printout, mirroring ProjectProposal.tsx's real save sequence (mint id
- *    -> upload file against it -> append to project.printouts[] -> PUT the
- *    project). Unlike invoice/change-order/proposal, printout carries no
- *    dollar figure so it stays visible to non-admins (spec §Decisions "Role
- *    visibility"). Its bytes ARE a real (pdf-lib-generated) multi-page PDF,
- *    unlike the invoice/pay-app fixtures — the document-previews viewer opens
- *    it and needs pdf.js to actually parse it and see >1 page for page-nav
- *    coverage (e2e/documents.spec.ts).
+ *  - a takeoff-print document, mirroring ProjectView.tsx's real handlePrint
+ *    save sequence (mint a sourceId -> upload the file against it with
+ *    kind=takeoff-print&sourceType=takeoff-print). Unlike invoice/change-order/
+ *    proposal, a takeoff print carries no dollar figure so it stays visible
+ *    to non-admins (spec §Decisions "Role visibility"). Its bytes ARE a real
+ *    (pdf-lib-generated) multi-page PDF, unlike the invoice/pay-app fixtures —
+ *    the document-previews viewer opens it and needs pdf.js to actually parse
+ *    it and see >1 page for page-nav coverage (e2e/documents.spec.ts).
  *
  * All four resolve to real navigable `source.href` values (billing tabs /
- * issues page / proposal page) since they reference the base seed's real
- * invoice/pay-app/issue/printout entries — this is what makes the Documents
- * page's Source column non-trivial to assert against instead of a
- * dangling-reference fallback.
+ * issues page / takeoffs tab) since they reference the base seed's real
+ * invoice/pay-app/issue ids and the takeoff-print file's own sourceId — this
+ * is what makes the Documents page's Source column non-trivial to assert
+ * against instead of a dangling-reference fallback.
  */
 export async function seedDocumentsPortfolio(
   request: APIRequestContext,
@@ -980,13 +980,11 @@ export async function seedDocumentsPortfolio(
   );
   if (!payAppFileRes.ok()) throw new Error(`pay app file upload failed: ${payAppFileRes.status()} ${await payAppFileRes.text()}`);
 
-  // Printout — a non-billing generated kind (visible to non-admins), whose
-  // source lives in project.printouts[] JSON rather than a table row (spec
-  // §Data model). Mirrors ProjectProposal.tsx's real save sequence: mint the
-  // printout id first, upload the file against it, then append the printout
-  // entry to the project and PUT the whole project back (optimistic version).
+  // Printout — a non-billing generated kind (visible to non-admins). Mirrors
+  // the Takeoffs tab's real save sequence: mint the print id first, then
+  // upload the file against it (handlePrint in src/pages/ProjectView.tsx).
   const printoutId = randomUUID();
-  const printoutFileName = `Printout-${short}.pdf`;
+  const printoutFileName = `Takeoff Print – ${portfolio.inProgressProjectName} – 2026-01-01`;
   const printoutFileId = randomUUID();
   // A real, minimal 2-page PDF (not just bytes with a %PDF header) — the
   // document-previews viewer modal renders this with pdf.js, and 2 pages
@@ -995,26 +993,15 @@ export async function seedDocumentsPortfolio(
   const printoutDoc = await PDFDocument.create();
   for (let i = 0; i < printoutPageCount; i++) printoutDoc.addPage([200, 200]);
   const printoutPdfBytes = await printoutDoc.save();
+  // sourceType (and kind) are `takeoff-print` — the printout no longer lives
+  // in project.printouts[] (removed in the proposal-rework, Task 5/9); the
+  // file row itself, sourced this way, is what GET /api/documents resolves
+  // via resolveTakeoffPrints (server/documents.ts).
   const printoutFileRes = await request.post(
-    `/api/files/${printoutFileId}?projectId=${portfolio.inProgressProjectId}&kind=printout&sourceType=printout&sourceId=${printoutId}&name=${encodeURIComponent(printoutFileName)}`,
+    `/api/files/${printoutFileId}?projectId=${portfolio.inProgressProjectId}&kind=takeoff-print&sourceType=takeoff-print&sourceId=${printoutId}&name=${encodeURIComponent(printoutFileName)}`,
     { headers: { ...auth, 'Content-Type': 'application/pdf' }, data: Buffer.from(printoutPdfBytes) },
   );
   if (!printoutFileRes.ok()) throw new Error(`printout file upload failed: ${printoutFileRes.status()} ${await printoutFileRes.text()}`);
-
-  const projectRes = await request.get(`/api/projects/${portfolio.inProgressProjectId}`, { headers: auth });
-  if (!projectRes.ok()) throw new Error(`project fetch (for printout) failed: ${projectRes.status()} ${await projectRes.text()}`);
-  const project = await projectRes.json();
-  const putRes = await request.put(`/api/projects/${portfolio.inProgressProjectId}`, {
-    headers: auth,
-    data: {
-      ...project,
-      printouts: [
-        ...(project.printouts ?? []),
-        { id: printoutId, name: printoutFileName, fileId: printoutFileId, createdAt: Date.now(), type: 'pdf' },
-      ],
-    },
-  });
-  if (!putRes.ok()) throw new Error(`project save (printout) failed: ${putRes.status()} ${await putRes.text()}`);
 
   return {
     ...portfolio,

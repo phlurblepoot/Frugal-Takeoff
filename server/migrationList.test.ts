@@ -537,7 +537,12 @@ describe('migration 23: document source attribution', () => {
     const db = openDb(':memory:');
     runMigrations(db, dir, migrations.filter(m => m.version <= 22));
     seed(db);
-    runMigrations(db, dir, migrations);
+    // Capped at 27 (pre-proposals): this suite exercises migration 23's own
+    // document-source-attribution behavior, not migration 28's legacy
+    // proposal/printout transform (which has its own describe block below
+    // and would otherwise relabel/re-point this fixture's printout+proposal
+    // files a second time).
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
     return { db, dir };
   };
 
@@ -635,7 +640,8 @@ describe('migration 23: document source attribution', () => {
     db.prepare('INSERT INTO projects (id, name, meta, createdAt) VALUES (?, ?, ?, ?)')
       .run('p-bad', 'Broken', '{not json', 1);
 
-    expect(() => runMigrations(db, dir, migrations)).not.toThrow();
+    // Capped at 27 for the same reason as migrated() above.
+    expect(() => runMigrations(db, dir, migrations.filter(m => m.version <= 27))).not.toThrow();
     // the rest of the portfolio still migrated
     expect(rowOf(db, 'f-printout')).toMatchObject({ kind: 'printout', sourceId: 'po1' });
     expect(db.prepare('SELECT meta FROM projects WHERE id = ?').get('p-bad')).toEqual({ meta: '{not json' });
@@ -691,5 +697,216 @@ describe('migration 27: daily reports', () => {
       `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_daily_report_photos_report'`
     ).all() as { name: string }[]).map(r => r.name);
     expect(names).toContain('idx_daily_report_photos_report');
+  });
+});
+
+describe('migration 28 — proposals', () => {
+  // Seeds a project whose meta carries the legacy printouts/proposal shape,
+  // runs everything up to 27, then 28 on top.
+  const seedLegacy = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    const meta = {
+      printouts: [
+        { id: 'po-prop-1', name: 'Proposal – Old Job', fileId: 'f-prop-1', createdAt: 1000, type: 'pdf' },
+        { id: 'po-print-1', name: 'Printout - 1/2/2026, 9:00:00 AM', fileId: 'f-print-1', createdAt: 2000, type: 'pdf' },
+        { id: 'po-xls-1', name: 'Excel Export - 1/2/2026, 9:05:00 AM', fileId: 'f-xls-1', createdAt: 3000, type: 'excel' },
+        { id: 'po-prop-2', name: 'Proposal – Old Job', fileId: 'f-prop-2', createdAt: 4000, type: 'pdf' },
+      ],
+      proposalFileId: 'f-prop-2',
+      proposalSentAt: 4500,
+      proposalPhotoIds: ['f-photo-1', 'f-photo-2'],
+      proposalCoverNotes: 'notes here',
+      proposalTerms: 'terms here',
+      legendOnAllPages: true,
+    };
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p1', 'Old Job', 1, 1, 1, ?)`).run(JSON.stringify(meta));
+    const ins = db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES (?, 'p1', ?, ?, 1, 'x', ?, NULL, 1, NULL, ?, ?, ?, 0)`);
+    ins.run('f-prop-1', 'Proposal – Old Job', 'application/pdf', 'printout', 1000, 'printout', 'po-prop-1');
+    ins.run('f-print-1', 'Printout - 1/2/2026, 9:00:00 AM', 'application/pdf', 'printout', 2000, 'printout', 'po-print-1');
+    ins.run('f-xls-1', 'Excel Export - 1/2/2026, 9:05:00 AM', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'printout', 3000, 'printout', 'po-xls-1');
+    ins.run('f-prop-2', 'Proposal – Old Job', 'application/pdf', 'proposal', 4000, 'proposal', 'p1');
+    ins.run('f-photo-1', 'a.jpg', 'image/jpeg', 'proposal-photo', 100, 'proposal', 'p1');
+    ins.run('f-photo-2', 'b.jpg', 'image/jpeg', 'proposal-photo', 101, 'proposal', 'p1');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+    return db;
+  };
+
+  it('creates the four tables', () => {
+    const db = seedLegacy();
+    const tables = tableNames(db);
+    for (const t of ['proposals', 'proposal_lines', 'proposal_photos', 'proposal_attachments']) expect(tables).toContain(t);
+    for (const c of ['number', 'revisedFromId', 'status', 'legacy', 'inclusions', 'exclusions', 'paymentSchedule', 'showGrandTotal', 'fileId', 'signedFileId', 'sentTo', 'version']) {
+      expect(columnNames(db, 'proposals')).toContain(c);
+    }
+    for (const c of ['kind', 'takeoffId', 'amountCents', 'derivedAmountCents', 'measurementSummary', 'isAlternate']) {
+      expect(columnNames(db, 'proposal_lines')).toContain(c);
+    }
+    expect(columnNames(db, 'proposal_photos')).toContain('caption');
+    db.close();
+  });
+
+  it('converts legacy proposal printouts into numbered legacy proposals, sent = the one matching proposalFileId', () => {
+    const db = seedLegacy();
+    const rows = db.prepare('SELECT * FROM proposals WHERE projectId = ? ORDER BY number').all('p1') as any[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ number: 1, legacy: 1, status: 'draft', fileId: 'f-prop-1', coverNotes: 'notes here', terms: 'terms here' });
+    expect(rows[1]).toMatchObject({ number: 2, legacy: 1, status: 'sent', fileId: 'f-prop-2', sentAt: 4500 });
+    // file rows re-pointed at the proposal id under kind 'proposal'
+    const f1 = db.prepare('SELECT kind, sourceType, sourceId FROM files WHERE id = ?').get('f-prop-1') as any;
+    expect(f1).toEqual({ kind: 'proposal', sourceType: 'proposal', sourceId: rows[0].id });
+    const f2 = db.prepare('SELECT kind, sourceType, sourceId FROM files WHERE id = ?').get('f-prop-2') as any;
+    expect(f2).toEqual({ kind: 'proposal', sourceType: 'proposal', sourceId: rows[1].id });
+    db.close();
+  });
+
+  it('a non-proposal-named printout whose fileId matches proposalFileId becomes the sent proposal, not a takeoff print', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    const meta = {
+      printouts: [
+        { id: 'po-1', name: 'Printout - 3/3/2026, 9:00:00 AM', fileId: 'f-1', createdAt: 1000, type: 'pdf' },
+      ],
+      proposalFileId: 'f-1',
+      proposalSentAt: 1500,
+    };
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p3', 'Edge Job', 1, 1, 1, ?)`).run(JSON.stringify(meta));
+    db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES ('f-1', 'p3', 'Printout - 3/3/2026, 9:00:00 AM', 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, 1000, 'printout', 'po-1', 0)`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    const rows = db.prepare('SELECT * FROM proposals WHERE projectId = ?').all('p3') as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ number: 1, legacy: 1, status: 'sent', fileId: 'f-1', sentAt: 1500 });
+    const f = db.prepare('SELECT kind, sourceType, sourceId FROM files WHERE id = ?').get('f-1') as any;
+    expect(f).toEqual({ kind: 'proposal', sourceType: 'proposal', sourceId: rows[0].id });
+    db.close();
+  });
+
+  it('attaches legacy proposal photos to the LATEST legacy proposal', () => {
+    const db = seedLegacy();
+    const latest = db.prepare('SELECT id FROM proposals WHERE projectId = ? ORDER BY number DESC LIMIT 1').get('p1') as any;
+    const photos = db.prepare('SELECT fileId, sortOrder FROM proposal_photos WHERE proposalId = ? ORDER BY sortOrder').all(latest.id) as any[];
+    expect(photos).toEqual([{ fileId: 'f-photo-1', sortOrder: 0 }, { fileId: 'f-photo-2', sortOrder: 1 }]);
+    const ph = db.prepare('SELECT sourceType, sourceId FROM files WHERE id = ?').get('f-photo-1') as any;
+    expect(ph).toEqual({ sourceType: 'proposal', sourceId: latest.id });
+    db.close();
+  });
+
+  it('relabels takeoff printouts/exports with the new kinds + names', () => {
+    const db = seedLegacy();
+    const pr = db.prepare('SELECT kind, name, sourceType, sourceId FROM files WHERE id = ?').get('f-print-1') as any;
+    expect(pr.kind).toBe('takeoff-print');
+    expect(pr.sourceType).toBe('takeoff-print');
+    expect(pr.sourceId).toBe('po-print-1');
+    expect(pr.name).toMatch(/^Takeoff Print – Old Job – \d{4}-\d{2}-\d{2}$/);
+    const xl = db.prepare('SELECT kind, name, sourceType FROM files WHERE id = ?').get('f-xls-1') as any;
+    expect(xl.kind).toBe('takeoff-export');
+    expect(xl.sourceType).toBe('takeoff-print');
+    expect(xl.name).toMatch(/^Takeoff Export – Old Job – \d{4}-\d{2}-\d{2}$/);
+    db.close();
+  });
+
+  it('strips the six legacy keys from project meta and leaves the rest', () => {
+    const db = seedLegacy();
+    const meta = JSON.parse((db.prepare('SELECT meta FROM projects WHERE id = ?').get('p1') as any).meta);
+    for (const k of ['printouts', 'proposalFileId', 'proposalSentAt', 'proposalPhotoIds', 'proposalCoverNotes', 'proposalTerms']) {
+      expect(meta).not.toHaveProperty(k);
+    }
+    expect(meta.legendOnAllPages).toBe(true);
+    db.close();
+  });
+
+  it('is idempotent on a project with no legacy keys', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('p2', 'Clean', 1, 1, 1, '{}')`).run();
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+    expect(db.prepare('SELECT COUNT(*) c FROM proposals').get()).toEqual({ c: 0 });
+    db.close();
+  });
+
+  // A printouts[] entry can outlive its file row (bytes reclaimed, a partial
+  // delete), and the same fileId can appear twice in the list. Neither may
+  // produce a proposal: the first would be a numbered row pointing at a
+  // dangling fileId, the second two rows fighting over one file.
+  it('skips a printout whose file row is gone, and dedupes repeats of one fileId', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    const meta = {
+      printouts: [
+        { id: 'po-a', name: 'Proposal – Ghost Job', fileId: 'f-missing', createdAt: 1000, type: 'pdf' },
+        { id: 'po-b', name: 'Proposal – Ghost Job', fileId: 'f-real', createdAt: 2000, type: 'pdf' },
+        { id: 'po-c', name: 'Proposal – Ghost Job', fileId: 'f-real', createdAt: 3000, type: 'pdf' },
+        { id: 'po-d', name: 'Printout - 1/2/2026, 9:00:00 AM', fileId: 'f-print', createdAt: 4000, type: 'pdf' },
+        { id: 'po-e', name: 'Printout - 1/2/2026, 9:00:00 AM', fileId: 'f-print', createdAt: 5000, type: 'pdf' },
+        { id: 'po-f', name: 'Printout - 1/2/2026, 9:10:00 AM', fileId: 'f-gone-too', createdAt: 6000, type: 'pdf' },
+      ],
+    };
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pg', 'Ghost Job', 1, 1, 1, ?)`).run(JSON.stringify(meta));
+    const ins = db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES (?, 'pg', ?, 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, ?, 'printout', ?, 0)`);
+    ins.run('f-real', 'Proposal – Ghost Job', 2000, 'po-b');
+    ins.run('f-print', 'Printout - 1/2/2026, 9:00:00 AM', 4000, 'po-d');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    // one proposal (from f-real, kept once), not three
+    const props = db.prepare('SELECT number, fileId FROM proposals WHERE projectId = ? ORDER BY number').all('pg') as any[];
+    expect(props).toEqual([{ number: 1, fileId: 'f-real' }]);
+    // the takeoff print was relabeled exactly once, and the two dead ids made nothing
+    const prints = db.prepare(`SELECT id FROM files WHERE kind = 'takeoff-print'`).all() as any[];
+    expect(prints.map(r => r.id)).toEqual(['f-print']);
+    expect(db.prepare('SELECT COUNT(*) c FROM files').get()).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('names relabeled takeoff prints with the LOCAL date of the printout', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 27));
+    // 11pm local: already the next day in UTC west of Greenwich.
+    const late = new Date(2026, 0, 5, 23, 30, 0).getTime();
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pl', 'Late Job', 1, 1, 1, ?)`)
+      .run(JSON.stringify({ printouts: [{ id: 'po-l', name: 'Printout - x', fileId: 'f-late', createdAt: late, type: 'pdf' }] }));
+    db.prepare(`INSERT INTO files (id, projectId, name, mime, size, sha256, kind, parentFileId, versionNumber, legacyFormat, createdAt, sourceType, sourceId, archived)
+      VALUES ('f-late', 'pl', 'Printout - x', 'application/pdf', 1, 'x', 'printout', NULL, 1, NULL, ?, 'printout', 'po-l', 0)`).run(late);
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+
+    const name = (db.prepare('SELECT name FROM files WHERE id = ?').get('f-late') as any).name;
+    expect(name).toBe('Takeoff Print – Late Job – 2026-01-05');
+    db.close();
+  });
+});
+
+describe('migration 29 — proposal counter', () => {
+  it('backfills proposalCounter to each project\'s MAX(number), and createProposal continues from it', async () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 28));
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pc', 'Counter Job', 1, 1, 1, '{}')`).run();
+    db.prepare(`INSERT INTO projects (id, name, createdAt, version, updatedAt, meta) VALUES ('pd', 'No Proposals', 1, 1, 1, '{}')`).run();
+    const ins = db.prepare(`INSERT INTO proposals (id, projectId, number, status, legacy, createdAt, updatedAt) VALUES (?, 'pc', ?, 'sent', 1, 1, 1)`);
+    ins.run('lp1', 1); ins.run('lp2', 2); ins.run('lp3', 3);
+    runMigrations(db, dir, migrations.filter(m => m.version <= 29));
+
+    expect((db.prepare('SELECT proposalCounter c FROM projects WHERE id = ?').get('pc') as any).c).toBe(3);
+    // a project with no proposals backfills to 0, not NULL
+    expect((db.prepare('SELECT proposalCounter c FROM projects WHERE id = ?').get('pd') as any).c).toBe(0);
+
+    // The number is issued from the counter, so it continues past the legacy
+    // rows — and never reuses one after a delete (the point of migration 29).
+    const { createProposal, deleteProposal } = await import('./proposalStore');
+    expect(createProposal(db, 'pc', {}).number).toBe(4);
+    const fifth = createProposal(db, 'pc', {});
+    expect(fifth.number).toBe(5);
+    deleteProposal(db, fifth.id);
+    expect(createProposal(db, 'pc', {}).number).toBe(6);
+    expect(createProposal(db, 'pd', {}).number).toBe(1);
+    db.close();
   });
 });

@@ -2,17 +2,14 @@
 // CHARACTERIZATION tests: lock in what the pure helpers in proposalGenerator.ts
 // do TODAY.  Do not "fix" surprising behavior — assert the current output and
 // comment where it differs from naive expectation.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   hexToRgb,
   formatCurrency,
   dataUrlToUint8Array,
   HIGHLIGHT_QUALITY_PRESETS,
-  getProposalPrefsKey,
-  resolveGrandTotal,
   computeTakeoffTotals,
 } from './proposalGenerator';
-import type { ProposalOptions, TakeoffTotals } from './proposalGenerator';
 import { computeRevisionModel } from '../../../utils/planSets';
 import type { Project, ProjectPage } from '../../../types';
 
@@ -100,91 +97,6 @@ describe('HIGHLIGHT_QUALITY_PRESETS', () => {
       expect(typeof preset.label).toBe('string');
     }
   );
-});
-
-// ── getProposalPrefsKey ──────────────────────────────────────────────────────
-describe('getProposalPrefsKey', () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
-  afterEach(() => {
-    localStorage.clear();
-  });
-
-  it('no "user" item in localStorage → "proposal-prefs-default"', () => {
-    expect(getProposalPrefsKey()).toBe('proposal-prefs-default');
-  });
-
-  it('user with id "u1" → "proposal-prefs-u1"', () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1' }));
-    expect(getProposalPrefsKey()).toBe('proposal-prefs-u1');
-  });
-
-  it('user item with no id field → "proposal-prefs-default"', () => {
-    // characterization: JSON.parse succeeds but user.id is undefined → "default"
-    localStorage.setItem('user', JSON.stringify({ name: 'Alice' }));
-    expect(getProposalPrefsKey()).toBe('proposal-prefs-default');
-  });
-
-  it('malformed JSON in "user" → "proposal-prefs-default"', () => {
-    // characterization: JSON.parse throws → catch returns "proposal-prefs-default"
-    localStorage.setItem('user', 'not-json{{{');
-    expect(getProposalPrefsKey()).toBe('proposal-prefs-default');
-  });
-});
-
-// ── resolveGrandTotal ─────────────────────────────────────────────────────────
-describe('resolveGrandTotal', () => {
-  // Minimal ProposalOptions — only priceMode / fixedPriceTotal matter here.
-  const baseOptions = (over: Partial<ProposalOptions> = {}): ProposalOptions => ({
-    includeCostDetail: false,
-    includeHighlights: false,
-    coverNotes: '',
-    fontFamily: 'helvetica',
-    validUntil: '',
-    terms: '',
-    includeSignature: false,
-    includeTakeoffList: false,
-    customTitle: '',
-    highlightQuality: 'best',
-    ...over,
-  });
-
-  // Minimal TakeoffTotals stub: simple-cost path → costPerUnit * totalRealValue.
-  const stub = (totalRealValue: number, costPerUnit: number): TakeoffTotals =>
-    ({ totalRealValue, costPerUnit, pageBreakdown: [] } as unknown as TakeoffTotals);
-
-  it('fixed mode returns fixedPriceTotal', () => {
-    const result = resolveGrandTotal(baseOptions({ priceMode: 'fixed', fixedPriceTotal: 12345 }), [
-      stub(100, 5), // would be 500 in takeoff mode — must be ignored
-    ]);
-    expect(result).toBe(12345);
-  });
-
-  it('fixed mode with undefined fixedPriceTotal returns 0', () => {
-    const result = resolveGrandTotal(baseOptions({ priceMode: 'fixed' }), [stub(100, 5)]);
-    expect(result).toBe(0);
-  });
-
-  it('takeoffs mode sums calculateTakeoffTotalCost across the list', () => {
-    // 10*2=20 + 3*4=12 + 5*5=25  →  57
-    const result = resolveGrandTotal(baseOptions({ priceMode: 'takeoffs' }), [
-      stub(10, 2),
-      stub(3, 4),
-      stub(5, 5),
-    ]);
-    expect(result).toBe(57);
-  });
-
-  it('undefined priceMode defaults to takeoffs-mode summing', () => {
-    const result = resolveGrandTotal(baseOptions(), [stub(10, 2), stub(3, 4)]);
-    expect(result).toBe(32);
-  });
-
-  it('takeoffs mode over empty list returns 0', () => {
-    expect(resolveGrandTotal(baseOptions({ priceMode: 'takeoffs' }), [])).toBe(0);
-  });
 });
 
 // ── computeTakeoffTotals: revision (sheetId) de-duplication ───────────────────

@@ -1480,91 +1480,73 @@ describe('email send routes', () => {
     expect(typeof after.sentAt).toBe('number');
   });
 
-  it('proposal send: to override + custom subject/body + extras; inReplyTo threaded; sets proposalSentAt', async () => {
-    // project with an associated email to reply to
-    await request(app).post('/api/projects').send({
-      ...PROJECT, id: 'pe', createdAt: 5,
-      pages: [{ id: 'pgE', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
-      email: { from: 'reply@example.com', fromName: 'Owner', subject: 'Bid request', messageId: '<msg-1@x>' },
+  describe('POST /api/proposals/:id/send', () => {
+    let failingEmailApp: express.Express;
+    beforeEach(() => {
+      const a = express();
+      a.use(express.json({ limit: '50mb' }));
+      registerEmailRoutes(a, {
+        db,
+        dataDir: dir,
+        authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+        requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+        buildTransporter: (_userId: string) => ({ sendMail: async () => { throw new Error('smtp down'); } } as any),
+        getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
+        broadcastChange: () => {},
+      });
+      failingEmailApp = a;
     });
-    const res = await request(emailApp).post('/api/projects/pe/send-proposal').send({
-      to: 'override@example.com', cc: 'cc@example.com', subject: 'Our Proposal', body: 'See attached.',
-      fileId: 'primary', attachmentFileIds: ['extra1'],
-    });
-    expect(res.status).toBe(200);
-    const m = sent[0];
-    expect(m.to).toBe('override@example.com');
-    expect(m.cc).toBe('cc@example.com');
-    expect(m.subject).toBe('Our Proposal');
-    expect(m.text).toBe('See attached.');
-    expect(m.inReplyTo).toBe('<msg-1@x>');
-    expect(m.references).toBe('<msg-1@x>');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf', 'Spec.pdf']);
-    // proposal side-effects persisted
-    const fresh = loadProject(db, 'pe');
-    expect(fresh.proposalFileId).toBe('primary');
-    expect(typeof fresh.proposalSentAt).toBe('number');
-  });
 
-  it('proposal send: falls back to project email "from" + Re: subject when no overrides', async () => {
-    await request(app).post('/api/projects').send({
-      ...PROJECT, id: 'pe2', createdAt: 6,
-      pages: [{ id: 'pgE2', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
-      email: { from: 'reply@example.com', subject: 'Bid request', messageId: '<msg-2@x>' },
+    it('sends the proposal PDF, marks sent with sentTo, logs proposal_sent, 409s a second send', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const up = await request(app).post('/api/files/gen?projectId=p1&kind=proposal&name=Proposal.pdf&sourceType=proposal&sourceId=' + c.body.id)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', cc: 'me@x.com', subject: 'Our proposal', body: 'hi', fileId: up.body.fileId });
+      expect(res.status).toBe(200);
+      expect(sent[0].to).toBe('gc@x.com');
+      expect(sent[0].attachments[0].filename).toMatch(/\.pdf$/);
+      const row = db.prepare('SELECT status, sentTo FROM proposals WHERE id = ?').get(c.body.id) as any;
+      expect(row.status).toBe('sent');
+      expect(JSON.parse(row.sentTo)).toEqual({ to: 'gc@x.com', cc: 'me@x.com', subject: 'Our proposal' });
+      expect(db.prepare(`SELECT type FROM activity WHERE type = 'proposal_sent'`).all()).toHaveLength(1);
+      const again = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(again.status).toBe(409);
     });
-    await request(emailApp).post('/api/projects/pe2/send-proposal').send({ fileId: 'primary' });
-    const m = sent[0];
-    expect(m.to).toBe('reply@example.com');
-    expect(m.subject).toBe('Re: Bid request');
-    expect(m.text).toBe('Please find the attached proposal.');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf']);
-  });
 
-  it('proposal send: project WITHOUT email sends with an explicit "to" (no 400); cc/bcc/subject/body forwarded; proposalSentAt persisted', async () => {
-    // A manually-created project — no inbound bid email at all.
-    await request(app).post('/api/projects').send({
-      ...PROJECT, id: 'pe3', name: 'Manual Job', createdAt: 7,
-      pages: [{ id: 'pgE3', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    // The attachment must arrive named as the document is named in Documents,
+    // not a generic Proposal.pdf. proposalFileName() stores no extension, so
+    // the route adds one.
+    it('names the attachment after the stored document, adding .pdf when it has no extension', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const name = 'Proposal – Test Project – 2026-08-28';
+      const up = await request(app).post(`/api/files/gen-named?projectId=p1&kind=proposal&name=${encodeURIComponent(name)}&sourceType=proposal&sourceId=${c.body.id}`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      sent.length = 0;
+      const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(res.status).toBe(200);
+      expect(sent[0].attachments[0].filename).toBe(`${name}.pdf`);
     });
-    const res = await request(emailApp).post('/api/projects/pe3/send-proposal').send({
-      to: ' client@new.com ', cc: 'cc@new.com', bcc: 'bcc@new.com',
-      subject: 'Your Proposal', body: 'Attached for review.',
-      fileId: 'primary', attachmentFileIds: ['extra1'],
-    });
-    expect(res.status).toBe(200);
-    const m = sent[0];
-    expect(m.to).toBe('client@new.com'); // trimmed
-    expect(m.cc).toBe('cc@new.com');
-    expect(m.bcc).toBe('bcc@new.com');
-    expect(m.subject).toBe('Your Proposal');
-    expect(m.text).toBe('Attached for review.');
-    // no bid email → not threaded
-    expect(m.inReplyTo).toBeUndefined();
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['Proposal.pdf', 'Spec.pdf']);
-    // proposal side-effects persisted
-    const fresh = loadProject(db, 'pe3');
-    expect(fresh.proposalFileId).toBe('primary');
-    expect(typeof fresh.proposalSentAt).toBe('number');
-  });
 
-  it('proposal send: project WITHOUT email defaults subject to "Proposal — <name>"', async () => {
-    await request(app).post('/api/projects').send({
-      ...PROJECT, id: 'pe4', name: 'Manual Job', createdAt: 8,
-      pages: [{ id: 'pgE4', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    it('keeps an extension the stored name already has', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const up = await request(app).post(`/api/files/gen-ext?projectId=p1&kind=proposal&name=Bid.pdf&sourceType=proposal&sourceId=${c.body.id}`)
+        .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      sent.length = 0;
+      await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(sent[0].attachments[0].filename).toBe('Bid.pdf');
     });
-    await request(emailApp).post('/api/projects/pe4/send-proposal').send({ to: 'client@new.com', fileId: 'primary' });
-    expect(sent[0].subject).toBe('Proposal — Manual Job');
-  });
 
-  it('proposal send: project WITHOUT email AND no "to" → 400, no send', async () => {
-    await request(app).post('/api/projects').send({
-      ...PROJECT, id: 'pe5', name: 'Manual Job', createdAt: 9,
-      pages: [{ id: 'pgE5', name: 'A1', imageId: '', measurements: [], scaleConfig: null }],
+    it('does not mark sent when SMTP fails', async () => {
+      const c = await request(app).post('/api/projects/p1/proposals').send({});
+      const up = await request(app).post('/api/files/gen2?projectId=p1&kind=proposal&name=P.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
+      await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
+      const res = await request(failingEmailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(res.status).toBe(500);
+      expect((db.prepare('SELECT status FROM proposals WHERE id = ?').get(c.body.id) as any).status).toBe('draft');
     });
-    const res = await request(emailApp).post('/api/projects/pe5/send-proposal').send({ fileId: 'primary' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('No recipient address');
-    expect(sent).toHaveLength(0);
   });
 });
 

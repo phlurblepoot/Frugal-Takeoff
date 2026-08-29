@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Settings, Loader2, Upload, Hash, ZoomIn, ZoomOut, Maximize, Calendar, Building2, MapPin, Clock, Mail, HardDrive, Layers, GitCompare, SlidersHorizontal } from 'lucide-react';
-import { Project, MeasurementTakeoff, ProjectPage, Printout, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
-import { getProject, saveProject, getImageUrl, saveImage, saveBinaryFile, getFile, getTemplates, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
+import { Project, MeasurementTakeoff, ProjectPage, TakeoffTemplate, CustomCost, ProjectNote } from '../types';
+import { getProject, saveProject, getImageUrl, saveImage, saveBinaryFile, getFile, getTemplates, getProjectNotes, saveProjectNotes, getSettings, getUserPreferences, saveUserPreferences, createShare, createProposal, getProjectStorage, formatBytes, ProjectStorage, recordRecentProject, TaskListItem, getTasks } from '../utils/store';
+import { takeoffPrintName, takeoffPrintsUrl } from '../utils/takeoffPrintNames';
 import { formatRealValue, calculateTakeoffTotalCost, evaluateMathExpression, roundUpTo100 } from '../utils/math';
 import { allocateSubsetCost, allocateSubsetDetails, SubsetCostDetail } from '../utils/costAllocation';
 import { loadPdfPagesGenerator } from '../utils/pdf';
@@ -37,6 +38,7 @@ import {
   normalizeHighlightQuality,
 } from './project/proposal/proposalGenerator';
 import { shrinkPdfToBudget, EMAIL_TARGET_BYTES } from './project/proposal/shrinkPdf';
+import { optionDefaultsFromPrefs } from './project/proposal/proposalPrefs';
 import { EmailTab } from './project/EmailTab';
 import { ProjectPagesTab } from './project/ProjectPagesTab';
 import { ProjectTakeoffsTab } from './project/ProjectTakeoffsTab';
@@ -373,7 +375,7 @@ export const ProjectView: React.FC = () => {
     }
   }, [location.state]);
 
-  // Per-project storage usage. Recomputed when the page/printout count changes
+  // Per-project storage usage. Recomputed when the page count changes
   // (uploads and deletes are what actually move the number), since that's what
   // the server attributes a project's image bytes from.
   useEffect(() => {
@@ -383,7 +385,7 @@ export const ProjectView: React.FC = () => {
       .then(s => { if (!cancelled) setProjectStorage(s); })
       .catch(() => { if (!cancelled) setProjectStorage(null); });
     return () => { cancelled = true; };
-  }, [projectId, project?.pages?.length, project?.printouts?.length]);
+  }, [projectId, project?.pages?.length]);
 
   // Backfill the search text cache from each page's source PDF. Vector pages
   // uploaded under earlier code paths may have OCR-derived extractedText
@@ -1156,38 +1158,18 @@ export const ProjectView: React.FC = () => {
       }
 
       setProgressMessage('Saving…');
-      const name = `Printout - ${new Date().toLocaleString()}`;
-      // The printout id is minted first so it can attribute its own file; each
-      // printout entry therefore keeps a distinct document.
-      const printoutId = uuidv4();
+      const name = takeoffPrintName(project.name, 'pdf');
       // Raw streaming save — base64-in-JSON dies at the server's JSON body cap
       // for big plan-set printouts, and silently at that (413).
-      const { fileId } = await saveBinaryFile(uuidv4(), new Blob([outBuffer], { type: 'application/pdf' }), {
-        projectId: project.id, kind: 'printout', name,
-        sourceType: 'printout', sourceId: printoutId,
+      await saveBinaryFile(uuidv4(), new Blob([outBuffer], { type: 'application/pdf' }), {
+        projectId: project.id, kind: 'takeoff-print', name, sourceType: 'takeoff-print', sourceId: uuidv4(),
       });
       if (overBudget) {
         toast(`Printout is ${(outBuffer.byteLength / 1048576).toFixed(1)}MB — above the 18MB email target; some providers may reject it.`, { type: 'warning' });
       }
 
-      const newPrintout: Printout = {
-        id: printoutId,
-        name,
-        fileId,
-        createdAt: Date.now(),
-        type: 'pdf',
-      };
-
-      const updatedProject = {
-        ...project,
-        printouts: [...(project.printouts || []), newPrintout],
-      };
-
-      await saveProject(updatedProject);
-      setProject(updatedProject);
       setSelectedTakeoffIds(new Set());
-      // Printout history now lives in the Proposal section.
-      navigate(`/project/${projectId}/proposal`);
+      navigate(takeoffPrintsUrl(project.id));
     } catch (error) {
       console.error('Error generating PDF:', error);
       toast('Failed to generate PDF.', { type: 'error' });
@@ -1340,38 +1322,39 @@ export const ProjectView: React.FC = () => {
       const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const excelBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
-      const printoutId = uuidv4();
-      const name = `Excel Export - ${new Date().toLocaleString()}`;
+      const name = takeoffPrintName(project.name, 'excel');
       // Attributed streaming save, same as the PDF printout above, so the export
-      // lands in Documents as this printout entry's document.
-      const { fileId } = await saveBinaryFile(uuidv4(), excelBlob, {
-        projectId: project.id, kind: 'printout', name,
-        sourceType: 'printout', sourceId: printoutId,
+      // lands in Documents as its own takeoff-export document. sourceType is
+      // 'takeoff-print' for BOTH pdf and excel exports (only `kind` tells them
+      // apart) — that's what server/documents.ts's resolveTakeoffPrints keys
+      // off, matching the migration 28 relabel (server/migrationList.ts).
+      await saveBinaryFile(uuidv4(), excelBlob, {
+        projectId: project.id, kind: 'takeoff-export', name, sourceType: 'takeoff-print', sourceId: uuidv4(),
       });
 
-      const newPrintout: Printout = {
-        id: printoutId,
-        name,
-        fileId,
-        createdAt: Date.now(),
-        type: 'excel',
-      };
-
-      const updatedProject = {
-        ...project,
-        printouts: [...(project.printouts || []), newPrintout],
-      };
-
-      await saveProject(updatedProject);
-      setProject(updatedProject);
       setSelectedTakeoffIds(new Set());
-      // Printout history now lives in the Proposal section.
-      navigate(`/project/${projectId}/proposal`);
+      navigate(takeoffPrintsUrl(project.id));
     } catch (error) {
       console.error('Error generating Excel:', error);
       toast('Failed to generate Excel.', { type: 'error' });
     } finally {
       setIsExportingExcel(false);
+    }
+  };
+
+  const handleCreateProposal = async () => {
+    if (!project || selectedTakeoffIds.size === 0) return;
+    try {
+      // Same last-used document options a blank proposal gets (ProposalsList's
+      // handleNew) — best-effort, so an offline prefs fetch is not fatal.
+      const prefs = await getUserPreferences().catch(() => ({} as Record<string, string>));
+      const { id } = await createProposal(project.id, {
+        takeoffIds: [...selectedTakeoffIds],
+        ...optionDefaultsFromPrefs(prefs),
+      });
+      navigate(`/project/${project.id}/proposal/${id}`);
+    } catch {
+      toast('Failed to create proposal', { type: 'error' });
     }
   };
 
@@ -2119,6 +2102,8 @@ export const ProjectView: React.FC = () => {
             setSelectedTakeoffIds={setSelectedTakeoffIds}
             handlePrint={handlePrint}
             handleExportExcel={handleExportExcel}
+            onCreateProposal={handleCreateProposal}
+            isAdmin={isAdmin}
             toggleTakeoffSelection={toggleTakeoffSelection}
             toggleTakeoffExpanded={toggleTakeoffExpanded}
             toggleTakeoffPageExpanded={toggleTakeoffPageExpanded}
@@ -2128,7 +2113,7 @@ export const ProjectView: React.FC = () => {
           />
         ) : (
           /* Email tab — only reachable when project.email exists */
-          <EmailTab project={project} onOpenProposal={() => navigate(`/project/${projectId}/proposal`)} />
+          <EmailTab project={project} onOpenProposal={isAdmin ? () => navigate(`/project/${projectId}/proposal`) : undefined} />
         )}
       </div>
 

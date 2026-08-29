@@ -16,7 +16,8 @@ import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectRfis } from './pages/project/ProjectRfis';
 import { ProjectDailyReports } from './pages/project/ProjectDailyReports';
 import { ProjectPunch } from './pages/project/ProjectPunch';
-import { ProjectProposal } from './pages/project/ProjectProposal';
+import { ProposalsList } from './pages/project/proposal/ProposalsList';
+import { ProposalEditor } from './pages/project/proposal/ProposalEditor';
 import { ProjectSettings } from './pages/project/ProjectSettings';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
@@ -118,7 +119,8 @@ export default function App() {
           children: [
             { index: true, element: <ProjectOverview /> },
             { path: 'takeoff', element: <ProjectView /> },
-            { path: 'proposal', element: <ProjectProposal /> },
+            { path: 'proposal', element: <ProposalsList /> },
+            { path: 'proposal/:proposalId', element: <ProposalEditor /> },
             { path: 'documents', element: <ProjectDocumentsRedirect /> },
             { path: 'notes', element: <ProjectNotes /> },
             { path: 'time', element: <ProjectTime /> },

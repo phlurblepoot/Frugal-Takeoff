@@ -18,6 +18,9 @@ vi.mock('../../utils/store', async (importOriginal) => {
 // A .png so a MIME-based guess ('photo') would differ from the shared default.
 const png = (name = 'shot.png') => new File([new Uint8Array([1])], name, { type: 'image/png' });
 
+const project = { id: 'proj1', name: 'Test Project', customerId: 'cust1' } as any;
+const customer = { id: 'cust2', name: 'Test Customer' } as any;
+
 const renderModal = (initialFiles?: File[]) =>
   render(
     <ToastProvider>
@@ -25,8 +28,8 @@ const renderModal = (initialFiles?: File[]) =>
         open
         onClose={() => {}}
         onUploaded={() => {}}
-        projects={[]}
-        customers={[]}
+        projects={[project]}
+        customers={[customer]}
         customTypes={[]}
         initialFiles={initialFiles}
       />
@@ -73,5 +76,76 @@ describe('UploadDocumentsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /Upload \(1\)/ }));
     await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(3));
     expect((saveBinaryFile.mock.calls[2][1] as File).name).toBe('b.png');
+  });
+
+  it('selecting company-document disables the Project select and uploads carry no projectId', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'proj1' } });
+    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('proj1');
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Project')).toBeDisabled();
+    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('');
+    expect(screen.getByText("Company documents aren't tied to a project.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload \(1\)/ }));
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1));
+    expect(saveBinaryFile.mock.calls[0][2]).toMatchObject({ kind: 'company-document' });
+    expect(saveBinaryFile.mock.calls[0][2]).not.toHaveProperty('projectId');
+  });
+
+  it('selecting company-document disables and clears the Customer select and uploads carry no customerId', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'cust2' } });
+    expect((screen.getByLabelText('Customer') as HTMLSelectElement).value).toBe('cust2');
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Customer')).toBeDisabled();
+    expect((screen.getByLabelText('Customer') as HTMLSelectElement).value).toBe('');
+    expect(screen.getByText("Company documents aren't tied to a customer.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload \(1\)/ }));
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1));
+    expect(saveBinaryFile.mock.calls[0][2]).toMatchObject({ kind: 'company-document' });
+    expect(saveBinaryFile.mock.calls[0][2]).not.toHaveProperty('customerId');
+  });
+
+  it('re-enables the Customer select when the Type is changed away from company-document', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Customer')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'document' } });
+    expect(screen.getByLabelText('Customer')).toBeEnabled();
+  });
+
+  it('gates projectId/customerId per entry when per-file typing mixes company-document with a project-tagged file', async () => {
+    renderModal([png('shared.png'), png('company.png')]);
+    fireEvent.click(screen.getByLabelText('Set type per file'));
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'proj1' } });
+    fireEvent.change(screen.getByLabelText('Type for company.png'), { target: { value: 'company-document' } });
+    // Only one file opted into company-document — the batch isn't
+    // company-document-only, so the Project select stays as the person set it.
+    expect(screen.getByLabelText('Project')).toBeEnabled();
+    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('proj1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload \(2\)/ }));
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(2));
+
+    const shared = saveBinaryFile.mock.calls.find(c => (c[1] as File).name === 'shared.png')!;
+    const company = saveBinaryFile.mock.calls.find(c => (c[1] as File).name === 'company.png')!;
+    expect(shared[2]).toMatchObject({ kind: 'document', projectId: 'proj1', customerId: 'cust1' });
+    expect(company[2]).toMatchObject({ kind: 'company-document' });
+    expect(company[2]).not.toHaveProperty('projectId');
+    expect(company[2]).not.toHaveProperty('customerId');
+  });
+
+  it('re-enables the Project select when the Type is changed away from company-document', async () => {
+    renderModal([png()]);
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'company-document' } });
+    expect(screen.getByLabelText('Project')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'document' } });
+    expect(screen.getByLabelText('Project')).toBeEnabled();
   });
 });

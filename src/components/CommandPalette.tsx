@@ -104,7 +104,6 @@ export const CommandPalette: React.FC = () => {
       { id: 'ctx:new-punch', type: 'action' as const, title: 'New punch item', subtitle: 'Project', icon: <ClipboardCheck size={16} />, run: () => navigate(`/project/${projectId}/punch?new=1`) },
       { id: 'ctx:new-daily-report', type: 'action' as const, title: 'New daily report', subtitle: 'Project', icon: <CalendarDays size={16} />, run: () => navigate(`/project/${projectId}/daily-reports?new=1`) },
       { id: 'ctx:new-task', type: 'action' as const, title: 'New task', subtitle: 'Project', icon: <ListTodo size={16} />, run: () => navigate('/tasks?new=1') },
-      { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
       { id: 'ctx:overview', type: 'action' as const, title: 'Project overview', subtitle: 'Project', icon: <LayoutGrid size={16} />, run: () => navigate(`/project/${projectId}`) },
       { id: 'ctx:takeoff', type: 'action' as const, title: 'Takeoff & estimate', subtitle: 'Project', icon: <Ruler size={16} />, run: () => navigate(`/project/${projectId}/takeoff`) },
       { id: 'ctx:documents', type: 'action' as const, title: 'Documents', subtitle: 'Project', icon: <FolderOpen size={16} />, run: () => navigate(`/documents?projectIds=${projectId}`) },
@@ -117,6 +116,7 @@ export const CommandPalette: React.FC = () => {
     ];
     if (isAdmin) {
       actions.push(
+        { id: 'ctx:proposal', type: 'action' as const, title: 'Open proposal', subtitle: 'Project', icon: <FileText size={16} />, run: () => navigate(`/project/${projectId}/proposal`) },
         { id: 'ctx:billing', type: 'action' as const, title: 'Billing', subtitle: 'Project', icon: <DollarSign size={16} />, run: () => navigate(`/project/${projectId}/billing`) },
         { id: 'ctx:settings', type: 'action' as const, title: 'Project settings', subtitle: 'Project', icon: <SlidersHorizontal size={16} />, run: () => navigate(`/project/${projectId}/settings`) },
       );

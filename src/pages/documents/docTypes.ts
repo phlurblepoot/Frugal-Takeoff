@@ -22,7 +22,16 @@ const KIND_META: Record<string, KindMeta> = {
   other:                { label: 'Other',              tone: 'slate' },
   proposal:             { label: 'Proposal',           tone: 'blue' },
   'proposal-photo':     { label: 'Proposal Photo',     tone: 'blue' },
+  'proposal-signed':    { label: 'Signed Proposal',    tone: 'blue' },
+  // Retired kind: migration 28 relabels every legacy 'printout' row to
+  // takeoff-print/takeoff-export, but a database that hasn't run it yet (or a
+  // row that migration missed) would otherwise render a raw 'printout' badge.
+  // Kept out of KIND_OPTIONS — nobody should be able to filter to, or re-type
+  // a file into, a kind we no longer write.
   printout:             { label: 'Printout',           tone: 'slate' },
+  'takeoff-print':      { label: 'Takeoff Print',      tone: 'slate' },
+  'takeoff-export':     { label: 'Takeoff Export',     tone: 'green' },
+  'company-document':   { label: 'Company Document',   tone: 'violet' },
   'plan-source':        { label: 'Plan Set',           tone: 'slate' },
   invoice:              { label: 'Invoice',            tone: 'emerald' },
   'change-order':       { label: 'Change Order',       tone: 'amber' },
@@ -43,8 +52,12 @@ const KIND_META: Record<string, KindMeta> = {
 
 // Display order for the Type filter dropdown. 'plan' and 'settings-asset' are
 // never returned by GET /api/documents (spec §Server "always excluded"), so
-// they have no entry here.
+// they have no entry here; 'printout' has a KIND_META entry (so a stray
+// pre-migration row still gets a readable badge) but is never offered.
+const NON_SELECTABLE_KINDS = ['printout'];
+
 export const KIND_OPTIONS: { id: string; label: string }[] = Object.keys(KIND_META)
+  .filter(id => !NON_SELECTABLE_KINDS.includes(id))
   .map(id => ({ id, label: KIND_META[id].label }));
 
 const customLabel = (kind: string, customTypes: CustomDocType[]): string | undefined => {
@@ -64,7 +77,15 @@ export const kindTone = (kind: string): PillTone =>
 // bundle). These are the only kinds a person can pick in the upload popup or
 // re-type a file into via "Change type", and the only ones a file may ever be
 // deleted outright (see documentsPolicy.ts).
-export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other'] as const;
+export const DIRECT_UPLOAD_KINDS = ['document', 'spreadsheet', 'photo', 'other', 'company-document'] as const;
+
+// Client mirror of server/documents.ts's DELETABLE_GENERATED_KINDS: generated
+// documents with no owning record, so they are deletable (and shareable)
+// straight from the Documents page even though they carry a sourceType.
+export const DELETABLE_GENERATED_KINDS = ['takeoff-print', 'takeoff-export'] as const;
+
+export const isDeletableGeneratedKind = (kind: string): boolean =>
+  (DELETABLE_GENERATED_KINDS as readonly string[]).includes(kind);
 
 export const isDirectUploadKind = (kind: string): boolean =>
   (DIRECT_UPLOAD_KINDS as readonly string[]).includes(kind) || kind.startsWith('custom:');
