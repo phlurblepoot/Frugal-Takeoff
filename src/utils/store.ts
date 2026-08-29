@@ -243,6 +243,10 @@ export interface FileUploadOpts {
   customerId?: string;
   sourceType?: string;
   sourceId?: string;
+  // Only meaningful on an upsert-by-source hit — see server/files.ts's
+  // `store`. 'version' (default) keeps prior versions as history; 'overwrite'
+  // replaces the current version in place (regenerate-in-place flows).
+  mode?: 'version' | 'overwrite';
 }
 
 export interface UploadResult {
@@ -258,6 +262,7 @@ const uploadQuery = (opts?: FileUploadOpts): URLSearchParams => {
   if (opts?.customerId) q.set('customerId', opts.customerId);
   if (opts?.sourceType) q.set('sourceType', opts.sourceType);
   if (opts?.sourceId) q.set('sourceId', opts.sourceId);
+  if (opts?.mode) q.set('mode', opts.mode);
   return q;
 };
 
@@ -759,6 +764,37 @@ export const getDocuments = async (
   if (filters.limit != null) p.set('limit', String(filters.limit));
   if (filters.offset != null) p.set('offset', String(filters.offset));
   const res = await fetchWithRetry(`/api/documents?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+// Single-entity lookup keyed by the owning entity (server/documents.ts's
+// SourceDoc) — "does this invoice already have a generated PDF?" without
+// browsing the full Documents list.
+export interface GeneratedDoc {
+  id: string;
+  name: string | null;
+  mime: string;
+  size: number;
+  createdAt: number;
+  versionNumber: number;
+}
+
+export const getDocumentBySource = async (
+  q: { sourceType: string; sourceId: string; kind: string }
+): Promise<GeneratedDoc | null> => {
+  const p = new URLSearchParams({ sourceType: q.sourceType, sourceId: q.sourceId, kind: q.kind });
+  const res = await fetchWithRetry(`/api/documents/by-source?${p.toString()}`, { headers: { ...getAuthHeaders() } });
+  if (res.status === 404) return null;
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getDocumentsBySource = async (
+  q: { sourceType: string; sourceIds: string[]; kind: string }
+): Promise<Record<string, GeneratedDoc | null>> => {
+  const p = new URLSearchParams({ sourceType: q.sourceType, kind: q.kind, sourceIds: q.sourceIds.join(',') });
+  const res = await fetchWithRetry(`/api/documents/by-source?${p.toString()}`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res);
   return await res.json();
 };
