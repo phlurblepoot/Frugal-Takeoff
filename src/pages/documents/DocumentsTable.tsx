@@ -27,17 +27,11 @@ import { DocumentViewerModal } from './DocumentViewerModal';
 import { MimeIcon } from './MimeIcon';
 import { openTargetFor } from './openTarget';
 import { RowContextMenu, RowContextMenuState } from './RowContextMenu';
+import { downloadBlob } from '../../utils/download';
 
-export const downloadBlob = (blob: Blob, name: string) => {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+// Moved to src/utils/download.ts (shared with DocumentActionsBar); re-exported
+// here so the page-local imports keep working.
+export { downloadBlob } from '../../utils/download';
 
 const iconBtnCls = 'flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink md:min-h-0 md:min-w-0';
 

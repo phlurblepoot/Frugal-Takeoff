@@ -43,7 +43,10 @@ export const DocumentViewerModal: React.FC<{
   onOpenInEditor: (row: DocumentRow) => void;
   onDownload: (row: DocumentRow) => void;
   onArchive: (row: DocumentRow, archived: boolean) => Promise<void>;
-}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive }) => {
+  /** Suppress the Archive button for hosts that don't own archiving (e.g. an
+   *  editor's DocumentActionsBar preview). */
+  hideArchive?: boolean;
+}> = ({ row, customTypes, onClose, onOpenInEditor, onDownload, onArchive, hideArchive = false }) => {
   const kind = previewKindFor(row.mime);
 
   // ── PDF: one document handle for the modal's lifetime, page flips render
@@ -111,7 +114,7 @@ export const DocumentViewerModal: React.FC<{
     return () => { cancelled = true; };
   }, [row.id, kind]);
 
-  const archivable = selectionPolicy([row]).archivable.length > 0;
+  const archivable = !hideArchive && selectionPolicy([row]).archivable.length > 0;
   const [archiving, setArchiving] = useState(false);
 
   const handleArchive = async () => {
