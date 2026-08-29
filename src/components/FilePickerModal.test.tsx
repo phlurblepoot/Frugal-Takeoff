@@ -303,3 +303,89 @@ describe('FilePickerModal — query cost', () => {
     expect(getDocuments).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('FilePickerModal — upload guards', () => {
+  // useDropZone filters by type, not by count: without a cap in runUpload a
+  // single-file picker silently uploads a whole dropped batch.
+  it('uploads only the first file when multi is false, however many are dropped', async () => {
+    const onPick = vi.fn();
+    render(
+      <FilePickerModal open onClose={() => {}} onPick={onPick} accept="image" multi={false}
+        upload={uploadCfg} defaultTab="upload" />
+    );
+    const first = png('a.png');
+    fireEvent.drop(screen.getByTestId('picker-dropzone'), {
+      dataTransfer: { files: [first, png('b.png'), png('c.png')] },
+    });
+
+    await waitFor(() => expect(onPick).toHaveBeenCalled());
+    expect(uploadProjectFile).toHaveBeenCalledTimes(1);
+    expect(uploadProjectFile).toHaveBeenCalledWith('p1', first, 'photo', expect.anything());
+    expect(h.toast).toHaveBeenCalledWith('Only one file can be added here', expect.objectContaining({ type: 'warning' }));
+    expect(onPick.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('honours a single-file upload config even when the picker itself is multi', async () => {
+    const onPick = vi.fn();
+    render(
+      <FilePickerModal open onClose={() => {}} onPick={onPick} accept="image"
+        upload={{ ...uploadCfg, multi: false }} defaultTab="upload" />
+    );
+    fireEvent.change(screen.getByTestId('picker-upload-input'), { target: { files: [png('a.png'), png('b.png')] } });
+
+    await waitFor(() => expect(onPick).toHaveBeenCalled());
+    expect(uploadProjectFile).toHaveBeenCalledTimes(1);
+  });
+
+  // Modal calls onClose unconditionally from Escape, the backdrop and the X.
+  // Closing mid-upload would leave a file stored server-side that onPick never
+  // reported — an orphan the caller can't link.
+  it('refuses to close while an upload is in flight, then closes when it lands', async () => {
+    let release!: (v: { fileId: string; versioned: boolean }) => void;
+    (uploadProjectFile as any).mockImplementationOnce(() => new Promise(res => { release = res; }));
+    const onPick = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <FilePickerModal open onClose={onClose} onPick={onPick} accept="image"
+        upload={uploadCfg} defaultTab="upload" />
+    );
+    fireEvent.change(screen.getByTestId('picker-upload-input'), { target: { files: [png('a.png')] } });
+    await screen.findByText('Uploading…');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('modal-overlay'));
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('picker-upload-panel')).toBeInTheDocument();
+
+    // The tabs stay live during an upload, so the Existing tab's (enabled)
+    // Cancel is another route to the same orphan.
+    fireEvent.click(screen.getByRole('tab', { name: 'Existing' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Upload' }));
+
+    await act(async () => { release({ fileId: 'up-a.png', versioned: false }); });
+    await waitFor(() => expect(onPick).toHaveBeenCalledTimes(1));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays quiet when the picker is unmounted mid-upload', async () => {
+    let release!: (v: { fileId: string; versioned: boolean }) => void;
+    (uploadProjectFile as any).mockImplementationOnce(() => new Promise(res => { release = res; }));
+    const onPick = vi.fn();
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <FilePickerModal open onClose={onClose} onPick={onPick} accept="image"
+        upload={uploadCfg} defaultTab="upload" />
+    );
+    fireEvent.change(screen.getByTestId('picker-upload-input'), { target: { files: [png('a.png')] } });
+    await screen.findByText('Uploading…');
+
+    unmount();
+    await act(async () => { release({ fileId: 'up-a.png', versioned: false }); });
+
+    expect(onPick).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

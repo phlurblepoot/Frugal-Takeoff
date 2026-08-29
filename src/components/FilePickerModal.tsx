@@ -248,12 +248,21 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
 
   // Files chosen on the Upload tab are stored immediately — there's no second
   // confirm step, because the dialog's whole job is "give me these files".
-  const runUpload = async (files: File[]) => {
-    if (!upload || !files.length || uploading) return;
+  const runUpload = async (chosen: File[]) => {
+    if (!upload || !chosen.length || uploading) return;
+    // The single-file cap lives here rather than in useDropZone because this
+    // is the one choke point every path funnels through: `multiple` on the
+    // input only constrains the OS dialog, and a drag-drop bypasses it
+    // entirely (useDropZone filters by type, never by count).
+    const singleOnly = (upload.multi ?? multi) === false;
+    if (singleOnly && chosen.length > 1) toast('Only one file can be added here', { type: 'warning' });
+    const files = singleOnly ? chosen.slice(0, 1) : chosen;
+
     setUploading(true);
     setProgress(files.map(f => ({ name: f.name, status: 'pending' as UploadStatus })));
-    const mark = (i: number, status: UploadStatus) =>
-      setProgress(prev => prev.map((p, j) => (j === i ? { ...p, status } : p)));
+    const mark = (i: number, status: UploadStatus) => {
+      if (mountedRef.current) setProgress(prev => prev.map((p, j) => (j === i ? { ...p, status } : p)));
+    };
 
     const done: { row: DocumentRow; blob: Blob }[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -276,6 +285,13 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
         mark(i, 'error');
       }
     }
+    // Unmounted mid-flight (the owner tore the dialog down — a route change,
+    // a card that went away): stop here rather than setting state on a dead
+    // tree. Anything that did upload is stored server-side under the same
+    // source triple, so it still surfaces on the record and on /documents —
+    // whereas calling back into an owner that may itself be gone can't be
+    // made safe from in here.
+    if (!mountedRef.current) return;
     setUploading(false);
 
     if (done.length < files.length) {
@@ -296,12 +312,20 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
 
   const uploadTab = tab === 'upload' && !!upload;
 
+  // Modal fires onClose from Escape, the backdrop AND the X without asking.
+  // Honouring that mid-upload would strand a file that is already on the
+  // server but was never reported to the caller — the same reason Cancel is
+  // disabled while uploading.
+  const requestClose = useCallback(() => { if (!uploading) onClose(); }, [uploading, onClose]);
+
   return (
-    <Modal open={open} onClose={onClose} title={title} width="xl"
+    <Modal open={open} onClose={requestClose} title={title} width="xl"
       footer={uploadTab ? (
-        <Button variant="secondary" onClick={onClose} disabled={uploading}>Cancel</Button>
+        <Button variant="secondary" onClick={requestClose} disabled={uploading}>Cancel</Button>
       ) : (<>
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        {/* requestClose, not onClose: the tabs stay live during an upload, so
+            Cancel on the Existing tab is another way to strand one. */}
+        <Button variant="secondary" onClick={requestClose}>Cancel</Button>
         <Button onClick={confirm} disabled={selected.size === 0 || picking}>Add {selected.size} file{selected.size === 1 ? '' : 's'}</Button>
       </>)}>
       {upload && (
