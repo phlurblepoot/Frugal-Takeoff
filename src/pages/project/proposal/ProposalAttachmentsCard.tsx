@@ -73,8 +73,8 @@ export const ProposalAttachmentsCard: React.FC<{
     const other = attachments[index + dir];
     if (!other) return;
     try {
-      await updateProposalAttachment(cur.id, cur.fileId, { sortOrder: other.sortOrder });
-      await updateProposalAttachment(other.id, other.fileId, { sortOrder: cur.sortOrder });
+      await updateProposalAttachment(proposal.id, cur.fileId, { sortOrder: other.sortOrder });
+      await updateProposalAttachment(proposal.id, other.fileId, { sortOrder: cur.sortOrder });
     } catch (e) {
       toastProposalCardError(e, toast, 'Failed to reorder attachments');
     } finally {

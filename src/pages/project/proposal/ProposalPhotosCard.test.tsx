@@ -88,6 +88,26 @@ describe('ProposalPhotosCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  it('caption commit PATCHes on the proposal id, not the photo row id', async () => {
+    const { onChanged } = renderCard();
+    const input = screen.getByDisplayValue('Front porch');
+    fireEvent.change(input, { target: { value: 'Back porch' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(updateProposalPhoto).toHaveBeenCalledWith('pr1', 'f1', { caption: 'Back porch' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('reorder: swaps sortOrder via two PATCHes on the proposal id', async () => {
+    const { onChanged } = renderCard();
+    fireEvent.click(screen.getAllByLabelText('Move right')[0]);
+    await waitFor(() => expect(updateProposalPhoto).toHaveBeenCalledTimes(2));
+    // First arg is the PROPOSAL id, not the photo row id — the API route is
+    // /api/proposals/:id/photos/:fileId, so passing the row id 404s.
+    expect(vi.mocked(updateProposalPhoto).mock.calls[0]).toEqual(['pr1', 'f1', { sortOrder: 1 }]);
+    expect(vi.mocked(updateProposalPhoto).mock.calls[1]).toEqual(['pr1', 'f2', { sortOrder: 0 }]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
   it('reorder: if the second PATCH fails, toasts and still resyncs via onChanged', async () => {
     const { onChanged } = renderCard();
     vi.mocked(updateProposalPhoto)

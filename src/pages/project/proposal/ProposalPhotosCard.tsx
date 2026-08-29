@@ -109,7 +109,7 @@ export const ProposalPhotosCard: React.FC<{
 
   const handleCaption = async (photo: ProposalPhoto, caption: string) => {
     try {
-      await updateProposalPhoto(photo.id, photo.fileId, { caption: caption.trim() || null });
+      await updateProposalPhoto(proposal.id, photo.fileId, { caption: caption.trim() || null });
       onChanged();
     } catch (e) { handleProposalCardError(e, toast, onChanged, 'Failed to update caption'); }
   };
@@ -124,8 +124,8 @@ export const ProposalPhotosCard: React.FC<{
     const other = photos[index + dir];
     if (!other) return;
     try {
-      await updateProposalPhoto(cur.id, cur.fileId, { sortOrder: other.sortOrder });
-      await updateProposalPhoto(other.id, other.fileId, { sortOrder: cur.sortOrder });
+      await updateProposalPhoto(proposal.id, cur.fileId, { sortOrder: other.sortOrder });
+      await updateProposalPhoto(proposal.id, other.fileId, { sortOrder: cur.sortOrder });
     } catch (e) {
       toastProposalCardError(e, toast, 'Failed to reorder photos');
     } finally {

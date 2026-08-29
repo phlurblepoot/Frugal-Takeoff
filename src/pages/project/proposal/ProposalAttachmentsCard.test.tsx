@@ -87,6 +87,17 @@ describe('ProposalAttachmentsCard', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
+  it('reorder: swaps sortOrder via two PATCHes on the proposal id', async () => {
+    const onChanged = renderCard();
+    fireEvent.click(screen.getAllByLabelText('Move down')[0]);
+    await waitFor(() => expect(updateProposalAttachment).toHaveBeenCalledTimes(2));
+    // First arg is the PROPOSAL id, not the attachment row id — the API route
+    // is /api/proposals/:id/attachments/:fileId, so a row id 404s.
+    expect(vi.mocked(updateProposalAttachment).mock.calls[0]).toEqual(['pr1', 'f1', { sortOrder: 1 }]);
+    expect(vi.mocked(updateProposalAttachment).mock.calls[1]).toEqual(['pr1', 'f2', { sortOrder: 0 }]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
   it('reorder: if the second PATCH fails, toasts and still resyncs via onChanged', async () => {
     const onChanged = renderCard();
     vi.mocked(updateProposalAttachment)
