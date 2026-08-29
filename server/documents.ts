@@ -220,6 +220,39 @@ export function listDocuments(
   return { rows, total };
 }
 
+// Single-document lookup keyed by the owning entity, for callers that already
+// know exactly which (sourceType, sourceId, kind) they want (e.g. "does this
+// invoice already have a generated PDF?") rather than browsing the full
+// Documents list. Honors the same role-visibility rules as listDocuments.
+export interface SourceDoc { id: string; name: string | null; mime: string; size: number; createdAt: number; versionNumber: number }
+const SOURCE_COLS = 'id, name, mime, size, createdAt, versionNumber, kind';
+
+export function findDocumentsBySource(
+  db: Database.Database,
+  q: { sourceType: string; sourceIds: string[]; kind: string },
+  isAdmin: boolean
+): Record<string, SourceDoc | null> {
+  const out: Record<string, SourceDoc | null> = {};
+  const ids = [...new Set(q.sourceIds.filter(Boolean))].slice(0, 200);
+  for (const id of ids) out[id] = null;
+  if (!ids.length) return out;
+  if (!isAdmin && (NON_ADMIN_EXCLUDED_KINDS as readonly string[]).includes(q.kind)) return out;
+  if ((ALWAYS_EXCLUDED_KINDS as readonly string[]).includes(q.kind)) return out;
+  const rows = db.prepare(`SELECT ${SOURCE_COLS}, sourceId FROM files
+    WHERE parentFileId IS NULL AND sourceType = ? AND kind = ? AND sourceId IN (${ids.map(() => '?').join(',')})
+    ORDER BY createdAt ASC, id ASC`).all(q.sourceType, q.kind, ...ids) as any[];
+  for (const r of rows) if (!out[r.sourceId]) { const { sourceId, kind, ...doc } = r; out[sourceId] = doc; }
+  return out;
+}
+
+export function findDocumentBySource(
+  db: Database.Database,
+  q: { sourceType: string; sourceId: string; kind: string },
+  isAdmin: boolean
+): SourceDoc | null {
+  return findDocumentsBySource(db, { sourceType: q.sourceType, sourceIds: [q.sourceId], kind: q.kind }, isAdmin)[q.sourceId] ?? null;
+}
+
 // Source types resolvable by a plain "SELECT ... WHERE id IN (...)" against a
 // single table, with a fixed href template keyed off the file's own
 // projectId. `proposal` and `printout` don't fit this shape (see below) and
