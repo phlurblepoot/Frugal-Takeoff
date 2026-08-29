@@ -11,9 +11,10 @@
 //    save fails (spec §2, "Dirty rule").
 //  - A record that already has a document never gets silently replaced — the
 //    version/overwrite dialog is the only way past it.
-//  - Send reuses the stored file only when it is genuinely current AND the
-//    header email wasn't overridden in the composer; anything else rebuilds,
-//    so the recipient always gets bytes that match the record.
+//  - Send reuses the stored file only when it is genuinely current, no save was
+//    needed on the way in, AND the header email wasn't overridden in the
+//    composer; anything else rebuilds, so the recipient always gets bytes that
+//    match the record.
 //  - A record with no change clock (staleness="unknown") never claims to be
 //    current, so Send always rebuilds rather than mailing a stale file.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -227,6 +228,12 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
 
   const handleSend = async (m: SendMessage & { headerEmail?: string }) => {
     if (!send) return;
+    // Read BEFORE the save: `upToDate` below is this render's value, captured
+    // when the composer's onSend fired. saveFirst() moves the record past the
+    // stored file, but the closure still holds the pre-save "current" — trusting
+    // it would email the pre-edit PDF. A save having been needed at all is
+    // enough to know the stored copy is behind.
+    const wasDirty = dirty;
     // Emailing from a dirty editor would attach bytes that disagree with the
     // record, so Send commits first exactly like Generate. A failed save throws
     // the same sentinel a cancelled dialog does, so EmailComposer keeps the
@@ -240,8 +247,10 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     const headerOverride =
       m.headerEmail && m.headerEmail !== send.composer.defaultHeaderEmail ? m.headerEmail : undefined;
 
+    const reusable = !!file && upToDate && !wasDirty && staleness !== 'unknown' && !headerOverride;
+
     let fileId: string;
-    if (file && upToDate && staleness !== 'unknown' && !headerOverride) {
+    if (reusable && file) {
       fileId = file.id;
     } else {
       let mode: 'version' | 'overwrite' | undefined;

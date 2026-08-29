@@ -284,9 +284,11 @@ describe('DocumentActionsBar — send', () => {
   // Send — it commits, then builds from the saved record.
   it('saves a dirty editor before building and sending', async () => {
     h.state.file = FILE;
-    // A dirty editor means the record is about to move past the stored file —
-    // the hook reports it stale once the save lands.
-    h.state.upToDate = false;
+    // The honest pre-save value: the hook still calls the stored file current,
+    // because the edit that will move the record past it hasn't been written
+    // yet. handleSend must not trust it (it is captured in the render closure
+    // and never re-read after the save).
+    h.state.upToDate = true;
     renderBar({ dirty: true, send: sendProp() });
 
     const btn = screen.getByTestId('doc-send');
@@ -305,6 +307,27 @@ describe('DocumentActionsBar — send', () => {
     await waitFor(() => expect(sendFn).toHaveBeenCalled());
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(build.mock.invocationCallOrder[0]);
     expect(sendFn.mock.calls[0][0]).toBe('new-file');
+  });
+
+  it('never emails the pre-edit file when a save was needed', async () => {
+    // Regression: `upToDate` is read from the render closure, so it still says
+    // "current" after saveFirst() has moved the record — sending would have
+    // attached the PDF of the text the user just changed.
+    h.state.file = FILE;
+    h.state.upToDate = true;
+    renderBar({ dirty: true, send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    await screen.findByText('Replace the existing PDF?');
+    fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }));
+
+    await waitFor(() => expect(sendFn).toHaveBeenCalled());
+    expect(build).toHaveBeenCalled();
+    expect(sendFn.mock.calls[0][0]).toBe('new-file');
+    expect(sendFn.mock.calls[0][0]).not.toBe(FILE.id);
   });
 
   it('sends nothing when the save fails, and leaves the composer open', async () => {
