@@ -3,6 +3,7 @@ import { X, FileImage, Trash2, Plus, Upload, Loader2 } from 'lucide-react';
 import { Project } from '../types';
 import { PageNamingStep, NamingStepPage, ExistingSheet } from './PageNamingStep';
 import { AiScanProgress } from '../utils/aiSheets';
+import { AddFilesButton } from './documents/AddFilesButton';
 
 export interface AddPagesProgress {
   status: string;
@@ -238,6 +239,26 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                   required={newPlanSetFiles.length === 0}
                   disabled={isAddingPages}
                 />
+                {/* A revision that already lives in Documents (an emailed set,
+                    a saved printout) skips the download-then-re-upload round
+                    trip: the picker hands back bytes, and everything
+                    downstream still just sees File[]. */}
+                <div className="mt-2 flex justify-center">
+                  <AddFilesButton
+                    label="Choose from documents"
+                    accept="pdf"
+                    size="sm"
+                    returnBlobs
+                    initialProjectIds={[project.id]}
+                    disabled={isAddingPages}
+                    onPickBlobs={picked => {
+                      const files = picked.map(p => new File([p.blob], p.row.name ?? 'plan.pdf', { type: 'application/pdf' }));
+                      if (files.length === 0) return;
+                      setNewPlanSetFiles(prev => [...prev, ...files]);
+                      setNewPlanSetName(prev => prev || files[0].name.replace(/\.pdf$/i, ''));
+                    }}
+                  />
+                </div>
               </div>
             </div>
             <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">

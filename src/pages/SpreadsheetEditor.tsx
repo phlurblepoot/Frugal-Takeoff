@@ -12,6 +12,7 @@ import { getFileMeta, fetchFileBlob } from '../utils/store';
 import { workbookToFortuneSheets, ensureSheetCelldata } from '../utils/sheetBridge';
 import { useToast } from '../components/Toast';
 import { useCollaboration } from '../context/CollaborationContext';
+import { AddFilesButton } from '../components/documents/AddFilesButton';
 import { CLIENT_SESSION_ID } from '../utils/clientSession';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -714,6 +715,35 @@ export const SpreadsheetEditor: React.FC = () => {
     [addTabFromSheets, toast],
   );
 
+  // Open a workbook that is already stored, by id. Shared by the ?fileId=
+  // entry point and the toolbar's documents picker — the picker can't just
+  // push a new ?fileId=, because the entry point below only runs on mount.
+  const openFileById = useCallback(
+    async (fileId: string) => {
+      try {
+        const [meta, blob] = await Promise.all([
+          getFileMeta(fileId),
+          fetchFileBlob(fileId),
+        ]);
+        const base = meta?.name || `file-${fileId}`;
+        if (isLegacyXls(base, meta?.mime)) {
+          toast(XLS_READONLY_MESSAGE, { type: 'warning' });
+          return;
+        }
+        const fname = base.toLowerCase().endsWith('.xlsx') ? base : `${base}.xlsx`;
+        const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId };
+        const f = new File([blob], fname, {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        });
+        await openFile(f, src);
+      } catch (e) {
+        console.error('Failed to open file by id:', e);
+        toast('Could not open the file', { type: 'error' });
+      }
+    },
+    [openFile, toast],
+  );
+
   // ── Auto-open + IDB restore on mount ──────────────────────────────────────
 
   useEffect(() => {
@@ -753,26 +783,7 @@ export const SpreadsheetEditor: React.FC = () => {
           setTabs(restoredTabs);
           tabsRef.current = restoredTabs;
         }
-        try {
-          const [meta, blob] = await Promise.all([
-            getFileMeta(fileIdParam),
-            fetchFileBlob(fileIdParam),
-          ]);
-          const base = meta?.name || `file-${fileIdParam}`;
-          if (isLegacyXls(base, meta?.mime)) {
-            toast(XLS_READONLY_MESSAGE, { type: 'warning' });
-            return;
-          }
-          const fname = base.toLowerCase().endsWith('.xlsx') ? base : `${base}.xlsx`;
-          const src: PrintoutSource = { projectId: meta?.projectId ?? '', fileId: fileIdParam };
-          const f = new File([blob], fname, {
-            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          });
-          await openFile(f, src);
-        } catch (e) {
-          console.error('Failed to open file by id:', e);
-          toast('Could not open the file', { type: 'error' });
-        }
+        await openFileById(fileIdParam);
         return;
       }
 
@@ -954,6 +965,14 @@ export const SpreadsheetEditor: React.FC = () => {
         >
           <FolderOpen size={16} /> Open
         </button>
+        <AddFilesButton
+          label="Open from documents"
+          accept="spreadsheet"
+          multi={false}
+          size="sm"
+          title="Open a workbook already filed under Documents"
+          onPick={rows => { const r = rows[0]; if (r) void openFileById(r.id); }}
+        />
 
         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
 

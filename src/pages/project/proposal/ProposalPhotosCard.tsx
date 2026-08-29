@@ -139,7 +139,9 @@ export const ProposalPhotosCard: React.FC<{
               accept="image"
               size="sm"
               defaultTab="upload"
-              upload={{ ...photoUpload, accept: 'image/*', capture: 'environment' }}
+              // No `capture`: proposal photos are chosen from the gallery after
+              // the fact, unlike the field cards where the camera is the point.
+              upload={{ ...photoUpload, accept: 'image/*' }}
               initialProjectIds={[projectId]}
               excludeFileIds={proposal.photos.map(p => p.fileId)}
               disabled={busy}

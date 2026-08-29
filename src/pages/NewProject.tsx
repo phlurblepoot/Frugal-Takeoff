@@ -3,11 +3,12 @@ import { useNavigate, Link, useLocation, useSearchParams } from 'react-router-do
 import { Upload, ArrowLeft, FileText, Loader2, Trash2, Plus, Check } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Project, ProjectPage, Customer } from '../types';
-import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getCustomers, saveCustomer } from '../utils/store';
+import { createProject, saveProject, getProject, saveImage, saveBinaryFile, getCustomers, saveCustomer, DocumentRow } from '../utils/store';
 import { loadPdfPagesGenerator } from '../utils/pdf';
 import { AddressAutocomplete } from '../components/AddressAutocomplete';
 import { UploadFailuresModal, UploadFailure } from '../components/UploadFailuresModal';
 import { PageNamingStep } from '../components/PageNamingStep';
+import { AddFilesButton } from '../components/documents/AddFilesButton';
 import { readSheet, runWithConcurrency, applyReadToPage, aiAutoNameEnabled, warmupAi, getAiIdleTimeoutMs, waitForAiReady, type AiScanProgress } from '../utils/aiSheets';
 import { composePageName } from '../utils/sheetNaming';
 import { useToast } from '../components/Toast';
@@ -147,6 +148,15 @@ export const NewProject: React.FC = () => {
         setName(selectedFiles[0].name.replace('.pdf', ''));
       }
     }
+  };
+
+  // Same landing spot as handleFileChange, for a plan set that is already
+  // filed under Documents — no download-then-re-upload round trip.
+  const addPickedDocuments = (picked: { row: DocumentRow; blob: Blob }[]) => {
+    const picks = picked.map(p => new File([p.blob], p.row.name ?? 'plan.pdf', { type: 'application/pdf' }));
+    if (picks.length === 0) return;
+    setFiles(prev => [...prev, ...picks]);
+    setName(prev => prev || picks[0].name.replace(/\.pdf$/i, ''));
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -916,6 +926,16 @@ export const NewProject: React.FC = () => {
                   multiple
                   disabled={isProcessing}
                 />
+                <div className="mt-2 flex justify-center">
+                  <AddFilesButton
+                    label="Choose from documents"
+                    accept="pdf"
+                    size="sm"
+                    returnBlobs
+                    disabled={isProcessing}
+                    onPickBlobs={addPickedDocuments}
+                  />
+                </div>
               </div>
             </div>
 

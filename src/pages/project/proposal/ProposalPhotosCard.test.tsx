@@ -66,6 +66,17 @@ describe('ProposalPhotosCard', () => {
     expect(container.querySelectorAll('input[type="file"]')).toHaveLength(0);
   });
 
+  // Proposal photos are chosen after the fact from what's already on the
+  // phone, unlike the six field cards where the camera is the point — so this
+  // upload must not force the camera roll open.
+  it('opens the gallery rather than the camera when uploading', async () => {
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: /Add photos/i }));
+    const input = await screen.findByTestId('picker-upload-input');
+    expect(input).toHaveAttribute('accept', 'image/*');
+    expect(input).not.toHaveAttribute('capture');
+  });
+
   it('a dropped image is uploaded into the proposal, added, then resynced', async () => {
     const { onChanged } = renderCard();
     const shot = new File(['x'], 'shot.png', { type: 'image/png' });
