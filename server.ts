@@ -26,7 +26,7 @@ import { SheetFlushEngine } from './server/realtime/sheetFlush';
 import { loadMailCrypto } from './server/mail/crypto';
 import type { MailContext } from './server/mail/context';
 import type { MailCrypto } from './server/mail/crypto';
-import { createMailProvider } from './server/mail/providers';
+import { createMailProvider, defaultProviderDeps } from './server/mail/providers';
 import { registerMailRoutes } from './server/mail/routes';
 import { MailScheduler } from './server/mail/sync/scheduler';
 import { BodyCache } from './server/mail/sync/bodyCache';
@@ -596,7 +596,7 @@ async function startServer() {
     db,
     dataDir: DATA_DIR,
     crypto: mailCrypto,
-    providerFactory: createMailProvider,
+    providerFactory: (a, auth) => createMailProvider(a, auth, defaultProviderDeps(db, mailCrypto)),
     broadcastChange,
   };
   mailScheduler = new MailScheduler(mailCtx);
