@@ -25,6 +25,7 @@ import { SheetSessionStore } from './server/realtime/sheetSessions';
 import { SheetFlushEngine } from './server/realtime/sheetFlush';
 import { loadMailCrypto } from './server/mail/crypto';
 import type { MailContext } from './server/mail/context';
+import type { MailCrypto } from './server/mail/crypto';
 import { createMailProvider } from './server/mail/providers';
 import { registerMailRoutes } from './server/mail/routes';
 import { MailScheduler } from './server/mail/sync/scheduler';
@@ -37,6 +38,10 @@ const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "app.db");
 
 let db: Database.Database;
+// Loaded (or generated) once in initDb, then shared by migration 31 and the
+// mail subsystem — two MailCrypto instances over one key file would be pure
+// duplication.
+let mailCrypto: MailCrypto;
 
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -77,7 +82,8 @@ function initDb() {
     db = openDb(DB_FILE);
     // mailCrypto is what lets migration 31 re-seal each user's smtp.* config as
     // a mail account; without it that transform skips with a warning.
-    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true, mailCrypto: loadMailCrypto(DATA_DIR) });
+    mailCrypto = loadMailCrypto(DATA_DIR);
+    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true, mailCrypto });
 
     // Initialize default settings
     const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };
@@ -194,7 +200,7 @@ async function startServer() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
-    Promise.all([mailScheduler?.stop(), sheetFlush.flushAll()]).finally(() => process.exit(0));
+    Promise.allSettled([mailScheduler?.stop(), sheetFlush.flushAll()]).finally(() => process.exit(0));
   };
   process.once('SIGTERM', () => flushAndExit('SIGTERM'));
   process.once('SIGINT', () => flushAndExit('SIGINT'));
@@ -587,7 +593,7 @@ async function startServer() {
   const mailCtx: MailContext = {
     db,
     dataDir: DATA_DIR,
-    crypto: loadMailCrypto(DATA_DIR),
+    crypto: mailCrypto,
     providerFactory: createMailProvider,
     broadcastChange,
   };

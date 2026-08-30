@@ -727,7 +727,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   app.get('/api/daily-reports/:id', authenticateToken, (req, res) => {
     try {
       const report = getDailyReport(db, req.params.id);
-      if (!report) return res.status(404).json({ error: 'Daily report not found' });
+      if (!report) { res.status(404).json({ error: 'Daily report not found' }); return; }
       res.json(report);
     } catch (e) { dailyErr(e, res); }
   });
@@ -1671,6 +1671,19 @@ interface SendItemSpec {
 export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps): void {
   const { db, authenticateToken, requireAdmin, mailCtx } = deps;
 
+  // Express 4 leaves a rejected async handler unanswered — the request would
+  // hang. Every send route is wrapped so an unexpected throw (a store read, a
+  // locked database) still gets a response.
+  const sendRoute = (label: string, fn: (req: express.Request, res: express.Response) => Promise<void>): express.RequestHandler =>
+    async (req, res) => {
+      try { await fn(req, res); }
+      catch (e: any) {
+        if (e instanceof ProposalLockedError) return proposalErr(e, res);
+        console.error(`Error sending ${label}:`, e);
+        if (!res.headersSent) res.status(500).json({ error: e?.message || `Failed to send ${label}` });
+      }
+    };
+
   // Runs one item send. Returns the SendResult on success, or null after having
   // already written the error response — callers do `if (!r) return;`.
   const sendItem = async (
@@ -1709,36 +1722,30 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
 
   // Send a proposal PDF (admin only). Marked sent inside sendService, only after
   // the provider has accepted the message.
-  app.post('/api/proposals/:id/send', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const p = getProposal(db, req.params.id);
-      if (!p) return res.status(404).json({ error: 'Proposal not found' });
-      if (p.legacy || p.status !== 'draft') return res.status(409).json({ error: 'Proposal already sent', code: 'locked' });
-      const project = loadProject(db, p.projectId);
-      // The attachment arrives named as the document is named in Documents
-      // ("Proposal – Job – 2026-08-28"), not a generic Proposal.pdf — that
-      // name is what the customer files. proposalFileName() carries no
-      // extension, so add one when the stored name lacks it.
-      const r = await sendItem(req, res, {
-        itemType: 'proposal', itemId: p.id,
-        primaryName: withPdfExtension(getMeta(db, (req.body as SendBody).fileId)?.name) ?? 'Proposal.pdf',
-        defaultSubject: `Proposal — ${project?.name ?? 'Untitled'}`,
-        defaultBody: 'Please find the attached proposal.',
-      });
-      if (!r) return;
-      // markSent bumped the row; the client needs the new version to keep editing.
-      res.json({ success: true, ...r, version: getProposal(db, p.id)?.version });
-    } catch (e: any) {
-      if (e instanceof ProposalLockedError) return proposalErr(e, res);
-      console.error('Error sending proposal:', e);
-      res.status(500).json({ error: e.message || 'Failed to send proposal' });
-    }
-  });
+  app.post('/api/proposals/:id/send', authenticateToken, requireAdmin, sendRoute('proposal', async (req, res) => {
+    const p = getProposal(db, req.params.id);
+    if (!p) { res.status(404).json({ error: 'Proposal not found' }); return; }
+    if (p.legacy || p.status !== 'draft') { res.status(409).json({ error: 'Proposal already sent', code: 'locked' }); return; }
+    const project = loadProject(db, p.projectId);
+    // The attachment arrives named as the document is named in Documents
+    // ("Proposal – Job – 2026-08-28"), not a generic Proposal.pdf — that
+    // name is what the customer files. proposalFileName() carries no
+    // extension, so add one when the stored name lacks it.
+    const r = await sendItem(req, res, {
+      itemType: 'proposal', itemId: p.id,
+      primaryName: withPdfExtension(getMeta(db, (req.body as SendBody).fileId)?.name) ?? 'Proposal.pdf',
+      defaultSubject: `Proposal — ${project?.name ?? 'Untitled'}`,
+      defaultBody: 'Please find the attached proposal.',
+    });
+    if (!r) return;
+    // markSent bumped the row; the client needs the new version to keep editing.
+    res.json({ success: true, ...r, version: getProposal(db, p.id)?.version });
+  }));
 
   // Send an invoice PDF (admin only)
-  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+  app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, sendRoute('invoice', async (req, res) => {
     const inv = getInvoice(db, req.params.id);
-    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    if (!inv) { res.status(404).json({ error: 'Invoice not found' }); return; }
     const r = await sendItem(req, res, {
       itemType: 'invoice', itemId: inv.id,
       primaryName: `${inv.number || 'invoice'}.pdf`,
@@ -1747,12 +1754,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 
   // Send a change order request PDF (admin only)
-  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
+  app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, sendRoute('change order', async (req, res) => {
     const co = getChangeOrder(db, req.params.id);
-    if (!co) return res.status(404).json({ error: 'Change order not found' });
+    if (!co) { res.status(404).json({ error: 'Change order not found' }); return; }
     const number = co.number ?? '';
     const r = await sendItem(req, res, {
       itemType: 'changeOrder', itemId: co.id,
@@ -1762,11 +1769,11 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 
   // Send a punch-list report PDF (any authenticated user). The "item" is the
   // project itself — a punch list has no row of its own.
-  app.post('/api/projects/:id/send-punch', authenticateToken, async (req, res) => {
+  app.post('/api/projects/:id/send-punch', authenticateToken, sendRoute('punch report', async (req, res) => {
     const r = await sendItem(req, res, {
       itemType: 'punch', itemId: req.params.id,
       primaryName: 'punch-list.pdf',
@@ -1775,12 +1782,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 
   // Send an issue report PDF (any authenticated user — field members send issue reports)
-  app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
+  app.post('/api/issues/:id/send', authenticateToken, sendRoute('issue', async (req, res) => {
     const iss = getIssue(db, req.params.id);
-    if (!iss) return res.status(404).json({ error: 'Issue not found' });
+    if (!iss) { res.status(404).json({ error: 'Issue not found' }); return; }
     const padded = String(iss.number).padStart(3, '0');
     const r = await sendItem(req, res, {
       itemType: 'issue', itemId: iss.id,
@@ -1790,12 +1797,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 
   // Send an RFI PDF (any authenticated user — field members send RFIs)
-  app.post('/api/rfis/:id/send', authenticateToken, async (req, res) => {
+  app.post('/api/rfis/:id/send', authenticateToken, sendRoute('RFI', async (req, res) => {
     const rfi = getRfi(db, req.params.id);
-    if (!rfi) return res.status(404).json({ error: 'RFI not found' });
+    if (!rfi) { res.status(404).json({ error: 'RFI not found' }); return; }
     const padded = String(rfi.number).padStart(3, '0');
     const r = await sendItem(req, res, {
       itemType: 'rfi', itemId: rfi.id,
@@ -1805,12 +1812,12 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 
   // Send a daily report PDF (any authenticated user — field members file dailies)
-  app.post('/api/daily-reports/:id/send', authenticateToken, async (req, res) => {
+  app.post('/api/daily-reports/:id/send', authenticateToken, sendRoute('daily report', async (req, res) => {
     const report = getDailyReport(db, req.params.id);
-    if (!report) return res.status(404).json({ error: 'Daily report not found' });
+    if (!report) { res.status(404).json({ error: 'Daily report not found' }); return; }
     // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
     // (client can't be imported server-side) — falls back to date-only when
     // jobName is blank.
@@ -1823,5 +1830,5 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     });
     if (!r) return;
     res.json({ success: true, ...r });
-  });
+  }));
 }

@@ -1353,6 +1353,31 @@ describe('email send routes', () => {
     expect((await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com' })).status).toBe(400);
   });
 
+  it('invoice send: a `to` with no parseable address is refused with 400', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'not an address', fileId: 'primary' });
+    expect(res.status).toBe(400);
+    expect(provider.sent).toHaveLength(0);
+  });
+
+  it('invoice send: accountId picks a specific account; another user\'s is not reachable', async () => {
+    const id = await makeInvoice();
+    const second = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'second@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, second.id, getFakeProvider(second.id).folders);
+    const ok = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: second.id });
+    expect(ok.status).toBe(200);
+    expect(ok.body.accountId).toBe(second.id);
+    expect(getFakeProvider(second.id).sent).toHaveLength(1);
+    expect(provider.sent).toHaveLength(0);   // the default account was not used
+    // an account owned by someone else is invisible
+    db.prepare("INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u2', 'u2', 'x', 'admin')").run();
+    const theirs = accounts.createAccount(db, mailCrypto, { userId: 'u2', provider: 'fake', emailAddress: 'them@example.com', auth: { refreshToken: 'r' } });
+    const id2 = await makeInvoice();
+    const denied = await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: theirs.id });
+    expect(denied.status).toBe(409);
+    expect(getFakeProvider(theirs.id).sent).toHaveLength(0);
+  });
+
   it('invoice send: non-admin gets 403', async () => {
     const id = await makeInvoice();
     const memberApp = buildEmailApp('member');
