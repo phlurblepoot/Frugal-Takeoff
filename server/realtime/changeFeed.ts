@@ -9,7 +9,8 @@ import type { Server } from 'socket.io';
 export type EntityType =
   | 'project' | 'task' | 'issue' | 'rfi' | 'dailyReport' | 'punch'
   | 'invoice' | 'changeOrder' | 'payment' | 'aiaSov' | 'aiaPayApp'
-  | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template' | 'proposal';
+  | 'file' | 'note' | 'customer' | 'user' | 'timeEntry' | 'template' | 'proposal'
+  | 'mailThread' | 'mailAccount';
 
 export interface EntityChangedEvent {
   type: EntityType;
