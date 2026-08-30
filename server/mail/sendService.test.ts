@@ -1,0 +1,64 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'fs'; import os from 'os'; import path from 'path';
+import type Database from 'better-sqlite3';
+import { openDb } from '../db'; import { runMigrations } from '../migrations'; import { migrations } from '../migrationList';
+import { createProject } from '../projectStore'; import { createRfi, getRfi } from '../rfiStore';
+import { putBuffer } from '../files';
+import { MailCrypto } from './crypto'; import * as accounts from './accountStore';
+import { FakeMailProvider } from './providers/fake';
+import type { MailContext } from './context';
+import { send, MailSendError } from './sendService';
+import { stageUpload } from './uploads';
+import { listLinksForThread } from './links';
+
+let db: Database.Database; let ctx: MailContext; let provider: FakeMailProvider; let dir: string; let acct: accounts.MailAccountRow;
+const crypto = new MailCrypto(Buffer.alloc(32, 5)); const user = { id: 'u1', role: 'user' };
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ss-')); db = openDb(':memory:'); runMigrations(db, dir, migrations, { mailCrypto: crypto });
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','user')`).run();
+  createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
+  acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', displayName: 'Me', auth: { refreshToken: 'r' } });
+  provider = new FakeMailProvider(); provider.seed([]);
+  ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: () => {} };
+});
+describe('sendService.send', () => {
+  it('sends through the default account, indexes the sent row, links + effects the item', async () => {
+    const { id: rfiId } = createRfi(db, 'p1', { title: 'Ceilings' });
+    putBuffer(db, dir, 'f1', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'rfi', name: 'RFI-001.pdf' });
+    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 'RFI-001', html: '<p>See attached</p>', attachments: [{ fileId: 'f1', itemType: 'rfi', itemId: rfiId }] });
+    expect(provider.sent.length).toBe(1);
+    expect(provider.sent[0]).toMatchObject({ from: { addr: 'me@bb.com', name: 'Me' }, subject: 'RFI-001', text: 'See attached' });
+    expect(provider.sent[0].attachments[0]).toMatchObject({ name: 'RFI-001.pdf', mime: 'application/pdf' });
+    const row = db.prepare('SELECT threadKey, sentFromApp, isRead FROM mail_messages').get() as any;
+    expect(row.sentFromApp).toBe(1); expect(row.threadKey).toBe(r.threadKey);
+    expect(listLinksForThread(db, r.threadKey).map(l => l.itemType)).toEqual(['rfi']);
+    expect(getRfi(db, rfiId).status).toBe('sent');
+    expect(db.prepare('SELECT lastOutboundDate FROM mail_thread_reply_state WHERE threadKey = ?').get(r.threadKey)).toBeTruthy();
+    expect(r.effectsSkipped).toEqual([]);
+  });
+  it('replies inside an existing thread with In-Reply-To/References to its last message', async () => {
+    db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, messageIdHeader, threadKey, date, createdAt, updatedAt, referencesJson) VALUES ('m1', ?, 'p1', 'root@teg.com', 'root@teg.com', '2026-08-01T00:00:00.000Z', 't', 't', '[]')`).run(acct.id);
+    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 'Re: x', html: 'ok', attachments: [], replyTo: { accountId: acct.id, threadKey: 'root@teg.com' } });
+    expect(provider.sent[0].inReplyTo).toBe('root@teg.com'); expect(provider.sent[0].references).toEqual(['root@teg.com']);
+    expect(r.threadKey).toBe('root@teg.com');
+  });
+  it('reports effectsSkipped for admin-gated items sent by a non-admin, still links', async () => {
+    putBuffer(db, dir, 'f2', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'invoice', name: 'Invoice-1.pdf' });
+    const r = await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [{ fileId: 'f2', itemType: 'invoice', itemId: 'inv1' }] });
+    expect(r.effectsSkipped).toEqual(['invoice']);
+    expect(listLinksForThread(db, r.threadKey).length).toBe(1);
+  });
+  it('uses staged uploads and deletes the draft after send', async () => {
+    const { uploadId } = stageUpload(dir, 'site.jpg', 'image/jpeg', Buffer.from('jpg'));
+    const d = await provider.saveDraft({ from: { addr: 'me@bb.com' }, to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageIdHeader: 'x' });
+    await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [{ uploadId }], draftProviderId: d.providerMessageId });
+    expect(provider.sent[0].attachments[0].name).toBe('site.jpg'); expect(provider.drafts.size).toBe(0);
+    expect(fs.existsSync(path.join(dir, 'tmp', 'mail-uploads', uploadId + '.bin'))).toBe(false);
+  });
+  it('fails cleanly with no account / inactive account', async () => {
+    accounts.updateAccount(db, acct.id, { status: 'auth_error' });
+    await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toBeInstanceOf(MailSendError);
+    accounts.deleteAccount(db, acct.id);
+    await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toThrow(/no mail account/i);
+  });
+});
