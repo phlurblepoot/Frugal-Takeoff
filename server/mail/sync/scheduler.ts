@@ -6,6 +6,7 @@ import * as accounts from '../accountStore';
 import type { MailProvider } from '../providers/types';
 import { AuthExpiredError } from '../providers/types';
 import { runBackfill, runIncremental } from './engine';
+import { ensureGraphSubscription, hasGraphPushApi } from '../push';
 
 interface Worker {
   accountId: string; provider: MailProvider; timer: NodeJS.Timeout | null; failures: number;
@@ -20,8 +21,12 @@ export class MailScheduler {
   // stopAccount()+startAccount() for the same account doesn't run two ticks concurrently.
   private draining = new Map<string, Promise<void>>();
   private readonly fastMs: number; private readonly slowMs: number; private readonly backoffMaxMs: number; private readonly now: () => number;
-  constructor(private ctx: MailContext, opts: { fastMs?: number; slowMs?: number; backoffMaxMs?: number; now?: () => number } = {}) {
+  /** Where Microsoft should post change notifications. Null (APP_PUBLIC_URL
+   *  unset) means Graph accounts fall back to polling only — spec §4.2. */
+  private readonly publicUrl: string | null;
+  constructor(private ctx: MailContext, opts: { fastMs?: number; slowMs?: number; backoffMaxMs?: number; now?: () => number; publicUrl?: string | null } = {}) {
     this.fastMs = opts.fastMs ?? 30_000; this.slowMs = opts.slowMs ?? 300_000; this.backoffMaxMs = opts.backoffMaxMs ?? 600_000; this.now = opts.now ?? (() => Date.now());
+    this.publicUrl = opts.publicUrl ?? null;
   }
   // Never throws: one account whose provider cannot be constructed (bad/undecryptable
   // auth blob, provider factory blowing up) must not take the whole mail subsystem —
@@ -58,13 +63,32 @@ export class MailScheduler {
     catch (e) { this.markUnstartable(accountId, e); return; }
     const w: Worker = { accountId, provider, timer: null, failures: 0, running: null, stopped: false, pokeRequested: false };
     this.workers.set(accountId, w);
+    // Before the first tick, not after: a tick runs synchronously up to its
+    // first await, so it can stopAccount() (deleted account) before this line
+    // is reached — and then nothing would ever close the channel we opened.
+    this.startPush(w);
     const prevDrain = this.draining.get(accountId);
     if (prevDrain) void prevDrain.then(() => { if (!w.stopped) void this.tick(w); });
     else void this.tick(w);
   }
-  private markUnstartable(accountId: string, e: unknown): void {
+  /** Opens the provider's live-change channel, when it has one (IMAP IDLE).
+   *  Fire-and-forget: a channel that will not open is a downgrade to polling,
+   *  not a reason to lose the worker. */
+  private startPush(w: Worker): void {
+    if (!w.provider.startPush || w.stopped) return;
+    void Promise.resolve().then(() => w.provider.startPush!(
+      () => { if (!w.stopped) this.pokeAccount(w.accountId); },
+      (err) => {
+        // The channel is gone for good: the credentials, not the network, are
+        // the problem. Park the account so the user is asked to reconnect.
+        this.stopAccount(w.accountId);
+        this.markUnstartable(w.accountId, err, 'push reported dead credentials for');
+      },
+    )).catch(e => console.error(`[mail] could not open the push channel for ${w.accountId}:`, (e as Error).message));
+  }
+  private markUnstartable(accountId: string, e: unknown, what = 'cannot start sync for'): void {
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`[mail] cannot start sync for ${accountId}:`, message);
+    console.error(`[mail] ${what} ${accountId}:`, message);
     this.providers.delete(accountId);
     const account = accounts.getAccountAny(this.ctx.db, accountId);
     if (!account) return;
@@ -79,6 +103,8 @@ export class MailScheduler {
     const w = this.workers.get(accountId); if (!w) return;
     w.stopped = true; if (w.timer) clearTimeout(w.timer); w.timer = null;
     this.workers.delete(accountId);
+    void Promise.resolve().then(() => w.provider.stopPush?.())
+      .catch(e => console.error(`[mail] could not close the push channel for ${accountId}:`, (e as Error).message));
     if (w.running) {
       const p = w.running;
       this.draining.set(accountId, p);
@@ -111,6 +137,13 @@ export class MailScheduler {
         // through to runIncremental against a null syncState forever.
         if (!account.syncState) await runBackfill(this.ctx, account, w.provider); else await runIncremental(this.ctx, account, w.provider);
         w.failures = 0;
+        // Graph push is a subscription that expires, not a socket, so the tick
+        // doubles as its renewal timer. Cheap (no network) until renewal is due,
+        // and it never throws, so a Graph outage cannot fail the poll.
+        if (this.publicUrl && account.provider === 'microsoft' && hasGraphPushApi(w.provider)) {
+          const fresh = accounts.getAccountAny(this.ctx.db, w.accountId);
+          if (fresh) await ensureGraphSubscription(this.ctx, fresh, w.provider, this.publicUrl, this.now());
+        }
       } catch (e) {
         if (e instanceof AuthExpiredError) { this.stopAccount(w.accountId); this.providers.delete(w.accountId); return; }
         w.failures = Math.min(w.failures + 1, 6);

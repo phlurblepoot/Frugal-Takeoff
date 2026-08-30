@@ -10,6 +10,7 @@ import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
 import { stageUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
+import { getWebhookSecret, handleGraphWebhook, WEBHOOK_PATH } from './push';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
@@ -273,6 +274,34 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       // including a provider client we swap in later — is covered.
       failed(redactGrant(e?.message || 'Could not connect that mailbox', code, state.verifier));
     }
+  });
+
+  // ── Microsoft Graph change notifications ──
+  // Deliberately unauthenticated: Microsoft has no token of ours to send. What
+  // makes it safe is that the body is never believed beyond "re-sync account X"
+  // — the `clientState` secret must match, the subscription id must already
+  // belong to an account, and nothing from the payload is stored. The response
+  // must also be fast (Graph retries, then drops the subscription, if we are
+  // slow), so the handler only reads the DB and returns; the re-sync it kicks
+  // off is fire-and-forget.
+  app.post(WEBHOOK_PATH, (req, res) => {
+    // Handshake: Microsoft validates a new subscription by POSTing a token that
+    // must come straight back as plain text. Cap it so we never echo a payload.
+    const token = req.query.validationToken;
+    if (typeof token === 'string') {
+      if (token.length > 2048) return res.status(400).end();
+      // nosniff: the body is caller-supplied text, and only text/plain is safe for that.
+      res.set('X-Content-Type-Options', 'nosniff').type('text/plain').status(200).send(token);
+      return;
+    }
+    try {
+      for (const id of handleGraphWebhook(ctx, req.body, getWebhookSecret(db))) ctx.scheduler?.pokeAccount(id);
+    } catch (e) {
+      // Never 500 a notification: Graph would retry it, and a retry cannot help
+      // a body we could not read.
+      console.error('[mail] graph webhook failed', e);
+    }
+    res.status(202).end();
   });
 
   // Which OAuth providers the deployment has credentials for (never the values).
@@ -694,7 +723,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       microsoft: {
         configured: !!(deps.env.MS_OAUTH_CLIENT_ID && deps.env.MS_OAUTH_CLIENT_SECRET),
         redirectUri: base ? redirectUri(base, 'microsoft') : null,
-        webhookUrl: base ? `${base}/api/mail/ms/webhook` : null,
+        webhookUrl: base ? base + WEBHOOK_PATH : null,
         tenant: deps.env.MS_OAUTH_TENANT || 'common',
       },
       secretKey: deps.env.MAIL_SECRET_KEY ? 'env' : 'file',

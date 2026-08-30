@@ -8,6 +8,7 @@ import type { Envelope, MailProvider, ProviderFolder } from '../providers/types'
 import { AuthExpiredError } from '../providers/types';
 import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, normalizeSubject, stripSubjectPrefixes } from '../threadKey';
 import { snippetOf } from '../mime';
+import { mergePushState, pickPushState, writeSyncState } from '../push';
 
 export type InboundHook = (ctx: MailContext, ev: { threadKey: string; messageId: string; account: MailAccountRow }) => void;
 const inboundHooks: InboundHook[] = [];
@@ -269,7 +270,7 @@ export async function runBackfill(ctx: MailContext, account: MailAccountRow, pro
     // cursor the provider told us it could no longer honour.
     const r = await provider.incremental({});
     upsertEnvelopes(ctx, account, r.upserts);
-    accounts.updateAccount(ctx.db, account.id, { syncState: JSON.stringify(r.state) });
+    writeSyncState(ctx.db, account.id, r.state);
   });
 }
 
@@ -282,13 +283,18 @@ export async function runIncremental(ctx: MailContext, account: MailAccountRow, 
     // clear it and re-read from indexedSince — upserts are keyed by provider
     // id, so a re-read refreshes the existing rows instead of duplicating them.
     if (r.reset) {
+      // Nulling the state is what routes the next pass back through a backfill,
+      // but the Graph subscription living in the same JSON is still valid — put
+      // it back once the backfill has written the new provider state.
+      const push = pickPushState(fresh.syncState);
       accounts.updateAccount(ctx.db, account.id, { syncState: null });
       await runBackfill(ctx, accounts.getAccountAny(ctx.db, account.id)!, provider);
+      if (Object.keys(push).length) mergePushState(ctx.db, account.id, push);
       return;
     }
     if (r.upserts.length) { upsertFolders(ctx.db, account.id, await provider.listFolders()); upsertEnvelopes(ctx, account, r.upserts); }
     if (r.deletes.length) removeMessages(ctx, account, r.deletes);
     sweepSentPlaceholders(ctx, account);
-    accounts.updateAccount(ctx.db, account.id, { syncState: JSON.stringify(r.state) });
+    writeSyncState(ctx.db, account.id, r.state);
   });
 }

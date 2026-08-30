@@ -459,9 +459,9 @@ async function startServer() {
   });
 
   // Settings API — public endpoint, excludes any key that could contain secrets
-  // (jwt.secret, retired smtp.* rows, email.* credentials). Those are fetched via their own
+  // (jwt.secret, retired smtp.* rows, mail.webhookSecret). Those are fetched via their own
   // authenticated endpoints.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.'];
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
@@ -599,7 +599,10 @@ async function startServer() {
     providerFactory: (a, auth) => createMailProvider(a, auth, defaultProviderDeps(db, mailCrypto)),
     broadcastChange,
   };
-  mailScheduler = new MailScheduler(mailCtx);
+  // publicUrl is what lets Graph accounts use change notifications instead of
+  // polling alone: the scheduler both points Microsoft at our webhook and keeps
+  // the subscription renewed. Unset → poll only (spec §4.2).
+  mailScheduler = new MailScheduler(mailCtx, { publicUrl: process.env.APP_PUBLIC_URL || null });
   mailCtx.scheduler = mailScheduler;
 
   registerMailRoutes(app, {

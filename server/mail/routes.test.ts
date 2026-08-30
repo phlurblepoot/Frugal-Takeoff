@@ -17,6 +17,7 @@ import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
 import { registerMailRoutes, type MailRouteDeps } from './routes';
+import { getWebhookSecret } from './push';
 import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
 import { MailScheduler } from './sync/scheduler';
@@ -526,7 +527,7 @@ describe('mail routes', () => {
 
   it('GET /api/mail/oauth/:provider/start redirects to consent with PKCE state', async () => {
     routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
-    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'gs';
+    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'g-client-secret-value';
     const r = await request(app).get('/api/mail/oauth/google/start').query({ token: 'tok' });
     expect(r.status).toBe(302);
     const url = new URL(r.headers.location);
@@ -537,8 +538,9 @@ describe('mail routes', () => {
     expect(verifyState(JWT_SECRET, url.searchParams.get('state')!)).toMatchObject({ userId: 'u1', provider: 'google' });
     // The verifier itself never leaves in the clear alongside its challenge.
     expect(url.searchParams.get('code_challenge')).not.toBe(verifyState(JWT_SECRET, url.searchParams.get('state')!).verifier);
-    // Nothing here may carry the client secret.
-    expect(r.headers.location).not.toContain('gs');
+    // Nothing here may carry the client secret. (It has to be long: the URL is
+    // mostly random base64url, so a two-character secret matches it by chance.)
+    expect(r.headers.location).not.toContain('g-client-secret-value');
     // ?token= is in this request's own url; the browser must not pass it along
     // as the Referer when it follows the hop to the provider.
     expect(r.headers['referrer-policy']).toBe('no-referrer');
@@ -552,7 +554,7 @@ describe('mail routes', () => {
     expect(noEnv.status).toBe(503);
     expect(noEnv.body.error).toContain('MS_OAUTH_CLIENT_ID');
     routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
-    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'gs';
+    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'g-client-secret-value';
     const noUrl = await request(oauthApp({ publicUrl: null })).get('/api/mail/oauth/google/start').query({ token: 'tok' });
     expect(noUrl.status).toBe(503);
     expect(noUrl.body.error).toContain('APP_PUBLIC_URL');
@@ -657,5 +659,50 @@ describe('mail routes', () => {
     expect(failed.headers.location).toMatch(/error=/);
     expect(failed.headers.location).not.toContain('c-secret');
     expect((db.prepare('SELECT COUNT(*) n FROM mail_accounts').get() as { n: number }).n).toBe(before.n);
+  });
+});
+
+describe('POST /api/mail/ms/webhook', () => {
+  const subscribe = (id: string) => accounts.updateAccount(db, acct.id, { syncState: JSON.stringify({ deltaLinks: {}, subscriptionId: id }) });
+
+  it('echoes the validation token back as plain text for the Graph handshake', async () => {
+    const r = await request(app).post('/api/mail/ms/webhook').query({ validationToken: 'tok-abc 123' });
+    expect(r.status).toBe(200);
+    expect(r.headers['content-type']).toMatch(/^text\/plain/);
+    expect(r.text).toBe('tok-abc 123');
+  });
+
+  it('pokes the account that owns the subscription named in a notification', async () => {
+    subscribe('sub-9');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post('/api/mail/ms/webhook').send({
+      value: [{ subscriptionId: 'sub-9', clientState: getWebhookSecret(db), resource: 'me/messages', changeType: 'created' }],
+    });
+    expect(r.status).toBe(202);
+    expect(poke).toHaveBeenCalledWith(acct.id);
+    poke.mockRestore();
+  });
+
+  it('accepts but ignores a notification carrying the wrong clientState', async () => {
+    subscribe('sub-9');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post('/api/mail/ms/webhook').send({ value: [{ subscriptionId: 'sub-9', clientState: 'forged' }] });
+    expect(r.status).toBe(202);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('acks a junk body instead of failing, so Graph does not retry it forever', async () => {
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    expect((await request(app).post('/api/mail/ms/webhook').send({ nope: true })).status).toBe(202);
+    expect((await request(app).post('/api/mail/ms/webhook').send([1, 2, 3])).status).toBe(202);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('needs no authentication — Microsoft has no token to send', async () => {
+    subscribe('sub-9');
+    currentUser = { id: 'nobody', role: 'none' };
+    expect((await request(app).post('/api/mail/ms/webhook').query({ validationToken: 't' })).status).toBe(200);
   });
 });

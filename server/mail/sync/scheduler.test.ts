@@ -3,6 +3,7 @@ import fs from 'fs'; import os from 'os'; import path from 'path';
 import { openDb } from '../../db'; import { runMigrations } from '../../migrations'; import { migrations } from '../../migrationList';
 import { MailCrypto } from '../crypto'; import * as accounts from '../accountStore';
 import { FakeMailProvider } from '../providers/fake'; import { AuthExpiredError } from '../providers/types';
+import type { MailProvider } from '../providers/types';
 import { MailScheduler } from './scheduler';
 import type { MailContext } from '../context';
 
@@ -142,6 +143,125 @@ describe('MailScheduler', () => {
     await vi.advanceTimersByTimeAsync(0);   // settle the queued re-run's microtask chain without also firing the next real poll timer
     expect(calls).toBe(2);                  // the queued poke ran once tick #2 finished
     expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 3 });
+    await s.stop(); vi.useRealTimers();
+  });
+});
+
+describe('MailScheduler push', () => {
+  it('starts the provider push channel and re-syncs when it fires', async () => {
+    vi.useFakeTimers();
+    let onChange: (() => void) | null = null;
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async (cb: () => void) => { onChange = cb; });
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(p.startPush).toHaveBeenCalledTimes(1);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+
+    provider.injectInbound(env('pushed'));
+    onChange!();                                   // the provider says something moved
+    await vi.runOnlyPendingTimersAsync();
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('parks the account in auth_error when the push channel reports dead credentials', async () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const events: { type: string; id: string }[] = [];
+    ctx.broadcastChange = ev => { events.push(ev as { type: string; id: string }); };
+    let onAuthError: ((e: Error) => void) | null = null;
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async (_cb: () => void, onErr?: (e: Error) => void) => { onAuthError = onErr ?? null; });
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+
+    onAuthError!(new Error('mailbox rejected the password'));
+    await vi.runOnlyPendingTimersAsync();
+    const row = accounts.getAccountAny(ctx.db, acct.id)!;
+    expect(row.status).toBe('auth_error');
+    expect(row.lastError).toBe('mailbox rejected the password');
+    expect(s.isRunning(acct.id)).toBe(false);
+    expect(events.some(e => e.type === 'mailAccount' && e.id === acct.id)).toBe(true);
+    errSpy.mockRestore();
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('a rejected startPush does not take the worker down', async () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async () => { throw new Error('IDLE refused'); });
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(s.isRunning(acct.id)).toBe(true);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    errSpy.mockRestore();
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('stopAccount closes the push channel', async () => {
+    vi.useFakeTimers();
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async () => {});
+    p.stopPush = vi.fn(async () => {});
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    s.stopAccount(acct.id);
+    await vi.advanceTimersByTimeAsync(0);   // startPush/stopPush are dispatched off a microtask
+    expect(p.stopPush).toHaveBeenCalledTimes(1);
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('opens the push channel before the first tick, so a worker that stops immediately still closes it', async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async () => { order.push('start'); });
+    p.stopPush = vi.fn(async () => { order.push('stop'); });
+    // The account vanishes between the provider being built and the first tick
+    // reading the row, so tick() calls stopAccount() before startAccount returns.
+    const inner = ctx.providerFactory;
+    ctx.providerFactory = (a, auth) => { accounts.deleteAccount(ctx.db, a.id); return inner(a, auth); };
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.startAccount(acct.id);
+    await vi.runOnlyPendingTimersAsync();
+    expect(s.isRunning(acct.id)).toBe(false);
+    // Not just "both were called" — a stop that lands before the start leaves the
+    // IDLE connection open with no worker left to close it.
+    expect(order).toEqual(['start', 'stop']);
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('keeps a Graph subscription alive on each tick when a public URL is configured', async () => {
+    vi.useFakeTimers();
+    const ms = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@bb.com', auth: { refreshToken: 'r' } });
+    const graph = provider as FakeMailProvider & {
+      createSubscription: ReturnType<typeof vi.fn>; renewSubscription: ReturnType<typeof vi.fn>;
+    };
+    graph.createSubscription = vi.fn(async (_u: string, _c: string, exp: string) => ({ id: 'sub-1', expirationDateTime: exp }));
+    graph.renewSubscription = vi.fn(async (id: string, exp: string) => ({ id, expirationDateTime: exp }));
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000, publicUrl: 'https://app.test' });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(graph.createSubscription).toHaveBeenCalledTimes(1);
+    const state = JSON.parse(accounts.getAccountAny(ctx.db, ms.id)!.syncState || '{}');
+    expect(state.subscriptionId).toBe('sub-1');
+    expect(state.cursor).toBe(0);                       // the provider's own sync state is intact
+
+    await vi.advanceTimersByTimeAsync(5001);            // next tick: still fresh, so no second call
+    expect(graph.createSubscription).toHaveBeenCalledTimes(1);
+    expect(graph.renewSubscription).not.toHaveBeenCalled();
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('leaves Graph alone when no public URL is configured', async () => {
+    vi.useFakeTimers();
+    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@bb.com', auth: { refreshToken: 'r' } });
+    const graph = provider as FakeMailProvider & { createSubscription: ReturnType<typeof vi.fn> };
+    graph.createSubscription = vi.fn();
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(graph.createSubscription).not.toHaveBeenCalled();
     await s.stop(); vi.useRealTimers();
   });
 });
