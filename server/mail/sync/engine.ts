@@ -175,8 +175,11 @@ export async function runBackfill(ctx: MailContext, account: MailAccountRow, pro
       upsertEnvelopes(ctx, account, page.messages);
       cursor = page.cursor; if (page.done) break;
     } while (cursor);
-    // Establish the incremental baseline so history starts "now".
-    const r = await provider.incremental(JSON.parse(account.syncState || '{}'));
+    // Establish the incremental baseline so history starts "now". Deliberately
+    // `{}` and not the row's syncState: a backfill has just re-read everything,
+    // so any cursor from before it is stale — and after a reset it is the very
+    // cursor the provider told us it could no longer honour.
+    const r = await provider.incremental({});
     upsertEnvelopes(ctx, account, r.upserts);
     accounts.updateAccount(ctx.db, account.id, { syncState: JSON.stringify(r.state) });
   });

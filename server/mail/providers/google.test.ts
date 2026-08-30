@@ -101,7 +101,13 @@ describe('GmailProvider', () => {
 
   it('incremental applies history, drops deleted ids from the refetch set, and advances historyId', async () => {
     const f = fakeFetch([
-      [/\/history\?/, url => { expect(url).toMatch(/startHistoryId=1000/); return fx('gmail-history.json'); }],
+      [/\/history\?/, url => {
+        expect(url).toMatch(/startHistoryId=1000/);
+        // historyTypes is a REPEATED param in the API; a comma-joined value is
+        // rejected, so it is left off and the whole feed is read instead.
+        expect(url).not.toMatch(/historyTypes/);
+        return fx('gmail-history.json');
+      }],
       [/\/messages\/m2\?/, () => ({ ...fx('gmail-message-full.json'), id: 'm2', threadId: 't2' })],
     ]);
     const r = await provider(f).incremental({ historyId: '1000' });
@@ -213,6 +219,34 @@ describe('GmailProvider', () => {
 
     await p.deleteDraft('draft:d1');
     expect(f.calls[f.calls.length - 1]).toMatchObject({ init: { method: 'DELETE' } });
+  });
+
+  it('a reply resolves its parent thread and sends with threadId; a new message does neither', async () => {
+    const f = fakeFetch([
+      [/\/messages\?/, url => { expect(url).toMatch(/q=rfc822msgid%3Aroot-1%40bigbearplaster\.com/); return { messages: [{ id: 'p1', threadId: 't1' }] }; }],
+      [/\/messages\/send$/, () => ({ id: 's2', threadId: 't1' })],
+      [/\/messages\/s2\?/, () => ({ id: 's2', payload: { headers: [] } })],
+    ]);
+    const p = provider(f);
+    await p.send({ ...outgoing(), inReplyTo: 'root-1@bigbearplaster.com', references: ['root-1@bigbearplaster.com'] });
+    expect(f.calls[0].url).toMatch(/maxResults=1/);
+    expect(JSON.parse(f.calls[1].init.body)).toEqual({ raw: expect.any(String), threadId: 't1' });
+
+    const fresh = fakeFetch([
+      [/\/messages\?/, () => { throw new Error('a new message must not look up a parent'); }],
+      [/\/messages\/send$/, () => ({ id: 's3', threadId: 't3' })],
+    ]);
+    await provider(fresh).send(outgoing());
+    expect(Object.keys(JSON.parse(fresh.calls[0].init.body))).toEqual(['raw']);
+  });
+
+  it('a reply whose parent is not in this mailbox still sends, unthreaded', async () => {
+    const f = fakeFetch([                                // the rfc822msgid lookup 404s
+      [/\/messages\/send$/, () => ({ id: 's4', threadId: 't4' })],
+    ]);
+    expect(await provider(f).send({ ...outgoing(), inReplyTo: 'elsewhere@x.com' }))
+      .toMatchObject({ providerMessageId: 's4' });
+    expect(Object.keys(JSON.parse(f.calls[1].init.body))).toEqual(['raw']);
   });
 
   it('send still succeeds when the Message-ID read-back fails', async () => {

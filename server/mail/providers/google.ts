@@ -297,8 +297,8 @@ export class GmailProvider implements MailProvider {
       cc: parseAddressList(h('Cc')),
       bcc: parseAddressList(h('Bcc')),
       subject: h('Subject'),
-      // Gmail's snippet is HTML-escaped ("&#39;", "&mdash;"); htmlToText puts
-      // it back into the plain text the list is going to render.
+      // Gmail's snippet arrives HTML-escaped ("&#39;", "&mdash;"), so it goes
+      // through the entity decoder before the list renders it as plain text.
       snippet: snippetOf(htmlToText(m.snippet ?? '')),
       date: (isNaN(when.getTime()) ? new Date() : when).toISOString(),
       isRead: !labels.includes('UNREAD'),
@@ -363,13 +363,12 @@ export class GmailProvider implements MailProvider {
     let pageToken: string | undefined;
     try {
       do {
+        // No historyTypes filter: Gmail declares it a REPEATED parameter, and a
+        // comma-joined value is silently rejected. The loop below already reads
+        // only the four record types it cares about, so the unfiltered feed
+        // costs a little payload and removes a way to get this wrong.
         const page = await this.api<GmailHistoryResponse>('history', {
-          query: {
-            startHistoryId,
-            historyTypes: 'messageAdded,messageDeleted,labelAdded,labelRemoved',
-            maxResults: PAGE_SIZE,
-            pageToken,
-          },
+          query: { startHistoryId, maxResults: PAGE_SIZE, pageToken },
         });
         for (const rec of page.history ?? []) {
           for (const a of [...(rec.messagesAdded ?? []), ...(rec.labelsAdded ?? []), ...(rec.labelsRemoved ?? [])]) {
@@ -465,9 +464,32 @@ export class GmailProvider implements MailProvider {
 
   async send(msg: OutgoingMessage): Promise<{ providerMessageId: string; providerThreadId?: string; messageIdHeader?: string }> {
     const raw = b64url(await buildRawMime(msg));
-    const r = await this.api<GmailMessage>('messages/send', { method: 'POST', body: JSON.stringify({ raw }) });
+    // Matching In-Reply-To/References is not enough for Gmail's OWN UI: without
+    // an explicit threadId it files the reply as a new conversation. Only a
+    // reply pays for the lookup, and a miss just sends it unthreaded.
+    const threadId = msg.inReplyTo ? await this.threadIdOf(msg.inReplyTo) : undefined;
+    const r = await this.api<GmailMessage>('messages/send', {
+      method: 'POST',
+      body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
+    });
     const messageIdHeader = await this.sentMessageIdHeader(r.id);
     return { providerMessageId: r.id, providerThreadId: r.threadId, ...(messageIdHeader ? { messageIdHeader } : {}) };
+  }
+
+  /** The thread a Message-ID belongs to, via Gmail's own header index. Returns
+   *  undefined when the parent is not in this mailbox (a reply to something
+   *  that only ever lived in another account) — the send then goes out
+   *  unthreaded rather than failing. */
+  private async threadIdOf(messageIdHeader: string): Promise<string | undefined> {
+    try {
+      const r = await this.api<GmailListResponse>('messages', {
+        query: { q: `rfc822msgid:${messageIdHeader.replace(/^<|>$/g, '')}`, maxResults: 1 },
+      });
+      return r.messages?.[0]?.threadId;
+    } catch (e) {
+      console.warn('[gmail] could not resolve the parent thread for a reply:', (e as Error).message);
+      return undefined;
+    }
   }
 
   /** Gmail stamps its own Message-ID on anything it sends, so the header we

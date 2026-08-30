@@ -12,6 +12,14 @@ describe('mime helpers', () => {
   it('htmlToText keeps line breaks for block elements and drops tags', () => {
     expect(htmlToText('<p>Hi<br>there</p><div>ok &amp; done</div>')).toBe('Hi\nthere\nok & done');
   });
+  it('htmlToText decodes numeric and the common named entities in one pass', () => {
+    expect(htmlToText('<p>Level&nbsp;6 &mdash; Mike&#39;s call&hellip;</p>')).toBe("Level 6 — Mike's call…");
+    expect(htmlToText('<p>caf&#xe9; &ndash; &lsquo;ok&rsquo; &ldquo;q&rdquo;</p>')).toBe('café – ‘ok’ “q”');
+    // One pass only: an escaped entity must survive as literal text.
+    expect(htmlToText('<p>ok &amp;#39; done</p>')).toBe('ok &#39; done');
+    // Anything unrecognised is left exactly as written.
+    expect(htmlToText('<p>a &bogus; b &#0; c</p>')).toBe('a &bogus; b &#0; c');
+  });
   it('stripQuotedReply removes On … wrote:, > blocks and From: headers', () => {
     const t = 'Approved.\n\nOn Aug 25, 2026, Nathan wrote:\n> COR attached\n> thanks';
     expect(stripQuotedReply(t)).toBe('Approved.');

@@ -101,6 +101,14 @@ describe('engine', () => {
     const a = accounts.getAccountAny(db, acct.id)!; expect(a.status).toBe('ok'); expect(a.lastSyncAt).toBeTruthy();
     expect(events.some(e => e.type === 'mailAccount' && e.id === acct.id)).toBe(true);
   });
+  it("runBackfill's closing incremental gets a fresh state, never the stale cursor", async () => {
+    accounts.updateAccount(db, acct.id, { syncState: JSON.stringify({ cursor: 41 }) });
+    const seen: SyncState[] = [];
+    const inner = provider.incremental.bind(provider);
+    provider.incremental = (state: SyncState) => { seen.push(state); return inner(state); };
+    await runBackfill(ctx, acct, provider);
+    expect(seen).toEqual([{}]);
+  });
   it('runIncremental restarts with a backfill when the provider says its history expired', async () => {
     // A provider whose change log no longer reaches our cursor: the first poll
     // reports reset, every later call behaves normally. It delegates to the
