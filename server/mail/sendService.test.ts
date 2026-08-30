@@ -11,6 +11,7 @@ import { send, MailSendError } from './sendService';
 import { stageUpload } from './uploads';
 import { listLinksForThread } from './links';
 import { upsertEnvelopes } from './sync/engine';
+import type { EntityChangedEvent } from '../realtime/changeFeed';
 
 vi.mock('./sync/engine', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./sync/engine')>();
@@ -18,6 +19,7 @@ vi.mock('./sync/engine', async (importOriginal) => {
 });
 
 let db: Database.Database; let ctx: MailContext; let provider: FakeMailProvider; let dir: string; let acct: accounts.MailAccountRow;
+let events: EntityChangedEvent[];
 const crypto = new MailCrypto(Buffer.alloc(32, 5)); const user = { id: 'u1', role: 'user' };
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ss-')); db = openDb(':memory:'); runMigrations(db, dir, migrations, { mailCrypto: crypto });
@@ -25,7 +27,8 @@ beforeEach(() => {
   createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
   acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', displayName: 'Me', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider(); provider.seed([]);
-  ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: () => {} };
+  events = [];
+  ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: ev => { events.push(ev); } };
 });
 describe('sendService.send', () => {
   it('sends through the default account, indexes the sent row, links + effects the item', async () => {
@@ -65,7 +68,29 @@ describe('sendService.send', () => {
     accounts.updateAccount(db, acct.id, { status: 'auth_error' });
     await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toBeInstanceOf(MailSendError);
     accounts.deleteAccount(db, acct.id);
-    await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toThrow(/no mail account/i);
+    await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toThrow(/no usable mail account/i);
+  });
+  it('picks the first USABLE account, preferring the default one', async () => {
+    // acct is the default. Park it in needs_review (where migration 31 leaves a
+    // converted SMTP config) — the send must move to the healthy account rather
+    // than fail on a default the user cannot send from.
+    accounts.updateAccount(db, acct.id, { status: 'needs_review' });
+    const good = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@bb.com', auth: { refreshToken: 'r' } });
+    const r = await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] });
+    expect(r.accountId).toBe(good.id);
+    // a healthy default still wins over a healthy non-default
+    accounts.updateAccount(db, acct.id, { status: 'ok' });
+    const r2 = await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] });
+    expect(r2.accountId).toBe(acct.id);
+  });
+  it('stamps bySessionId on the broadcasts a send causes', async () => {
+    await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [], sessionId: 's9', links: [{ itemType: 'project', itemId: 'p1' }] });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every(e => e.bySessionId === 's9')).toBe(true);
+    // omitted → nobody is excluded from the refetch
+    events.length = 0;
+    await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] });
+    expect(events.every(e => e.bySessionId === undefined)).toBe(true);
   });
   it('rejects a replyTo.accountId the user does not own, and sends nothing', async () => {
     db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();

@@ -401,7 +401,9 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
 
   // ── send / drafts / uploads / provider search ──
   app.post('/api/mail/send', authenticateToken, async (req, res) => {
-    try { res.json(await send(ctx, userOf(req), req.body)); }
+    // sessionId comes from the header, never the body — the sender's own tab is
+    // identified by the request, not by what it claims.
+    try { res.json(await send(ctx, userOf(req), { ...req.body, sessionId: req.get('x-session-id') || undefined })); }
     catch (e) { fail(res, e, 'Send failed'); }
   });
 

@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, ImageIcon } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, sendPunchReport,
+  getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, sendPunchReport,
 } from '../../utils/store';
 import { Customer } from '../../types';
 import { resolveRecipient } from '../../utils/recipients';
@@ -40,6 +40,8 @@ export const ProjectPunch: React.FC = () => {
     defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
+    /** Set once we know the user has no mail account to send from. */
+    sendBlockedReason?: string;
   }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
@@ -67,7 +69,7 @@ export const ProjectPunch: React.FC = () => {
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
         }
       } catch { /* non-fatal */ }
     })();
@@ -197,7 +199,7 @@ export const ProjectPunch: React.FC = () => {
           staleness="unknown"
           size="sm"
           send={{
-            blockedReason: list.length === 0 ? 'No punch items' : undefined,
+            blockedReason: (list.length === 0 ? 'No punch items' : undefined) ?? emailDefaults.sendBlockedReason,
             composer: {
               title: 'Send punch list report',
               defaultTo: emailDefaults.defaultTo || undefined,

@@ -18,6 +18,8 @@ export interface SendRequest {
   replyTo?: { accountId: string; threadKey: string };
   links?: Array<{ itemType: ItemType; itemId: string }>;
   draftProviderId?: string;
+  /** The caller's x-session-id, so the tab that sent doesn't refetch its own change. */
+  sessionId?: string;
 }
 export interface SendResult { messageId: string; threadKey: string; accountId: string; effectsSkipped: ItemType[] }
 
@@ -30,9 +32,17 @@ function fileAttachment(ctx: MailContext, fileId: string, name?: string): Outgoi
 export async function send(ctx: MailContext, user: { id: string; role: string }, req: SendRequest): Promise<SendResult> {
   const { db } = ctx;
   if (!req.to?.length) throw new MailSendError('At least one recipient is required');
-  const account = req.accountId ? accounts.getOwned(db, user.id, req.accountId) : accounts.listAccounts(db, user.id).find(a => a.isDefault) ?? accounts.listAccounts(db, user.id)[0];
-  if (!account) throw new MailSendError('No mail account connected — add one in Settings → Mail', 409);
-  if (account.status !== 'ok' && account.status !== 'syncing') throw new MailSendError(`Mail account ${account.emailAddress} is ${account.status.replace('_', ' ')} — fix it in Settings → Mail`, 409);
+  // The server picks the account, not the client: an explicit accountId is
+  // honoured (scoped to this user), and otherwise we take the first USABLE
+  // account preferring the default one. Falling back to the default even when
+  // it is auth_error/needs_review is what let the client and the server
+  // disagree about who was sending.
+  const usable = (a: accounts.MailAccountRow) => a.status === 'ok' || a.status === 'syncing';
+  const account = req.accountId
+    ? accounts.getOwned(db, user.id, req.accountId)
+    : (() => { const ok = accounts.listAccounts(db, user.id).filter(usable); return ok.find(a => a.isDefault) ?? ok[0] ?? null; })();
+  if (!account) throw new MailSendError('No usable mail account — connect or activate one in Settings → Mail', 409);
+  if (!usable(account)) throw new MailSendError(`Mail account ${account.emailAddress} is ${account.status.replace('_', ' ')} — fix it in Settings → Mail`, 409);
   const provider = ctx.scheduler ? ctx.scheduler.getProvider(account.id) : ctx.providerFactory(account, accounts.readAuth(db, ctx.crypto, account.id)!);
 
   const attachments: OutgoingAttachment[] = []; const usedUploads: string[] = []; const tagged: Array<{ itemType: ItemType; itemId: string }> = [...(req.links ?? [])];
@@ -71,7 +81,7 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
       from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: snippetOf(msg.text), date: new Date().toISOString(),
       isRead: true, isStarred: false, isDraft: false, attachments: attachments.map((a, i) => ({ attId: 'out' + i, name: a.name, mime: a.mime, size: a.content.length })), sizeBytes: msg.html.length,
       folderProviderIds: ['SENT'],
-    }], { sentFromApp: true });
+    }], { sentFromApp: true, sessionId: req.sessionId });
     const messageId = messageIds[0];
     const threadKey = (db.prepare('SELECT threadKey FROM mail_messages WHERE id = ?').get(messageId) as { threadKey: string }).threadKey;
 
@@ -87,7 +97,7 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
         createLink(db, { threadKey, itemType: t.itemType, itemId: t.itemId, linkedByUserId: user.id, subjectSnapshot: msg.subject, firstDate: new Date().toISOString(), participants: [msg.from, ...msg.to] });
         const eff = applySendEffects(db, { itemType: t.itemType, itemId: t.itemId, userId: user.id, role: user.role, to, cc, subject: msg.subject, threadKey });
         if (eff.skipped === 'role') effectsSkipped.push(t.itemType);
-        if (eff.broadcast) broadcasts.push({ ...eff.broadcast, action: 'updated', byUserId: user.id });
+        if (eff.broadcast) broadcasts.push({ ...eff.broadcast, action: 'updated', byUserId: user.id, bySessionId: req.sessionId });
       }
     })();
     broadcasts.forEach(b => ctx.broadcastChange(b));

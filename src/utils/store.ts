@@ -351,12 +351,20 @@ export const getMailAccounts = async (): Promise<MailAccountSummary[]> => {
   return await res.json();
 };
 
-// The account a send would go out through: the default one, else the first
-// usable one. null when the user has nothing connected (or nothing healthy).
+// The account a send would go out through. Mirrors the rule the server applies
+// in server/mail/sendService (usable-first, default preferred) so the Send
+// button and the send route never disagree about whether a send can happen.
 export const pickSendableAccount = (list: MailAccountSummary[]): MailAccountSummary | null => {
   const usable = list.filter(a => a.status === 'ok' || a.status === 'syncing');
   return usable.find(a => a.isDefault) ?? usable[0] ?? null;
 };
+
+export const NO_MAIL_ACCOUNT_REASON = 'Connect a mail account in Settings → Mail';
+
+// The DocumentActionsBar `send.blockedReason` for a user with nowhere to send
+// from; undefined once any account is usable.
+export const mailSendBlockedReason = (list: MailAccountSummary[]): string | undefined =>
+  pickSendableAccount(list) === null ? NO_MAIL_ACCOUNT_REASON : undefined;
 
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
   const res = await fetch(`/api/projects/${projectId}/notes`, { headers: getAuthHeaders() });

@@ -20,8 +20,11 @@ const h = vi.hoisted(() => ({
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildRfiPdf: vi.fn(),
+  getMailAccounts: vi.fn(),
   pickerProps: { last: null as any },
 }));
+
+const OK_ACCOUNT = { id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 };
 
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
@@ -39,8 +42,7 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
   getSettings: vi.fn(async () => ({})),
-  getMailAccounts: vi.fn(async () => []),
-  pickSendableAccount: vi.fn(() => null),
+  getMailAccounts: h.getMailAccounts,
   getAlwaysCc: vi.fn(async () => ''),
   getProject: vi.fn(async () => null),
   getCustomer: vi.fn(async () => undefined),
@@ -134,6 +136,7 @@ beforeEach(() => {
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildRfiPdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
+  h.getMailAccounts.mockResolvedValue([OK_ACCOUNT]);
 });
 
 describe('RfiEditor — document actions', () => {
@@ -197,6 +200,25 @@ describe('RfiEditor — document actions', () => {
     fireEvent.click(await screen.findByTestId('composer-send'));
     await waitFor(() => expect(h.sendRfi).toHaveBeenCalled());
     expect(h.saveRfi).not.toHaveBeenCalled();
+  });
+
+  // The whole app sends through the user's connected mail account now, so with
+  // none connected Email must say so instead of failing at the server.
+  it('blocks Email when no mail account is connected, and unblocks once one is', async () => {
+    h.getMailAccounts.mockResolvedValue([]);
+    mount();
+    await waitFor(() => expect(screen.getByTestId('doc-send')).toBeDisabled());
+    expect(screen.getByTestId('doc-send')).toHaveAttribute('title', 'Connect a mail account in Settings → Mail');
+
+    // an account that exists but cannot send is still no account
+    h.getMailAccounts.mockResolvedValue([{ ...OK_ACCOUNT, status: 'needs_review' }]);
+    mount();
+    await waitFor(() => expect(screen.getAllByTestId('doc-send')[1]).toBeDisabled());
+
+    h.getMailAccounts.mockResolvedValue([OK_ACCOUNT]);
+    mount();
+    await waitFor(() => expect(screen.getAllByTestId('doc-send')[2]).toBeEnabled());
+    expect(screen.getAllByTestId('doc-send')[2]).not.toHaveAttribute('title', 'Connect a mail account in Settings → Mail');
   });
 
   it('sends the generated file through sendRfi', async () => {

@@ -133,7 +133,7 @@ async function startServer() {
   // parser lives in registerMailRoutes) — the app-level JSON parser would eat
   // the stream first, so it steps aside for exactly that path.
   const jsonParser = express.json({ limit: "50mb" });
-  app.use((req, res, next) => (req.path === '/api/mail/uploads' ? next() : jsonParser(req, res, next)));
+  app.use((req, res, next) => (req.path.startsWith('/api/mail/uploads') ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
   //   1. JWT_SECRET environment variable (admin override)
@@ -556,9 +556,10 @@ async function startServer() {
     try {
       const rows = db.prepare('SELECT key, value FROM user_preferences WHERE userId = ?').all((req as any).user.id) as { key: string; value: string }[];
       const prefs: Record<string, string> = {};
-      // Exclude smtp.* keys: outbound email moved to mail accounts, but a user's
-      // old rows (incl. the password) survive migration 31 and must never leak
-      // out through the generic prefs endpoint.
+      // Exclude smtp.* keys. Migration 31 deletes them for every user it could
+      // convert into a mail account, but a half-filled block (blank smtp.host,
+      // or neither fromAddress nor username) is left behind untouched — and it
+      // can still hold a password, so it must never leak out here.
       rows.forEach(row => { if (!row.key.startsWith('smtp.')) prefs[row.key] = row.value; });
       res.json(prefs);
     } catch (error) {
@@ -574,7 +575,8 @@ async function startServer() {
       const userId = (req as any).user.id;
       Object.entries(prefs).forEach(([key, value]) => {
         // The smtp.* namespace is retired (migration 31 converted it to mail
-        // accounts). Refuse writes so nothing can resurrect a credential there.
+        // accounts and deleted the rows it converted). Refuse writes so nothing
+        // can resurrect a credential there.
         if (key.startsWith('smtp.')) return;
         stmt.run(userId, key, value as string);
       });
@@ -612,7 +614,6 @@ async function startServer() {
 
   registerEmailRoutes(app, {
     db,
-    dataDir: DATA_DIR,
     authenticateToken,
     requireAdmin,
     broadcastChange,

@@ -3,7 +3,7 @@
 // recipient resolved from the project/customer role emails, the user's
 // always-CC list, and the from-addresses the letterhead can advertise.
 import { useEffect, useState } from 'react';
-import { getAlwaysCc, getCustomer, getProject, getSettings, getMailAccounts, pickSendableAccount } from '../../../utils/store';
+import { getAlwaysCc, getCustomer, getProject, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason } from '../../../utils/store';
 import { resolveRecipient } from '../../../utils/recipients';
 import type { Customer } from '../../../types';
 
@@ -14,6 +14,8 @@ export interface ProposalEmailDefaults {
   /** The company address the letterhead uses unless the sender picks another. */
   companyEmail: string;
   headerEmailOptions: { label: string; value: string }[];
+  /** Set once we know the user has no mail account to send from. */
+  sendBlockedReason?: string;
 }
 
 const EMPTY: ProposalEmailDefaults = {
@@ -49,6 +51,7 @@ export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefau
           defaultCc: mergeCsv(resolved.cc, alwaysCc),
           defaultBcc: resolved.bcc,
           companyEmail,
+          sendBlockedReason: mailSendBlockedReason(mailAccounts),
           headerEmailOptions: [
             companyEmail ? { label: 'Company default', value: companyEmail } : null,
             fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,

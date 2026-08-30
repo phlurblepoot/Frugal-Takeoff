@@ -1,6 +1,6 @@
 // src/pages/project/issues/IssueEditor.tsx
 import React, { useEffect, useState } from 'react';
-import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
+import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -50,6 +50,8 @@ export const IssueEditor: React.FC<{
     defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
+    /** Set once we know the user has no mail account to send from. */
+    sendBlockedReason?: string;
   }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export const IssueEditor: React.FC<{
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
         }
       } catch { /* non-fatal */ }
     })();
@@ -184,6 +186,7 @@ export const IssueEditor: React.FC<{
             updatedAt={issue.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send issue report',
                 defaultTo: emailDefaults.defaultTo || undefined,

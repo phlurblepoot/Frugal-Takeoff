@@ -65,7 +65,6 @@ vi.mock('../../../utils/store', async () => {
     getFileMeta: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ companyEmail: 'office@bigbear.test' })),
     getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
-    pickSendableAccount: vi.fn((l: { status: string }[]) => l[0] ?? null),
     getAlwaysCc: vi.fn(async () => ''),
     getCustomer: vi.fn(async () => undefined),
   };

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,
-  saveChangeOrder, getChangeOrder, setChangeOrderStatus, getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
+  saveChangeOrder, getChangeOrder, setChangeOrderStatus, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, sendChangeOrder,
   addCOPhoto, removeCOPhoto, fetchFileBlob,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
@@ -73,6 +73,8 @@ export const ChangeOrderEditor: React.FC<{
     defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
+    /** Set once we know the user has no mail account to send from. */
+    sendBlockedReason?: string;
   }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
@@ -99,7 +101,7 @@ export const ChangeOrderEditor: React.FC<{
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
         }
       } catch { /* non-fatal */ }
     })();
@@ -235,6 +237,7 @@ export const ChangeOrderEditor: React.FC<{
             updatedAt={co.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send change order request',
                 defaultTo: emailDefaults.defaultTo || undefined,

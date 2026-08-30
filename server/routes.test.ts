@@ -18,6 +18,7 @@ import type { FakeMailProvider } from './mail/providers/fake';
 import { getFakeProvider, resetFakes } from './mail/providers/fakeRegistry';
 import { upsertFolders } from './mail/sync/engine';
 import type { MailContext } from './mail/context';
+import type { EntityChangedEvent } from './realtime/changeFeed';
 
 let db: Database.Database;
 let dir: string;
@@ -1230,6 +1231,7 @@ describe('email send routes', () => {
   let ctx: MailContext;
   let acct: accounts.MailAccountRow;
   let provider: FakeMailProvider;
+  let broadcasts: EntityChangedEvent[];
   const mailCrypto = new MailCrypto(Buffer.alloc(32, 7));
 
   const buildEmailApp = (role: 'admin' | 'member', userId = 'u1') => {
@@ -1237,7 +1239,6 @@ describe('email send routes', () => {
     a.use(express.json({ limit: '50mb' }));
     registerEmailRoutes(a, {
       db,
-      dataDir: dir,
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
       broadcastChange: () => {},
@@ -1250,7 +1251,8 @@ describe('email send routes', () => {
     resetFakes();
     // mail_accounts.userId is a real FK — the send routes' stub user must exist.
     db.prepare("INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1', 'u1', 'x', 'admin')").run();
-    ctx = { db, dataDir: dir, crypto: mailCrypto, providerFactory: a => getFakeProvider(a.id), broadcastChange: () => {} };
+    broadcasts = [];
+    ctx = { db, dataDir: dir, crypto: mailCrypto, providerFactory: a => getFakeProvider(a.id), broadcastChange: ev => { broadcasts.push(ev); } };
     acct = accounts.createAccount(db, mailCrypto, {
       userId: 'u1', provider: 'fake', emailAddress: 'noreply@example.com', displayName: 'Frugal', auth: { refreshToken: 'r' },
     });
@@ -1378,6 +1380,54 @@ describe('email send routes', () => {
     expect(getFakeProvider(theirs.id).sent).toHaveLength(0);
   });
 
+  it('invoice send: broadcasts carry the sender\'s x-session-id', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`)
+      .set('x-session-id', 's1').send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    // the item's own change event ...
+    const invoiceEv = broadcasts.find(b => b.type === 'invoice' && b.id === id);
+    expect(invoiceEv).toMatchObject({ byUserId: 'u1', bySessionId: 's1' });
+    // ... and the mail thread the sent copy created
+    expect(broadcasts.find(b => b.type === 'mailThread')).toMatchObject({ bySessionId: 's1' });
+    // no header → no session attribution (every viewer refetches)
+    broadcasts.length = 0;
+    const id2 = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(broadcasts.find(b => b.type === 'invoice')?.bySessionId).toBeUndefined();
+  });
+
+  it('invoice send: an unusable default account is skipped for a usable one', async () => {
+    const id = await makeInvoice();
+    // acct is the default; park it in needs_review the way migration 31 leaves
+    // a converted SMTP config, then add a healthy second account.
+    accounts.updateAccount(db, acct.id, { status: 'needs_review' });
+    const good = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, good.id, getFakeProvider(good.id).folders);
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    expect(res.body.accountId).toBe(good.id);
+    expect(provider.sent).toHaveLength(0);
+    // with no usable account at all, the send is refused rather than silently
+    // going out through the broken default
+    accounts.updateAccount(db, good.id, { status: 'auth_error' });
+    const id2 = await makeInvoice();
+    const denied = await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(denied.status).toBe(409);
+    expect(denied.body.error).toMatch(/No usable mail account/);
+  });
+
+  it('invoice send: an explicitly chosen but unusable account is refused, not swapped', async () => {
+    const id = await makeInvoice();
+    accounts.updateAccount(db, acct.id, { status: 'auth_error' });
+    const good = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, good.id, getFakeProvider(good.id).folders);
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: acct.id });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/auth error/);
+    expect(getFakeProvider(good.id).sent).toHaveLength(0);
+  });
+
   it('invoice send: non-admin gets 403', async () => {
     const id = await makeInvoice();
     const memberApp = buildEmailApp('member');
@@ -1389,7 +1439,7 @@ describe('email send routes', () => {
     accounts.deleteAccount(db, acct.id);
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/No mail account connected/);
+    expect(res.body.error).toMatch(/No usable mail account/);
     expect(provider.sent).toHaveLength(0);
     expect((await request(app).get(`/api/invoices/${id}`)).body.status).not.toBe('sent');
   });

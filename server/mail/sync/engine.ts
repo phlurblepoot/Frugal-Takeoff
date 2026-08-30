@@ -64,7 +64,10 @@ export function rebuildThread(db: Database.Database, accountId: string, threadKe
     .run(uuidv4(), accountId, threadKey, subject, rows[0].date, rows[rows.length - 1].date, rows.length, unread, hasAtt, starred, JSON.stringify([...participants.values()]), JSON.stringify([...folders]), now);
 }
 
-export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envelopes: Envelope[], opts: { sentFromApp?: boolean } = {}): { messageIds: string[]; threadKeys: string[] } {
+// opts.sessionId: when this upsert is the direct result of a request (a send),
+// the originating tab's x-session-id rides along on the broadcasts so it does
+// not refetch a change it already applied locally.
+export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envelopes: Envelope[], opts: { sentFromApp?: boolean; sessionId?: string } = {}): { messageIds: string[]; threadKeys: string[] } {
   const { db } = ctx;
   const fmap = folderMap(db, account.id);
   const touched = new Set<string>();
@@ -133,8 +136,8 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
     for (const key of touched) rebuildThread(db, account.id, key);
   });
   tx();
-  for (const key of touched) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'updated', byUserId: account.userId });
-  for (const key of mergedAway) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'deleted', byUserId: account.userId });
+  for (const key of touched) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'updated', byUserId: account.userId, bySessionId: opts.sessionId });
+  for (const key of mergedAway) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'deleted', byUserId: account.userId, bySessionId: opts.sessionId });
   for (const ev of inboundEvents) for (const h of inboundHooks) { try { h(ctx, { ...ev, account }); } catch (e) { console.error('[mail] inbound hook failed', e); } }
   return { messageIds, threadKeys: [...touched] };
 }

@@ -4,7 +4,7 @@ import { CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
   saveDailyReport, getDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
-  getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject,
+  getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject,
   fetchFileBlob, sendDailyReport,
 } from '../../../utils/store';
 import { Customer } from '../../../types';
@@ -75,6 +75,8 @@ export const DailyReportEditor: React.FC<{
     defaultBcc: string;
     companyEmail: string;
     headerEmailOptions: { label: string; value: string }[];
+    /** Set once we know the user has no mail account to send from. */
+    sendBlockedReason?: string;
   }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
 
   useEffect(() => {
@@ -101,7 +103,7 @@ export const DailyReportEditor: React.FC<{
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
         ].filter(Boolean) as { label: string; value: string }[];
         if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
+          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
         }
       } catch { /* non-fatal */ }
     })();
@@ -251,6 +253,7 @@ export const DailyReportEditor: React.FC<{
             updatedAt={report.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send daily report',
                 defaultTo: emailDefaults.defaultTo || undefined,

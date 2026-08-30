@@ -134,7 +134,7 @@ export const ProposalEditor: React.FC = () => {
                 refreshMedia();
               }}
               send={{
-                blockedReason: sendBlockedReason,
+                blockedReason: sendBlockedReason ?? emailDefaults.sendBlockedReason,
                 composer: {
                   title: 'Send proposal',
                   defaultTo: emailDefaults.defaultTo || project.email?.from || '',

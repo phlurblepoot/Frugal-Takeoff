@@ -62,8 +62,8 @@ import {
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
-import { registerProposalRoutes, proposalErr } from './proposalRoutes';
-import { getProposal, LockedError as ProposalLockedError } from './proposalStore';
+import { registerProposalRoutes } from './proposalRoutes';
+import { getProposal } from './proposalStore';
 import { send as mailSend, MailSendError, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
 import type { MailContext } from './mail/context';
@@ -1599,7 +1599,6 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
 export interface EmailRouteDeps {
   db: Database.Database;
-  dataDir: string;
   authenticateToken: express.RequestHandler;
   requireAdmin: express.RequestHandler;
   // Not used by the send routes themselves — applySendEffects broadcasts the
@@ -1678,7 +1677,6 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     async (req, res) => {
       try { await fn(req, res); }
       catch (e: any) {
-        if (e instanceof ProposalLockedError) return proposalErr(e, res);
         console.error(`Error sending ${label}:`, e);
         if (!res.headersSent) res.status(500).json({ error: e?.message || `Failed to send ${label}` });
       }
@@ -1708,6 +1706,7 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
         attachments,
         replyTo,
         links: [{ itemType: item.itemType, itemId: item.itemId }],
+        sessionId: req.get('x-session-id') || undefined,
       });
     } catch (e: unknown) {
       if (e instanceof MailSendError) { res.status(e.status).json({ error: e.message }); return null; }
