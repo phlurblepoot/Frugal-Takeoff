@@ -36,6 +36,11 @@ export interface MailProvider {
   saveDraft(draft: OutgoingMessage, existingProviderId?: string): Promise<{ providerMessageId: string }>;
   deleteDraft(providerMessageId: string): Promise<void>;
   search(query: string, opts: { before?: Date; limit: number }): Promise<Envelope[]>;
+  /** Optional live-change channel (IMAP IDLE, a webhook subscription, …).
+   *  `onChange` is a hint that something moved — the caller re-syncs, it carries
+   *  no payload. Providers without push simply omit both. */
+  startPush?(onChange: () => void): Promise<void>;
+  stopPush?(): Promise<void>;
 }
 export class AuthExpiredError extends Error {}
 export class RateLimitedError extends Error { retryAfterMs = 60_000 }
