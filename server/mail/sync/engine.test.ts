@@ -9,7 +9,7 @@ import { MailCrypto } from '../crypto';
 import * as accounts from '../accountStore';
 import { FakeMailProvider } from '../providers/fake';
 import type { MailContext } from '../context';
-import type { Envelope } from '../providers/types';
+import type { Envelope, MailProvider, SyncState } from '../providers/types';
 import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages } from './engine';
 
 let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountRow; let provider: FakeMailProvider; let events: any[];
@@ -100,6 +100,45 @@ describe('engine', () => {
     expect(db.prepare('SELECT COUNT(*) c FROM mail_folders').get()).toEqual({ c: 5 });
     const a = accounts.getAccountAny(db, acct.id)!; expect(a.status).toBe('ok'); expect(a.lastSyncAt).toBeTruthy();
     expect(events.some(e => e.type === 'mailAccount' && e.id === acct.id)).toBe(true);
+  });
+  it('runIncremental restarts with a backfill when the provider says its history expired', async () => {
+    // A provider whose change log no longer reaches our cursor: the first poll
+    // reports reset, every later call behaves normally. It delegates to the
+    // fake rather than subclassing it — only the interface's return type
+    // carries `reset`, the fake's own narrower one does not.
+    const inner = new FakeMailProvider();
+    let backfills = 0;
+    let resetPending = true;
+    const p: MailProvider = {
+      kind: 'fake',
+      listFolders: () => inner.listFolders(),
+      backfill: o => { backfills++; return inner.backfill(o); },
+      incremental: async (state: SyncState) => {
+        if (!resetPending) return inner.incremental(state);
+        resetPending = false;
+        return { upserts: [], deletes: [], state: { historyId: null }, reset: true };
+      },
+      getBody: id => inner.getBody(id),
+      getAttachment: (id, attId) => inner.getAttachment(id, attId),
+      send: m => inner.send(m),
+      setFlags: (ids, f) => inner.setFlags(ids, f),
+      move: (ids, f) => inner.move(ids, f),
+      archive: ids => inner.archive(ids),
+      trash: ids => inner.trash(ids),
+      saveDraft: (d, existing) => inner.saveDraft(d, existing),
+      deleteDraft: id => inner.deleteDraft(id),
+      search: (q, o) => inner.search(q, o),
+    };
+    inner.seed([env('old', { date: '2026-01-01T00:00:00.000Z' }), env('new')]);
+    accounts.updateAccount(db, acct.id, { syncState: JSON.stringify({ historyId: 'stale' }) });
+
+    await runIncremental(ctx, acct, p);
+
+    expect(backfills).toBe(1);
+    expect(db.prepare('SELECT providerMessageId FROM mail_messages').all()).toEqual([{ providerMessageId: 'new' }]);
+    // The dead cursor is replaced by the one the fresh backfill established.
+    expect(JSON.parse(accounts.getAccountAny(db, acct.id)!.syncState!)).toEqual({ cursor: 0 });
+    expect(accounts.getAccountAny(db, acct.id)!.status).toBe('ok');
   });
   it('runIncremental applies upserts/deletes and persists state', async () => {
     await runBackfill(ctx, acct, provider);

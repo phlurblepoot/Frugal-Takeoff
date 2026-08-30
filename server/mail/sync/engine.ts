@@ -186,6 +186,15 @@ export async function runIncremental(ctx: MailContext, account: MailAccountRow, 
   await guarded(ctx, account, async () => {
     const fresh = accounts.getAccountAny(ctx.db, account.id)!;
     const r = await provider.incremental(JSON.parse(fresh.syncState || '{}'));
+    // The provider's change log no longer reaches our cursor (Gmail drops
+    // history after about a week offline). Its state is meaningless now, so
+    // clear it and re-read from indexedSince — upserts are keyed by provider
+    // id, so a re-read refreshes the existing rows instead of duplicating them.
+    if (r.reset) {
+      accounts.updateAccount(ctx.db, account.id, { syncState: null });
+      await runBackfill(ctx, accounts.getAccountAny(ctx.db, account.id)!, provider);
+      return;
+    }
     if (r.upserts.length) { upsertFolders(ctx.db, account.id, await provider.listFolders()); upsertEnvelopes(ctx, account, r.upserts); }
     if (r.deletes.length) removeMessages(ctx, account, r.deletes);
     accounts.updateAccount(ctx.db, account.id, { syncState: JSON.stringify(r.state) });

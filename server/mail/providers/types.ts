@@ -25,7 +25,10 @@ export interface MailProvider {
   kind: MailProviderKind;
   listFolders(): Promise<ProviderFolder[]>;
   backfill(opts: { since: Date; cursor?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean }>;
-  incremental(state: SyncState): Promise<{ upserts: Envelope[]; deletes: string[]; state: SyncState }>;
+  /** `reset: true` means the provider's change log no longer reaches back to
+   *  the caller's cursor (Gmail expires history after about a week), so the
+   *  returned state is worthless and the caller must re-run a full backfill. */
+  incremental(state: SyncState): Promise<{ upserts: Envelope[]; deletes: string[]; state: SyncState; reset?: boolean }>;
   getBody(providerMessageId: string): Promise<{ html?: string; text?: string; attachments: AttachmentMeta[] }>;
   getAttachment(providerMessageId: string, attId: string): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }>;
   /** `messageIdHeader` is the Message-ID the provider actually used — Gmail/Graph rewrite
