@@ -56,4 +56,15 @@ describe('accountStore', () => {
     expect(store.getAccountAny(db, a.id)).toBeNull();
     expect(store.getOwned(db, 'u1', b.id)!.isDefault).toBe(1);
   });
+  it('updateAccount normalizes emailAddress', () => {
+    const a = store.createAccount(db, crypto, { userId: 'u1', provider: 'imap', emailAddress: 'a@x', auth: imapAuth });
+    store.updateAccount(db, a.id, { emailAddress: ' New@X.COM ' });
+    expect(store.getAccountAny(db, a.id)!.emailAddress).toBe('new@x.com');
+  });
+  it('setDefault throws for a non-owned account and leaves the existing default untouched', () => {
+    const a = store.createAccount(db, crypto, { userId: 'u1', provider: 'imap', emailAddress: 'a@x', auth: imapAuth });
+    const other = store.createAccount(db, crypto, { userId: 'u2', provider: 'imap', emailAddress: 'c@x', auth: imapAuth });
+    expect(() => store.setDefault(db, 'u1', other.id)).toThrow('Account not found');
+    expect(store.getOwned(db, 'u1', a.id)!.isDefault).toBe(1);
+  });
 });

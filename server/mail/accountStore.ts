@@ -44,8 +44,10 @@ export function updateAccount(db: Database.Database, accountId: string,
   patch: Partial<Pick<MailAccountRow, 'displayName' | 'signatureHtml' | 'status' | 'lastSyncAt' | 'lastError' | 'syncState' | 'indexedSince' | 'emailAddress'>>): void {
   const keys = Object.keys(patch) as (keyof typeof patch)[];
   if (!keys.length) return;
+  const normalized: typeof patch = { ...patch };
+  if (normalized.emailAddress != null) normalized.emailAddress = normalized.emailAddress.trim().toLowerCase();
   const sets = keys.map(k => `${k} = ?`).join(', ');
-  db.prepare(`UPDATE mail_accounts SET ${sets}, updatedAt = ? WHERE id = ?`).run(...keys.map(k => patch[k] ?? null), new Date().toISOString(), accountId);
+  db.prepare(`UPDATE mail_accounts SET ${sets}, updatedAt = ? WHERE id = ?`).run(...keys.map(k => normalized[k] ?? null), new Date().toISOString(), accountId);
 }
 export function updateAuth(db: Database.Database, crypto: MailCrypto, accountId: string, auth: ImapAuth | OAuthAuth): void {
   db.prepare('UPDATE mail_accounts SET authBlob = ?, updatedAt = ? WHERE id = ?').run(crypto.seal(auth), new Date().toISOString(), accountId);
@@ -56,6 +58,8 @@ export function readAuth(db: Database.Database, crypto: MailCrypto, accountId: s
 }
 export function setDefault(db: Database.Database, userId: string, accountId: string): void {
   db.transaction(() => {
+    const owned = db.prepare('SELECT 1 FROM mail_accounts WHERE id = ? AND userId = ?').get(accountId, userId);
+    if (!owned) throw new Error('Account not found');
     db.prepare('UPDATE mail_accounts SET isDefault = 0 WHERE userId = ?').run(userId);
     db.prepare('UPDATE mail_accounts SET isDefault = 1 WHERE id = ? AND userId = ?').run(accountId, userId);
   })();
