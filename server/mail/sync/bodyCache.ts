@@ -1,3 +1,5 @@
+// A single entry larger than maxBytes is intentionally allowed to sit alone over budget after
+// eviction empties the map — refusing to cache it would just re-fetch it every time, which is worse.
 export class BodyCache<T> {
   private map = new Map<string, { value: T; bytes: number; at: number }>();
   private total = 0;

@@ -52,4 +52,75 @@ describe('MailScheduler', () => {
     const s = new MailScheduler(ctx);
     expect(s.getProvider(acct.id)).toBe(provider);
   });
+  it('clamps the backoff delay after applying jitter, never scheduling past backoffMaxMs', async () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(1);   // worst-case jitter multiplier: 1.2x
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    provider.listFolders = async () => { throw new Error('listFolders down'); };   // fails every backfill attempt
+    // slowMs alone (1000) already exceeds backoffMaxMs (100) once doubled for a single failure,
+    // so a pre-jitter clamp (buggy) would yield 100 * 1.2 = 120; a post-jitter clamp caps at 100.
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 1000, backoffMaxMs: 100 });
+    s.start();
+    await vi.runOnlyPendingTimersAsync();
+    const delays = setTimeoutSpy.mock.calls.map(c => c[1] as number).filter((d): d is number => typeof d === 'number');
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(100);
+    await s.stop();
+    randomSpy.mockRestore(); setTimeoutSpy.mockRestore(); vi.useRealTimers();
+  });
+  it('retries backfill on the next tick after a transient failure, instead of switching to incremental against a null syncState', async () => {
+    vi.useFakeTimers();
+    provider.failNextWith(new Error('net blip'));
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 1000, backoffMaxMs: 5000 });
+    s.start();
+    // Settle only the microtask-only first attempt (no macrotask boundary needed for it to fail),
+    // without also racing ahead into the just-scheduled retry timer.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 0 });
+    expect(accounts.getAccountAny(ctx.db, acct.id)!.syncState).toBeNull();
+    await vi.advanceTimersByTimeAsync(2500);   // past the single-failure backoff (max 1000*2*1.2 = 2400ms)
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    expect(accounts.getAccountAny(ctx.db, acct.id)!.syncState).not.toBeNull();
+    await s.stop(); vi.useRealTimers();
+  });
+  it('an account deleted between ticks stops the worker without an unhandled rejection', async () => {
+    vi.useFakeTimers();
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 1000 });
+    s.start();
+    await vi.runOnlyPendingTimersAsync();   // first backfill completes successfully
+    expect(s.isRunning(acct.id)).toBe(true);
+    accounts.deleteAccount(ctx.db, acct.id);   // account vanishes before the next tick's DB read
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(s.isRunning(acct.id)).toBe(false);
+    await s.stop(); vi.useRealTimers();
+  });
+  it('pokeAccount mid-tick queues a re-run instead of dropping it, and does not start a second concurrent tick', async () => {
+    vi.useFakeTimers();
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+
+    let resolveDeferred: () => void = () => {};
+    const deferred = new Promise<void>(res => { resolveDeferred = res; });
+    const origIncremental = provider.incremental.bind(provider);
+    let calls = 0;
+    provider.incremental = async (state: any) => {
+      calls++;
+      if (calls === 1) await deferred;
+      return origIncremental(state);
+    };
+
+    provider.injectInbound(env('during'));
+    s.pokeAccount(acct.id);                 // starts tick #2, blocks inside incremental on `deferred`
+    expect(calls).toBe(1);
+    provider.injectInbound(env('after'));
+    s.pokeAccount(acct.id);                 // mid-tick poke: must queue, not start a second concurrent call
+    expect(calls).toBe(1);
+
+    resolveDeferred();
+    await vi.advanceTimersByTimeAsync(0);   // settle the queued re-run's microtask chain without also firing the next real poll timer
+    expect(calls).toBe(2);                  // the queued poke ran once tick #2 finished
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 3 });
+    await s.stop(); vi.useRealTimers();
+  });
 });
