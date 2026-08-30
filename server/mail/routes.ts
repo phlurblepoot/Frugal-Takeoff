@@ -9,7 +9,7 @@ import { htmlToText, newMessageIdHeader } from './mime';
 import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
 import { stageUpload } from './uploads';
-import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant } from './oauth';
+import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
@@ -249,7 +249,11 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       if (existing) {
         accounts.updateAuth(db, ctx.crypto, existing.id, { refreshToken });
         accounts.updateAccount(db, existing.id, { status: 'ok', lastError: null });
-        // Drop the cached provider first: it still holds the OLD refresh token.
+        // A live worker captured its provider — holding the OLD refresh token —
+        // when it started, and startAccount() no-ops while that worker exists.
+        // Stop it and drop the cache, or the reconnect changes nothing and the
+        // next AuthExpiredError stops the worker for good.
+        ctx.scheduler?.stopAccount(existing.id);
         ctx.scheduler?.dropProvider(existing.id);
         id = existing.id;
       } else {
@@ -681,13 +685,15 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   });
 
   app.get('/api/mail/setup-info', authenticateToken, requireAdmin, (_req, res) => {
-    const base = deps.publicUrl?.replace(/\/$/, '') ?? null;
+    // The URIs shown here are the ones an admin pastes into the provider console,
+    // so they MUST come from the same builder the real redirect uses.
+    const base = deps.publicUrl?.replace(/\/+$/, '') ?? null;
     res.json({
       publicUrl: base,
-      google: { configured: !!(deps.env.GOOGLE_OAUTH_CLIENT_ID && deps.env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: base ? `${base}/api/mail/oauth/google/callback` : null },
+      google: { configured: !!(deps.env.GOOGLE_OAUTH_CLIENT_ID && deps.env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: base ? redirectUri(base, 'google') : null },
       microsoft: {
         configured: !!(deps.env.MS_OAUTH_CLIENT_ID && deps.env.MS_OAUTH_CLIENT_SECRET),
-        redirectUri: base ? `${base}/api/mail/oauth/microsoft/callback` : null,
+        redirectUri: base ? redirectUri(base, 'microsoft') : null,
         webhookUrl: base ? `${base}/api/mail/ms/webhook` : null,
         tenant: deps.env.MS_OAUTH_TENANT || 'common',
       },

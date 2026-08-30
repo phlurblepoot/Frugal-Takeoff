@@ -333,7 +333,12 @@ describe('mail routes', () => {
     expect(rc.body.some((x: any) => x.addr === 'gc@teg.com')).toBe(true);
     expect((await request(app).post('/api/mail/heartbeat').send({ accountIds: [acct.id] })).status).toBe(204);
     const si = await request(app).get('/api/mail/setup-info');
-    expect(si.body).toMatchObject({ google: { configured: false, redirectUri: 'https://app.test/api/mail/oauth/google/callback' } });
+    // These are the URIs an admin pastes into the provider console, so they must
+    // be exactly what the real redirect builds.
+    expect(si.body).toMatchObject({
+      google: { configured: false, redirectUri: 'https://app.test/api/mail/oauth/google/callback' },
+      microsoft: { configured: false, redirectUri: 'https://app.test/api/mail/oauth/microsoft/callback' },
+    });
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/setup-info')).status).toBe(403);
   });
@@ -591,6 +596,30 @@ describe('mail routes', () => {
     expect(accounts.readAuth(db, crypto, first.id)).toEqual({ refreshToken: 'RT2' });
     expect(dropSpy).toHaveBeenCalledWith(first.id);
     dropSpy.mockRestore();
+  });
+
+  it('reconnecting a running account rebuilds its provider on the NEW refresh token', async () => {
+    const state = () => signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' });
+    await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state: state() });
+    const a = accounts.listAccounts(db, 'u1').find(x => x.emailAddress === 'oauth@bb.com')!;
+    // The worker is live, and it captured its provider (holding RT) when it started.
+    expect(ctx.scheduler!.isRunning(a.id)).toBe(true);
+    const stopSpy = vi.spyOn(ctx.scheduler!, 'stopAccount');
+    const factorySpy = vi.spyOn(ctx, 'providerFactory');
+
+    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
+    await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c2', state: state() });
+
+    expect(accounts.readAuth(db, crypto, a.id)).toEqual({ refreshToken: 'RT2' });
+    // Without stopAccount() first, startAccount() no-ops and the old provider —
+    // still holding RT — keeps ticking until it dies on an auth error. This is
+    // the assertion that catches that: the provider must be REBUILT on RT2.
+    expect(factorySpy).toHaveBeenCalled();
+    expect(factorySpy.mock.calls.at(-1)![1]).toEqual({ refreshToken: 'RT2' });
+    expect(stopSpy).toHaveBeenCalledWith(a.id);
+    expect(ctx.scheduler!.isRunning(a.id)).toBe(true);
+    stopSpy.mockRestore();
+    factorySpy.mockRestore();
   });
 
   it('another user connecting the same address gets their own account', async () => {

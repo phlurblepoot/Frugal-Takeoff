@@ -65,20 +65,34 @@ export const createVerifier = (): string => b64url(randomBytes(32));
 export const challengeOf = (verifier: string): string => b64url(createHash('sha256').update(verifier).digest());
 
 // ── signed state ───────────────────────────────────────────────────────────
-export interface StatePayload { userId: string; provider: OAuthProvider; verifier: string }
+/** Marks this JWT as an OAuth state and NOTHING else. The app signs session
+ *  tokens with the same secret, so without a type claim a stolen session token
+ *  would verify here as a state (and `authenticateToken` doesn't check `typ`
+ *  either — but a state presented as a session yields no `id`, so it fails). */
+export const STATE_TYP = 'mail_oauth_state';
 
-export function signState(jwtSecret: string, payload: StatePayload): string {
-  return jwt.sign(payload, jwtSecret, { algorithm: 'HS256', expiresIn: STATE_TTL_SEC });
+export interface StatePayload { userId: string; provider: OAuthProvider; verifier: string; nonce: string }
+
+export function signState(jwtSecret: string, payload: Omit<StatePayload, 'nonce'> & { nonce?: string }): string {
+  // Two consent flows started in the same second by the same user would
+  // otherwise produce byte-identical states; the nonce keeps each one distinct.
+  const nonce = payload.nonce || randomBytes(16).toString('hex');
+  return jwt.sign({ userId: payload.userId, provider: payload.provider, verifier: payload.verifier, nonce, typ: STATE_TYP },
+    jwtSecret, { algorithm: 'HS256', expiresIn: STATE_TTL_SEC });
 }
 
-/** Throws on a bad signature, a wrong algorithm, an expired state or a payload
- *  that isn't shaped like one of ours. */
+/** Throws on a bad signature, a wrong algorithm, an expired state, a JWT that
+ *  isn't one of ours, or a payload that isn't shaped like a state. */
 export function verifyState(jwtSecret: string, state: string): StatePayload {
-  const claims = jwt.verify(state, jwtSecret, { algorithms: ['HS256'] }) as Partial<StatePayload>;
-  if (typeof claims?.userId !== 'string' || !claims.userId || typeof claims.verifier !== 'string' || !claims.verifier || !isOAuthProvider(claims.provider)) {
+  const claims = jwt.verify(state, jwtSecret, { algorithms: ['HS256'] }) as Partial<StatePayload> & { typ?: string };
+  if (claims?.typ !== STATE_TYP) throw new Error('That token is not a mail sign-in state');
+  if (typeof claims.userId !== 'string' || !claims.userId
+    || typeof claims.verifier !== 'string' || !claims.verifier
+    || typeof claims.nonce !== 'string' || !claims.nonce
+    || !isOAuthProvider(claims.provider)) {
     throw new Error('Malformed sign-in state');
   }
-  return { userId: claims.userId, provider: claims.provider, verifier: claims.verifier };
+  return { userId: claims.userId, provider: claims.provider, verifier: claims.verifier, nonce: claims.nonce };
 }
 
 // ── consent URL ────────────────────────────────────────────────────────────
@@ -164,7 +178,14 @@ export async function exchangeCode(
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const body = (await res.json().catch(() => ({}))) as TokenBody;
-  if (!res.ok) throw new Error(redactGrant(`${body.error || res.status}: ${body.error_description || 'the sign-in could not be completed'}`, code, codeVerifier));
+  if (!res.ok) {
+    // `error` is an enumerated OAuth code; `error_description` is free text the
+    // provider composes and can quote the grant back into. Only the code is
+    // shown, and only if it LOOKS like a code — the description stays in the log.
+    console.error('[mail] oauth token exchange rejected', provider, res.status, redactGrant(body.error_description || '', code, codeVerifier));
+    const enumerated = /^[a-z][a-z0-9_.-]{0,63}$/.test(String(body.error ?? '')) ? String(body.error) : `HTTP ${res.status}`;
+    throw new Error(`${enumerated}: the mail provider rejected the sign-in`);
+  }
   if (!body.access_token) throw new Error('The provider returned no access token');
   // Without a refresh token the account would work until the first access token
   // expired and then silently stop — better to fail the connect outright.
@@ -177,9 +198,11 @@ export async function exchangeCode(
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-  const id = (await idRes.json().catch(() => ({}))) as { email?: string; name?: string; mail?: string; userPrincipalName?: string; displayName?: string };
+  const id = (await idRes.json().catch(() => ({}))) as { email?: string; email_verified?: boolean; name?: string; mail?: string; userPrincipalName?: string; displayName?: string };
   const email = (google ? id.email : id.mail || id.userPrincipalName) ?? '';
   if (!idRes.ok || !email) throw new Error('Connected, but the provider would not tell us the mailbox email address');
+  // Only an explicit false is a rejection: Workspace omits the claim entirely.
+  if (google && id.email_verified === false) throw new Error('Google reports this address is not verified');
   return {
     refreshToken: String(body.refresh_token),
     accessToken,
