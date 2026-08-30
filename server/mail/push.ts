@@ -12,7 +12,7 @@ import type Database from 'better-sqlite3';
 import type { MailContext } from './context';
 import * as accounts from './accountStore';
 import type { MailAccountRow } from './accountStore';
-import type { SyncState } from './providers/types';
+import { ProviderNotFoundError, type SyncState } from './providers/types';
 
 /** Path Microsoft POSTs to; also what `GET /api/mail/setup-info` shows an admin. */
 export const WEBHOOK_PATH = '/api/mail/ms/webhook';
@@ -121,8 +121,14 @@ export async function ensureGraphSubscription(
         result = await provider.renewSubscription(id, expiration);
       } catch (e) {
         // Graph drops a subscription it could not deliver to; renewing one it no
-        // longer knows about 404s. Start a new one rather than going quiet.
-        console.warn(`[mail] could not renew the Graph subscription for ${account.id}, creating a new one:`, (e as Error).message);
+        // longer knows about 404/410s, and ONLY that is worth replacing.
+        // A 429, a 5xx or a dropped socket says nothing about whether the
+        // subscription still exists — creating a second one on those would leak
+        // a subscription per failed tick and double every notification. Let
+        // those fall through to the outer catch: the stored state is untouched,
+        // so the next tick simply retries the renewal.
+        if (!(e instanceof ProviderNotFoundError)) throw e;
+        console.warn(`[mail] Microsoft no longer knows the Graph subscription for ${account.id}, creating a new one:`, (e as Error).message);
         result = await provider.createSubscription(url, secret, expiration);
       }
     } else {

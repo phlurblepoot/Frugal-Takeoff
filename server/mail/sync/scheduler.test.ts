@@ -187,6 +187,56 @@ describe('MailScheduler push', () => {
     await s.stop(); vi.useRealTimers();
   });
 
+  it('does not park the account when a sync succeeded after the push error fired', async () => {
+    // The IDLE socket can be rejected while the tick already in flight completes
+    // happily against a still-valid session. The poll path is the source of
+    // truth: the account keeps polling and the channel is reopened on the next
+    // startAccount().
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T12:00:00.000Z'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let onAuthError: ((e: Error) => void) | null = null;
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async (_cb: () => void, onErr?: (e: Error) => void) => { onAuthError = onErr ?? null; });
+    // The scheduler's clock, held one second BEHIND the sync the backfill records —
+    // i.e. the channel gave up before that sync landed.
+    let clock = Date.parse('2026-08-30T11:59:59.000Z');
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000, now: () => clock });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    const syncedAt = accounts.getAccountAny(ctx.db, acct.id)!.lastSyncAt!;
+    expect(Date.parse(syncedAt)).toBeGreaterThan(clock);
+
+    onAuthError!(new Error('IDLE says the password is wrong'));
+    await vi.advanceTimersByTimeAsync(0);
+    const row = accounts.getAccountAny(ctx.db, acct.id)!;
+    expect(row.status).toBe('ok');
+    expect(row.lastError).toBeNull();
+    expect(s.isRunning(acct.id)).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore(); clock = Date.now();
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('does not park an account whose worker was replaced before the push error settled', async () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let onAuthError: ((e: Error) => void) | null = null;
+    const p: MailProvider = provider;
+    p.startPush = vi.fn(async (_cb: () => void, onErr?: (e: Error) => void) => { onAuthError = onErr ?? null; });
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 500_000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    const dead = onAuthError!;
+    // A reconnect: the old worker is torn down and a new one takes the account.
+    s.stopAccount(acct.id); s.startAccount(acct.id);
+    await vi.advanceTimersByTimeAsync(0);
+    dead(new Error('the channel we already replaced is dead'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accounts.getAccountAny(ctx.db, acct.id)!.status).toBe('ok');
+    expect(s.isRunning(acct.id)).toBe(true);
+    errSpy.mockRestore();
+    await s.stop(); vi.useRealTimers();
+  });
+
   it('a rejected startPush does not take the worker down', async () => {
     vi.useFakeTimers();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

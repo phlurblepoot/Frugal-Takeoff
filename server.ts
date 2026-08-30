@@ -29,6 +29,7 @@ import type { MailCrypto } from './server/mail/crypto';
 import { createMailProvider, defaultProviderDeps } from './server/mail/providers';
 import { registerMailRoutes } from './server/mail/routes';
 import { MailScheduler } from './server/mail/sync/scheduler';
+import { WEBHOOK_PATH } from './server/mail/push';
 import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
 
@@ -129,11 +130,15 @@ async function startServer() {
     maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
-  // POST /api/mail/uploads streams a raw attachment body (its own express.raw
-  // parser lives in registerMailRoutes) — the app-level JSON parser would eat
-  // the stream first, so it steps aside for exactly that path.
+  // Two mail paths bring their own body parser, and this one runs first, so it
+  // steps aside for exactly those:
+  //   * POST /api/mail/uploads streams a raw attachment body (its own
+  //     express.raw parser lives in registerMailRoutes);
+  //   * the Graph webhook is unauthenticated and open to the internet, so it
+  //     takes a 256 KB express.json() of its own instead of this 50 MB one.
   const jsonParser = express.json({ limit: "50mb" });
-  app.use((req, res, next) => (req.path.startsWith('/api/mail/uploads') ? next() : jsonParser(req, res, next)));
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH;
+  app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
   //   1. JWT_SECRET environment variable (admin override)

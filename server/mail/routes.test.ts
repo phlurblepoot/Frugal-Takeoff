@@ -16,7 +16,7 @@ import { MailCrypto } from './crypto';
 import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
-import { registerMailRoutes, type MailRouteDeps } from './routes';
+import { registerMailRoutes, WEBHOOK_MAX_BODY_BYTES, type MailRouteDeps } from './routes';
 import { getWebhookSecret } from './push';
 import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
@@ -69,7 +69,10 @@ beforeEach(() => {
   upsertFolders(db, acct.id, provider.folders);
   upsertEnvelopes(ctx, acct, [env('m1')]);
   app = express();
-  app.use(express.json({ limit: '50mb' }));
+  // Mirrors server.ts: the app-level parser steps aside for the two mail paths
+  // that bring their own (the upload stream, and the webhook's 256 KB cap).
+  const appJson = express.json({ limit: '50mb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/mail/uploads') || req.path === '/api/mail/ms/webhook' ? next() : appJson(req, res, next)));
   registerMailRoutes(app, {
     ctx,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,6 +93,28 @@ afterEach(async () => {
   // backfills (load-older); drain them so no timer outlives the test.
   await ctx.scheduler!.stop();
 });
+
+// A second app with its own dep overrides — used by the OAuth flow tests and by
+// the webhook tests that need an app WITHOUT an app-level JSON parser.
+const altApp = (over: Partial<MailRouteDeps> = {}, opts: { json?: boolean } = {}) => {
+  const a = express();
+  if (opts.json !== false) a.use(express.json());
+  registerMailRoutes(a, {
+    ctx,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    authenticateToken: (req: any, _r, next) => { req.user = currentUser; next(); },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    requireAdmin: (req: any, res, next) => (req.user.role === 'admin' ? next() : res.status(403).end()),
+    verifyToken: t => (t === 'tok' ? currentUser : null),
+    bodyCache: new BodyCache({ maxBytes: 1e6, ttlMs: 1e5 }),
+    publicUrl: 'https://app.test',
+    env: routeEnv,
+    jwtSecret: JWT_SECRET,
+    oauthExchange: (...args) => oauthStub!(...args),
+    ...over,
+  });
+  return a;
+};
 
 describe('mail routes', () => {
   it('GET /api/mail/accounts lists own accounts without secrets', async () => {
@@ -434,11 +459,12 @@ describe('mail routes', () => {
     expect((await request(app).get('/api/mail/providers')).body).toEqual({ google: true, microsoft: false });
   });
 
-  it('POST /api/mail/uploads rejects a body the raw parser never saw', async () => {
-    // The app-level express.json() claims application/json bodies, so req.body
-    // arrives as an object rather than a Buffer.
-    expect((await request(app).post('/api/mail/uploads').query({ name: 'a.json' }).send({ not: 'a buffer' })).status).toBe(400);
+  it('POST /api/mail/uploads rejects an empty body, and takes a JSON one as bytes', async () => {
+    // The app-level parser steps aside for this path (server.ts), so the raw
+    // parser sees every content type — an application/json attachment is stored
+    // as the bytes it is, not parsed into an object.
     expect((await request(app).post('/api/mail/uploads').query({ name: 'a.jpg' }).set('Content-Type', 'image/jpeg').send(Buffer.alloc(0))).status).toBe(400);
+    expect((await request(app).post('/api/mail/uploads').query({ name: 'a.json' }).send({ its: 'a file' })).body.uploadId).toBeTruthy();
   });
 
   it('staged uploads: POST /api/mail/uploads returns uploadId usable by send', async () => {
@@ -505,26 +531,6 @@ describe('mail routes', () => {
     spy.mockRestore();
   });
   // ── OAuth connect flow ──
-  const oauthApp = (over: Partial<MailRouteDeps> = {}) => {
-    const a = express();
-    a.use(express.json());
-    registerMailRoutes(a, {
-      ctx,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      authenticateToken: (req: any, _r, next) => { req.user = currentUser; next(); },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      requireAdmin: (req: any, res, next) => (req.user.role === 'admin' ? next() : res.status(403).end()),
-      verifyToken: t => (t === 'tok' ? currentUser : null),
-      bodyCache: new BodyCache({ maxBytes: 1e6, ttlMs: 1e5 }),
-      publicUrl: 'https://app.test',
-      env: routeEnv,
-      jwtSecret: JWT_SECRET,
-      oauthExchange: (...args) => oauthStub!(...args),
-      ...over,
-    });
-    return a;
-  };
-
   it('GET /api/mail/oauth/:provider/start redirects to consent with PKCE state', async () => {
     routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
     routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'g-client-secret-value';
@@ -555,7 +561,7 @@ describe('mail routes', () => {
     expect(noEnv.body.error).toContain('MS_OAUTH_CLIENT_ID');
     routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
     routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'g-client-secret-value';
-    const noUrl = await request(oauthApp({ publicUrl: null })).get('/api/mail/oauth/google/start').query({ token: 'tok' });
+    const noUrl = await request(altApp({ publicUrl: null })).get('/api/mail/oauth/google/start').query({ token: 'tok' });
     expect(noUrl.status).toBe(503);
     expect(noUrl.body.error).toContain('APP_PUBLIC_URL');
   });
@@ -704,5 +710,46 @@ describe('POST /api/mail/ms/webhook', () => {
     subscribe('sub-9');
     currentUser = { id: 'nobody', role: 'none' };
     expect((await request(app).post('/api/mail/ms/webhook').query({ validationToken: 't' })).status).toBe(200);
+  });
+
+  // ── the route is open to the internet: body cap + rate limit ──
+
+  it('rejects an oversized body with 413 without reading or acting on it', async () => {
+    subscribe('sub-9');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post('/api/mail/ms/webhook').send({
+      value: [{ subscriptionId: 'sub-9', clientState: getWebhookSecret(db), pad: 'x'.repeat(WEBHOOK_MAX_BODY_BYTES) }],
+    });
+    expect(r.status).toBe(413);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('parses its own body, so the cap does not depend on the app-level parser', async () => {
+    subscribe('sub-9');
+    // No express.json() at all on this app — exactly what server.ts arranges for
+    // this path. The notification must still be understood.
+    const bare = altApp({}, { json: false });
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(bare).post('/api/mail/ms/webhook').send({
+      value: [{ subscriptionId: 'sub-9', clientState: getWebhookSecret(db) }],
+    });
+    expect(r.status).toBe(202);
+    expect(poke).toHaveBeenCalledWith(acct.id);
+    poke.mockRestore();
+  });
+
+  it('runs the injected rate limiter before the handler', async () => {
+    subscribe('sub-9');
+    let calls = 0;
+    const limited = altApp({ webhookRateLimit: (_req, res) => { calls++; res.status(429).end(); } });
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(limited).post('/api/mail/ms/webhook').send({
+      value: [{ subscriptionId: 'sub-9', clientState: getWebhookSecret(db) }],
+    });
+    expect(r.status).toBe(429);
+    expect(calls).toBe(1);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
   });
 });

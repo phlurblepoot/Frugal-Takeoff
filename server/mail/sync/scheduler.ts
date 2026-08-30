@@ -79,12 +79,36 @@ export class MailScheduler {
     void Promise.resolve().then(() => w.provider.startPush!(
       () => { if (!w.stopped) this.pokeAccount(w.accountId); },
       (err) => {
-        // The channel is gone for good: the credentials, not the network, are
-        // the problem. Park the account so the user is asked to reconnect.
-        this.stopAccount(w.accountId);
-        this.markUnstartable(w.accountId, err, 'push reported dead credentials for');
+        // The channel says the credentials are gone for good — but a push
+        // channel dying and a poll succeeding can race (an IDLE socket can be
+        // rejected while the tick already in flight completes happily against a
+        // still-valid session). Parking on the push error alone would knock out
+        // a healthy account, so the decision waits for the in-flight tick.
+        void this.settlePushAuthError(w, err, this.now());
       },
     )).catch(e => console.error(`[mail] could not open the push channel for ${w.accountId}:`, (e as Error).message));
+  }
+  /** Park the account whose push channel reported dead credentials — unless the
+   *  poll path says otherwise. Two things can veto the parking:
+   *    * the worker is no longer the one that opened this channel (a
+   *      stop+start, a reconnect, a deleted account) — that new worker owns the
+   *      account now and this error is about a channel that is already closed;
+   *    * a sync completed AFTER the error fired, which means the stored
+   *      credentials still work. Polling keeps the account fresh, and the push
+   *      channel is reopened by the next startAccount().
+   *  `firedAt` is captured by the caller, not read here: the whole point is to
+   *  compare against the moment the channel gave up, not the moment we looked. */
+  private async settlePushAuthError(w: Worker, err: Error, firedAt: number): Promise<void> {
+    await w.running;   // tick() never rejects, so this cannot throw
+    if (this.workers.get(w.accountId) !== w) return;
+    const account = accounts.getAccountAny(this.ctx.db, w.accountId);
+    const syncedAt = account?.lastSyncAt ? Date.parse(account.lastSyncAt) : NaN;
+    if (Number.isFinite(syncedAt) && syncedAt > firedAt) {
+      console.warn(`[mail] push reported dead credentials for ${w.accountId}, but a sync succeeded afterwards — keeping the account on polling instead of parking it:`, err.message);
+      return;
+    }
+    this.stopAccount(w.accountId);
+    this.markUnstartable(w.accountId, err, 'push reported dead credentials for');
   }
   private markUnstartable(accountId: string, e: unknown, what = 'cannot start sync for'): void {
     const message = e instanceof Error ? e.message : String(e);

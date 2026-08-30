@@ -15,6 +15,7 @@ import {
   getWebhookSecret, handleGraphWebhook, ensureGraphSubscription,
   pickPushState, writeSyncState, MAX_SUBSCRIPTION_MINUTES, type GraphPushApi,
 } from './push';
+import { ProviderNotFoundError } from './providers/types';
 import type { GraphProvider } from './providers/microsoft';
 import type { MailContext } from './context';
 
@@ -152,15 +153,31 @@ describe('ensureGraphSubscription', () => {
     expect(stateOf(acct.id).subscriptionExpires).toBe(expires);
   });
 
-  it('re-creates the subscription when the renewal is rejected (Graph forgot it)', async () => {
+  it('re-creates the subscription when Graph says it no longer exists (404/410)', async () => {
     const now = Date.parse('2026-08-29T00:00:00.000Z');
     setState(acct.id, { subscriptionId: 'gone', subscriptionExpires: new Date(now + 3600_000).toISOString() });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const g = stubGraph({ renewSubscription: vi.fn(async () => { throw new Error('Graph 404'); }) });
+    const g = stubGraph({ renewSubscription: vi.fn(async () => { throw new ProviderNotFoundError('subscriptions/gone'); }) });
     await ensureGraphSubscription(ctx, accounts.getAccountAny(db, acct.id)!, g, 'https://app.test', now);
     expect(g.createSubscription).toHaveBeenCalledTimes(1);
     expect(stateOf(acct.id).subscriptionId).toBe('sub-new');
     warn.mockRestore();
+  });
+
+  it('does NOT create a second subscription when the renewal fails for any other reason', async () => {
+    // A 429/5xx/dropped socket says nothing about whether the subscription still
+    // exists. Creating one per failed tick would leak subscriptions and double
+    // every notification; the stored id must survive for the next tick to retry.
+    const now = Date.parse('2026-08-29T00:00:00.000Z');
+    const expires = new Date(now + 3600_000).toISOString();
+    setState(acct.id, { deltaLinks: { INBOX: 'l' }, subscriptionId: 'sub-1', subscriptionExpires: expires });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const g = stubGraph({ renewSubscription: vi.fn(async () => { throw new Error('Graph 503 — service unavailable'); }) });
+    await expect(ensureGraphSubscription(ctx, accounts.getAccountAny(db, acct.id)!, g, 'https://app.test', now)).resolves.toBeUndefined();
+    expect(g.createSubscription).not.toHaveBeenCalled();
+    expect(stateOf(acct.id)).toEqual({ deltaLinks: { INBOX: 'l' }, subscriptionId: 'sub-1', subscriptionExpires: expires });
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 
   it('never rejects when Graph refuses outright, and leaves the stored state alone', async () => {

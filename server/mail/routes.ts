@@ -1,5 +1,6 @@
 // server/mail/routes.ts  (spec §4.4)
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 import type { MailContext } from './context';
 import * as accounts from './accountStore';
@@ -30,7 +31,15 @@ export interface MailRouteDeps {
   jwtSecret: string;
   /** Injectable so route tests never reach a real provider. */
   oauthExchange?: typeof exchangeCode;
+  /** Rate limiter for the unauthenticated Graph webhook. Injectable so a test
+   *  can assert the limiter is consulted; defaults to 120/min per IP. */
+  webhookRateLimit?: express.RequestHandler;
 }
+
+/** Graph batches change notifications, but a batch is a handful of ids — a body
+ *  anywhere near this is not Microsoft. Also mounted as the webhook's own JSON
+ *  limit, so the app-level parser's (much larger) limit does not apply here. */
+export const WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 
 // The runtime twin of the ItemType union — typed as ItemType[] so a typo here is a compile error.
 const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
@@ -284,7 +293,28 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   // must also be fast (Graph retries, then drops the subscription, if we are
   // slow), so the handler only reads the DB and returns; the re-sync it kicks
   // off is fire-and-forget.
-  app.post(WEBHOOK_PATH, (req, res) => {
+  //
+  // It is also the only route in the app that takes an unauthenticated POST
+  // body, so it gets its own limiter and its own body cap. Two notes on the cap:
+  //   * the Content-Length check answers before a byte of body is read, and is
+  //     what stops a large declared body;
+  //   * the route-local express.json() is the real limit for a chunked body
+  //     that declares no length — but it only bites if the HOST app let this
+  //     path past its own parser (server.ts exempts WEBHOOK_PATH for exactly
+  //     that reason; a body-parser that already ran wins and this one no-ops).
+  const webhookLimiter: express.RequestHandler = deps.webhookRateLimit ?? rateLimit({
+    windowMs: 60_000,
+    max: 120,   // Graph batches; 120 notification POSTs a minute from one IP is already unreal
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many notifications' },
+  });
+  const webhookSizeGuard: express.RequestHandler = (req, res, next) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > WEBHOOK_MAX_BODY_BYTES) return res.status(413).end();
+    next();
+  };
+  app.post(WEBHOOK_PATH, webhookLimiter, webhookSizeGuard, express.json({ limit: WEBHOOK_MAX_BODY_BYTES }), (req, res) => {
     // Handshake: Microsoft validates a new subscription by POSTing a token that
     // must come straight back as plain text. Cap it so we never echo a payload.
     const token = req.query.validationToken;
