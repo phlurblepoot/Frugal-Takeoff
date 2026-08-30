@@ -23,9 +23,9 @@ const CHANGELOG: ChangelogEntry[] = [
     version: '2.10.0',
     date: 'August 30, 2026',
     changes: [
-      'Mail accounts: each user now connects their own mailbox under Settings → Mail — Google Workspace or Microsoft 365 with a single Connect button (no password stored), or any IMAP/SMTP host. New mail arrives within seconds on Microsoft and IMAP, and within about half a minute on Gmail while you are reading.',
-      'Everything the app emails — proposals, invoices, change orders, issue reports, RFIs, daily reports, punch lists, pay applications — now goes out through your own mailbox, so it appears in your Sent items and replies come back to you. Each send is linked to the record it came from, so the whole conversation stays attached to the project.',
-      'Note for self-hosters: your old SMTP settings have been migrated into a mail account that starts as "Needs review" — open Settings → Mail, check the IMAP host (it is guessed from your SMTP host) and press Test & activate, or connect Google/Microsoft instead. Nothing sends until an account is active. Google and Microsoft sign-in also needs a one-time server setup by an admin (see docs/mail-setup.md). This update includes a data-transforming migration (31) plus an additive index (32) — back up before pulling, and keep the new data/mail.key file with your data directory.',
+      'Groundwork for the in-app mail client: the server can now hold a mail account per user — Google Workspace or Microsoft 365 over a Connect button (no password stored), or any IMAP/SMTP host — and keeps each mailbox indexed, with new mail noticed within seconds on Microsoft and IMAP and within about half a minute on Gmail.',
+      'Sending from proposals, invoices, change orders, issue reports, RFIs, daily reports, punch lists and pay applications is paused until the Mail settings screen arrives in the next update. Admins can pre-connect accounts via the API in the meantime (see docs/mail-setup.md).',
+      'Note for self-hosters: your old SMTP settings have been migrated into a mail account that starts as "Needs review", and nothing sends until an account is active — so plan on the pause above lasting until the next update. Google and Microsoft sign-in also needs a one-time server setup by an admin (see docs/mail-setup.md). This update includes a data-transforming migration (31) plus an additive index (32) — back up before pulling, and keep the new data/mail.key file with your data directory.',
     ],
   },
   {

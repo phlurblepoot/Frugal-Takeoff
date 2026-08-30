@@ -14,8 +14,7 @@ actually resolved.
 > **Where this stands (2026-08-30):** the server side is complete — accounts,
 > OAuth, sync, push, sending. The **Settings → Mail** screens referenced below
 > ship with the mail client UI; until then the same information is available
-> from `GET /api/mail/setup-info` and `GET /api/mail/providers`. Delete this
-> note once the UI has landed.
+> from `GET /api/mail/setup-info` and `GET /api/mail/providers`.
 
 ---
 
@@ -71,8 +70,8 @@ body. It has to be (Microsoft has no token of ours to send), so
 it is narrow by construction: a notification is believed only far enough to say
 "re-sync account X" — the `clientState` secret must match, the subscription id
 must already belong to an account, and nothing from the payload is stored. The
-route also caps the body at **256 KB** and rate-limits itself to **120
-requests/min per IP**. If a reverse proxy sits in front, let this path through
+route also caps the body at **256 KB** and rate-limits itself to **600
+requests/min per IP** (a throttled burst is logged once a minute). If a reverse proxy sits in front, let this path through
 unbuffered and do not strip the query string (the validation handshake arrives
 as `?validationToken=…`).
 
@@ -86,8 +85,10 @@ host/port/SSL, SMTP host/port (STARTTLS or SSL), username, password (an *app
 password* for providers that require one). "Test & save" verifies both.
 
 Accounts migrated from the old per-user SMTP settings appear in status
-**Needs review** with the IMAP host pre-filled from the SMTP host — open
-them, correct the IMAP host if needed, and press **Test & activate**.
+**Needs review** with the IMAP host pre-filled from the SMTP host. Nothing
+sends from a `needs_review` account; until the Mail settings screen ships they
+are corrected and activated through the API (`PATCH /api/mail/accounts/:id`
+then `POST /api/mail/accounts/:id/test`).
 
 Push: a persistent IMAP IDLE connection on INBOX; other folders every 5 min.
 
@@ -111,7 +112,7 @@ other data is lost).
 | "No refresh token returned" (Google) | The user had previously consented without offline access. Remove the app under Google Account → Security → Third‑party access, then connect again. |
 | Account shows **Reconnect needed** (`auth_error`) | The refresh token/password was revoked or rotated. Press Reconnect (OAuth) or Edit → re-enter password (IMAP). |
 | Microsoft push never arrives | `APP_PUBLIC_URL` not reachable from the internet, or a proxy strips the validation handshake / the `?validationToken=` query. The server logs subscription failures; polling still works, so the only symptom is latency. |
-| Webhook returns 413 or 429 | The body cap (256 KB) or the per-IP rate limit (120/min) fired. Real Graph batches are far under both — check what else is POSTing to that path. |
+| Webhook returns 413 or 429 | The body cap (256 KB) or the per-IP rate limit (600/min) fired. Real Graph batches are far under both — check what else is POSTing to that path. |
 | Gmail "history expired" in the log | Normal after long downtime; Gmail drops history ids it no longer holds and the account re-backfills automatically. |
 | Sync stuck for one folder (IMAP) | A folder that LISTs but refuses SELECT is skipped with a warning; others continue. |
 | A message's body says "still being filed" (Microsoft) | Sent copy not yet in Sent Items; it appears within the next sync. |
