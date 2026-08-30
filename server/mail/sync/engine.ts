@@ -80,6 +80,12 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
   const lookup = (mid: string) => (lookupStmt.get(account.id, mid) as { threadKey: string } | undefined)?.threadKey ?? null;
   const orphanStmt = db.prepare('SELECT 1 FROM mail_messages WHERE accountId = ? AND threadKey = ?');
   const existingStmt = db.prepare('SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND providerMessageId = ?');
+  // Microsoft Graph never reports the id of a message it sent, so a send whose
+  // Sent Items read-back came up empty is indexed under "sent:<Message-ID>".
+  // When the sync later delivers the same message under its real id, that row
+  // has to be RE-KEYED rather than inserted alongside, or the user's own sent
+  // message shows up twice in the thread for ever.
+  const sentPlaceholderStmt = db.prepare(`SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ? AND providerMessageId LIKE 'sent:%'`);
   const ownAddressStmt = db.prepare('SELECT 1 FROM mail_accounts WHERE LOWER(emailAddress) = ?');
   const updateStmt = db.prepare(`UPDATE mail_messages SET accountId=?, providerMessageId=?, providerThreadId=?, messageIdHeader=?, inReplyTo=?, referencesJson=?, threadKey=?, fromAddr=?, fromName=?, toJson=?, ccJson=?, bccJson=?,
     subject=?, snippet=?, date=?, isRead=?, isStarred=?, isDraft=?, hasAttachments=?, attachmentsJson=?, sizeBytes=?, folderIdsJson=?, sentFromApp=MAX(sentFromApp, ?), updatedAt=? WHERE id=?`);
@@ -109,7 +115,11 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
         if (orphanStmt.get(account.id, c)) { mergeThreadKeys(db, account.id, c, threadKey); touched.delete(c); mergedAway.add(c); touched.add(threadKey); }
       }
 
-      const existing = existingStmt.get(account.id, env.providerMessageId) as { id: string; threadKey: string } | undefined;
+      const existing = (existingStmt.get(account.id, env.providerMessageId)
+        // Only a placeholder is adopted this way: two REAL ids that happen to
+        // share a Message-ID (the same message filed in two mailboxes) stay
+        // two rows, which is what the folder list expects.
+        ?? (mid && !env.providerMessageId.startsWith('sent:') ? sentPlaceholderStmt.get(account.id, mid) : undefined)) as { id: string; threadKey: string } | undefined;
       const id = existing?.id ?? uuidv4();
       const now = new Date().toISOString();
       const folderIds = (env.folderProviderIds || []).map(p => fmap.get(p)).filter((x): x is string => !!x);

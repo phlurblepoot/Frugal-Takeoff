@@ -36,7 +36,7 @@ export function createMailProvider(account: MailAccountRow, auth: ImapAuth | OAu
     case 'microsoft': {
       need(deps.env, 'MS_OAUTH_CLIENT_ID', 'MS_OAUTH_CLIENT_SECRET');
       const ts = new TokenSource({ refreshToken: (auth as OAuthAuth).refreshToken, refresh: rt => microsoftRefresh(deps.env, rt, deps.fetch), onRotate });
-      return new GraphProvider(ts, deps.fetch);
+      return new GraphProvider(ts, { fetch: deps.fetch });
     }
     default:
       throw new Error(`Unknown mail provider ${account.provider}`);

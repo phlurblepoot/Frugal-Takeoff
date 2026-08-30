@@ -79,6 +79,23 @@ describe('engine', () => {
     expect(db.prepare('SELECT isRead, isStarred FROM mail_messages').get()).toEqual({ isRead: 1, isStarred: 1 });
     expect(db.prepare('SELECT unreadCount FROM mail_threads').get()).toEqual({ unreadCount: 0 });
   });
+  it('re-keys a sent: placeholder when the provider finally reports the real sent message', () => {
+    // Graph cannot tell us the id of what it sent, so a send whose Sent Items
+    // read-back came up empty indexes under "sent:<our Message-ID>".
+    upsertEnvelopes(ctx, acct, [env('sent:out-1@bb.com', { messageIdHeader: 'out-1@bb.com', from: { addr: 'me@bb.com' }, isRead: true, folderProviderIds: ['SENT'] })], { sentFromApp: true });
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+
+    // The next delta pass finds the same message under its real provider id.
+    upsertEnvelopes(ctx, acct, [env('AAMkRealSentId', { messageIdHeader: 'out-1@bb.com', from: { addr: 'me@bb.com' }, isRead: true, folderProviderIds: ['SENT'] })]);
+    expect(db.prepare('SELECT providerMessageId, sentFromApp FROM mail_messages').all())
+      .toEqual([{ providerMessageId: 'AAMkRealSentId', sentFromApp: 1 }]);   // re-keyed, not duplicated
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 1 });
+  });
+  it('only the sent: placeholder is re-keyed — two real ids sharing a Message-ID stay separate rows', () => {
+    upsertEnvelopes(ctx, acct, [env('real-1', { messageIdHeader: 'dup@bb.com' })]);
+    upsertEnvelopes(ctx, acct, [env('real-2', { messageIdHeader: 'dup@bb.com' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+  });
   it('writes reply-state and fires inbound hooks only for linked threads', () => {
     const seen: string[] = [];
     registerInboundHook((_c, ev) => seen.push(ev.threadKey));
