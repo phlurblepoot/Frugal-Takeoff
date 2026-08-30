@@ -9,6 +9,7 @@ import { htmlToText, newMessageIdHeader } from './mime';
 import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
 import { stageUpload } from './uploads';
+import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant } from './oauth';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
@@ -24,6 +25,10 @@ export interface MailRouteDeps {
   bodyCache: BodyCache<BodyPayload>;
   publicUrl: string | null;
   env: NodeJS.ProcessEnv;
+  /** The app's own JWT secret — signs the OAuth `state` envelope. */
+  jwtSecret: string;
+  /** Injectable so route tests never reach a real provider. */
+  oauthExchange?: typeof exchangeCode;
 }
 
 // The runtime twin of the ItemType union — typed as ItemType[] so a typo here is a compile error.
@@ -185,10 +190,78 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     runBackfill(ctx, fresh, provider, new Date(newSince)).catch(e => console.error('[mail] load-older backfill failed', e));
   });
 
-  // Plan 2 replaces this with the real consent redirect; the client reads
-  // GET /api/mail/setup-info to render the disabled state until then.
-  app.get('/api/mail/oauth/:provider/start', authenticateToken, (_req, res) =>
-    res.status(501).json({ error: 'OAuth providers are installed in the next phase' }));
+  // ── OAuth connect (see oauth.ts for why state is a signed JWT) ──
+  // The browser NAVIGATES here, so it cannot send an Authorization header —
+  // ?token= is accepted exactly as the attachment routes do.
+  app.get('/api/mail/oauth/:provider/start', authOrQueryToken, (req, res) => {
+    const provider = req.params.provider;
+    if (!isOAuthProvider(provider)) return res.status(400).json({ error: 'Unknown mail provider' });
+    // Without a public origin there is no redirect URI to register or return to.
+    if (!deps.publicUrl) return res.status(503).json({ error: 'APP_PUBLIC_URL is not set — see Settings → Mail → Server setup guide' });
+    const verifier = createVerifier();
+    let url: string;
+    try {
+      url = buildAuthUrl(provider, deps.env, deps.publicUrl, signState(deps.jwtSecret, { userId: userOf(req).id, provider, verifier }), challengeOf(verifier));
+    } catch (e: any) {
+      // A missing client id/secret is a deployment gap, not a request error.
+      return res.status(503).json({ error: e?.message || 'This mail provider is not configured' });
+    }
+    res.redirect(url);
+  });
+
+  // No auth middleware: the browser arrives from the provider. The signed state
+  // is what says who started the flow — and it is the ONLY thing trusted here.
+  app.get('/api/mail/oauth/:provider/callback', async (req, res) => {
+    const settings = (params: string) => res.redirect(`/settings?tab=mail&${params}`);
+    // Never let a provider's text (or ours) carry a grant back into the URL bar.
+    const failed = (message: string) => settings(`error=${encodeURIComponent(message.slice(0, 300))}`);
+    const provider = req.params.provider;
+    if (!isOAuthProvider(provider)) return failed('Unknown mail provider');
+    if (!deps.publicUrl) return failed('APP_PUBLIC_URL is not set on this server');
+    // Consent was declined or the provider bailed: its own error code is not
+    // reflected back, only that it did not complete.
+    if (req.query.error) return failed('The mail provider did not complete the sign-in — please try again');
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const rawState = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!code || !rawState) return failed('That sign-in did not come back with everything we need — please try again');
+    let state: ReturnType<typeof verifyState>;
+    try { state = verifyState(deps.jwtSecret, rawState); }
+    catch { return failed('That sign-in link expired or was not issued by this app — please try connecting again'); }
+    // A Google grant must never be filed as a Microsoft account.
+    if (state.provider !== provider) return failed('That sign-in did not match the provider it started from');
+
+    try {
+      const exchange = deps.oauthExchange ?? exchangeCode;
+      const { refreshToken, email, name } = await exchange(provider, deps.env, deps.publicUrl, code, state.verifier, undefined);
+      // Reconnecting the SAME mailbox updates the account in place — a second
+      // row would double every sync and split the user's threads.
+      const existing = accounts.listAccounts(db, state.userId)
+        .find(a => a.provider === provider && a.emailAddress === email);
+      let id: string;
+      if (existing) {
+        accounts.updateAuth(db, ctx.crypto, existing.id, { refreshToken });
+        accounts.updateAccount(db, existing.id, { status: 'ok', lastError: null });
+        // Drop the cached provider first: it still holds the OLD refresh token.
+        ctx.scheduler?.dropProvider(existing.id);
+        id = existing.id;
+      } else {
+        id = accounts.createAccount(db, ctx.crypto, {
+          userId: state.userId, provider, emailAddress: email, displayName: name ?? null,
+          auth: { refreshToken }, status: 'ok',
+        }).id;
+      }
+      ctx.scheduler?.startAccount(id);
+      ctx.broadcastChange({ type: 'mailAccount', id, action: existing ? 'updated' : 'created', byUserId: state.userId });
+      settings(`connected=${encodeURIComponent(id)}`);
+    } catch (e: any) {
+      // The detail (which may name the grant) stays in the log; the user gets
+      // the provider's own summary with the code and verifier already scrubbed.
+      console.error('[mail] oauth callback failed', e);
+      // redactGrant again (not only inside exchangeCode) so ANY thrower —
+      // including a provider client we swap in later — is covered.
+      failed(redactGrant(e?.message || 'Could not connect that mailbox', code, state.verifier));
+    }
+  });
 
   // Which OAuth providers the deployment has credentials for (never the values).
   app.get('/api/mail/providers', authenticateToken, (_req, res) => res.json({

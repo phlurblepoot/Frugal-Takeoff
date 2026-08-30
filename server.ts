@@ -610,6 +610,7 @@ async function startServer() {
     bodyCache: new BodyCache({ maxBytes: 50 * 1024 * 1024, ttlMs: 10 * 60_000 }),
     publicUrl: process.env.APP_PUBLIC_URL || null,
     env: process.env,
+    jwtSecret: JWT_SECRET,
   });
 
   registerEmailRoutes(app, {

@@ -16,7 +16,8 @@ import { MailCrypto } from './crypto';
 import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
-import { registerMailRoutes } from './routes';
+import { registerMailRoutes, type MailRouteDeps } from './routes';
+import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
 import { MailScheduler } from './sync/scheduler';
 import { upsertFolders, upsertEnvelopes } from './sync/engine';
@@ -29,6 +30,10 @@ let ctx: MailContext;
 let acct: accounts.MailAccountRow;
 let provider: FakeMailProvider;
 let routeEnv: NodeJS.ProcessEnv;
+const JWT_SECRET = 'test-jwt-secret';
+// Swapped per test so a callback never touches a real provider.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let oauthStub: MailRouteDeps['oauthExchange'];
 const crypto = new MailCrypto(Buffer.alloc(32, 6));
 let currentUser = { id: 'u1', role: 'admin' };
 
@@ -48,6 +53,7 @@ beforeEach(() => {
   resetFakes();
   currentUser = { id: 'u1', role: 'admin' };
   routeEnv = {};
+  oauthStub = async () => ({ refreshToken: 'RT', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-mr-'));
   db = openDb(':memory:');
   runMigrations(db, dir, migrations, { mailCrypto: crypto });
@@ -73,6 +79,8 @@ beforeEach(() => {
     bodyCache: new BodyCache({ maxBytes: 1e6, ttlMs: 1e5 }),
     publicUrl: 'https://app.test',
     env: routeEnv,
+    jwtSecret: JWT_SECRET,
+    oauthExchange: (...args) => oauthStub!(...args),
   });
 });
 
@@ -420,12 +428,6 @@ describe('mail routes', () => {
     expect((await request(app).get('/api/mail/providers')).body).toEqual({ google: true, microsoft: false });
   });
 
-  it('GET /api/mail/oauth/:provider/start is a 501 placeholder until Plan 2', async () => {
-    const r = await request(app).get('/api/mail/oauth/google/start');
-    expect(r.status).toBe(501);
-    expect(r.body.error).toBeTruthy();
-  });
-
   it('POST /api/mail/uploads rejects a body the raw parser never saw', async () => {
     // The app-level express.json() claims application/json bodies, so req.body
     // arrives as an object rather than a Buffer.
@@ -495,5 +497,132 @@ describe('mail routes', () => {
     expect((await request(app).post('/api/mail/heartbeat').send({ accountIds: [acct.id] })).status).toBe(204);
     expect(spy).toHaveBeenCalledWith([]);
     spy.mockRestore();
+  });
+  // ── OAuth connect flow ──
+  const oauthApp = (over: Partial<MailRouteDeps> = {}) => {
+    const a = express();
+    a.use(express.json());
+    registerMailRoutes(a, {
+      ctx,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      authenticateToken: (req: any, _r, next) => { req.user = currentUser; next(); },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      requireAdmin: (req: any, res, next) => (req.user.role === 'admin' ? next() : res.status(403).end()),
+      verifyToken: t => (t === 'tok' ? currentUser : null),
+      bodyCache: new BodyCache({ maxBytes: 1e6, ttlMs: 1e5 }),
+      publicUrl: 'https://app.test',
+      env: routeEnv,
+      jwtSecret: JWT_SECRET,
+      oauthExchange: (...args) => oauthStub!(...args),
+      ...over,
+    });
+    return a;
+  };
+
+  it('GET /api/mail/oauth/:provider/start redirects to consent with PKCE state', async () => {
+    routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
+    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'gs';
+    const r = await request(app).get('/api/mail/oauth/google/start').query({ token: 'tok' });
+    expect(r.status).toBe(302);
+    const url = new URL(r.headers.location);
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(r.headers.location).toContain('state=');
+    // The state is a signed envelope carrying the caller and the PKCE verifier.
+    expect(verifyState(JWT_SECRET, url.searchParams.get('state')!)).toMatchObject({ userId: 'u1', provider: 'google' });
+    // The verifier itself never leaves in the clear alongside its challenge.
+    expect(url.searchParams.get('code_challenge')).not.toBe(verifyState(JWT_SECRET, url.searchParams.get('state')!).verifier);
+    // Nothing here may carry the client secret.
+    expect(r.headers.location).not.toContain('gs');
+  });
+
+  it('start rejects an unknown provider, a bad token, a missing publicUrl and missing env', async () => {
+    expect((await request(app).get('/api/mail/oauth/aol/start').query({ token: 'tok' })).status).toBe(400);
+    expect((await request(app).get('/api/mail/oauth/google/start').query({ token: 'nope' })).status).toBe(401);
+    // env not configured for microsoft
+    const noEnv = await request(app).get('/api/mail/oauth/microsoft/start').query({ token: 'tok' });
+    expect(noEnv.status).toBe(503);
+    expect(noEnv.body.error).toContain('MS_OAUTH_CLIENT_ID');
+    routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
+    routeEnv.GOOGLE_OAUTH_CLIENT_SECRET = 'gs';
+    const noUrl = await request(oauthApp({ publicUrl: null })).get('/api/mail/oauth/google/start').query({ token: 'tok' });
+    expect(noUrl.status).toBe(503);
+    expect(noUrl.body.error).toContain('APP_PUBLIC_URL');
+  });
+
+  it('callback exchanges the code, creates the account and starts the worker', async () => {
+    const state = signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v1' });
+    const seen: Array<{ provider: string; code: string; verifier: string }> = [];
+    oauthStub = async (provider, _env, _url, code, verifier) => { seen.push({ provider, code, verifier }); return { refreshToken: 'RT', accessToken: 'AT', email: 'New@BB.com', name: 'Nate' }; };
+    const startSpy = vi.spyOn(ctx.scheduler!, 'startAccount');
+    const r = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state });
+    expect(r.status).toBe(302);
+    const created = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'new@bb.com')!;
+    expect(created).toBeTruthy();
+    expect(created.provider).toBe('google');
+    expect(created.status).toBe('ok');
+    expect(created.displayName).toBe('Nate');
+    expect(accounts.readAuth(db, crypto, created.id)).toEqual({ refreshToken: 'RT' });
+    expect(r.headers.location).toBe(`/settings?tab=mail&connected=${created.id}`);
+    // code + verifier reached the exchange; the refresh token never reaches the browser.
+    expect(seen[0]).toEqual({ provider: 'google', code: 'c1', verifier: 'v1' });
+    expect(r.headers.location).not.toContain('RT');
+    expect(startSpy).toHaveBeenCalledWith(created.id);
+    startSpy.mockRestore();
+  });
+
+  it('a second callback for the same address reconnects instead of duplicating', async () => {
+    const state = () => signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' });
+    await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c1', state: state() });
+    const first = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'oauth@bb.com')!;
+    accounts.updateAccount(db, first.id, { status: 'auth_error', lastError: 'expired' });
+    const dropSpy = vi.spyOn(ctx.scheduler!, 'dropProvider');
+    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
+    const r = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c2', state: state() });
+    expect(r.headers.location).toBe(`/settings?tab=mail&connected=${first.id}`);
+    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
+    const after = accounts.getAccountAny(db, first.id)!;
+    expect(after.status).toBe('ok');
+    expect(after.lastError).toBeNull();
+    expect(accounts.readAuth(db, crypto, first.id)).toEqual({ refreshToken: 'RT2' });
+    expect(dropSpy).toHaveBeenCalledWith(first.id);
+    dropSpy.mockRestore();
+  });
+
+  it('another user connecting the same address gets their own account', async () => {
+    await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c', state: signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' }) });
+    await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c', state: signState(JWT_SECRET, { userId: 'u2', provider: 'google', verifier: 'v' }) });
+    expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
+    expect(accounts.listAccounts(db, 'u2').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);
+  });
+
+  it('callback redirects with a safe error and creates nothing when anything is wrong', async () => {
+    const before = db.prepare('SELECT COUNT(*) n FROM mail_accounts').get() as { n: number };
+    const bad = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c', state: 'garbage' });
+    expect(bad.status).toBe(302);
+    expect(bad.headers.location).toMatch(/^\/settings\?tab=mail&error=/);
+
+    // A state signed with another secret is rejected the same way.
+    expect((await request(app).get('/api/mail/oauth/google/callback')
+      .query({ code: 'c', state: signState('other-secret', { userId: 'u1', provider: 'google', verifier: 'v' }) }))
+      .headers.location).toMatch(/error=/);
+
+    // The state's provider must match the URL's, or a Google grant could be filed as Microsoft.
+    expect((await request(app).get('/api/mail/oauth/microsoft/callback')
+      .query({ code: 'c', state: signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' }) }))
+      .headers.location).toMatch(/error=/);
+
+    // A denied consent comes back with no code at all.
+    expect((await request(app).get('/api/mail/oauth/google/callback')
+      .query({ error: 'access_denied', state: signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' }) }))
+      .headers.location).toMatch(/error=/);
+
+    // A failed exchange must not leak the code, and must not leave a half-made account.
+    oauthStub = async () => { throw new Error('invalid_grant for code c-secret'); };
+    const failed = await request(app).get('/api/mail/oauth/google/callback')
+      .query({ code: 'c-secret', state: signState(JWT_SECRET, { userId: 'u1', provider: 'google', verifier: 'v' }) });
+    expect(failed.headers.location).toMatch(/error=/);
+    expect(failed.headers.location).not.toContain('c-secret');
+    expect((db.prepare('SELECT COUNT(*) n FROM mail_accounts').get() as { n: number }).n).toBe(before.n);
   });
 });
