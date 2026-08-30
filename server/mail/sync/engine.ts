@@ -6,7 +6,7 @@ import type { MailAccountRow } from '../accountStore';
 import * as accounts from '../accountStore';
 import type { Envelope, MailProvider, ProviderFolder } from '../providers/types';
 import { AuthExpiredError } from '../providers/types';
-import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, normalizeSubject } from '../threadKey';
+import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, stripSubjectPrefixes } from '../threadKey';
 import { snippetOf } from '../mime';
 
 export type InboundHook = (ctx: MailContext, ev: { threadKey: string; messageId: string; account: MailAccountRow }) => void;
@@ -38,7 +38,7 @@ function folderMap(db: Database.Database, accountId: string): Map<string, string
 }
 
 export function isInbound(db: Database.Database, env: Envelope): boolean {
-  const own = db.prepare('SELECT 1 FROM mail_accounts WHERE emailAddress = ?').get((env.from?.addr || '').toLowerCase());
+  const own = db.prepare('SELECT 1 FROM mail_accounts WHERE LOWER(emailAddress) = ?').get((env.from?.addr || '').trim().toLowerCase());
   return !own;
 }
 
@@ -54,7 +54,7 @@ export function rebuildThread(db: Database.Database, accountId: string, threadKe
     addrs.forEach((a: any) => { if (a?.addr && !participants.has(a.addr)) participants.set(a.addr, a.name ? { addr: a.addr, name: a.name } : { addr: a.addr }); });
     JSON.parse(r.folderIdsJson).forEach((f: string) => folders.add(f));
     if (r.hasAttachments) hasAtt = 1; if (r.isStarred) starred = 1; if (!r.isRead) unread++;
-    if (!subject && r.subject) subject = r.subject.replace(/^((re|fw|fwd)\s*:\s*)+/i, '').trim();
+    if (!subject && r.subject) subject = stripSubjectPrefixes(r.subject);
   }
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO mail_threads (id, accountId, threadKey, subject, firstDate, lastDate, messageCount, unreadCount, hasAttachments, isStarred, participantsJson, folderIdsJson, updatedAt)
@@ -68,21 +68,45 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
   const { db } = ctx;
   const fmap = folderMap(db, account.id);
   const touched = new Set<string>();
+  const mergedAway = new Set<string>();
   const messageIds: string[] = [];
   const inboundEvents: { threadKey: string; messageId: string }[] = [];
-  const lookup = (mid: string) => (db.prepare('SELECT threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ?').get(account.id, mid) as { threadKey: string } | undefined)?.threadKey ?? null;
+
+  // Prepared once per call, reused across every envelope/candidate in the loop below.
+  const lookupStmt = db.prepare('SELECT threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ?');
+  const lookup = (mid: string) => (lookupStmt.get(account.id, mid) as { threadKey: string } | undefined)?.threadKey ?? null;
+  const orphanStmt = db.prepare('SELECT 1 FROM mail_messages WHERE accountId = ? AND threadKey = ?');
+  const existingStmt = db.prepare('SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND providerMessageId = ?');
+  const ownAddressStmt = db.prepare('SELECT 1 FROM mail_accounts WHERE LOWER(emailAddress) = ?');
+  const updateStmt = db.prepare(`UPDATE mail_messages SET accountId=?, providerMessageId=?, providerThreadId=?, messageIdHeader=?, inReplyTo=?, referencesJson=?, threadKey=?, fromAddr=?, fromName=?, toJson=?, ccJson=?, bccJson=?,
+    subject=?, snippet=?, date=?, isRead=?, isStarred=?, isDraft=?, hasAttachments=?, attachmentsJson=?, sizeBytes=?, folderIdsJson=?, sentFromApp=MAX(sentFromApp, ?), updatedAt=? WHERE id=?`);
+  const insertStmt = db.prepare(`INSERT INTO mail_messages (accountId, providerMessageId, providerThreadId, messageIdHeader, inReplyTo, referencesJson, threadKey, fromAddr, fromName, toJson, ccJson, bccJson,
+    subject, snippet, date, isRead, isStarred, isDraft, hasAttachments, attachmentsJson, sizeBytes, folderIdsJson, sentFromApp, id, createdAt, updatedAt) VALUES (${Array.from({ length: 23 }, () => '?').join(',')}, ?, ?, ?)`);
+  const linkedStmt = db.prepare('SELECT 1 FROM mail_thread_links WHERE threadKey = ? LIMIT 1');
+  const insertReplyStateStmt = db.prepare('INSERT OR IGNORE INTO mail_thread_reply_state (threadKey, updatedAt) VALUES (?, ?)');
+  const updateInboundStmt = db.prepare(`UPDATE mail_thread_reply_state SET lastInboundDate = MAX(COALESCE(lastInboundDate, ''), ?), updatedAt = ? WHERE threadKey = ?`);
+  const updateOutboundStmt = db.prepare(`UPDATE mail_thread_reply_state SET lastOutboundDate = MAX(COALESCE(lastOutboundDate, ''), ?), updatedAt = ? WHERE threadKey = ?`);
+
   const tx = db.transaction(() => {
     for (const env of envelopes) {
       const mid = normalizeMessageId(env.messageIdHeader);
       const { threadKey } = deriveThreadKey(lookup, { messageIdHeader: mid, inReplyTo: env.inReplyTo ?? null, references: env.references ?? [], fallbackSeed: account.id + ':' + env.providerMessageId });
-      // Late root: children were keyed on THIS message's id before it arrived.
-      if (mid && mid !== threadKey) {
-        const orphanKey = (db.prepare('SELECT 1 FROM mail_messages WHERE accountId = ? AND threadKey = ?').get(account.id, mid)) ? mid : null;
-        if (orphanKey) { mergeThreadKeys(db, account.id, orphanKey, threadKey); touched.add(orphanKey); }
-      } else if (mid && mid === threadKey) {
-        // This message IS the root; anything already keyed by a reference chain pointing at it is already on `mid`.
+
+      // Bridge merge (spec §3.1 step 7): fold in ANY existing thread that this
+      // message's own chain (references, in-reply-to, or its own id) points
+      // at but which didn't resolve to `threadKey` — covers a late-arriving
+      // root AND a late-arriving mid-chain message that finally links two
+      // previously-separate, independently-keyed groups.
+      const candidates = new Set<string>((env.references || []).map(normalizeMessageId).filter((x): x is string => !!x));
+      const irt = normalizeMessageId(env.inReplyTo);
+      if (irt) candidates.add(irt);
+      if (mid) candidates.add(mid);
+      for (const c of candidates) {
+        if (c === threadKey) continue;
+        if (orphanStmt.get(account.id, c)) { mergeThreadKeys(db, account.id, c, threadKey); touched.delete(c); mergedAway.add(c); touched.add(threadKey); }
       }
-      const existing = db.prepare('SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND providerMessageId = ?').get(account.id, env.providerMessageId) as { id: string; threadKey: string } | undefined;
+
+      const existing = existingStmt.get(account.id, env.providerMessageId) as { id: string; threadKey: string } | undefined;
       const id = existing?.id ?? uuidv4();
       const now = new Date().toISOString();
       const folderIds = (env.folderProviderIds || []).map(p => fmap.get(p)).filter((x): x is string => !!x);
@@ -91,18 +115,16 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
         env.subject || '', snippetOf(env.snippet || ''), env.date, env.isRead ? 1 : 0, env.isStarred ? 1 : 0, env.isDraft ? 1 : 0,
         env.attachments?.length ? 1 : 0, JSON.stringify(env.attachments || []), env.sizeBytes || 0, JSON.stringify(folderIds), opts.sentFromApp ? 1 : 0];
       if (existing) {
-        db.prepare(`UPDATE mail_messages SET accountId=?, providerMessageId=?, providerThreadId=?, messageIdHeader=?, inReplyTo=?, referencesJson=?, threadKey=?, fromAddr=?, fromName=?, toJson=?, ccJson=?, bccJson=?,
-          subject=?, snippet=?, date=?, isRead=?, isStarred=?, isDraft=?, hasAttachments=?, attachmentsJson=?, sizeBytes=?, folderIdsJson=?, sentFromApp=MAX(sentFromApp, ?), updatedAt=? WHERE id=?`).run(...values, now, id);
+        updateStmt.run(...values, now, id);
         if (existing.threadKey !== threadKey) touched.add(existing.threadKey);
       } else {
-        db.prepare(`INSERT INTO mail_messages (accountId, providerMessageId, providerThreadId, messageIdHeader, inReplyTo, referencesJson, threadKey, fromAddr, fromName, toJson, ccJson, bccJson,
-          subject, snippet, date, isRead, isStarred, isDraft, hasAttachments, attachmentsJson, sizeBytes, folderIdsJson, sentFromApp, id, createdAt, updatedAt) VALUES (${values.map(() => '?').join(',')}, ?, ?, ?)`).run(...values, id, now, now);
+        insertStmt.run(...values, id, now, now);
         // Reply-state + hooks only for NEW messages on linked threads.
-        const linked = db.prepare('SELECT 1 FROM mail_thread_links WHERE threadKey = ? LIMIT 1').get(threadKey);
+        const linked = linkedStmt.get(threadKey);
         if (linked) {
-          const inbound = isInbound(db, env);
-          db.prepare('INSERT OR IGNORE INTO mail_thread_reply_state (threadKey, updatedAt) VALUES (?, ?)').run(threadKey, now);
-          db.prepare(`UPDATE mail_thread_reply_state SET ${inbound ? 'lastInboundDate' : 'lastOutboundDate'} = MAX(COALESCE(${inbound ? 'lastInboundDate' : 'lastOutboundDate'}, ''), ?), updatedAt = ? WHERE threadKey = ?`).run(env.date, now, threadKey);
+          const inbound = !ownAddressStmt.get((env.from?.addr || '').trim().toLowerCase());
+          insertReplyStateStmt.run(threadKey, now);
+          (inbound ? updateInboundStmt : updateOutboundStmt).run(env.date, now, threadKey);
           if (inbound) inboundEvents.push({ threadKey, messageId: id });
         }
       }
@@ -112,6 +134,7 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
   });
   tx();
   for (const key of touched) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'updated', byUserId: account.userId });
+  for (const key of mergedAway) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'deleted', byUserId: account.userId });
   for (const ev of inboundEvents) for (const h of inboundHooks) { try { h(ctx, { ...ev, account }); } catch (e) { console.error('[mail] inbound hook failed', e); } }
   return { messageIds, threadKeys: [...touched] };
 }

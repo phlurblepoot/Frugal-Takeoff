@@ -1550,7 +1550,7 @@ export const migrations: Migration[] = [
           smtpHost: cfg.host, smtpPort, smtpSecure: cfg.secure === 'true',
           username: cfg.username || '', password: cfg.password || '',
         };
-        const email = (cfg.fromAddress || cfg.username || '').trim();
+        const email = (cfg.fromAddress || cfg.username || '').trim().toLowerCase();
         if (!email) continue;
         const id = 'mailacct-' + userId;
         db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, displayName, isDefault, authBlob, indexedSince, status, createdAt, updatedAt)

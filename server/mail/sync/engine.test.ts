@@ -10,7 +10,7 @@ import * as accounts from '../accountStore';
 import { FakeMailProvider } from '../providers/fake';
 import type { MailContext } from '../context';
 import type { Envelope } from '../providers/types';
-import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, removeMessages } from './engine';
+import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages } from './engine';
 
 let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountRow; let provider: FakeMailProvider; let events: any[];
 const crypto = new MailCrypto(Buffer.alloc(32, 9));
@@ -25,6 +25,7 @@ beforeEach(() => {
   provider = new FakeMailProvider(); provider.seed([]);
   events = [];
   ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: e => events.push(e) };
+  clearInboundHooks();
 });
 
 describe('engine', () => {
@@ -50,6 +51,26 @@ describe('engine', () => {
     upsertEnvelopes(ctx, acct, [env('root', { messageIdHeader: 'root@bb.com', date: '2026-08-01T00:00:00.000Z' })]);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 1 });
     expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE threadKey='root@bb.com'`).get()).toEqual({ c: 2 });
+  });
+  it('bridges a mid-chain orphan when the true root arrives after both branches', () => {
+    // child only has In-Reply-To=x (no References) → provisionally keyed 'x@bb.com'.
+    upsertEnvelopes(ctx, acct, [env('child', { inReplyTo: 'x@bb.com', references: [] })]);
+    // mid references [r, x] but neither exists yet as a messageIdHeader → falls back to refs[0]='r@bb.com',
+    // and must bridge the orphan group keyed 'x@bb.com' into 'r@bb.com' via the In-Reply-To/References candidate scan.
+    upsertEnvelopes(ctx, acct, [env('mid2', { references: ['r@bb.com', 'x@bb.com'] })]);
+    // the true root finally arrives with its own id = r@bb.com.
+    upsertEnvelopes(ctx, acct, [env('root3', { messageIdHeader: 'r@bb.com', date: '2026-08-01T00:00:00.000Z' })]);
+    const threads = db.prepare('SELECT * FROM mail_threads').all() as any[];
+    expect(threads.length).toBe(1);
+    expect(threads[0]).toMatchObject({ threadKey: 'r@bb.com', messageCount: 3 });
+    expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE threadKey='r@bb.com'`).get()).toEqual({ c: 3 });
+  });
+  it('merges two independently-keyed groups when a later message references both', () => {
+    upsertEnvelopes(ctx, acct, [env('a', { references: ['x@bb.com'] })]);
+    upsertEnvelopes(ctx, acct, [env('b', { references: ['r@bb.com'] })]);
+    upsertEnvelopes(ctx, acct, [env('c', { references: ['r@bb.com', 'x@bb.com'] })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 1 });
+    expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE threadKey='r@bb.com'`).get()).toEqual({ c: 3 });
   });
   it('re-upserting the same provider id updates flags instead of duplicating', () => {
     upsertEnvelopes(ctx, acct, [env('a')]);

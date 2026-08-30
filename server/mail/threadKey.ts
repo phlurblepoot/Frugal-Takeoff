@@ -7,11 +7,17 @@ export function normalizeMessageId(raw: string | null | undefined): string | nul
   const t = raw.trim().replace(/^<+|>+$/g, '').trim().toLowerCase();
   return t || null;
 }
-export function normalizeSubject(s: string): string {
+const SUBJECT_PREFIX_RE = /^(re|fw|fwd|aw|wg)\s*:\s*/i;
+// Strips repeated reply/forward prefixes without altering case or collapsing
+// whitespace — safe for DISPLAY. `normalizeSubject` builds on this for the
+// case-insensitive MATCHING key so the two never drift apart.
+export function stripSubjectPrefixes(s: string): string {
   let t = (s || '').trim();
-  const re = /^(re|fw|fwd|aw|wg)\s*:\s*/i;
-  while (re.test(t)) t = t.replace(re, '').trim();
-  return t.replace(/\s+/g, ' ').toLowerCase();
+  while (SUBJECT_PREFIX_RE.test(t)) t = t.replace(SUBJECT_PREFIX_RE, '').trim();
+  return t;
+}
+export function normalizeSubject(s: string): string {
+  return stripSubjectPrefixes(s).replace(/\s+/g, ' ').toLowerCase();
 }
 export function deriveThreadKey(
   lookup: (messageIdHeader: string) => string | null,

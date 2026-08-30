@@ -951,7 +951,7 @@ describe('migration 31 mail-client', () => {
     db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
     const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
     for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.port': '465', 'smtp.secure': 'true',
-      'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'nate@example.com', 'theme': 'dark' })) ins.run('u9', k, v);
+      'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'Nate@EXAMPLE.com', 'theme': 'dark' })) ins.run('u9', k, v);
     const crypto = loadMailCrypto(dir, {} as any);
     runMigrations(db, dir, migrations, { mailCrypto: crypto });
     const acct = db.prepare('SELECT * FROM mail_accounts WHERE userId = ?').get('u9') as any;
