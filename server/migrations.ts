@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3';
 import fsSync from 'fs';
 import path from 'path';
+import type { MailCrypto } from './mail/crypto';
 
 export interface MigrationCtx {
   db: Database.Database;
   dataDir: string;
+  mailCrypto?: MailCrypto;
 }
 
 export interface Migration {
@@ -43,7 +45,7 @@ export function runMigrations(
   db: Database.Database,
   dataDir: string,
   migrations: Migration[],
-  opts: { dbFile?: string; vacuum?: boolean } = {}
+  opts: { dbFile?: string; vacuum?: boolean; mailCrypto?: MailCrypto } = {}
 ): MigrationResult {
   const from = currentVersion(db);
   const pending = migrations
@@ -63,7 +65,7 @@ export function runMigrations(
   const applied: string[] = [];
   for (const mig of pending) {
     const tx = db.transaction(() => {
-      mig.up({ db, dataDir });
+      mig.up({ db, dataDir, mailCrypto: opts.mailCrypto });
       db.prepare('INSERT INTO schema_version (version, name, appliedAt) VALUES (?, ?, ?)')
         .run(mig.version, mig.name, Date.now());
     });

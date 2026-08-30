@@ -63,6 +63,9 @@ export const SYSTEM_KINDS = [
 export const MULTI_INSTANCE_KINDS = [
   'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
   'rfi-photo', 'proposal-photo', 'plan-source', 'daily-report-photo',
+  // Several attachments saved from one email message share a source triple
+  // (sourceType='email-message', sourceId=<messageId>) — spec §3.2.
+  'email-attachment',
 ] as const;
 
 // Kinds a person can pick in the upload popup — the only ones a file may be

@@ -7,6 +7,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { getDataUrlString } from './files';
 import { readFileContent } from './fileStore';
+import { loadMailCrypto } from './mail/crypto';
 
 const tmpDir = () => fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-ml-'));
 
@@ -922,6 +923,56 @@ describe('migration 30 — updatedAt columns', () => {
       expect(columnNames(db, t), `missing updatedAt on ${t}`).toContain('updatedAt');
     }
     expect((db.prepare('SELECT updatedAt FROM invoices WHERE id = ?').get('i1') as any).updatedAt).toBe(12345);
+    db.close();
+  });
+});
+
+describe('migration 31 mail-client', () => {
+  const setup = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 30));
+    return { db, dir };
+  };
+  it('creates the mail tables and rfis columns', () => {
+    const { db, dir } = setup();
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    const tables = tableNames(db);
+    for (const t of ['mail_accounts', 'mail_folders', 'mail_messages', 'mail_threads', 'mail_thread_links', 'mail_thread_reply_state']) {
+      expect(tables, `missing ${t}`).toContain(t);
+    }
+    for (const c of ['pendingReplyJson', 'responseSource', 'responseMessageIdHeader']) {
+      expect(columnNames(db, 'rfis')).toContain(c);
+    }
+    db.close();
+  });
+  it('migrates smtp.* prefs into a sealed imap account and deletes the prefs', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
+    for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.port': '465', 'smtp.secure': 'true',
+      'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'nate@example.com', 'theme': 'dark' })) ins.run('u9', k, v);
+    const crypto = loadMailCrypto(dir, {} as any);
+    runMigrations(db, dir, migrations, { mailCrypto: crypto });
+    const acct = db.prepare('SELECT * FROM mail_accounts WHERE userId = ?').get('u9') as any;
+    expect(acct.provider).toBe('imap');
+    expect(acct.emailAddress).toBe('nate@example.com');
+    expect(acct.displayName).toBe('Nate');
+    expect(acct.status).toBe('needs_review');
+    expect(acct.isDefault).toBe(1);
+    expect(acct.authBlob).not.toContain('hunter2');
+    expect(crypto.open<any>(acct.authBlob)).toMatchObject({ smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true, imapHost: 'smtp.example.com', imapPort: 993, imapSecure: true, username: 'nate@example.com', password: 'hunter2' });
+    const left = db.prepare("SELECT key FROM user_preferences WHERE userId='u9'").all().map((r: any) => r.key);
+    expect(left).toEqual(['theme']);
+    db.close();
+  });
+  it('skips the transform (keeps prefs) when no crypto is supplied', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('u9', 'smtp.host', 'h');
+    runMigrations(db, dir, migrations);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
+    expect(db.prepare("SELECT COUNT(*) c FROM user_preferences WHERE key LIKE 'smtp.%'").get()).toEqual({ c: 1 });
     db.close();
   });
 });
