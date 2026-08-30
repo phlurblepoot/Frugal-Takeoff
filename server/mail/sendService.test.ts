@@ -51,6 +51,15 @@ describe('sendService.send', () => {
     expect(provider.sent[0].inReplyTo).toBe('root@teg.com'); expect(provider.sent[0].references).toEqual(['root@teg.com']);
     expect(r.threadKey).toBe('root@teg.com');
   });
+  it('indexes the sent row under the Message-ID the provider reports, not the one we generated', async () => {
+    provider.sendMessageIdHeader = '<REWRITTEN@mail.gmail.com>';
+    const r = await send(ctx, user, { to: [{ addr: 'gc@teg.com' }], subject: 's', html: 'h', attachments: [] });
+    const row = db.prepare('SELECT messageIdHeader, threadKey FROM mail_messages').get() as any;
+    expect(row.messageIdHeader).toBe('rewritten@mail.gmail.com');
+    expect(row.threadKey).toBe('rewritten@mail.gmail.com');
+    expect(r.threadKey).toBe('rewritten@mail.gmail.com');
+    expect(provider.sent[0].messageIdHeader).not.toBe(row.messageIdHeader);   // ours was replaced
+  });
   it('reports effectsSkipped for admin-gated items sent by a non-admin, still links', async () => {
     putBuffer(db, dir, 'f2', Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'invoice', name: 'Invoice-1.pdf' });
     const r = await send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [{ fileId: 'f2', itemType: 'invoice', itemId: 'inv1' }] });

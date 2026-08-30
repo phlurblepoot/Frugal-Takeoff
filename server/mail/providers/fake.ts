@@ -18,6 +18,9 @@ export class FakeMailProvider implements MailProvider {
     { providerId: 'ARCHIVE', name: 'Archive', role: 'archive' },
   ];
   private nextFailure: Error | null = null;
+  /** When set, send() reports this back as the Message-ID the provider actually used
+   *  (mirrors Gmail/Graph rewriting the header we supplied). */
+  sendMessageIdHeader: string | null = null;
 
   seed(list: Seeded[]): void { this.msgs.clear(); this.log = []; list.forEach(m => this.msgs.set(m.providerMessageId, m)); }
   injectInbound(m: Seeded): void { this.msgs.set(m.providerMessageId, m); this.log.push({ seq: ++this.seq, upsert: m.providerMessageId }); }
@@ -51,13 +54,14 @@ export class FakeMailProvider implements MailProvider {
   async send(msg: OutgoingMessage) {
     this.guard(); this.sent.push(msg);
     const id = 'sent-' + uuidv4();
-    const env: Seeded = { providerMessageId: id, messageIdHeader: msg.messageIdHeader, inReplyTo: msg.inReplyTo, references: msg.references ?? [],
+    const messageIdHeader = this.sendMessageIdHeader ?? msg.messageIdHeader;
+    const env: Seeded = { providerMessageId: id, messageIdHeader, inReplyTo: msg.inReplyTo, references: msg.references ?? [],
       from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: msg.text.slice(0, 200), date: new Date().toISOString(),
       isRead: true, isStarred: false, isDraft: false, sizeBytes: msg.html.length,
       attachments: msg.attachments.map((a, i): AttachmentMeta => ({ attId: 'att' + i, name: a.name, mime: a.mime, size: a.content.length })),
       folderProviderIds: ['SENT'], html: msg.html, text: msg.text };
     this.msgs.set(id, env); this.log.push({ seq: ++this.seq, upsert: id });
-    return { providerMessageId: id };
+    return this.sendMessageIdHeader ? { providerMessageId: id, messageIdHeader: this.sendMessageIdHeader } : { providerMessageId: id };
   }
   async setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }) {
     this.guard(); ids.forEach(id => { const m = this.msgs.get(id); if (!m) return; if (flags.read !== undefined) m.isRead = flags.read; if (flags.starred !== undefined) m.isStarred = flags.starred; this.log.push({ seq: ++this.seq, upsert: id }); });

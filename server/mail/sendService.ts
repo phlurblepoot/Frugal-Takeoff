@@ -5,6 +5,7 @@ import { getMeta } from '../files';
 import { readFileContent } from '../fileStore';
 import type { Addr, OutgoingAttachment, OutgoingMessage } from './providers/types';
 import { htmlToText, newMessageIdHeader, snippetOf } from './mime';
+import { normalizeMessageId } from './threadKey';
 import { upsertEnvelopes } from './sync/engine';
 import { createLink, type ItemType } from './links';
 import { applySendEffects } from './itemSendEffects';
@@ -67,6 +68,10 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
     attachments, inReplyTo, references, messageIdHeader: newMessageIdHeader(domain),
   };
   const sent = await provider.send(msg);
+  // Gmail/Graph replace the Message-ID we generated with one of their own. Index the sent
+  // row under the header the provider reports, or the recipient's In-Reply-To will point at
+  // a header we never stored and the reply will start a new thread.
+  const sentMessageIdHeader = normalizeMessageId(sent.messageIdHeader) ?? msg.messageIdHeader;
 
   // Everything below is local bookkeeping AFTER the provider has already accepted
   // the message — it must never look like the send itself failed. If any of it
@@ -77,7 +82,7 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
     if (req.draftProviderId) { try { await provider.deleteDraft(req.draftProviderId); } catch { /* best effort */ } }
 
     const { messageIds, threadKeys } = upsertEnvelopes(ctx, account, [{
-      providerMessageId: sent.providerMessageId, providerThreadId: sent.providerThreadId, messageIdHeader: msg.messageIdHeader, inReplyTo, references: references ?? [],
+      providerMessageId: sent.providerMessageId, providerThreadId: sent.providerThreadId, messageIdHeader: sentMessageIdHeader, inReplyTo, references: references ?? [],
       from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: snippetOf(msg.text), date: new Date().toISOString(),
       isRead: true, isStarred: false, isDraft: false, attachments: attachments.map((a, i) => ({ attId: 'out' + i, name: a.name, mime: a.mime, size: a.content.length })), sizeBytes: msg.html.length,
       folderProviderIds: ['SENT'],

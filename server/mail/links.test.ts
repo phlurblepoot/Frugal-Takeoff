@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import type Database from 'better-sqlite3';
@@ -20,6 +21,8 @@ describe('links', () => {
     expect(resolveChain(db, 'project', projectId)).toEqual({ projectId, customerId });
     expect(resolveChain(db, 'customer', customerId)).toEqual({ projectId: null, customerId });
     expect(resolveChain(db, 'rfi', 'missing')).toEqual({ projectId: null, customerId: null });
+    // an itemType with no table mapping must not interpolate `undefined` into the SQL
+    expect(resolveChain(db, 'nope' as any, 'x')).toEqual({ projectId: null, customerId: null });
   });
   it('createLink is idempotent and denormalizes the chain', () => {
     const a = createLink(db, { threadKey: 'k', itemType: 'rfi', itemId: rfiId, linkedByUserId: 'u1', subjectSnapshot: 'RFI-001' });

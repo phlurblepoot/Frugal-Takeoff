@@ -23,6 +23,9 @@ export class MailScheduler {
   constructor(private ctx: MailContext, opts: { fastMs?: number; slowMs?: number; backoffMaxMs?: number; now?: () => number } = {}) {
     this.fastMs = opts.fastMs ?? 30_000; this.slowMs = opts.slowMs ?? 300_000; this.backoffMaxMs = opts.backoffMaxMs ?? 600_000; this.now = opts.now ?? (() => Date.now());
   }
+  // Never throws: one account whose provider cannot be constructed (bad/undecryptable
+  // auth blob, provider factory blowing up) must not take the whole mail subsystem —
+  // or server startup — down with it.
   start(): void { for (const a of accounts.listActiveAccounts(this.ctx.db)) this.startAccount(a.id); }
   async stop(): Promise<void> { for (const id of [...this.workers.keys()]) this.stopAccount(id); await Promise.all([...this.workers.values()].map(w => w.running ?? Promise.resolve())); await Promise.all([...this.draining.values()]); }
   isRunning(accountId: string): boolean { const w = this.workers.get(accountId); return !!w && !w.stopped; }
@@ -47,11 +50,30 @@ export class MailScheduler {
   dropProvider(accountId: string): void { this.providers.delete(accountId); }
   startAccount(accountId: string): void {
     if (this.workers.has(accountId)) return;
-    const w: Worker = { accountId, provider: this.getProvider(accountId), timer: null, failures: 0, running: null, stopped: false, pokeRequested: false };
+    let provider: MailProvider;
+    // getProvider() reaches into the DB, the crypto seal and the provider factory —
+    // any of those can throw for a single broken account. Park that account in
+    // auth_error and carry on with the others instead of propagating.
+    try { provider = this.getProvider(accountId); }
+    catch (e) { this.markUnstartable(accountId, e); return; }
+    const w: Worker = { accountId, provider, timer: null, failures: 0, running: null, stopped: false, pokeRequested: false };
     this.workers.set(accountId, w);
     const prevDrain = this.draining.get(accountId);
     if (prevDrain) void prevDrain.then(() => { if (!w.stopped) void this.tick(w); });
     else void this.tick(w);
+  }
+  private markUnstartable(accountId: string, e: unknown): void {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(`[mail] cannot start sync for ${accountId}:`, message);
+    this.providers.delete(accountId);
+    const account = accounts.getAccountAny(this.ctx.db, accountId);
+    if (!account) return;
+    try {
+      accounts.updateAccount(this.ctx.db, accountId, { status: 'auth_error', lastError: message });
+      this.ctx.broadcastChange({ type: 'mailAccount', id: accountId, action: 'updated', byUserId: account.userId });
+    } catch (inner) {
+      console.error(`[mail] could not flag ${accountId} as auth_error:`, inner);
+    }
   }
   stopAccount(accountId: string): void {
     const w = this.workers.get(accountId); if (!w) return;

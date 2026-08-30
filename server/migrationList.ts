@@ -1537,7 +1537,9 @@ export const migrations: Migration[] = [
       if (!hasCol('rfis', 'responseMessageIdHeader')) db.exec('ALTER TABLE rfis ADD COLUMN responseMessageIdHeader TEXT');
 
       if (!mailCrypto) { console.warn('[migration 31] mailCrypto not supplied — smtp.* transform skipped'); return; }
-      const users = db.prepare("SELECT DISTINCT userId FROM user_preferences WHERE key = 'smtp.host' AND TRIM(value) <> ''").all() as { userId: string }[];
+      // Scoped to live users: user_preferences rows can outlive a deleted user, and a
+      // mail_accounts insert for a missing userId would trip the FK (or orphan a row).
+      const users = db.prepare("SELECT DISTINCT userId FROM user_preferences WHERE key = 'smtp.host' AND TRIM(value) <> '' AND userId IN (SELECT id FROM users)").all() as { userId: string }[];
       const now = new Date().toISOString();
       const since = new Date(Date.now() - 180 * 86400000).toISOString();
       for (const { userId } of users) {
@@ -1551,7 +1553,9 @@ export const migrations: Migration[] = [
           username: cfg.username || '', password: cfg.password || '',
         };
         const email = (cfg.fromAddress || cfg.username || '').trim().toLowerCase();
-        if (!email) continue;
+        // No address to send as: leave the prefs in place (they are the only copy of
+        // that half-filled config) and say so, rather than silently dropping the user.
+        if (!email) { console.warn(`[migration 31] user ${userId}: smtp.host set but no fromAddress/username — left untouched`); continue; }
         const id = 'mailacct-' + userId;
         db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, displayName, isDefault, authBlob, indexedSince, status, createdAt, updatedAt)
                     VALUES (?, ?, 'imap', ?, ?, 1, ?, ?, 'needs_review', ?, ?)`)

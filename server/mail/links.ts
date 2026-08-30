@@ -17,7 +17,11 @@ export function resolveChain(db: Database.Database, itemType: ItemType, itemId: 
     const t = db.prepare('SELECT projectId, customerId FROM tasks WHERE id = ?').get(itemId) as { projectId: string | null; customerId: string | null } | undefined;
     projectId = t?.projectId ?? null; customerId = t?.customerId ?? null;
   } else {
-    const table = ITEM_TABLE[itemType]!;
+    // An itemType outside the map (a client typo that slipped past validation, or a
+    // future type added to the union but not the map) must not interpolate `undefined`
+    // into the SQL — it resolves to no chain at all.
+    const table = ITEM_TABLE[itemType];
+    if (!table) return { projectId: null, customerId: null };
     const r = db.prepare(`SELECT projectId FROM ${table} WHERE id = ?`).get(itemId) as { projectId: string } | undefined;
     projectId = r?.projectId ?? null;
   }

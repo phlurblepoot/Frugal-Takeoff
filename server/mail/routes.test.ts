@@ -319,6 +319,49 @@ describe('mail routes', () => {
       .toEqual({ lastInboundDate: '2026-08-10T10:00:00.000Z', lastOutboundDate: '2026-08-11T10:00:00.000Z' });
   });
 
+  it('links are app-wide but thread snapshots are not, and only the linker or an admin can unlink', async () => {
+    const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
+    expect(l.status).toBe(200);
+    expect(l.body.subjectSnapshot).toBe('CO 4');
+
+    // u1 owns the account the thread lives in, so u1 keeps the snapshot fields
+    const owner = await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' });
+    expect(owner.body[0].subjectSnapshot).toBe('CO 4');
+    expect(JSON.parse(owner.body[0].participantsJson)).toBeInstanceOf(Array);
+
+    currentUser = { id: 'u2', role: 'user' };
+    const other = await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' });
+    expect(other.body.length).toBe(1);                       // the link itself is item data: still visible
+    expect(other.body[0].id).toBe(l.body.id);
+    expect(other.body[0].subjectSnapshot).toBeNull();        // mailbox content: withheld
+    expect(other.body[0].participantsJson).toBeNull();
+
+    const denied = await request(app).delete(`/api/mail/links/${l.body.id}`);
+    expect(denied.status).toBe(404);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_thread_links').get()).toEqual({ c: 1 });
+
+    currentUser = { id: 'u2', role: 'admin' };               // an admin who did not create it still may
+    expect((await request(app).delete(`/api/mail/links/${l.body.id}`)).status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_thread_links').get()).toEqual({ c: 0 });
+  });
+
+  it('POST /api/mail/send rejects an unknown itemType and an empty recipient list before anything is sent', async () => {
+    const base = { to: [{ addr: 'gc@teg.com' }], subject: 's', html: '<p>h</p>', attachments: [] };
+    const badLink = await request(app).post('/api/mail/send').send({ ...base, links: [{ itemType: 'nope', itemId: 'p1' }] });
+    expect(badLink.status).toBe(400);
+    expect(badLink.body.error).toBe('Invalid itemType');
+
+    const badAtt = await request(app).post('/api/mail/send')
+      .send({ ...base, attachments: [{ fileId: 'f1', itemType: 'nope', itemId: 'p1' }] });
+    expect(badAtt.status).toBe(400);
+    expect(badAtt.body.error).toBe('Invalid itemType');
+
+    const noTo = await request(app).post('/api/mail/send').send({ ...base, to: [] });
+    expect(noTo.status).toBe(400);
+
+    expect(provider.sent.length).toBe(0);
+  });
+
   it('GET /api/mail/links validates itemType and requires itemId', async () => {
     expect((await request(app).get('/api/mail/links').query({ itemType: 'nope', itemId: 'p1' })).status).toBe(400);
     expect((await request(app).get('/api/mail/links').query({ itemType: 'project' })).status).toBe(400);

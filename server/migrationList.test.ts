@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
@@ -964,6 +964,30 @@ describe('migration 31 mail-client', () => {
     expect(crypto.open<any>(acct.authBlob)).toMatchObject({ smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true, imapHost: 'smtp.example.com', imapPort: 993, imapSecure: true, username: 'nate@example.com', password: 'hunter2' });
     const left = db.prepare("SELECT key FROM user_preferences WHERE userId='u9'").all().map((r: any) => r.key);
     expect(left).toEqual(['theme']);
+    db.close();
+  });
+  it('warns and keeps the prefs for a half-filled smtp config with no address to send as', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
+    // host + password but no fromAddress and no username: nothing to use as the from-address.
+    for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.password': 'hunter2' })) ins.run('u9', k, v);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    expect(warn.mock.calls.flat().join(' ')).toContain('[migration 31] user u9: smtp.host set but no fromAddress/username — left untouched');
+    warn.mockRestore();
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
+    expect(db.prepare("SELECT key FROM user_preferences WHERE userId='u9' ORDER BY key").all().map((r: any) => r.key))
+      .toEqual(['smtp.host', 'smtp.password']);
+    db.close();
+  });
+  it('ignores smtp prefs left behind by a deleted user', () => {
+    const { db, dir } = setup();
+    // No users row for 'ghost' — a stale preference must not create an orphan account.
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('ghost', 'smtp.host', 'h');
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('ghost', 'smtp.fromAddress', 'g@x.com');
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
     db.close();
   });
   it('skips the transform (keeps prefs) when no crypto is supplied', () => {

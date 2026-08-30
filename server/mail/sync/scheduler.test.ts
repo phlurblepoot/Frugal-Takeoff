@@ -48,6 +48,27 @@ describe('MailScheduler', () => {
     expect(s.isRunning(acct.id)).toBe(false);
     await s.stop(); vi.useRealTimers();
   });
+  it('start() survives an account whose provider cannot be built: it is parked in auth_error, the rest still sync', async () => {
+    vi.useFakeTimers();
+    const events: { type: string; id: string }[] = [];
+    ctx.broadcastChange = ev => { events.push(ev as { type: string; id: string }); };
+    const bad = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'bad@bb.com', auth: { refreshToken: 'r' } });
+    ctx.providerFactory = (a) => { if (a.id === bad.id) throw new Error('auth blob unreadable'); return provider; };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
+    expect(() => s.start()).not.toThrow();
+    await vi.runOnlyPendingTimersAsync();
+    const parked = accounts.getAccountAny(ctx.db, bad.id)!;
+    expect(parked.status).toBe('auth_error');
+    expect(parked.lastError).toBe('auth blob unreadable');
+    expect(s.isRunning(bad.id)).toBe(false);
+    expect(events.some(e => e.type === 'mailAccount' && e.id === bad.id)).toBe(true);
+    // the healthy account's worker still ran its backfill
+    expect(s.isRunning(acct.id)).toBe(true);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    errSpy.mockRestore();
+    await s.stop(); vi.useRealTimers();
+  });
   it('getProvider creates a provider for an account without a worker', () => {
     const s = new MailScheduler(ctx);
     expect(s.getProvider(acct.id)).toBe(provider);

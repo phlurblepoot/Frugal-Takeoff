@@ -25,7 +25,10 @@ export interface MailProvider {
   incremental(state: SyncState): Promise<{ upserts: Envelope[]; deletes: string[]; state: SyncState }>;
   getBody(providerMessageId: string): Promise<{ html?: string; text?: string; attachments: AttachmentMeta[] }>;
   getAttachment(providerMessageId: string, attId: string): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }>;
-  send(msg: OutgoingMessage): Promise<{ providerMessageId: string; providerThreadId?: string }>;
+  /** `messageIdHeader` is the Message-ID the provider actually used — Gmail/Graph rewrite
+   *  the one we hand them, and the sent row must be indexed under the real value or the
+   *  reply that quotes it will not thread. Omitted = ours was kept verbatim. */
+  send(msg: OutgoingMessage): Promise<{ providerMessageId: string; providerThreadId?: string; messageIdHeader?: string }>;
   setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }): Promise<void>;
   move(ids: string[], folderProviderId: string): Promise<void>;
   archive(ids: string[]): Promise<void>;

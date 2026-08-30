@@ -401,9 +401,19 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
 
   // ── send / drafts / uploads / provider search ──
   app.post('/api/mail/send', authenticateToken, async (req, res) => {
+    const b = req.body ?? {};
+    // Validate the item tags BEFORE the provider is handed the message: an unknown
+    // itemType reaches resolveChain/applySendEffects only after the mail is already
+    // irretrievably sent, so rejecting it here is the only place it costs nothing.
+    if (!Array.isArray(b.to) || !b.to.length) return res.status(400).json({ error: 'At least one recipient is required' });
+    const tagged: unknown[] = [
+      ...(Array.isArray(b.links) ? b.links : []).map((l: any) => l?.itemType),
+      ...(Array.isArray(b.attachments) ? b.attachments : []).map((a: any) => a?.itemType).filter((t: unknown) => t !== undefined && t !== null),
+    ];
+    if (tagged.some(t => !isItemType(t))) return res.status(400).json({ error: 'Invalid itemType' });
     // sessionId comes from the header, never the body — the sender's own tab is
     // identified by the request, not by what it claims.
-    try { res.json(await send(ctx, userOf(req), { ...req.body, sessionId: req.get('x-session-id') || undefined })); }
+    try { res.json(await send(ctx, userOf(req), { ...b, sessionId: req.get('x-session-id') || undefined })); }
     catch (e) { fail(res, e, 'Send failed'); }
   });
 
@@ -513,11 +523,24 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         updatedAt = ? WHERE threadKey = ?`).run(inbound, outbound, now, threadKey);
   };
 
+  // Does this user own an account whose index holds that thread? Links themselves are
+  // item data everyone on the job can see, but the thread's subject line and participant
+  // list are mailbox content — only the mailbox's owner gets those.
+  const seesThread = (userId: string, threadKey: string): boolean =>
+    !!db.prepare(`SELECT 1 FROM mail_threads t JOIN mail_accounts a ON a.id = t.accountId
+                  WHERE t.threadKey = ? AND a.userId = ? LIMIT 1`).get(threadKey, userId);
+
   app.get('/api/mail/links', authenticateToken, (req, res) => {
     const { itemType, itemId } = req.query;
     if (!isItemType(itemType)) return res.status(400).json({ error: 'Unknown itemType' });
     if (typeof itemId !== 'string' || !itemId) return res.status(400).json({ error: 'itemId is required' });
-    res.json(listLinksForItem(db, itemType, itemId));
+    const uid = userOf(req).id;
+    const visible = new Map<string, boolean>();
+    res.json(listLinksForItem(db, itemType, itemId).map(l => {
+      let ok = visible.get(l.threadKey);
+      if (ok === undefined) { ok = seesThread(uid, l.threadKey); visible.set(l.threadKey, ok); }
+      return ok ? l : { ...l, subjectSnapshot: null, participantsJson: null };
+    }));
   });
 
   app.post('/api/mail/links', authenticateToken, (req, res) => {
@@ -534,6 +557,12 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   });
 
   app.delete('/api/mail/links/:id', authenticateToken, (req, res) => {
+    // Anyone could see a link id from the app-wide GET; only the person who made the
+    // link (or an admin) may remove it. A link outside that scope is a 404, not a 403,
+    // so the route never confirms an id exists to someone who can't touch it.
+    const u = userOf(req);
+    const row = db.prepare('SELECT linkedByUserId FROM mail_thread_links WHERE id = ?').get(req.params.id) as { linkedByUserId: string } | undefined;
+    if (!row || (row.linkedByUserId !== u.id && u.role !== 'admin')) return res.status(404).json({ error: 'Link not found' });
     deleteLink(db, req.params.id);
     res.json({ ok: true });
   });
