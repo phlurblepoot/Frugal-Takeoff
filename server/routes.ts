@@ -1,7 +1,6 @@
 // server/routes.ts
 import express from 'express';
 import fsSync from 'fs';
-import nodemailer from 'nodemailer';
 import type Database from 'better-sqlite3';
 import {
   listProjects, loadProject, createProject, saveProject, deleteProject,
@@ -20,12 +19,12 @@ import {
 } from './billingStore';
 import {
   listIssues, getIssue, createIssue, saveIssue, setIssueStatus, deleteIssue,
-  addPhoto, removePhoto, markIssueSent,
+  addPhoto, removePhoto,
   ValidationError as IssueValidationError, ConflictError as IssueConflictError, NotFoundError as IssueNotFoundError,
 } from './issueStore';
 import {
   listRfis, getRfi, createRfi, saveRfi, setRfiStatus, deleteRfi,
-  addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, markRfiSent, setRfiResponse,
+  addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, setRfiResponse,
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
 } from './rfiStore';
 import {
@@ -64,7 +63,12 @@ import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocu
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes, proposalErr } from './proposalRoutes';
-import { getProposal, markSent, LockedError as ProposalLockedError } from './proposalStore';
+import { getProposal, LockedError as ProposalLockedError } from './proposalStore';
+import { send as mailSend, MailSendError, type SendResult } from './mail/sendService';
+import { AuthExpiredError } from './mail/providers/types';
+import type { MailContext } from './mail/context';
+import type { ItemType } from './mail/links';
+import { parseAddressList } from './mail/mime';
 
 export interface RouteDeps {
   db: Database.Database;
@@ -1583,74 +1587,26 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   registerProposalRoutes(app, { db, dataDir, authenticateToken, requireAdmin, broadcastChange: deps.broadcastChange });
 }
 
-// ── Email send routes ────────────────────────────────────────────────────────
-// Extracted from server.ts so the four send routes (invoice/change-order/issue/
-// proposal) and the shared sendProjectEmail helper can be exercised by tests with
-// a stubbed transporter. The transporter itself is built from settings (SMTP-
-// absent → null → sends become no-ops), exactly as before.
+// ── Item send routes ─────────────────────────────────────────────────────────
+// Every "email this document" button in the app lands here. The routes own the
+// item: they load it, apply the pre-send validations that have always guarded it
+// (404s, a proposal that is already sent), and name the attachment. Everything
+// downstream — choosing the account, building the MIME message, talking to the
+// provider, indexing the sent copy, linking the thread, marking the item sent,
+// logging the activity and broadcasting the change — belongs to
+// server/mail/sendService (spec §4.5/§4.6). There is deliberately no status,
+// activity or broadcast code left in this file.
 
 export interface EmailRouteDeps {
   db: Database.Database;
   dataDir: string;
   authenticateToken: express.RequestHandler;
   requireAdmin: express.RequestHandler;
-  // Returns a ready-to-use transporter for the given user, or null when that
-  // user's SMTP isn't configured. Injectable so tests can stub the transport.
-  buildTransporter: (userId: string) => nodemailer.Transporter | null;
-  // Returns the given user's SMTP config (smtp.* keys, prefix stripped). Used
-  // for the From header and the per-user config GET route.
-  getUserSmtp: (userId: string) => Record<string, string>;
+  // Not used by the send routes themselves — applySendEffects broadcasts the
+  // item's change through mailCtx.broadcastChange. Kept so callers wire every
+  // route registrar the same way.
   broadcastChange: BroadcastChange;
-}
-
-// Sends one or more stored files as attachments via SMTP. Throws on
-// misconfiguration/failure. cc/bcc are added only when non-blank (trimmed).
-// Unreadable attachment ids are skipped silently.
-export async function sendProjectEmail(
-  db: Database.Database,
-  dataDir: string,
-  transport: nodemailer.Transporter | null,
-  smtpCfg: Record<string, string>,
-  opts: {
-    to: string;
-    cc?: string;
-    bcc?: string;
-    subject: string;
-    text: string;
-    attachments: Array<{ fileId: string; attachmentName: string }>;
-    inReplyTo?: string;
-  },
-): Promise<void> {
-  if (!transport) throw new Error('SMTP not configured');
-  // Build the attachment list: read each fileId's bytes. The first entry is the
-  // primary document (the generated PDF) — if it can't be read, fail loudly so
-  // we never send a document email with no document. Extra attachments are
-  // best-effort and skipped if unreadable.
-  const builtAttachments: NonNullable<nodemailer.SendMailOptions['attachments']> = [];
-  opts.attachments.forEach((att, i) => {
-    const dataUrl = getDataUrlString(db, dataDir, att.fileId);
-    if (!dataUrl) {
-      if (i === 0) throw new Error('Attachment file not found');
-      return; // skip unreadable extra attachments silently
-    }
-    const base64Data = dataUrl.split(',')[1];
-    const mimeType = dataUrl.split(';')[0].replace('data:', '');
-    const fileBuffer = Buffer.from(base64Data, 'base64');
-    builtAttachments.push({ filename: att.attachmentName, content: fileBuffer, contentType: mimeType });
-  });
-  const mailOptions: nodemailer.SendMailOptions = {
-    from: smtpCfg.fromAddress ? `"${smtpCfg.fromName || ''}" <${smtpCfg.fromAddress}>` : undefined,
-    to: opts.to,
-    subject: opts.subject,
-    text: opts.text,
-    attachments: builtAttachments,
-  };
-  const cc = opts.cc?.trim();
-  if (cc) mailOptions.cc = cc;
-  const bcc = opts.bcc?.trim();
-  if (bcc) mailOptions.bcc = bcc;
-  if (opts.inReplyTo) { mailOptions.inReplyTo = opts.inReplyTo; mailOptions.references = opts.inReplyTo; }
-  await transport.sendMail(mailOptions);
+  mailCtx: MailContext;
 }
 
 // Builds the attachment list for a send route: the primary generated PDF followed
@@ -1682,6 +1638,13 @@ export const withPdfExtension = (name: string | null | undefined): string | null
   return /\.[A-Za-z0-9]{1,8}$/.test(trimmed) ? trimmed : `${trimmed}.pdf`;
 };
 
+// The composer sends rich HTML; the older editors (and any API caller) still
+// send plain text as `body`/`message`. Escape it and keep the line breaks so a
+// plain-text body doesn't arrive as one run-on paragraph.
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+export const textToHtml = (t: string): string =>
+  `<p>${t.replace(/[&<>]/g, c => HTML_ESCAPES[c]).replace(/\r?\n/g, '<br>')}</p>`;
+
 interface SendBody {
   to?: string;
   fileId: string;
@@ -1690,75 +1653,81 @@ interface SendBody {
   bcc?: string;
   subject?: string;
   body?: string;
+  html?: string;
   attachmentFileIds?: string[];
+  replyTo?: { accountId: string; threadKey: string };
+  accountId?: string;
+}
+
+// What a route knows about the thing it is sending.
+interface SendItemSpec {
+  itemType: ItemType;
+  itemId: string;
+  primaryName: string;
+  defaultSubject: string;
+  defaultBody: string;
 }
 
 export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps): void {
-  const { db, dataDir, authenticateToken, requireAdmin, buildTransporter, getUserSmtp } = deps;
-  const send = (userId: string, opts: Parameters<typeof sendProjectEmail>[4]) =>
-    sendProjectEmail(db, dataDir, buildTransporter(userId), getUserSmtp(userId), opts);
+  const { db, authenticateToken, requireAdmin, mailCtx } = deps;
 
-  // SMTP settings — strictly per-user (stored in user_preferences under smtp.*
-  // keys). Any authenticated user manages their OWN SMTP; no shared/global config.
-  app.get('/api/email/smtp', authenticateToken, (req, res) => {
+  // Runs one item send. Returns the SendResult on success, or null after having
+  // already written the error response — callers do `if (!r) return;`.
+  const sendItem = async (
+    req: express.Request,
+    res: express.Response,
+    item: SendItemSpec,
+  ): Promise<SendResult | null> => {
+    const { to, fileId, message, cc, bcc, subject, body, html, attachmentFileIds, replyTo, accountId } = req.body as SendBody;
+    if (!to || !fileId) { res.status(400).json({ error: 'to and fileId are required' }); return null; }
+    // The primary attachment carries the item tag: sendService links the thread
+    // to it and applies the item's "sent" side effects exactly once.
+    const attachments = buildSendAttachments(db, { fileId, attachmentName: item.primaryName }, attachmentFileIds)
+      .map((a, i) => ({ fileId: a.fileId, name: a.attachmentName, ...(i === 0 ? { itemType: item.itemType, itemId: item.itemId } : {}) }));
     try {
-      res.json(getUserSmtp((req as any).user.id));
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch SMTP settings' });
+      return await mailSend(mailCtx, (req as any).user, {
+        accountId,
+        to: parseAddressList(to),
+        cc: parseAddressList(cc || ''),
+        bcc: parseAddressList(bcc || ''),
+        subject: subject?.trim() || item.defaultSubject,
+        html: html || textToHtml(body ?? message ?? item.defaultBody),
+        attachments,
+        replyTo,
+        links: [{ itemType: item.itemType, itemId: item.itemId }],
+      });
+    } catch (e: unknown) {
+      if (e instanceof MailSendError) { res.status(e.status).json({ error: e.message }); return null; }
+      if (e instanceof AuthExpiredError) { res.status(409).json({ error: 'Mail account needs to be reconnected', code: 'auth_error' }); return null; }
+      // Spec §7: a provider's raw error can carry hosts, credentials or internal
+      // detail. The client gets a fixed string; the detail stays in the log.
+      console.error(`Error sending ${item.itemType}:`, e);
+      res.status(502).json({ error: 'Mail provider request failed' });
+      return null;
     }
-  });
+  };
 
-  app.post('/api/email/smtp', authenticateToken, (req, res) => {
-    try {
-      const cfg = req.body as Record<string, unknown>;
-      const userId = (req as any).user.id;
-      const stmt = db.prepare("INSERT OR REPLACE INTO user_preferences (userId, key, value) VALUES (?, ?, ?)");
-      // The client sends booleans (secure) and numbers (port); SQLite can only
-      // bind strings/numbers/null, so coerce everything to a string. null/undefined
-      // become '' so the key is still persisted.
-      Object.entries(cfg).forEach(([k, v]) => stmt.run(userId, `smtp.${k}`, v == null ? '' : String(v)));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to save SMTP settings' });
-    }
-  });
-
-  app.post('/api/email/test-smtp', authenticateToken, async (req, res) => {
-    try {
-      const transport = buildTransporter((req as any).user.id);
-      if (!transport) return res.status(400).json({ error: 'SMTP not configured' });
-      await transport.verify();
-      res.json({ success: true });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message || 'SMTP connection failed' });
-    }
-  });
-
-  // Send a proposal PDF via SMTP (admin only). Marks sent only after SMTP succeeds.
+  // Send a proposal PDF (admin only). Marked sent inside sendService, only after
+  // the provider has accepted the message.
   app.post('/api/proposals/:id/send', authenticateToken, requireAdmin, async (req, res) => {
     try {
       const p = getProposal(db, req.params.id);
       if (!p) return res.status(404).json({ error: 'Proposal not found' });
       if (p.legacy || p.status !== 'draft') return res.status(409).json({ error: 'Proposal already sent', code: 'locked' });
-      const { to, fileId, message, cc, bcc, subject: subjectIn, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
       const project = loadProject(db, p.projectId);
-      const subject = subjectIn?.trim() || `Proposal — ${project?.name ?? 'Untitled'}`;
       // The attachment arrives named as the document is named in Documents
       // ("Proposal – Job – 2026-08-28"), not a generic Proposal.pdf — that
       // name is what the customer files. proposalFileName() carries no
       // extension, so add one when the stored name lacks it.
-      const primaryName = withPdfExtension(getMeta(db, fileId)?.name) ?? 'Proposal.pdf';
-      await send((req as any).user.id, {
-        to, cc, bcc, subject,
-        text: body ?? message ?? 'Please find the attached proposal.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: primaryName }, attachmentFileIds),
-        inReplyTo: project?.email?.messageId || undefined,
+      const r = await sendItem(req, res, {
+        itemType: 'proposal', itemId: p.id,
+        primaryName: withPdfExtension(getMeta(db, (req.body as SendBody).fileId)?.name) ?? 'Proposal.pdf',
+        defaultSubject: `Proposal — ${project?.name ?? 'Untitled'}`,
+        defaultBody: 'Please find the attached proposal.',
       });
-      const r = markSent(db, p.id, { to, cc, subject });
-      logActivity(db, { projectId: p.projectId, userId: (req as any).user?.id, type: 'proposal_sent', message: `Proposal #${p.number} emailed to ${to}` });
-      deps.broadcastChange({ type: 'proposal', id: p.id, projectId: p.projectId, version: r.version, action: 'updated', ...requestMeta(req) });
-      res.json({ success: true, ...r });
+      if (!r) return;
+      // markSent bumped the row; the client needs the new version to keep editing.
+      res.json({ success: true, ...r, version: getProposal(db, p.id)?.version });
     } catch (e: any) {
       if (e instanceof ProposalLockedError) return proposalErr(e, res);
       console.error('Error sending proposal:', e);
@@ -1766,167 +1735,93 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     }
   });
 
-  // Send an invoice PDF via SMTP (admin only)
+  // Send an invoice PDF (admin only)
   app.post('/api/invoices/:id/send', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const inv = getInvoice(db, req.params.id);
-      if (!inv) return res.status(404).json({ error: 'Invoice not found' });
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      await send((req as any).user.id, {
-        to,
-        cc,
-        bcc,
-        subject: subject?.trim() || `Invoice ${inv.number ?? ''}`.trim(),
-        text: body ?? message ?? 'Please find the attached invoice.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: `${inv.number || 'invoice'}.pdf` }, attachmentFileIds),
-      });
-      // Mark sent (best effort) — never demote an already-paid invoice back to
-      // sent, and skip the write entirely when it is already 'sent' so a
-      // re-send doesn't stamp updatedAt and mark its own PDF out of date.
-      try {
-        if (inv.status !== 'sent' && inv.status !== 'paid') setInvoiceStatus(db, req.params.id, 'sent');
-      } catch { /* ignore */ }
-      logActivity(db, { projectId: inv.projectId, userId: (req as any).user?.id, type: 'invoice_sent', message: `Invoice ${inv.number ?? ''} emailed to ${to}` });
-      const fresh = getInvoice(db, req.params.id);
-      deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: inv.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending invoice:', e);
-      res.status(500).json({ error: e.message || 'Failed to send invoice' });
-    }
+    const inv = getInvoice(db, req.params.id);
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    const r = await sendItem(req, res, {
+      itemType: 'invoice', itemId: inv.id,
+      primaryName: `${inv.number || 'invoice'}.pdf`,
+      defaultSubject: `Invoice ${inv.number ?? ''}`.trim(),
+      defaultBody: 'Please find the attached invoice.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 
-  // Send a change order request PDF via SMTP (admin only)
+  // Send a change order request PDF (admin only)
   app.post('/api/change-orders/:id/send', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-      const co = getChangeOrder(db, req.params.id);
-      if (!co) return res.status(404).json({ error: 'Change order not found' });
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      const number = co.number ?? '';
-      await send((req as any).user.id, {
-        to,
-        cc,
-        bcc,
-        subject: subject?.trim() || `Change Order Request ${number}`.trim(),
-        text: body ?? message ?? 'Please find the attached change order request.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: `CO-${number || 'change-order'}.pdf` }, attachmentFileIds),
-      });
-      // Mark sent (best effort) — never override an already approved/rejected CO,
-      // and skip a no-op re-send write (it would bump updatedAt and stale the
-      // PDF that was just emailed).
-      try {
-        if (co.status !== 'sent' && co.status !== 'approved' && co.status !== 'rejected') setChangeOrderStatus(db, req.params.id, 'sent');
-      } catch { /* best effort */ }
-      logActivity(db, { projectId: co.projectId, userId: (req as any).user?.id, type: 'change_order_sent', message: `Change Order ${number} emailed to ${to}` });
-      const fresh = getChangeOrder(db, req.params.id);
-      deps.broadcastChange({ type: 'changeOrder', id: req.params.id, projectId: co.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending change order:', e);
-      res.status(500).json({ error: e.message || 'Failed to send change order' });
-    }
+    const co = getChangeOrder(db, req.params.id);
+    if (!co) return res.status(404).json({ error: 'Change order not found' });
+    const number = co.number ?? '';
+    const r = await sendItem(req, res, {
+      itemType: 'changeOrder', itemId: co.id,
+      primaryName: `CO-${number || 'change-order'}.pdf`,
+      defaultSubject: `Change Order Request ${number}`.trim(),
+      defaultBody: 'Please find the attached change order request.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 
-  // Send a punch-list report PDF via SMTP (any authenticated user)
+  // Send a punch-list report PDF (any authenticated user). The "item" is the
+  // project itself — a punch list has no row of its own.
   app.post('/api/projects/:id/send-punch', authenticateToken, async (req, res) => {
-    try {
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      await send((req as any).user.id, {
-        to,
-        cc,
-        bcc,
-        subject: subject?.trim() || 'Punch List Report',
-        text: body ?? message ?? 'Please find the attached punch list report.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: 'punch-list.pdf' }, attachmentFileIds),
-      });
-      logActivity(db, { projectId: req.params.id, userId: (req as any).user?.id, type: 'punch_sent', message: `Punch list report emailed to ${to}` });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending punch report:', e);
-      res.status(500).json({ error: e.message || 'Failed to send punch report' });
-    }
+    const r = await sendItem(req, res, {
+      itemType: 'punch', itemId: req.params.id,
+      primaryName: 'punch-list.pdf',
+      defaultSubject: 'Punch List Report',
+      defaultBody: 'Please find the attached punch list report.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 
-  // Send an issue report PDF via SMTP (any authenticated user — field members send issue reports)
+  // Send an issue report PDF (any authenticated user — field members send issue reports)
   app.post('/api/issues/:id/send', authenticateToken, async (req, res) => {
-    try {
-      const iss = getIssue(db, req.params.id);
-      if (!iss) return res.status(404).json({ error: 'Issue not found' });
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      const padded = String(iss.number).padStart(3, '0');
-      await send((req as any).user.id, {
-        to,
-        cc,
-        bcc,
-        subject: subject?.trim() || `Issue ISS-${padded}${iss.title ? ` — ${iss.title}` : ''}`,
-        text: body ?? message ?? 'Please find the attached issue report.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: `ISS-${padded}.pdf` }, attachmentFileIds),
-      });
-      try { markIssueSent(db, req.params.id); } catch { /* best effort */ }
-      logActivity(db, { projectId: iss.projectId, userId: (req as any).user?.id, type: 'issue_sent', message: `Issue ISS-${padded} emailed to ${to}` });
-      const fresh = getIssue(db, req.params.id);
-      deps.broadcastChange({ type: 'issue', id: req.params.id, projectId: iss.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending issue:', e);
-      res.status(500).json({ error: e.message || 'Failed to send issue' });
-    }
+    const iss = getIssue(db, req.params.id);
+    if (!iss) return res.status(404).json({ error: 'Issue not found' });
+    const padded = String(iss.number).padStart(3, '0');
+    const r = await sendItem(req, res, {
+      itemType: 'issue', itemId: iss.id,
+      primaryName: `ISS-${padded}.pdf`,
+      defaultSubject: `Issue ISS-${padded}${iss.title ? ` — ${iss.title}` : ''}`,
+      defaultBody: 'Please find the attached issue report.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 
-  // Send an RFI PDF via SMTP (any authenticated user — field members send RFIs)
+  // Send an RFI PDF (any authenticated user — field members send RFIs)
   app.post('/api/rfis/:id/send', authenticateToken, async (req, res) => {
-    try {
-      const rfi = getRfi(db, req.params.id);
-      if (!rfi) return res.status(404).json({ error: 'RFI not found' });
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      const padded = String(rfi.number).padStart(3, '0');
-      await send((req as any).user.id, {
-        to,
-        cc,
-        bcc,
-        subject: subject?.trim() || `RFI RFI-${padded}${rfi.title ? ` — ${rfi.title}` : ''}`,
-        text: body ?? message ?? 'Please find the attached RFI.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName: `RFI-${padded}.pdf` }, attachmentFileIds),
-      });
-      try { markRfiSent(db, req.params.id); } catch { /* best effort */ }
-      logActivity(db, { projectId: rfi.projectId, userId: (req as any).user?.id, type: 'rfi_sent', message: `RFI RFI-${padded} emailed to ${to}` });
-      const fresh = getRfi(db, req.params.id);
-      deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: rfi.projectId, version: fresh?.version, action: 'updated', ...requestMeta(req) });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending RFI:', e);
-      res.status(500).json({ error: e.message || 'Failed to send RFI' });
-    }
+    const rfi = getRfi(db, req.params.id);
+    if (!rfi) return res.status(404).json({ error: 'RFI not found' });
+    const padded = String(rfi.number).padStart(3, '0');
+    const r = await sendItem(req, res, {
+      itemType: 'rfi', itemId: rfi.id,
+      primaryName: `RFI-${padded}.pdf`,
+      defaultSubject: `RFI RFI-${padded}${rfi.title ? ` — ${rfi.title}` : ''}`,
+      defaultBody: 'Please find the attached RFI.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 
-  // Send a daily report PDF via SMTP (any authenticated user — field members file dailies)
+  // Send a daily report PDF (any authenticated user — field members file dailies)
   app.post('/api/daily-reports/:id/send', authenticateToken, async (req, res) => {
-    try {
-      const report = getDailyReport(db, req.params.id);
-      if (!report) return res.status(404).json({ error: 'Daily report not found' });
-      const { to, fileId, message, cc, bcc, subject, body, attachmentFileIds } = req.body as SendBody;
-      if (!to || !fileId) return res.status(400).json({ error: 'to and fileId are required' });
-      // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
-      // (client can't be imported server-side) — falls back to date-only when
-      // jobName is blank.
-      const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
-      const attachmentName = sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`;
-      await send((req as any).user.id, {
-        to, cc, bcc,
-        subject: subject?.trim() || `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
-        text: body ?? message ?? 'Please find the attached daily report.',
-        attachments: buildSendAttachments(db, { fileId, attachmentName }, attachmentFileIds),
-      });
-      logActivity(db, { projectId: report.projectId, userId: (req as any).user?.id, type: 'daily_report_sent', message: `Daily report ${report.reportDate} emailed to ${to}` });
-      res.json({ success: true });
-    } catch (e: any) {
-      console.error('Error sending daily report:', e);
-      res.status(500).json({ error: e.message || 'Failed to send daily report' });
-    }
+    const report = getDailyReport(db, req.params.id);
+    if (!report) return res.status(404).json({ error: 'Daily report not found' });
+    // Mirrors dailyReportPdf.ts's sanitizeForFileName + dailyReportFileName
+    // (client can't be imported server-side) — falls back to date-only when
+    // jobName is blank.
+    const sanitizedJobName = (report.jobName as string || '').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '-');
+    const r = await sendItem(req, res, {
+      itemType: 'dailyReport', itemId: report.id,
+      primaryName: sanitizedJobName ? `DailyReport-${sanitizedJobName}-${report.reportDate}.pdf` : `DailyReport-${report.reportDate}.pdf`,
+      defaultSubject: `Daily Report — ${report.reportDate}${report.jobName ? ` — ${report.jobName}` : ''}`,
+      defaultBody: 'Please find the attached daily report.',
+    });
+    if (!r) return;
+    res.json({ success: true, ...r });
   });
 }

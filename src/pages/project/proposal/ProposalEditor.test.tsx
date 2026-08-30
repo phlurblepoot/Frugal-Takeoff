@@ -64,7 +64,8 @@ vi.mock('../../../utils/store', async () => {
     fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
     getFileMeta: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ companyEmail: 'office@bigbear.test' })),
-    getSmtpSettings: vi.fn(async () => ({ fromAddress: 'me@bigbear.test' })),
+    getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
+    pickSendableAccount: vi.fn((l: { status: string }[]) => l[0] ?? null),
     getAlwaysCc: vi.fn(async () => ''),
     getCustomer: vi.fn(async () => undefined),
   };

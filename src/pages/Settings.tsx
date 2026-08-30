@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
-import { SmtpSettings } from '../types';
+import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
@@ -933,47 +932,19 @@ const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-
 
 const EmailTab: React.FC = () => {
   const { toast } = useToast();
-  const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
-  const [smtpSaving, setSmtpSaving] = useState(false);
-  const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
-  const [smtpTestMsg, setSmtpTestMsg] = useState('');
-  const [showSmtpPass, setShowSmtpPass] = useState(false);
   const [alwaysCc, setAlwaysCc] = useState('');
   const [alwaysCcSaving, setAlwaysCcSaving] = useState(false);
-
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [smtpData, prefs] = await Promise.all([getSmtpSettings(), getUserPreferences()]);
-      setSmtp(smtpData);
+      const prefs = await getUserPreferences();
       setAlwaysCc(prefs['emailAlwaysCc'] ?? '');
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const handleSmtpSave = async () => {
-    setSmtpSaving(true);
-    try { await saveSmtpSettings(smtp as Record<string, string>); toast('SMTP settings saved.', { type: 'success' }); }
-    catch { toast('Failed to save SMTP settings.', { type: 'error' }); }
-    finally { setSmtpSaving(false); }
-  };
-
-  const handleSmtpTest = async () => {
-    setSmtpTestStatus('testing');
-    setSmtpTestMsg('');
-    try {
-      await saveSmtpSettings(smtp as Record<string, string>);
-      await testSmtpConnection();
-      setSmtpTestStatus('ok');
-      setSmtpTestMsg('Connection successful!');
-    } catch (e: any) {
-      setSmtpTestStatus('error');
-      setSmtpTestMsg(e.message || 'Connection failed');
-    }
-  };
 
   const handleAlwaysCcSave = async () => {
     setAlwaysCcSaving(true);
@@ -1013,62 +984,13 @@ const EmailTab: React.FC = () => {
         </div>
       </div>
 
-      {/* SMTP */}
+      {/* Outbound email moved to the mail account */}
       <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These are your personal outgoing email settings. Emails you send (proposals, invoices, issues, change orders) go out through this account. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-2">
-                <label className={labelCls}>SMTP Server</label>
-                <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
-              </div>
-              <div>
-                <label className={labelCls}>Port</label>
-                <input className={inputCls} type="number" value={smtp.port || ''} onChange={e => setSmtp(s => ({ ...s, port: parseInt(e.target.value) || undefined }))} placeholder="587" />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>Username / Email</label>
-              <input className={inputCls} value={smtp.username || ''} onChange={e => setSmtp(s => ({ ...s, username: e.target.value }))} placeholder="you@example.com" />
-            </div>
-            <div>
-              <label className={labelCls}>Password / App Password</label>
-              <div className="relative">
-                <input className={inputCls + ' pr-12'} type={showSmtpPass ? 'text' : 'password'} value={smtp.password || ''} onChange={e => setSmtp(s => ({ ...s, password: e.target.value }))} placeholder="••••••••" />
-                <button type="button" onClick={() => setShowSmtpPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                  {showSmtpPass ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>From Name</label>
-              <input className={inputCls} value={smtp.fromName || ''} onChange={e => setSmtp(s => ({ ...s, fromName: e.target.value }))} placeholder="Acme Estimating" />
-            </div>
-            <div>
-              <label className={labelCls}>From Address</label>
-              <input className={inputCls} value={smtp.fromAddress || ''} onChange={e => setSmtp(s => ({ ...s, fromAddress: e.target.value }))} placeholder="estimates@acme.com" />
-            </div>
-            <div className="flex items-end">
-              <button type="button" onClick={() => setSmtp(s => ({ ...s, secure: !s.secure }))}
-                className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${smtp.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
-                {smtp.secure ? 'SSL/TLS (port 465)' : 'STARTTLS (port 587)'}
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 pt-2">
-            <button onClick={handleSmtpSave} disabled={smtpSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
-              <Save size={16} /> {smtpSaving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={handleSmtpTest} disabled={smtpTestStatus === 'testing'} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2">
-              {smtpTestStatus === 'testing' ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />} Test Connection
-            </button>
-            {smtpTestStatus === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"><CheckCircle size={15} /> {smtpTestMsg}</span>}
-            {smtpTestStatus === 'error' && <span className="flex items-center gap-1.5 text-sm text-red-600 dark:text-red-400"><XCircle size={15} /> {smtpTestMsg}</span>}
-          </div>
+        <div className="p-6">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Outbound email now uses your connected mail account (Settings &rarr; Mail, coming in the next update).
+          </p>
         </div>
       </div>
 

@@ -76,13 +76,16 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
     const threadKey = (db.prepare('SELECT threadKey FROM mail_messages WHERE id = ?').get(messageId) as { threadKey: string }).threadKey;
 
     const effectsSkipped: ItemType[] = []; const to = req.to.map(a => a.addr).join(', ');
+    // The proposal's sentTo snapshot records who it went to AND what it said —
+    // carry cc/subject through so the rewired routes keep that record intact.
+    const cc = (req.cc ?? []).map(a => a.addr).join(', ') || undefined;
     const seen = new Set<string>();
     const broadcasts: EntityChangedEvent[] = [];
     db.transaction(() => {
       for (const t of tagged) {
         const key = t.itemType + ':' + t.itemId; if (seen.has(key)) continue; seen.add(key);
         createLink(db, { threadKey, itemType: t.itemType, itemId: t.itemId, linkedByUserId: user.id, subjectSnapshot: msg.subject, firstDate: new Date().toISOString(), participants: [msg.from, ...msg.to] });
-        const eff = applySendEffects(db, { itemType: t.itemType, itemId: t.itemId, userId: user.id, role: user.role, to, threadKey });
+        const eff = applySendEffects(db, { itemType: t.itemType, itemId: t.itemId, userId: user.id, role: user.role, to, cc, subject: msg.subject, threadKey });
         if (eff.skipped === 'role') effectsSkipped.push(t.itemType);
         if (eff.broadcast) broadcasts.push({ ...eff.broadcast, action: 'updated', byUserId: user.id });
       }

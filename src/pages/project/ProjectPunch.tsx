@@ -4,7 +4,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, ImageIcon } from 'lucide-react';
 import {
   PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport,
+  getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, sendPunchReport,
 } from '../../utils/store';
 import { Customer } from '../../types';
 import { resolveRecipient } from '../../utils/recipients';
@@ -47,9 +47,9 @@ export const ProjectPunch: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
           getSettings(),
-          getSmtpSettings().catch(() => ({})),
+          getMailAccounts().catch(() => []),
           getAlwaysCc(),
           getProject(projectId).catch(() => null),
         ]);
@@ -61,7 +61,7 @@ export const ProjectPunch: React.FC = () => {
         const resolved = resolveRecipient('punch', project?.contactEmails, customer?.emails);
         const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         const opts = [
           companyEmail ? { label: 'Company default', value: companyEmail } : null,
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,

@@ -3,7 +3,7 @@
 // recipient resolved from the project/customer role emails, the user's
 // always-CC list, and the from-addresses the letterhead can advertise.
 import { useEffect, useState } from 'react';
-import { getAlwaysCc, getCustomer, getProject, getSettings, getSmtpSettings } from '../../../utils/store';
+import { getAlwaysCc, getCustomer, getProject, getSettings, getMailAccounts, pickSendableAccount } from '../../../utils/store';
 import { resolveRecipient } from '../../../utils/recipients';
 import type { Customer } from '../../../types';
 
@@ -31,9 +31,9 @@ export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefau
     let cancelled = false;
     (async () => {
       try {
-        const [settings, smtp, alwaysCc, proj] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, proj] = await Promise.all([
           getSettings(),
-          getSmtpSettings().catch(() => ({})),
+          getMailAccounts().catch(() => []),
           getAlwaysCc(),
           getProject(projectId).catch(() => null),
         ]);
@@ -43,7 +43,7 @@ export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefau
         if (cancelled) return;
         const resolved = resolveRecipient('proposal', proj?.contactEmails, customer?.emails);
         const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         setDefaults({
           defaultTo: resolved.to,
           defaultCc: mergeCsv(resolved.cc, alwaysCc),

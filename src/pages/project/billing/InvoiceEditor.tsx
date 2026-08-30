@@ -1,7 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, sendInvoice } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
@@ -78,9 +78,9 @@ export const InvoiceEditor: React.FC<{
     let cancelled = false;
     (async () => {
       try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
           getSettings(),
-          getSmtpSettings().catch(() => ({})),
+          getMailAccounts().catch(() => []),
           getAlwaysCc(),
           getProject(projectId).catch(() => null),
         ]);
@@ -92,7 +92,7 @@ export const InvoiceEditor: React.FC<{
         const resolved = resolveRecipient('invoice', project?.contactEmails, customer?.emails);
         const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         const opts = [
           companyEmail ? { label: 'Company default', value: companyEmail } : null,
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,

@@ -13,7 +13,7 @@ import { resolveChain, type ItemType } from './links';
 
 export const ADMIN_ITEM_TYPES: ItemType[] = ['proposal', 'invoice', 'changeOrder', 'payApp'];
 
-export interface SendEffectsInput { itemType: ItemType; itemId: string; userId: string; role: string; to: string; threadKey: string; subject?: string }
+export interface SendEffectsInput { itemType: ItemType; itemId: string; userId: string; role: string; to: string; cc?: string; threadKey: string; subject?: string }
 export interface SendEffectsResult { applied: boolean; skipped?: 'role' | 'noop' | 'missing'; broadcast?: { type: EntityType; id: string; projectId?: string; version?: number } }
 
 const pad3 = (n: number) => String(n).padStart(3, '0');
@@ -24,7 +24,7 @@ export function applySendEffects(db: Database.Database, i: SendEffectsInput): Se
     case 'proposal': {
       const p = getProposal(db, i.itemId); if (!p) return { applied: false, skipped: 'missing' };
       let version = p.version;
-      if (!p.legacy && p.status === 'draft') version = markProposalSent(db, p.id, { to: i.to, subject: i.subject ?? '' }).version;
+      if (!p.legacy && p.status === 'draft') version = markProposalSent(db, p.id, { to: i.to, cc: i.cc, subject: i.subject ?? '' }).version;
       logActivity(db, { projectId: p.projectId, userId: i.userId, type: 'proposal_sent', message: `Proposal #${p.number} emailed to ${i.to}` });
       return { applied: true, broadcast: { type: 'proposal', id: p.id, projectId: p.projectId, version } };
     }

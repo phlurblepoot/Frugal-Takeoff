@@ -1,6 +1,6 @@
 // src/pages/project/rfi/RfiEditor.tsx
 import React, { useEffect, useState } from 'react';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -77,9 +77,9 @@ export const RfiEditor: React.FC<{
     let cancelled = false;
     (async () => {
       try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
           getSettings(),
-          getSmtpSettings().catch(() => ({})),
+          getMailAccounts().catch(() => []),
           getAlwaysCc(),
           getProject(projectId).catch(() => null),
         ]);
@@ -91,7 +91,7 @@ export const RfiEditor: React.FC<{
         const resolved = resolveRecipient('rfi', project?.contactEmails, customer?.emails);
         const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         const opts = [
           companyEmail ? { label: 'Company default', value: companyEmail } : null,
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,

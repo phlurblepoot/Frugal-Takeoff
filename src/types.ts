@@ -166,16 +166,6 @@ export interface Customer {
   updatedAt?: number;
 }
 
-export interface SmtpSettings {
-  host: string;
-  port: number;
-  secure: boolean;
-  username: string;
-  password: string;
-  fromName: string;
-  fromAddress: string;
-}
-
 export interface Project {
   id: string;
   name: string;

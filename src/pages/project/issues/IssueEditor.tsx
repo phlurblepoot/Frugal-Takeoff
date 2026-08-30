@@ -1,6 +1,6 @@
 // src/pages/project/issues/IssueEditor.tsx
 import React, { useEffect, useState } from 'react';
-import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
+import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, getMailAccounts, pickSendableAccount, getAlwaysCc, getCustomer, getProject, fetchFileBlob, sendIssue } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -56,9 +56,9 @@ export const IssueEditor: React.FC<{
     let cancelled = false;
     (async () => {
       try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
           getSettings(),
-          getSmtpSettings().catch(() => ({})),
+          getMailAccounts().catch(() => []),
           getAlwaysCc(),
           getProject(projectId).catch(() => null),
         ]);
@@ -70,7 +70,7 @@ export const IssueEditor: React.FC<{
         const resolved = resolveRecipient('issue', project?.contactEmails, customer?.emails);
         const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
         const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
+        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         const opts = [
           companyEmail ? { label: 'Company default', value: companyEmail } : null,
           fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,

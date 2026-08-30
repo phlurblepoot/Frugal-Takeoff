@@ -1,4 +1,4 @@
-import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '../types';
+import { Project, TakeoffTemplate, ProjectNote, Customer } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
@@ -332,31 +332,30 @@ export const deleteTemplate = async (id: string): Promise<void> => {
   await handleResponse(res);
 };
 
-// Email / SMTP functions
-export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
-  const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });
+// ── Mail accounts ────────────────────────────────────────────────────────────
+// Outbound email goes through the sending user's connected mail account
+// (Settings → Mail). The old per-user SMTP settings are gone.
+export interface MailAccountSummary {
+  id: string;
+  provider: string;
+  emailAddress: string;
+  displayName: string | null;
+  isDefault: number;
+  status: string;
+  unreadCount: number;
+}
+
+export const getMailAccounts = async (): Promise<MailAccountSummary[]> => {
+  const res = await fetch('/api/mail/accounts', { headers: getAuthHeaders() });
   await handleResponse(res);
-  // Values are stored as strings; normalize the typed fields so the form's
-  // boolean toggle / numeric port round-trip correctly.
-  const raw = await res.json() as Record<string, string>;
-  const out: Partial<SmtpSettings> = { ...(raw as Partial<SmtpSettings>) };
-  if ('secure' in raw) out.secure = raw.secure === 'true';
-  if (raw.port) out.port = Number(raw.port); else delete (out as Partial<SmtpSettings>).port;
-  return out;
+  return await res.json();
 };
 
-export const saveSmtpSettings = async (cfg: Partial<SmtpSettings>): Promise<void> => {
-  const res = await fetch('/api/email/smtp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(cfg),
-  });
-  await handleResponse(res);
-};
-
-export const testSmtpConnection = async (): Promise<void> => {
-  const res = await fetch('/api/email/test-smtp', { method: 'POST', headers: getAuthHeaders() });
-  await handleResponse(res);
+// The account a send would go out through: the default one, else the first
+// usable one. null when the user has nothing connected (or nothing healthy).
+export const pickSendableAccount = (list: MailAccountSummary[]): MailAccountSummary | null => {
+  const usable = list.filter(a => a.status === 'ok' || a.status === 'syncing');
+  return usable.find(a => a.isDefault) ?? usable[0] ?? null;
 };
 
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
