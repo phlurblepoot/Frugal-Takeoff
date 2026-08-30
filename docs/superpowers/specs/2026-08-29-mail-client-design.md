@@ -13,12 +13,13 @@
 2. The server keeps a **lightweight envelope index** (last 180 days, extendable on demand). **Bodies and attachments are never bulk-downloaded**: they are fetched from the provider when opened and streamed to the browser. Attachment bytes are persisted only when the user explicitly saves them to Documents.
 3. Sending a document from an item (proposal, invoice, change order, pay app, issue, RFI, daily report, punch) goes through the same mail subsystem, lands in the user's Sent/thread, and **links the item to the thread** in an app-level, mailbox-independent table.
 4. Secrets (OAuth refresh tokens, IMAP passwords, the existing SMTP password) are encrypted at rest.
+6. First inbound-reply consumer: a reply on a thread linked to a sent RFI is captured as a **pending response** the user reviews and accepts — never auto-marked answered.
 5. Setup for the two OAuth providers is documented in an in-app help page and a runbook.
 
 ### Non-goals (Phase 2+)
 - Manual link management from a thread (link customer/project/item, multiple items) — the *table* ships now, the UI later.
 - Convert thread → task / RFI / issue.
-- Reply indicators on items (the `mail_thread_reply_state` table ships now so this is a query later).
+- Reply indicators on items other than RFIs (the `mail_thread_reply_state` table ships now so this is a query later; RFI pending-reply capture is the Phase 1 consumer, §4.7).
 - Cross-user "open in my mailbox" resolution UI (the thread-key rule is defined here; Phase 1 only renders the current user's own links).
 - Gmail Pub/Sub push (history polling is used; Pub/Sub noted as an optional upgrade).
 - Calendar, contacts sync, shared mailboxes, swipe gestures on mobile.
@@ -122,6 +123,10 @@ Unique `(threadKey, itemType, itemId)`. Indexes on `(itemType, itemId)`, `(proje
 7. When a later message arrives that bridges two existing keys (root arrives after children), the engine merges: rewrites the newer key to the older one across `mail_messages`, `mail_threads`, `mail_thread_links`, `mail_thread_reply_state`.
 
 Cross-user resolution rule (used by Phase 2, defined here): exact `threadKey` in the current user's index → open it; else a message in the current user's index with the same normalized subject and `date` within ±3 days of `firstDate` and sharing ≥1 participant → open that thread; else render a reference card.
+
+### `rfis` — new columns (same migration)
+`pendingReplyJson` TEXT NULL — `{ threadKey, accountId, mailMessageId, messageIdHeader, from: {addr, name}, date, text, attachments: [{attId, name, mime, size}], receivedAt }`. Written by §4.7, cleared on accept/dismiss. Only the newest un-reviewed inbound reply is kept.
+`responseSource` TEXT NULL — `'manual'` \| `'email'`; `responseMessageIdHeader` TEXT NULL — set when a response was accepted from a reply, so the editor can offer "Open thread".
 
 ### 3.2 Changes to existing storage
 - `user_preferences` rows `smtp.host/port/secure/username/password/fromName/fromAddress`: migration 31 creates one `mail_accounts` row per user with `smtp.host` set — `provider='imap'`, `emailAddress=fromAddress||username`, `displayName=fromName`, `authBlob` sealed with `imapHost=smtpHost` (guess), `imapPort=993`, `imapSecure=1`, SMTP fields copied, `status='needs_review'`, `isDefault=1`, `indexedSince=now-180d`. Then deletes the `smtp.*` rows. No mail is synced until the user opens Settings → Mail and confirms/edits the IMAP host ("Test & activate").
@@ -259,6 +264,17 @@ It is invoked **both** by the item send routes and by `sendService` when a send 
 
 Role rule: effects for admin-gated item types (`proposal`, `invoice`, `changeOrder`, `payApp`) run only when the sending user is an admin — the same gate as their routes. Non-admins cannot pick those documents in the first place (`NON_ADMIN_EXCLUDED_KINDS` hides them from the picker), so in practice the gate is a server-side safety check; if it trips, the send still goes out and the link is still written, but the status is untouched and the response carries `effectsSkipped: [...]` so the composer can show a note.
 
+### 4.7 Inbound reply hooks (`server/mail/inboundHooks.ts`)
+After the sync engine upserts an **inbound** message (per the reply-state rule in §3) whose `threadKey` has link rows, it calls `applyInboundHooks(db, { threadKey, message })`. Phase 1 registers one hook:
+
+**RFI pending response.** For every `rfi` link on the thread whose RFI is in status `sent` (not `open`, `answered`, `closed`): write `rfis.pendingReplyJson` from the message — sender, date, the reply's plain text with the quoted original stripped (`mailparser`/`talon`-style quote detection: lines after `On … wrote:`/`From:` headers/`>`-prefixed blocks are dropped; fall back to the full text if stripping leaves nothing), attachment metadata, and the message ids — then bump `version`/`updatedAt` and `broadcastChange({ type: 'rfi', id })`. A later inbound reply on the same thread replaces the pending one. The RFI status is **not** changed; `answeredAt` stays null. Outbound messages (the user's own replies) never touch it.
+
+Accept / dismiss routes: `POST /api/rfis/:id/pending-reply/accept { text?: string, responseFileId?: string }` → `setRfiResponse` with the (possibly edited) text and optional file, sets `responseSource='email'` and `responseMessageIdHeader`, clears `pendingReplyJson`. `POST /api/rfis/:id/pending-reply/dismiss` → clears it only. Both are `authenticateToken` (RFIs are non-admin items).
+
+Client: `RfiEditor` shows a banner above the Response section when `pendingReplyJson` is set — "Reply received from Alicia Chen · Aug 29 10:42 · [Use as response] [Dismiss] [Open thread]" — with the extracted text shown in a read-only preview. **Use as response** copies the text into the (editable) response field, and if the reply has attachments opens the Save-to-Documents modal (§5.2) pre-filled so one can be picked as the response file; the accept call is made on the editor's Save. `Open thread` navigates to the current user's copy of the thread when it exists in their index (exact `threadKey`, then subject+date fallback), otherwise shows the reference card. The RFI list row and the project's RFI tab show a small "reply" chip while a pending reply exists. `useLiveQuery` on `rfi` keeps the banner live when the reply arrives while the editor is open.
+
+The generic `mail_thread_reply_state` row is still written for every linked thread (any item type); only the RFI hook has UI in Phase 1. Issues, change orders, proposals get "reply received" indicators in Phase 2 through the same hook registry.
+
 Version note: the picker attaches the document's stored bytes as-is. If the item's generated PDF is stale relative to its data (the freshness chip in `DocumentActionsBar`), the composer shows the same "out of date — regenerate?" hint before send; it does not regenerate silently.
 
 ---
@@ -346,11 +362,12 @@ No admin setup. Users need IMAP + SMTP hosts and (usually) an app password.
 | Layer | What |
 |---|---|
 | Unit (server) | `crypto` round-trip + key-file creation; `threadKey` (References walk, normalization, merge on late root, synthetic keys); `sanitize` allowlist + cid rewrite + image blocking; `mime` build/parse; `links.resolveChain`; sync engine against `providers/fake.ts` (backfill window, incremental upserts/deletes, folder counts, thread denormalization, reply-state); migration 31 on a seeded DB with `smtp.*` prefs (row created, sealed, prefs deleted, `needs_review`) |
+| Unit (server, cont.) | `inboundHooks`: inbound reply on a thread linked to a `sent` RFI writes `pendingReplyJson` (quote-stripped text, attachments), a second reply replaces it, outbound messages and `open`/`answered`/`closed` RFIs are ignored, status never changes; accept sets response + `answered` + source fields and clears pending; dismiss clears only |
 | Routes (supertest) | every `/api/mail/*` with the fake provider injected; ownership isolation between two users; optimistic action revert on provider failure; attachment save writes files with `sourceType='mailMessage'`; the seven item send routes asserting side effects + link rows + sent index row; `POST /api/mail/send` with a tagged proposal attachment into an existing thread → proposal marked sent + activity + link (and unchanged when already sent; `effectsSkipped` for a non-admin); OAuth start/callback with a stubbed token exchange; Graph webhook validation |
 | Provider adapters | contract tests against recorded JSON fixtures for Gmail and Graph (no network); IMAP adapter against a fake imapflow client; `npm run mail:smoke -- --account <id>` manual live check |
-| UI (vitest/jsdom) | ThreadList/ThreadRow rendering + unread/link chips; Composer autocomplete + always-CC prefill + attachment item tagging; SaveAttachmentsModal pre-fill/remove; Settings account cards + disabled OAuth buttons; Sidebar badge |
-| E2E (Playwright, `MAIL_FAKE_PROVIDER=1`) | connect fake account → seeded threads visible → open thread → body renders in iframe, remote image blocked → reply inline → row moves to top; send an invoice from its editor → link chip appears → thread opens from chip; save attachment → appears in Documents |
-| Manual smoke | real Google + Microsoft + IMAP connect; push freshness (send yourself a mail); sanitizer on a hostile HTML sample; attachment save; phone/tablet stacked layout; SMTP-migrated account "Test & activate" |
+| UI (vitest/jsdom) | RfiEditor pending-reply banner (use as response fills field, dismiss clears, chip on list row); ThreadList/ThreadRow rendering + unread/link chips; Composer autocomplete + always-CC prefill + attachment item tagging; SaveAttachmentsModal pre-fill/remove; Settings account cards + disabled OAuth buttons; Sidebar badge |
+| E2E (Playwright, `MAIL_FAKE_PROVIDER=1`) | connect fake account → seeded threads visible → open thread → body renders in iframe, remote image blocked → reply inline → row moves to top; send an invoice from its editor → link chip appears → thread opens from chip; save attachment → appears in Documents; send an RFI → fake provider injects a reply → RFI editor shows the banner → Use as response → status answered |
+| Manual smoke | send an RFI to yourself from a second account, reply, verify banner + accept flow; real Google + Microsoft + IMAP connect; push freshness (send yourself a mail); sanitizer on a hostile HTML sample; attachment save; phone/tablet stacked layout; SMTP-migrated account "Test & activate" |
 
 ---
 
