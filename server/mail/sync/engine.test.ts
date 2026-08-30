@@ -91,6 +91,19 @@ describe('engine', () => {
       .toEqual([{ providerMessageId: 'AAMkRealSentId', sentFromApp: 1 }]);   // re-keyed, not duplicated
     expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 1 });
   });
+  it('re-keys the placeholder the provider names, even though the provider rewrote the Message-ID', () => {
+    upsertEnvelopes(ctx, acct, [env('sent:out-2@bb.com', { messageIdHeader: 'out-2@bb.com', from: { addr: 'me@bb.com' }, isRead: true })], { sentFromApp: true });
+    // Graph stamped its own Message-ID on the wire, so nothing about the real
+    // envelope's header matches the row we wrote — only the id it names does.
+    upsertEnvelopes(ctx, acct, [env('AAMkGraphId', { messageIdHeader: 'rewritten@outlook.com', from: { addr: 'me@bb.com' }, isRead: true, replacesProviderMessageId: 'sent:out-2@bb.com' })]);
+    expect(db.prepare('SELECT providerMessageId, messageIdHeader, sentFromApp FROM mail_messages').all())
+      .toEqual([{ providerMessageId: 'AAMkGraphId', messageIdHeader: 'rewritten@outlook.com', sentFromApp: 1 }]);
+  });
+  it('ignores replacesProviderMessageId when it does not name a sent: placeholder', () => {
+    upsertEnvelopes(ctx, acct, [env('real-a', { messageIdHeader: 'a@bb.com' })]);
+    upsertEnvelopes(ctx, acct, [env('real-b', { messageIdHeader: 'b@bb.com', replacesProviderMessageId: 'real-a' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+  });
   it('only the sent: placeholder is re-keyed — two real ids sharing a Message-ID stay separate rows', () => {
     upsertEnvelopes(ctx, acct, [env('real-1', { messageIdHeader: 'dup@bb.com' })]);
     upsertEnvelopes(ctx, acct, [env('real-2', { messageIdHeader: 'dup@bb.com' })]);

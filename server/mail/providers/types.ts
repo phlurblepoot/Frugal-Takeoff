@@ -9,6 +9,14 @@ export interface Envelope {
   isRead: boolean; isStarred: boolean; isDraft: boolean;
   attachments: AttachmentMeta[]; sizeBytes: number;
   folderProviderIds: string[];
+  /** A provider that cannot learn the id of a message it just sent indexes the
+   *  sent row under a placeholder (Graph: `sent:<the Message-ID we generated>`).
+   *  When the real message later arrives from a sync, this carries that
+   *  placeholder id so `upsertEnvelopes` RE-KEYS the existing row instead of
+   *  inserting a second copy of the user's own sent message. Matching on
+   *  `messageIdHeader` cannot do this job: the provider rewrote the header, so
+   *  the placeholder and the real envelope do not share one. */
+  replacesProviderMessageId?: string;
 }
 /** One `move`/`archive`/`trash` outcome: `to` is the message's new
  *  providerMessageId, or null when the provider did not report one. */

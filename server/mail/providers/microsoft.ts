@@ -20,7 +20,9 @@
 // the recipient will quote is one we never chose, so `send` reads the sent copy
 // back out of Sent Items and reports the real header; when that read-back finds
 // nothing, the id falls back to `sent:<our header>` and the next delta pass
-// replaces it (upsertEnvelopes matches the placeholder by messageIdHeader).
+// re-keys that row rather than duplicating it — tied together by the
+// `x-frugal-message-id` header this provider sets on the way out and reads back
+// off the synced message as Envelope.replacesProviderMessageId.
 import { Readable } from 'stream';
 import type {
   MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, OutgoingAttachment,
@@ -54,8 +56,11 @@ const SENT_PREFIX = 'sent:';
 /** A sent copy older than this is somebody else's message, not the one we
  *  just handed to Graph. */
 const SENT_MATCH_WINDOW_MS = 60_000;
-/** Lets the sent copy be matched exactly instead of by subject. Graph rejects
- *  any custom header that does not start with `x-`. */
+/** Lets the sent copy be matched exactly instead of by subject, and — when it
+ *  comes back around on a later sync — lets the engine tie the real message to
+ *  the `sent:` placeholder the send left behind. Graph rejects any custom
+ *  header that does not start with `x-`, and only accepts them on a message it
+ *  did not create itself, so a createReply draft cannot carry one. */
 const CORRELATION_HEADER = 'x-frugal-message-id';
 /** How many messages' attachment lists getAttachment may remember. Metadata
  *  only — never body bytes — and bounded so a long session cannot grow it. */
@@ -328,7 +333,12 @@ export class GraphProvider implements MailProvider {
   private toEnvelope(m: GraphMessage, attachments: AttachmentMeta[]): Envelope {
     const refs = (headerOf(m, 'References') ?? '').match(/<[^>]+>/g) ?? [];
     const when = new Date(m.receivedDateTime || m.sentDateTime || '');
+    // Our own correlation header, riding back in on the message Graph filed in
+    // Sent Items: it is the only thing tying this message to the placeholder
+    // row a send left behind, because Graph replaced the Message-ID we chose.
+    const correlation = headerOf(m, CORRELATION_HEADER);
     return {
+      ...(correlation ? { replacesProviderMessageId: SENT_PREFIX + correlation } : {}),
       providerMessageId: m.id,
       providerThreadId: m.conversationId,
       messageIdHeader: normalizeMessageId(m.internetMessageId) ?? undefined,
@@ -596,7 +606,7 @@ export class GraphProvider implements MailProvider {
       });
     }
 
-    const found = await this.findSentCopy(msg, sentAt);
+    const found = await this.findSentCopy(msg, sentAt, parent?.conversationId);
     if (found) {
       return {
         providerMessageId: found.id,
@@ -655,7 +665,7 @@ export class GraphProvider implements MailProvider {
    *  out of Sent Items: exactly, by the correlation header when we were able to
    *  set one, and otherwise by subject within a minute of the send. A failure
    *  here must never fail a send that has already gone out. */
-  private async findSentCopy(msg: OutgoingMessage, sentAt: number): Promise<{ id: string; conversationId?: string; messageIdHeader?: string } | null> {
+  private async findSentCopy(msg: OutgoingMessage, sentAt: number, conversationId?: string): Promise<{ id: string; conversationId?: string; messageIdHeader?: string } | null> {
     try {
       const r = await this.api<GraphList<GraphMessage>>('me/mailFolders/sentitems/messages', {
         query: { $top: 5, $orderby: 'sentDateTime desc', $select: 'id,internetMessageId,conversationId,subject,sentDateTime,internetMessageHeaders' },
@@ -665,6 +675,10 @@ export class GraphProvider implements MailProvider {
         return Number.isFinite(t) && Math.abs(t - sentAt) <= SENT_MATCH_WINDOW_MS;
       });
       const hit = recent.find(m => headerOf(m, CORRELATION_HEADER) === msg.messageIdHeader)
+        // A reply carries no correlation header (Graph only accepts one on a
+        // message it did not create), but we know the conversation it went
+        // into, which beats matching on a subject two messages can share.
+        ?? (conversationId ? recent.find(m => m.conversationId === conversationId) : undefined)
         ?? recent.find(m => (m.subject ?? '') === msg.subject);
       if (!hit?.id) return null;
       return {

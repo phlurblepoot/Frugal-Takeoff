@@ -328,6 +328,46 @@ describe('GraphProvider', () => {
     expect(r).toMatchObject({ providerMessageId: 'SENT-1', providerThreadId: 't9' });
   });
 
+  it('names the sent: placeholder it replaces when its own correlation header comes back on a sync', async () => {
+    const base = fx('graph-delta-initial.json');
+    const sent = {
+      ...base.value[1], id: 'AAMkRealSentId', parentFolderId: 'AAMkFolderSent',
+      internetMessageId: '<AS8PR01MB9999.EURPRD01.PROD.OUTLOOK.COM>',
+      internetMessageHeaders: [{ name: 'x-frugal-message-id', value: 'mid@x' }],
+    };
+    const f = fakeFetch([
+      ...FOLDER_ROUTES,
+      deltaRoute(() => ({ value: [sent], '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/AAMkFolderInbox/messages/delta?$deltatoken=D3' })),
+    ]);
+    const msgs = await drainBackfill(provider(f), new Date('2026-03-01T00:00:00.000Z'));
+
+    // Graph rewrote the Message-ID, so the header cannot tie these two together
+    // — the correlation header we set on the way out is what does.
+    const m = msgs.find(x => x.providerMessageId === 'AAMkRealSentId')!;
+    expect(m.messageIdHeader).toBe('as8pr01mb9999.eurprd01.prod.outlook.com');
+    expect(m.replacesProviderMessageId).toBe('sent:mid@x');
+    // An ordinary inbound message names nothing.
+    expect(msgs.every(x => x.providerMessageId === 'AAMkRealSentId' || x.replacesProviderMessageId === undefined)).toBe(true);
+  });
+
+  it('a reply finds its sent copy by conversation, not by a subject two messages can share', async () => {
+    const f = fakeFetch([
+      [/\/me\/messages\?\$filter=internetMessageId/, () => ({ value: [{ id: 'p1', conversationId: 't1' }] })],
+      [/\/createReply$/, () => ({ id: 'd1' })],
+      [/\/me\/messages\/d1\/send$/, () => new Response(null, { status: 202 })],
+      [/\/me\/messages\/d1$/, () => ({ id: 'd1' })],
+      [/sentitems\/messages\?/, () => ({
+        value: [
+          // A different message, same subject, sent moments ago — the trap.
+          { id: 'DECOY', subject: 'Re: COR-4', conversationId: 'tOTHER', sentDateTime: new Date().toISOString() },
+          { id: 'SENT-REPLY', subject: 'Re: COR-4', conversationId: 't1', internetMessageId: '<real@outlook.com>', sentDateTime: new Date().toISOString() },
+        ],
+      })],
+    ]);
+    expect(await provider(f).send({ ...outgoing(), subject: 'Re: COR-4', inReplyTo: 'root-1@bigbearplaster.com' }))
+      .toEqual({ providerMessageId: 'SENT-REPLY', providerThreadId: 't1', messageIdHeader: 'real@outlook.com' });
+  });
+
   it('a reply whose parent is not in this mailbox still sends, through sendMail', async () => {
     const f = fakeFetch([
       [/\/me\/messages\?\$filter=internetMessageId/, () => ({ value: [] })],
