@@ -253,6 +253,33 @@ describe('mail routes', () => {
       .toEqual([(db.prepare(`SELECT id FROM mail_folders WHERE role='archive'`).get() as { id: string }).id]);
   });
 
+  // An IMAP MOVE re-numbers the message. If the row kept the old provider id it
+  // would resolve to nothing and the next poll would index the moved copy again.
+  it('archive re-keys the row to the provider id the message now has', async () => {
+    const id = firstMessageId();
+    provider.archive = async (ids: string[]) => ids.map(from => ({ from, to: 'Archive 9 77' }));
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'archive' })).status).toBe(200);
+    const row = db.prepare('SELECT providerMessageId, folderIdsJson FROM mail_messages WHERE id = ?').get(id) as { providerMessageId: string; folderIdsJson: string };
+    expect(row.providerMessageId).toBe('Archive 9 77');
+    expect(JSON.parse(row.folderIdsJson)).toEqual([(db.prepare(`SELECT id FROM mail_folders WHERE role='archive'`).get() as { id: string }).id]);
+  });
+
+  it('trash drops the row when the provider cannot say where the message went', async () => {
+    const id = firstMessageId();
+    provider.trash = async (ids: string[]) => ids.map(from => ({ from, to: null }));
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'trash' })).status).toBe(200);
+    expect(db.prepare('SELECT id FROM mail_messages WHERE id = ?').get(id)).toBeUndefined();
+    // the thread rollup is rebuilt, not left pointing at a message that is gone
+    expect(db.prepare('SELECT id FROM mail_threads').get()).toBeUndefined();
+  });
+
+  it('an unchanged mapping leaves the row alone', async () => {
+    const id = firstMessageId();
+    const before = (db.prepare('SELECT providerMessageId FROM mail_messages WHERE id = ?').get(id) as { providerMessageId: string }).providerMessageId;
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'archive' })).status).toBe(200);
+    expect((db.prepare('SELECT providerMessageId FROM mail_messages WHERE id = ?').get(id) as { providerMessageId: string }).providerMessageId).toBe(before);
+  });
+
   it('actions reject an unknown action and a message the caller does not own', async () => {
     const id = firstMessageId();
     expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'bogus' })).status).toBe(400);

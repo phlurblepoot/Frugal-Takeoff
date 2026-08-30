@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 import type { ImapAuth } from '../accountStore';
 import type {
-  MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, FolderRole, Addr,
+  MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, FolderRole, Addr, MoveResult,
 } from './types';
 import { AuthExpiredError, ProviderNotFoundError } from './types';
 import { buildRawMime } from './mimeBuild';
@@ -57,6 +57,13 @@ const ROLE_BY_NAME: Array<[RegExp, FolderRole]> = [
 /** How far back each incremental poll re-reads flags so a read/star toggled in
  *  another client shows up here. Newer than this is covered by the UID walk. */
 const FLAG_RESCAN_WINDOW = 200;
+/** The flags that map to a column the engine stores, in a fixed order so the
+ *  code is comparable between polls. Anything else is not worth a re-index. */
+const TRACKED_FLAGS: Array<[string, string]> = [['\\Seen', 'S'], ['\\Flagged', 'F'], ['\\Draft', 'D']];
+const flagCode = (flags: Set<string> | undefined): string =>
+  TRACKED_FLAGS.filter(([f]) => flags?.has(f)).map(([, c]) => c).join('');
+const envelopeFlagCode = (e: Envelope): string =>
+  `${e.isRead ? 'S' : ''}${e.isStarred ? 'F' : ''}${e.isDraft ? 'D' : ''}`;
 const OP_SOCKET_TIMEOUT_MS = 60_000;
 const PUSH_IDLE_MS = 4 * 60_000;          // < the 29-minute IDLE ceiling in RFC 2177
 const PUSH_REARM_MS = 1_000;              // never re-IDLE in a hot loop
@@ -107,22 +114,42 @@ export interface ImapProviderOpts {
   pushBackoffMs?: number;
 }
 
-type FolderState = { uidValidity: number; lastUid: number };
+type FolderState = {
+  uidValidity: number;
+  lastUid: number;
+  /** uid → tracked-flag code, for the UIDs inside the re-scan window. Lets a
+   *  poll emit only the messages whose flags actually changed instead of
+   *  re-upserting the whole window (every upsert reads as a change downstream).
+   *  Absent on the first poll for a folder: that pass records the baseline. */
+  flags?: Record<string, string>;
+};
 type ImapSyncState = { folders: Record<string, FolderState> };
 
 const FETCH_QUERY = {
   uid: true, envelope: true, flags: true, size: true, internalDate: true,
   bodyStructure: true, headers: ['references'],
 };
+/** The flag re-scan reads nothing else — it runs over hundreds of UIDs. */
+const FLAGS_QUERY = { uid: true, flags: true };
 
 const AUTH_FAIL_RE = /AUTHENTICATIONFAILED|Invalid credentials|LOGIN failed|authentication failed|\bAUTH\b.*(failed|reject)/i;
-const SMTP_AUTH_FAIL_RE = /\b(535|534|530)\b|Invalid login|authentication (failed|credentials|unsuccessful)|Username and Password not accepted/i;
+/** nodemailer classifies the failure for us: `code` EAUTH, or a 53x reply to
+ *  the AUTH command. 530 is deliberately NOT here — it is most often
+ *  "must issue STARTTLS first", a configuration fault, not a dead password. */
+const isSmtpAuthFailure = (e: unknown): boolean => {
+  const err = e as { code?: string; responseCode?: number };
+  return err?.code === 'EAUTH' || err?.responseCode === 535 || err?.responseCode === 534;
+};
 
 export class ImapMailProvider implements MailProvider {
   kind = 'imap' as const;
   private pushClient: ImapClientLike | null = null;
   private pushStopped = true;
   private pushLoop: Promise<void> | null = null;
+  /** Set once the credentials in `this.auth` were rejected: reconnecting can
+   *  only fail the same way (and hammer the server into rate-limiting us), so
+   *  push stays down until the account is rebuilt with new credentials. */
+  private pushDead = false;
 
   constructor(private auth: ImapAuth, private opts: ImapProviderOpts) {}
 
@@ -175,7 +202,7 @@ export class ImapMailProvider implements MailProvider {
 
   private async selectable(c: ImapClientLike): Promise<ImapListItem[]> {
     const boxes = await c.list();
-    return (boxes ?? []).filter(b => !b.flags?.has?.('\\Noselect'));
+    return (boxes ?? []).filter(b => !b.flags?.has?.('\\Noselect') && !b.flags?.has?.('\\NonExistent'));
   }
 
   async listFolders(): Promise<ProviderFolder[]> {
@@ -279,8 +306,14 @@ export class ImapMailProvider implements MailProvider {
       for (const b of await this.selectable(c)) {
         const role = this.roleOf(b);
         if (role === 'trash' || role === 'spam') continue;        // history nobody asked to import
-        const r = await this.scanFolder(c, b.path, { since: opts.since });
-        messages.push(...r.msgs);
+        try {
+          const r = await this.scanFolder(c, b.path, { since: opts.since });
+          messages.push(...r.msgs);
+        } catch (e) {
+          // One unreadable mailbox (permissions, a shared folder that vanished)
+          // must not cost the account every other folder's history.
+          console.warn(`[imap] skipping folder ${b.path}: ${(e as Error).message}`);
+        }
       }
       return { messages, done: true };
     });
@@ -295,31 +328,53 @@ export class ImapMailProvider implements MailProvider {
       const byId = new Map<string, Envelope>();
       for (const b of await this.selectable(c)) {
         const prev = prevFolders[b.path];
-        const box = await c.mailboxOpen(b.path);
-        const uidValidity = Number(box.uidValidity);
-        const head = Math.max(0, Number(box.uidNext ?? 1) - 1);
-        // A folder we have never synced (or one whose UIDVALIDITY the server
-        // reset) is adopted at its current head: history is backfill's job, and
-        // replaying it here would re-emit every message under new ids.
-        if (!prev || prev.uidValidity !== uidValidity) {
-          next.folders[b.path] = { uidValidity, lastUid: head };
-          continue;
+        try {
+          const box = await c.mailboxOpen(b.path);
+          const uidValidity = Number(box.uidValidity);
+          const head = Math.max(0, Number(box.uidNext ?? 1) - 1);
+          // A folder we have never synced (or one whose UIDVALIDITY the server
+          // reset) is adopted at its current head: history is backfill's job, and
+          // replaying it here would re-emit every message under new ids.
+          if (!prev || prev.uidValidity !== uidValidity) {
+            next.folders[b.path] = { uidValidity, lastUid: head };
+            continue;
+          }
+          const fresh = await this.fetchRange(c, b.path, uidValidity, `${prev.lastUid + 1}:*`);
+          // "N:*" is not empty when N is past the end — IMAP answers with the
+          // highest existing UID — so the filter below is what keeps an idle
+          // folder from re-emitting its newest message on every poll.
+          const added = fresh.msgs.filter(m => parsePmid(m.providerMessageId).uid > prev.lastUid);
+          for (const m of added) byId.set(m.providerMessageId, m);
+
+          // IMAP has no flag change feed, so a window of known UIDs is re-read
+          // every poll. Only the FLAGS are read back and compared against the
+          // codes stored last time: unchanged UIDs cost one cheap FETCH and
+          // produce no upsert, and only the ones that really changed are then
+          // fetched in full.
+          const codes: Record<string, string> = {};
+          const changed: number[] = [];
+          if (prev.lastUid > 0) {
+            const from = Math.max(1, prev.lastUid - FLAG_RESCAN_WINDOW);
+            for await (const m of c.fetch(`${from}:${prev.lastUid}`, FLAGS_QUERY, { uid: true })) {
+              if (!m || typeof m.uid !== 'number' || m.uid > prev.lastUid) continue;
+              const code = flagCode(m.flags);
+              codes[String(m.uid)] = code;
+              // No stored codes yet = this pass is the baseline, emit nothing.
+              if (prev.flags && prev.flags[String(m.uid)] !== code) changed.push(m.uid);
+            }
+            if (changed.length) {
+              const refetched = await this.fetchRange(c, b.path, uidValidity, changed.join(','));
+              for (const m of refetched.msgs) if (!byId.has(m.providerMessageId)) byId.set(m.providerMessageId, m);
+            }
+          }
+          // Seed the codes of the messages this poll just indexed, or the next
+          // poll would see them as brand-new entries and re-emit them once.
+          for (const m of added) codes[String(parsePmid(m.providerMessageId).uid)] = envelopeFlagCode(m);
+          next.folders[b.path] = { uidValidity, lastUid: Math.max(prev.lastUid, fresh.maxUid), flags: codes };
+        } catch (e) {
+          console.warn(`[imap] skipping folder ${b.path}: ${(e as Error).message}`);
+          if (prev) next.folders[b.path] = prev;      // keep the cursor, retry next poll
         }
-        const fresh = await this.fetchRange(c, b.path, uidValidity, `${prev.lastUid + 1}:*`);
-        // "N:*" is not empty when N is past the end — IMAP answers with the
-        // highest existing UID — so the filter below is what keeps an idle
-        // folder from re-emitting its newest message on every poll.
-        for (const m of fresh.msgs) {
-          if (parsePmid(m.providerMessageId).uid > prev.lastUid) byId.set(m.providerMessageId, m);
-        }
-        // Re-read a window of known UIDs so a read/star toggled in another
-        // client reaches the engine's upsert (IMAP has no flag change feed).
-        if (prev.lastUid > 0) {
-          const from = Math.max(1, prev.lastUid - FLAG_RESCAN_WINDOW);
-          const rescan = await this.fetchRange(c, b.path, uidValidity, `${from}:${prev.lastUid}`);
-          for (const m of rescan.msgs) if (!byId.has(m.providerMessageId)) byId.set(m.providerMessageId, m);
-        }
-        next.folders[b.path] = { uidValidity, lastUid: Math.max(prev.lastUid, fresh.maxUid) };
       }
       // IMAP gives no cheap tombstones; disappearing messages are reconciled by
       // the next backfill rather than guessed at here.
@@ -375,34 +430,38 @@ export class ImapMailProvider implements MailProvider {
     stream.once('end', close);
     stream.once('error', close);
     stream.once('close', close);
+    // No `size`: imapflow's `expectedSize` is RFC822.SIZE — the whole message,
+    // not this part — and a caller that turned it into a Content-Length would
+    // truncate or stall every download. The contract makes size optional.
     return {
       stream,
       mime: dl.meta?.contentType || 'application/octet-stream',
-      size: dl.meta?.expectedSize,
       name: dl.meta?.filename || 'attachment',
     };
   }
 
   // -- mailbox operations ---------------------------------------------------
 
-  /** Batches ids per source folder — UIDs are only meaningful inside one. */
-  private groupByFolder(ids: string[]): Map<string, number[]> {
-    const out = new Map<string, number[]>();
+  /** Batches ids per source folder — UIDs are only meaningful inside one. The
+   *  caller's exact id string rides along so a MoveResult can name it back. */
+  private groupByFolder(ids: string[]): { groups: Map<string, Array<{ uid: number; id: string }>>; skipped: string[] } {
+    const groups = new Map<string, Array<{ uid: number; id: string }>>();
+    const skipped: string[] = [];
     for (const id of ids) {
       const p = tryParsePmid(id);
-      if (!p) continue;                                 // synthetic/unknown id: nothing on the server to touch
-      out.set(p.folder, [...(out.get(p.folder) ?? []), p.uid]);
+      if (!p) { skipped.push(id); continue; }           // synthetic/unknown id: nothing on the server to touch
+      groups.set(p.folder, [...(groups.get(p.folder) ?? []), { uid: p.uid, id }]);
     }
-    return out;
+    return { groups, skipped };
   }
 
   async setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }): Promise<void> {
-    const groups = this.groupByFolder(ids);
+    const { groups } = this.groupByFolder(ids);
     if (!groups.size || (flags.read === undefined && flags.starred === undefined)) return;
     await this.withClient(async c => {
-      for (const [folder, uids] of groups) {
+      for (const [folder, entries] of groups) {
         await c.mailboxOpen(folder);
-        const range = uids.join(',');
+        const range = entries.map(e => e.uid).join(',');
         if (flags.read !== undefined) {
           await (flags.read ? c.messageFlagsAdd(range, ['\\Seen'], { uid: true }) : c.messageFlagsRemove(range, ['\\Seen'], { uid: true }));
         }
@@ -413,34 +472,51 @@ export class ImapMailProvider implements MailProvider {
     });
   }
 
-  async move(ids: string[], folderProviderId: string): Promise<void> {
-    const groups = this.groupByFolder(ids);
-    if (!groups.size) return;
-    await this.withClient(async c => {
-      for (const [folder, uids] of groups) {
-        if (folder === folderProviderId) continue;
-        await c.mailboxOpen(folder);
-        await c.messageMove(uids.join(','), folderProviderId, { uid: true });
-      }
-    });
+  async move(ids: string[], folderProviderId: string): Promise<MoveResult[]> {
+    return this.moveTo(ids, () => Promise.resolve(folderProviderId));
   }
 
-  /** One connection for both halves: find the destination, then move into it. */
-  private async moveToRole(ids: string[], role: FolderRole, fallback: string): Promise<void> {
-    const groups = this.groupByFolder(ids);
-    if (!groups.size) return;
-    await this.withClient(async c => {
-      const dest = await this.roleFolder(c, role, fallback);
-      for (const [folder, uids] of groups) {
-        if (folder === dest) continue;
-        await c.mailboxOpen(folder);
-        await c.messageMove(uids.join(','), dest, { uid: true });
-      }
-    });
+  async archive(ids: string[]): Promise<MoveResult[]> {
+    return this.moveTo(ids, c => this.roleFolder(c, 'archive', 'Archive'));
   }
 
-  async archive(ids: string[]): Promise<void> { await this.moveToRole(ids, 'archive', 'Archive'); }
-  async trash(ids: string[]): Promise<void> { await this.moveToRole(ids, 'trash', 'Trash'); }
+  async trash(ids: string[]): Promise<MoveResult[]> {
+    return this.moveTo(ids, c => this.roleFolder(c, 'trash', 'Trash'));
+  }
+
+  /** One connection for both halves: resolve the destination, then move into
+   *  it, reporting the new provider id of every message the server re-numbered.
+   *  A UID only means something in one mailbox, so a moved message is a
+   *  DIFFERENT id afterwards — a caller that keeps the old one ends up with a
+   *  row nothing resolves plus a duplicate at the next sync. */
+  private async moveTo(ids: string[], destOf: (c: ImapClientLike) => Promise<string>): Promise<MoveResult[]> {
+    const { groups, skipped } = this.groupByFolder(ids);
+    const out: MoveResult[] = skipped.map(id => ({ from: id, to: null }));
+    if (!groups.size) return out;
+    await this.withClient(async c => {
+      const dest = await destOf(c);
+      for (const [folder, entries] of groups) {
+        if (folder === dest) { out.push(...entries.map(e => ({ from: e.id, to: e.id }))); continue; }
+        try {
+          await c.mailboxOpen(folder);
+          const r = await c.messageMove(entries.map(e => e.uid).join(','), dest, { uid: true }) as
+            { uidValidity?: bigint | number; uidMap?: Map<number, number> } | false | undefined;
+          // uidMap/uidValidity only arrive from a server with UIDPLUS; without
+          // them the move still happened, we just cannot name the new copy.
+          const destValidity = r && r.uidValidity != null ? Number(r.uidValidity) : null;
+          const uidMap = r && r.uidMap instanceof Map ? r.uidMap : null;
+          for (const e of entries) {
+            const newUid = uidMap?.get(e.uid);
+            out.push({ from: e.id, to: newUid && destValidity != null ? makePmid(dest, destValidity, newUid) : null });
+          }
+        } catch (err) {
+          console.warn(`[imap] skipping folder ${folder}: ${(err as Error).message}`);
+          out.push(...entries.map(e => ({ from: e.id, to: null })));
+        }
+      }
+    });
+    return out;
+  }
 
   // -- sending --------------------------------------------------------------
 
@@ -472,8 +548,7 @@ export class ImapMailProvider implements MailProvider {
     try {
       await this.transport().sendMail({ envelope: { from: msg.from.addr || this.opts.fromAddress, to: rcpt }, raw });
     } catch (e) {
-      const err = e as Error;
-      if (SMTP_AUTH_FAIL_RE.test(String(err?.message ?? ''))) {
+      if (isSmtpAuthFailure(e)) {
         throw new AuthExpiredError('SMTP login rejected — re-enter the mailbox password in Settings → Mail');
       }
       throw e;
@@ -529,14 +604,18 @@ export class ImapMailProvider implements MailProvider {
       const out: Envelope[] = [];
       for (const b of await this.selectable(c)) {
         if (out.length >= opts.limit) break;
-        const box = await c.mailboxOpen(b.path);
-        const criteria = { or: [{ subject: q }, { from: q }, { body: q }], ...(opts.before ? { before: opts.before } : {}) };
-        const uids = await c.search(criteria, { uid: true });
-        if (!uids || !uids.length) continue;
-        const room = opts.limit - out.length;
-        const wanted = uids.slice(-room);                 // newest matches first
-        const r = await this.fetchRange(c, b.path, Number(box.uidValidity), wanted.join(','), room);
-        out.push(...r.msgs);
+        try {
+          const box = await c.mailboxOpen(b.path);
+          const criteria = { or: [{ subject: q }, { from: q }, { body: q }], ...(opts.before ? { before: opts.before } : {}) };
+          const uids = await c.search(criteria, { uid: true });
+          if (!uids || !uids.length) continue;
+          const room = opts.limit - out.length;
+          const wanted = uids.slice(-room);                 // newest matches first
+          const r = await this.fetchRange(c, b.path, Number(box.uidValidity), wanted.join(','), room);
+          out.push(...r.msgs);
+        } catch (e) {
+          console.warn(`[imap] skipping folder ${b.path}: ${(e as Error).message}`);
+        }
       }
       return out.slice(0, opts.limit);
     });
@@ -545,9 +624,10 @@ export class ImapMailProvider implements MailProvider {
   // -- push -----------------------------------------------------------------
 
   /** Holds one extra connection in IDLE on INBOX and pings `onChange` whenever
-   *  the server announces new mail or a flag change. Reconnects with backoff. */
-  async startPush(onChange: () => void): Promise<void> {
-    if (!this.pushStopped) return;                                     // already running
+   *  the server announces new mail or a flag change. Reconnects with backoff —
+   *  except on an auth failure, which ends the loop and reports `onAuthError`. */
+  async startPush(onChange: () => void, onAuthError?: (err: Error) => void): Promise<void> {
+    if (!this.pushStopped || this.pushDead) return;                    // already running, or dead credentials
     this.pushStopped = false;
     const rearm = this.opts.pushRearmMs ?? PUSH_REARM_MS;
     const baseBackoff = this.opts.pushBackoffMs ?? PUSH_BACKOFF_MS;
@@ -569,7 +649,17 @@ export class ImapMailProvider implements MailProvider {
             if (!this.pushStopped && rearm) await sleep(rearm);
           }
         } catch (e) {
-          if (!this.pushStopped) console.warn('[imap] IDLE connection dropped:', (e as Error).message);
+          const err = e as Error & { authenticationFailed?: boolean };
+          // Retrying rejected credentials just fails on a timer forever, so the
+          // loop ends and the caller is told the channel is not coming back.
+          if (err instanceof AuthExpiredError || err?.authenticationFailed) {
+            this.pushDead = true;
+            this.pushStopped = true;
+            console.warn('[imap] IDLE stopped: the mailbox rejected the stored credentials');
+            try { onAuthError?.(err); } catch { /* the caller's problem, not ours */ }
+          } else if (!this.pushStopped) {
+            console.warn('[imap] IDLE connection dropped:', err.message);
+          }
         } finally {
           await c.logout().catch(() => {});
           if (this.pushClient === c) this.pushClient = null;

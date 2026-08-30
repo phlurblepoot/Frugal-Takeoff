@@ -20,6 +20,9 @@ interface Script {
   searchResult?: number[];
   bodyStructure?: unknown;
   idleGate?: () => Promise<void>;
+  /** Folders whose mailboxOpen blows up, the way an unreadable share does. */
+  openFails?: string[];
+  moveResult?: { uidValidity?: bigint; uidMap?: Map<number, number> } | false;
 }
 
 const DEFAULT_FOLDERS: FakeFolder[] = [
@@ -56,11 +59,12 @@ function fakeClient(script: Script) {
     async mailboxOpen(path: string) {
       const msgs = script.messages?.[path] ?? [];
       client.calls.push(['mailboxOpen', path]);
+      if (script.openFails?.includes(path)) throw new Error(`[NONEXISTENT] no such mailbox ${path}`);
       client.mailbox = { path, uidValidity: 7n, uidNext: script.uidNext?.[path] ?? 1, exists: msgs.length };
       return client.mailbox;
     },
-    async *fetch(range: unknown, _q: unknown, opts: unknown) {
-      client.calls.push(['fetch', range, opts]);
+    async *fetch(range: unknown, q: unknown, opts: unknown) {
+      client.calls.push(['fetch', range, opts, q]);
       for (const m of script.messages?.[client.mailbox!.path] ?? []) yield m;
     },
     async fetchOne(range: unknown, _q: unknown, opts: unknown) {
@@ -69,13 +73,15 @@ function fakeClient(script: Script) {
     },
     async download(range: unknown, part: unknown, opts: unknown) {
       client.calls.push(['download', range, part, opts]);
+      // imapflow reports expectedSize as RFC822.SIZE — the WHOLE message —
+      // even when a single part is being streamed, hence the mismatch here.
       return part
-        ? { content: Readable.from(Buffer.from('%PDF')), meta: { contentType: 'application/pdf', filename: 'a.pdf', expectedSize: 4 } }
+        ? { content: Readable.from(Buffer.from('%PDF')), meta: { contentType: 'application/pdf', filename: 'a.pdf', expectedSize: 98765 } }
         : { content: Readable.from(Buffer.from(RFC822)), meta: { contentType: 'message/rfc822', expectedSize: RFC822.length } };
     },
     async messageFlagsAdd(range: unknown, flags: string[]) { client.calls.push(['add', range, flags]); return true; },
     async messageFlagsRemove(range: unknown, flags: string[]) { client.calls.push(['remove', range, flags]); return true; },
-    async messageMove(range: unknown, dest: string) { client.calls.push(['move', range, dest]); return {}; },
+    async messageMove(range: unknown, dest: string) { client.calls.push(['move', range, dest]); return script.moveResult === undefined ? {} : script.moveResult; },
     async messageDelete(range: unknown) { client.calls.push(['delete', range]); return true; },
     async append(path: string, _raw: Buffer, flags: string[]) {
       client.calls.push(['append', path, flags]);
@@ -186,16 +192,18 @@ describe('ImapMailProvider', () => {
     const r = await provider(c).incremental({ folders: { INBOX: { uidValidity: 7, lastUid: 8 } } });
     expect(r.upserts.map(u => parsePmid(u.providerMessageId).uid)).toEqual([9]);   // deduped: the flag re-scan must not double-emit
     const st = r.state as { folders: Record<string, { uidValidity: number; lastUid: number }> };
-    expect(st.folders.INBOX).toEqual({ uidValidity: 7, lastUid: 9 });
+    // the new message's flag code is seeded so the next poll does not re-emit it
+    expect(st.folders.INBOX).toEqual({ uidValidity: 7, lastUid: 9, flags: { 9: '' } });
     // an unseen folder is adopted at its current head, not backfilled
     expect(st.folders['Sent Items']).toEqual({ uidValidity: 7, lastUid: 3 });
-    expect(c.calls).toContainEqual(['fetch', '9:*', { uid: true }]);
+    expect(c.calls.some(x => x[0] === 'fetch' && x[1] === '9:*')).toBe(true);
   });
 
   it('incremental re-scans recent UIDs so flag changes made elsewhere are picked up', async () => {
     const c = fakeClient({ messages: { INBOX: [env(9)] } });
     await provider(c).incremental({ folders: { INBOX: { uidValidity: 7, lastUid: 300 } } });
-    expect(c.calls).toContainEqual(['fetch', '100:300', { uid: true }]);
+    // ...and reads only the flags for that window, never whole envelopes
+    expect(c.calls).toContainEqual(['fetch', '100:300', { uid: true }, { uid: true, flags: true }]);
   });
 
   it('incremental restarts a folder when UIDVALIDITY changed, without emitting stale ids', async () => {
@@ -206,11 +214,50 @@ describe('ImapMailProvider', () => {
     expect(st.folders.INBOX).toEqual({ uidValidity: 7, lastUid: 11 });
   });
 
+  // The re-scan window used to re-emit every envelope in it on every poll, and
+  // the engine treats each upsert as a change. Now it compares flag codes.
+  it('a second incremental with nothing changed emits no upserts', async () => {
+    const msg = env(9);
+    const c = fakeClient({ messages: { INBOX: [msg] } });
+    const p = provider(c);
+    const first = await p.incremental({ folders: { INBOX: { uidValidity: 7, lastUid: 8 } } });
+    expect(first.upserts).toHaveLength(1);
+    const second = await p.incremental(first.state);
+    expect(second.upserts).toEqual([]);
+  });
+
+  it('incremental emits exactly the UID whose flags changed', async () => {
+    const msg = env(9);
+    const c = fakeClient({ messages: { INBOX: [msg] } });
+    const p = provider(c);
+    const first = await p.incremental({ folders: { INBOX: { uidValidity: 7, lastUid: 8 } } });
+    const second = await p.incremental(first.state);
+    msg.flags = new Set(['\\Seen']);                       // read in another client
+    const third = await p.incremental(second.state);
+    expect(third.upserts.map(u => parsePmid(u.providerMessageId).uid)).toEqual([9]);
+    expect(third.upserts[0].isRead).toBe(true);           // the full envelope, not just flags
+    const fourth = await p.incremental(third.state);
+    expect(fourth.upserts).toEqual([]);                   // and it settles again
+  });
+
   it('incremental tolerates an empty/absent prior state', async () => {
     const c = fakeClient({});
     const r = await provider(c).incremental({});
     expect(r.upserts).toEqual([]);
     expect(Object.keys((r.state as { folders: Record<string, unknown> }).folders).length).toBeGreaterThan(0);
+  });
+
+  it('one unreadable folder does not abort the rest of the sync', async () => {
+    const c = fakeClient({ openFails: ['Drafts'], messages: { INBOX: [env(5)], Archive: [env(6)] } });
+    const r = await provider(c).backfill({ since: new Date('2026-01-01') });
+    expect(r.messages.map(m => parsePmid(m.providerMessageId).uid).sort()).toEqual([5, 6]);
+  });
+
+  it('incremental keeps a folder cursor it could not read this time', async () => {
+    const c = fakeClient({ openFails: ['INBOX'], messages: { INBOX: [env(9)] } });
+    const r = await provider(c).incremental({ folders: { INBOX: { uidValidity: 7, lastUid: 8 } } });
+    expect(r.upserts).toEqual([]);
+    expect((r.state as { folders: Record<string, unknown> }).folders.INBOX).toEqual({ uidValidity: 7, lastUid: 8 });
   });
 
   it('getBody parses the downloaded RFC822 and reports attachments from BODYSTRUCTURE', async () => {
@@ -227,6 +274,9 @@ describe('ImapMailProvider', () => {
     const a = await provider(c).getAttachment(makePmid('INBOX', 7, 5), '2');
     expect(a.mime).toBe('application/pdf');
     expect(a.name).toBe('a.pdf');
+    // expectedSize is the whole message; reporting it would set a Content-Length
+    // far larger than the part and stall the download.
+    expect(a.size).toBeUndefined();
     expect(c.calls).toContainEqual(['download', '5', '2', { uid: true }]);
     const chunks: Buffer[] = [];
     for await (const ch of a.stream) chunks.push(ch as Buffer);
@@ -253,6 +303,27 @@ describe('ImapMailProvider', () => {
     expect(c.calls).toContainEqual(['move', '5', 'Archive']);
     await provider(c).move([makePmid('INBOX', 7, 5)], 'Later');
     expect(c.calls).toContainEqual(['move', '5', 'Later']);
+  });
+
+  // A MOVE re-numbers the message: the caller must learn the new id or it keeps
+  // a row pointing at nothing and re-indexes the moved copy as a duplicate.
+  it('move reports the new providerMessageId from the MOVE uidMap', async () => {
+    const c = fakeClient({ moveResult: { uidValidity: 9n, uidMap: new Map([[5, 77], [6, 78]]) } });
+    const r = await provider(c).move([makePmid('INBOX', 7, 5), makePmid('INBOX', 7, 6)], 'Later');
+    expect(r).toEqual([
+      { from: 'INBOX 7 5', to: 'Later 9 77' },
+      { from: 'INBOX 7 6', to: 'Later 9 78' },
+    ]);
+  });
+
+  it('move reports null when the server sends no UIDPLUS mapping', async () => {
+    const c = fakeClient({ moveResult: {} });
+    expect(await provider(c).trash([makePmid('INBOX', 7, 5)])).toEqual([{ from: 'INBOX 7 5', to: null }]);
+  });
+
+  it('move reports a null mapping for an id that never named a server message', async () => {
+    const c = fakeClient({});
+    expect(await provider(c).trash(['sent:unappended:mid@x'])).toEqual([{ from: 'sent:unappended:mid@x', to: null }]);
   });
 
   it('groups ops per source folder', async () => {
@@ -308,12 +379,24 @@ describe('ImapMailProvider', () => {
   it('send maps an SMTP auth rejection to AuthExpiredError without echoing the password', async () => {
     const c = fakeClient({});
     const p = provider(c, {
-      transportFactory: () => ({ sendMail: async () => { throw new Error('535 5.7.8 Authentication credentials invalid'); } }),
+      transportFactory: () => ({ sendMail: async () => { throw Object.assign(new Error('Invalid login'), { code: 'EAUTH', responseCode: 535 }); } }),
     });
     const err = await p.send(outgoing).catch((e: Error) => e);
     expect(err).toBeInstanceOf(AuthExpiredError);
     expect((err as Error).message).toMatch(/SMTP/);
     expect((err as Error).message).not.toContain(auth.password);
+  });
+
+  // 530 is nearly always "must issue STARTTLS first" — a server-settings fault.
+  // Calling it an auth expiry would tell the user to retype a working password.
+  it('send does not treat a 530 STARTTLS refusal as an auth failure', async () => {
+    const c = fakeClient({});
+    const p = provider(c, {
+      transportFactory: () => ({ sendMail: async () => { throw Object.assign(new Error('530 5.7.0 Must issue a STARTTLS command first'), { code: 'ESOCKET', responseCode: 530 }); } }),
+    });
+    const err = await p.send(outgoing).catch((e: Error) => e);
+    expect(err).not.toBeInstanceOf(AuthExpiredError);
+    expect((err as Error).message).toMatch(/STARTTLS/);
   });
 
   it('saveDraft appends to Drafts and replaces the previous draft', async () => {
@@ -361,6 +444,24 @@ describe('ImapMailProvider', () => {
     c.download = (async () => ({ content: null, meta: {} })) as unknown as FakeClient['download'];
     await expect(provider(c).getBody(makePmid('INBOX', 7, 5))).rejects.toBeInstanceOf(ProviderNotFoundError);
     expect(c.loggedOut).toBe(1);
+  });
+
+  // Reconnecting on rejected credentials just fails forever on a timer.
+  it('startPush gives up on an auth failure and reports it once', async () => {
+    const c = fakeClient({ authFail: true });
+    const p = provider(c, { pushRearmMs: 0, pushBackoffMs: 0 });
+    const errs: Error[] = [];
+    await p.startPush(() => {}, e => errs.push(e));
+    await new Promise(r => setTimeout(r, 20));
+    const attempts = c.calls.filter(x => x[0] === 'connect').length;
+    expect(attempts).toBe(1);
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toBeInstanceOf(AuthExpiredError);
+    await new Promise(r => setTimeout(r, 20));
+    expect(c.calls.filter(x => x[0] === 'connect').length).toBe(1);   // no reconnect loop
+    await p.startPush(() => {}, e => errs.push(e));                   // and it stays down
+    await new Promise(r => setTimeout(r, 10));
+    expect(c.calls.filter(x => x[0] === 'connect').length).toBe(1);
   });
 
   it('startPush idles on INBOX, calls back on exists, and stops cleanly', async () => {

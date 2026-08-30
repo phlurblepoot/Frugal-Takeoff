@@ -10,6 +10,9 @@ export interface Envelope {
   attachments: AttachmentMeta[]; sizeBytes: number;
   folderProviderIds: string[];
 }
+/** One `move`/`archive`/`trash` outcome: `to` is the message's new
+ *  providerMessageId, or null when the provider did not report one. */
+export interface MoveResult { from: string; to: string | null }
 export interface ProviderFolder { providerId: string; name: string; role: FolderRole | null; unreadCount?: number; totalCount?: number; sortOrder?: number }
 export type FolderRole = 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam' | 'starred';
 export type SyncState = Record<string, unknown>;
@@ -30,16 +33,24 @@ export interface MailProvider {
    *  reply that quotes it will not thread. Omitted = ours was kept verbatim. */
   send(msg: OutgoingMessage): Promise<{ providerMessageId: string; providerThreadId?: string; messageIdHeader?: string }>;
   setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }): Promise<void>;
-  move(ids: string[], folderProviderId: string): Promise<void>;
-  archive(ids: string[]): Promise<void>;
-  trash(ids: string[]): Promise<void>;
+  /** Moving a message can change its provider id (an IMAP MOVE gives it a new
+   *  UID in the destination). The result maps each id we asked to move to the
+   *  id it now has, or `null` when the provider could not tell us — the caller
+   *  must re-key its rows, or the next sync indexes the moved copy as a
+   *  duplicate of a row that no longer resolves. */
+  move(ids: string[], folderProviderId: string): Promise<MoveResult[]>;
+  archive(ids: string[]): Promise<MoveResult[]>;
+  trash(ids: string[]): Promise<MoveResult[]>;
   saveDraft(draft: OutgoingMessage, existingProviderId?: string): Promise<{ providerMessageId: string }>;
   deleteDraft(providerMessageId: string): Promise<void>;
   search(query: string, opts: { before?: Date; limit: number }): Promise<Envelope[]>;
   /** Optional live-change channel (IMAP IDLE, a webhook subscription, …).
    *  `onChange` is a hint that something moved — the caller re-syncs, it carries
-   *  no payload. Providers without push simply omit both. */
-  startPush?(onChange: () => void): Promise<void>;
+   *  no payload. `onAuthError` fires when the channel died because the account's
+   *  credentials stopped working: it will not reconnect on its own, so the
+   *  caller must mark the account and stop expecting push. Providers without
+   *  push simply omit both members. */
+  startPush?(onChange: () => void, onAuthError?: (err: Error) => void): Promise<void>;
   stopPush?(): Promise<void>;
 }
 export class AuthExpiredError extends Error {}

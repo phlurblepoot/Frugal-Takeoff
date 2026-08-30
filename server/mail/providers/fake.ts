@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
-import type { MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta } from './types';
+import type { MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, MoveResult } from './types';
 import { ProviderNotFoundError } from './types';
 
 type Seeded = Envelope & { html?: string; text?: string; attachmentBytes?: Record<string, Buffer> };
@@ -66,7 +66,13 @@ export class FakeMailProvider implements MailProvider {
   async setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }) {
     this.guard(); ids.forEach(id => { const m = this.msgs.get(id); if (!m) return; if (flags.read !== undefined) m.isRead = flags.read; if (flags.starred !== undefined) m.isStarred = flags.starred; this.log.push({ seq: ++this.seq, upsert: id }); });
   }
-  async move(ids: string[], folder: string) { this.guard(); ids.forEach(id => { const m = this.msgs.get(id); if (m) { m.folderProviderIds = [folder]; this.log.push({ seq: ++this.seq, upsert: id }); } }); }
+  // The fake keeps a message's id across a move (nothing here is UID-based), so
+  // every mapping is `to === from`. Tests that need a re-keying provider stub
+  // move/archive/trash directly.
+  async move(ids: string[], folder: string): Promise<MoveResult[]> {
+    this.guard();
+    return ids.map(id => { const m = this.msgs.get(id); if (m) { m.folderProviderIds = [folder]; this.log.push({ seq: ++this.seq, upsert: id }); } return { from: id, to: id }; });
+  }
   async archive(ids: string[]) { return this.move(ids, 'ARCHIVE'); }
   async trash(ids: string[]) { return this.move(ids, 'TRASH'); }
   async saveDraft(draft: OutgoingMessage, existing?: string) { this.guard(); const id = existing ?? 'draft-' + uuidv4(); this.drafts.set(id, draft); return { providerMessageId: id }; }

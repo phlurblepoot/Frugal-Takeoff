@@ -12,7 +12,7 @@ import { stageUpload } from './uploads';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
-import type { AttachmentMeta, Addr, MailProvider } from './providers/types';
+import type { AttachmentMeta, Addr, MailProvider, MoveResult } from './providers/types';
 import { AuthExpiredError } from './providers/types';
 
 export interface BodyPayload { html: string; text: string; blockedRemoteImages: number; attachments: AttachmentMeta[] }
@@ -361,11 +361,34 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       try {
         const p = providerFor(accountId);
         const ids = list.map(r => r.providerMessageId);
+        let moved: MoveResult[] | null = null;
         if (action === 'read' || action === 'unread') await p.setFlags(ids, { read: action === 'read' });
         else if (action === 'star' || action === 'unstar') await p.setFlags(ids, { starred: action === 'star' });
-        else if (action === 'archive') await p.archive(ids);
-        else if (action === 'trash') await p.trash(ids);
-        else await p.move(ids, target!.providerId);
+        else if (action === 'archive') moved = await p.archive(ids);
+        else if (action === 'trash') moved = await p.trash(ids);
+        else moved = await p.move(ids, target!.providerId);
+        // A moved message usually has a NEW provider id (an IMAP MOVE re-numbers
+        // it). Re-key the row now, or the next poll indexes the moved copy as a
+        // second message and the old row points at nothing.
+        if (moved?.length) {
+          const byFrom = new Map(list.map(r => [r.providerMessageId, r]));
+          try {
+            db.transaction(() => {
+              for (const m of moved!) {
+                const row = byFrom.get(m.from);
+                if (!row || m.to === m.from) continue;
+                if (m.to) db.prepare('UPDATE mail_messages SET providerMessageId = ?, folderIdsJson = ? WHERE id = ?').run(m.to, JSON.stringify([target!.id]), row.id);
+                // Trashed and untraceable: the server copy can no longer be
+                // addressed, so keeping a local row would only ever be a ghost.
+                else if (action === 'trash') db.prepare('DELETE FROM mail_messages WHERE id = ?').run(row.id);
+              }
+              for (const k of keys) rebuildThread(db, accountId, k);
+            })();
+          } catch (e) {
+            // The move itself succeeded — never unwind it over bookkeeping.
+            console.error('[mail] could not re-key moved messages', e);
+          }
+        }
       } catch (e) {
         db.transaction(() => {
           for (const s of snapshot) db.prepare('UPDATE mail_messages SET isRead = ?, isStarred = ?, folderIdsJson = ? WHERE id = ?').run(s.isRead, s.isStarred, s.folderIdsJson, s.id);
