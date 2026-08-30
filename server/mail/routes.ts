@@ -252,9 +252,17 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     res.json({ thread: threadRow(t, linksFor([t.threadKey])), messages, links: listLinksForThread(db, t.threadKey) });
   });
 
+  // A message the provider could not name yet (see Envelope.replacesProviderMessageId):
+  // the send went out, but the copy has not been filed where we can read it
+  // back, so asking the provider for it would 404 on the user's OWN message.
+  const isPending = (m: MessageRowRaw): boolean => String(m.providerMessageId || '').startsWith('sent:');
+
   app.get('/api/mail/messages/:id/body', authenticateToken, async (req, res) => {
     const m = ownedMessage(req, req.params.id);
     if (!m) return res.status(404).json({ error: 'Message not found' });
+    // 202, not an error: this resolves itself on the next sync, and the client
+    // shows "Sending…" rather than a failure.
+    if (isPending(m)) return res.status(202).json({ pending: true });
     const allowImages = req.query.images === '1';
     const key = `${m.id}:${allowImages ? 1 : 0}`;
     const hit = deps.bodyCache.get(key);
@@ -278,6 +286,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   app.get('/api/mail/messages/:id/attachments/:attId', authOrQueryToken, async (req, res) => {
     const m = ownedMessage(req, req.params.id);
     if (!m) return res.status(404).json({ error: 'Message not found' });
+    if (isPending(m)) return res.status(404).json({ error: 'This message is still being filed by the mail server — its attachments will be available in a minute' });
     try {
       const att = await providerFor(m.accountId).getAttachment(m.providerMessageId, req.params.attId);
       res.setHeader('Content-Type', att.mime || 'application/octet-stream');

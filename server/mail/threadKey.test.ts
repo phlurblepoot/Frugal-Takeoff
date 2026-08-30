@@ -19,6 +19,24 @@ describe('normalizeSubject', () => {
 });
 describe('deriveThreadKey', () => {
   const none = () => null;
+  it('falls back to the provider conversation when the tenant omits the headers', () => {
+    // Some Microsoft 365 tenants leave internetMessageHeaders off a delta
+    // projection, so the second message of a conversation arrives with nothing
+    // to thread on but its conversationId.
+    const byThread = (pt: string) => (pt === 'CONV-1' ? 'synthetic:abc' : null);
+    expect(deriveThreadKey(none, { messageIdHeader: null, inReplyTo: null, references: [], fallbackSeed: 'a', providerThreadId: 'CONV-1' }, byThread))
+      .toEqual({ threadKey: 'synthetic:abc', synthetic: false });
+    // An unknown conversation still falls through to the synthetic key.
+    expect(deriveThreadKey(none, { messageIdHeader: null, inReplyTo: null, references: [], fallbackSeed: 'a', providerThreadId: 'CONV-9' }, byThread).synthetic).toBe(true);
+  });
+  it('the header chain outranks the provider conversation', () => {
+    const byThread = () => 'from-conversation';
+    // A known References entry wins outright...
+    expect(deriveThreadKey(k => (k === 'root@x' ? 'from-header' : null), { messageIdHeader: 'me@x', inReplyTo: null, references: ['root@x'], fallbackSeed: 'a', providerThreadId: 'CONV-1' }, byThread).threadKey)
+      .toBe('from-header');
+    // ...and so does an unknown one, which is what bridges a late-arriving root.
+    expect(deriveThreadKey(none, { messageIdHeader: 'me@x', inReplyTo: null, references: [], fallbackSeed: 'a' }, byThread).threadKey).toBe('me@x');
+  });
   it('own Message-ID becomes the key for a root message', () => {
     expect(deriveThreadKey(none, { messageIdHeader: 'root@x', inReplyTo: null, references: [], fallbackSeed: 'a' })).toEqual({ threadKey: 'root@x', synthetic: false });
   });

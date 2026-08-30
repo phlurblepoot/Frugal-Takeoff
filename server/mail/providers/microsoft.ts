@@ -30,7 +30,7 @@ import type {
 } from './types';
 import { AuthExpiredError, RateLimitedError, ProviderNotFoundError } from './types';
 import type { TokenSource } from './tokenSource';
-import { snippetOf, htmlToText } from '../mime';
+import { snippetOf, htmlToText, decodeEntities } from '../mime';
 import { normalizeMessageId } from '../threadKey';
 
 const API = 'https://graph.microsoft.com/v1.0/';
@@ -56,6 +56,11 @@ const SENT_PREFIX = 'sent:';
 /** A sent copy older than this is somebody else's message, not the one we
  *  just handed to Graph. */
 const SENT_MATCH_WINDOW_MS = 60_000;
+/** sendMail answers 202 the moment Exchange accepts the message and files the
+ *  Sent Items copy some time AFTER that, so a single read-back mostly loses the
+ *  race and the placeholder becomes the common path rather than the rare one.
+ *  These are the waits before the 2nd, 3rd and 4th attempts. */
+const SENT_READBACK_BACKOFF_MS = [500, 1000, 2000];
 /** Lets the sent copy be matched exactly instead of by subject, and — when it
  *  comes back around on a later sync — lets the engine tie the real message to
  *  the `sent:` placeholder the send left behind. Graph rejects any custom
@@ -141,7 +146,12 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-export interface MicrosoftProviderOpts { fetch: typeof fetch }
+export interface MicrosoftProviderOpts {
+  fetch: typeof fetch;
+  /** Injectable only so the read-back retry below can be tested without
+   *  actually waiting three and a half seconds. */
+  sleep?: (ms: number) => Promise<void>;
+}
 
 /** Where a backfill has got to: the delta page it must read next, and the
  *  folders it has not started yet. Opaque to the caller, which only stores it. */
@@ -349,8 +359,9 @@ export class GraphProvider implements MailProvider {
       cc: addrList(m.ccRecipients),
       bcc: addrList(m.bccRecipients),
       subject: m.subject ?? '',
-      // bodyPreview is already plain text, but it arrives entity-escaped.
-      snippet: snippetOf(htmlToText(m.bodyPreview ?? '')),
+      // bodyPreview is already plain text — only entity-escaped. Running it
+      // through htmlToText would eat any literal "<...>" the sender wrote.
+      snippet: snippetOf(decodeEntities(m.bodyPreview ?? '')),
       date: (isNaN(when.getTime()) ? new Date() : when).toISOString(),
       isRead: !!m.isRead,
       isStarred: m.flag?.flagStatus === 'flagged',
@@ -489,29 +500,33 @@ export class GraphProvider implements MailProvider {
     const raw: GraphMessage[] = [];
     const deletes: string[] = [];
     const now = new Date();
-    try {
-      // Re-listing the folders is what discovers one created in Outlook since
-      // the last poll; it gets a baseline link here rather than waiting for a
-      // backfill that may never run again.
-      for (const id of await this.syncableFolderIds()) {
-        const link = stored[id];
-        if (link) {
-          const r = await this.drainDelta(link);
-          raw.push(...r.messages);
-          deletes.push(...r.removed);
-          links[id] = r.deltaLink;
-        } else {
-          const { link: fresh, messages } = await this.baselineLink(id, now);
-          raw.push(...messages);
-          if (fresh) links[id] = fresh;
-        }
+    // Re-listing the folders is what discovers one created in Outlook since
+    // the last poll; it gets a baseline link here rather than waiting for a
+    // backfill that may never run again.
+    for (const id of await this.syncableFolderIds()) {
+      const link = stored[id];
+      if (!link) {
+        const { link: fresh, messages } = await this.baselineLink(id, now);
+        raw.push(...messages);
+        if (fresh) links[id] = fresh;
+        continue;
       }
-    } catch (e) {
-      // Graph retires a delta token after a period offline (410 Gone,
-      // syncStateNotFound). The stored state is worthless then and the only way
-      // back is a full re-read.
-      if (e instanceof ProviderNotFoundError) return { upserts: [], deletes: [], state: { deltaLinks: {} }, reset: true };
-      throw e;
+      let r: { messages: GraphMessage[]; removed: string[]; deltaLink: string };
+      try {
+        r = await this.drainDelta(link);
+      } catch (e) {
+        // Graph retires a delta token after a period offline (410 Gone,
+        // syncStateNotFound). The stored state is worthless then and the only
+        // way back is a full re-read. Deliberately scoped to the drain: a 404
+        // from the folder listing or a baseline is a different problem, and
+        // answering it with a whole-mailbox re-read would be a rough way to
+        // find that out.
+        if (e instanceof ProviderNotFoundError) return { upserts: [], deletes: [], state: { deltaLinks: {} }, reset: true };
+        throw e;
+      }
+      raw.push(...r.messages);
+      deletes.push(...r.removed);
+      links[id] = r.deltaLink;
     }
 
     // A message deleted in the same window it changed in is gone: never refetch
@@ -663,9 +678,22 @@ export class GraphProvider implements MailProvider {
 
   /** Graph never reports the id of what it sent, so the sent copy is matched
    *  out of Sent Items: exactly, by the correlation header when we were able to
-   *  set one, and otherwise by subject within a minute of the send. A failure
-   *  here must never fail a send that has already gone out. */
+   *  set one, then by the conversation a reply went into, and only then by
+   *  subject within a minute of the send. Exchange files that copy
+   *  asynchronously, so this retries with a short backoff rather than losing
+   *  the race on the first look. A failure here must never fail a send that has
+   *  already gone out. */
   private async findSentCopy(msg: OutgoingMessage, sentAt: number, conversationId?: string): Promise<{ id: string; conversationId?: string; messageIdHeader?: string } | null> {
+    const sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
+    for (let attempt = 0; ; attempt++) {
+      const hit = await this.readSentCopy(msg, sentAt, conversationId);
+      if (hit) return hit;
+      if (attempt >= SENT_READBACK_BACKOFF_MS.length) return null;
+      await sleep(SENT_READBACK_BACKOFF_MS[attempt]);
+    }
+  }
+
+  private async readSentCopy(msg: OutgoingMessage, sentAt: number, conversationId?: string): Promise<{ id: string; conversationId?: string; messageIdHeader?: string } | null> {
     try {
       const r = await this.api<GraphList<GraphMessage>>('me/mailFolders/sentitems/messages', {
         query: { $top: 5, $orderby: 'sentDateTime desc', $select: 'id,internetMessageId,conversationId,subject,sentDateTime,internetMessageHeaders' },

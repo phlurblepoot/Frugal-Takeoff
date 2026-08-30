@@ -6,13 +6,19 @@ import type { MailAccountRow } from '../accountStore';
 import * as accounts from '../accountStore';
 import type { Envelope, MailProvider, ProviderFolder } from '../providers/types';
 import { AuthExpiredError } from '../providers/types';
-import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, stripSubjectPrefixes } from '../threadKey';
+import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, normalizeSubject, stripSubjectPrefixes } from '../threadKey';
 import { snippetOf } from '../mime';
 
 export type InboundHook = (ctx: MailContext, ev: { threadKey: string; messageId: string; account: MailAccountRow }) => void;
 const inboundHooks: InboundHook[] = [];
 export function registerInboundHook(fn: InboundHook): void { inboundHooks.push(fn); }
 export function clearInboundHooks(): void { inboundHooks.length = 0; }   // tests
+
+/** How far apart our sent row and the provider's copy of it may be before they
+ *  stop looking like the same message. */
+const SENT_MATCH_WINDOW_MS = 5 * 60_000;
+/** A placeholder older than this has had every chance to be reconciled. */
+const PLACEHOLDER_TTL_MS = 60 * 60_000;
 
 export function upsertFolders(db: Database.Database, accountId: string, folders: ProviderFolder[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -79,17 +85,25 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
   const lookupStmt = db.prepare('SELECT threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ?');
   const lookup = (mid: string) => (lookupStmt.get(account.id, mid) as { threadKey: string } | undefined)?.threadKey ?? null;
   const orphanStmt = db.prepare('SELECT 1 FROM mail_messages WHERE accountId = ? AND threadKey = ?');
+  // Also serves the by-id placeholder lookup: same account, same column.
   const existingStmt = db.prepare('SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND providerMessageId = ?');
+  const threadByProviderStmt = db.prepare('SELECT threadKey FROM mail_messages WHERE accountId = ? AND providerThreadId = ? LIMIT 1');
+  const lookupByProviderThread = (pt: string) => (threadByProviderStmt.get(account.id, pt) as { threadKey: string } | undefined)?.threadKey ?? null;
   // Microsoft Graph never reports the id of a message it sent, so a send whose
   // Sent Items read-back came up empty is indexed under "sent:<Message-ID>".
   // When the sync later delivers the same message under its real id, that row
   // has to be RE-KEYED rather than inserted alongside, or the user's own sent
-  // message shows up twice in the thread for ever. The provider names the row
-  // it is replacing (it recognises its own outgoing correlation header); the
-  // messageIdHeader rule below is the weaker fallback, and only bites for a
-  // provider that kept the Message-ID we generated.
-  const placeholderByIdStmt = db.prepare(`SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND providerMessageId = ?`);
+  // message shows up twice in the thread for ever. Three ways in, weakest last:
+  // the provider names the row (it recognises its own correlation header); the
+  // Message-ID matches (only for a provider that kept ours); or the real copy
+  // lands in Sent and looks like the placeholder (SENT_MATCH below).
   const sentPlaceholderStmt = db.prepare(`SELECT id, threadKey FROM mail_messages WHERE accountId = ? AND messageIdHeader = ? AND providerMessageId LIKE 'sent:%'`);
+  // A range rather than LIKE 'sent:%': SQLite only turns a LIKE prefix into an
+  // index range when case_sensitive_like is on, and this wants the
+  // (accountId, providerMessageId) index.
+  const placeholderRowsStmt = db.prepare(`SELECT id, threadKey, providerThreadId, subject, date FROM mail_messages
+    WHERE accountId = ? AND providerMessageId >= 'sent:' AND providerMessageId < 'sent;'`);
+  const sentFolderIds = new Set((db.prepare(`SELECT id FROM mail_folders WHERE accountId = ? AND role = 'sent'`).all(account.id) as { id: string }[]).map(r => r.id));
   const ownAddressStmt = db.prepare('SELECT 1 FROM mail_accounts WHERE LOWER(emailAddress) = ?');
   const updateStmt = db.prepare(`UPDATE mail_messages SET accountId=?, providerMessageId=?, providerThreadId=?, messageIdHeader=?, inReplyTo=?, referencesJson=?, threadKey=?, fromAddr=?, fromName=?, toJson=?, ccJson=?, bccJson=?,
     subject=?, snippet=?, date=?, isRead=?, isStarred=?, isDraft=?, hasAttachments=?, attachmentsJson=?, sizeBytes=?, folderIdsJson=?, sentFromApp=MAX(sentFromApp, ?), updatedAt=? WHERE id=?`);
@@ -100,10 +114,35 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
   const updateInboundStmt = db.prepare(`UPDATE mail_thread_reply_state SET lastInboundDate = MAX(COALESCE(lastInboundDate, ''), ?), updatedAt = ? WHERE threadKey = ?`);
   const updateOutboundStmt = db.prepare(`UPDATE mail_thread_reply_state SET lastOutboundDate = MAX(COALESCE(lastOutboundDate, ''), ?), updatedAt = ? WHERE threadKey = ?`);
 
+  /** Last line of defence for a `sent:` placeholder whose provider could not
+   *  name it (a Graph REPLY carries no correlation header, because Graph only
+   *  accepts one on a message it did not create itself). The real copy is
+   *  recognised by the conversation it shares with the placeholder, or by the
+   *  same subject within five minutes.
+   *
+   *  Both tests are guarded on the message being FROM one of our own addresses.
+   *  Without that guard the guard is worse than nothing: normalizeSubject
+   *  strips "Re:", so a reply arriving within five minutes of our own send
+   *  matches on subject, and we would re-key our sent row onto the INBOUND
+   *  message and lose both. */
+  const matchPlaceholder = (env: Envelope): { id: string; threadKey: string } | undefined => {
+    const landsInSent = (env.folderProviderIds || []).some(p => { const local = fmap.get(p); return !!local && sentFolderIds.has(local); });
+    if (!landsInSent && account.provider !== 'microsoft') return undefined;
+    if (ownAddressStmt.get((env.from?.addr || '').trim().toLowerCase()) === undefined) return undefined;
+    const rows = placeholderRowsStmt.all(account.id) as { id: string; threadKey: string; providerThreadId: string | null; subject: string; date: string }[];
+    if (!rows.length) return undefined;
+    const when = Date.parse(env.date);
+    const subject = normalizeSubject(env.subject || '');
+    const hit = rows.find(r => env.providerThreadId && r.providerThreadId === env.providerThreadId)
+      ?? rows.find(r => normalizeSubject(r.subject || '') === subject
+        && Number.isFinite(when) && Math.abs(Date.parse(r.date) - when) <= SENT_MATCH_WINDOW_MS);
+    return hit ? { id: hit.id, threadKey: hit.threadKey } : undefined;
+  };
+
   const tx = db.transaction(() => {
     for (const env of envelopes) {
       const mid = normalizeMessageId(env.messageIdHeader);
-      const { threadKey } = deriveThreadKey(lookup, { messageIdHeader: mid, inReplyTo: env.inReplyTo ?? null, references: env.references ?? [], fallbackSeed: account.id + ':' + env.providerMessageId });
+      const { threadKey } = deriveThreadKey(lookup, { messageIdHeader: mid, inReplyTo: env.inReplyTo ?? null, references: env.references ?? [], fallbackSeed: account.id + ':' + env.providerMessageId, providerThreadId: env.providerThreadId ?? null }, lookupByProviderThread);
 
       // Bridge merge (spec §3.1 step 7): fold in ANY existing thread that this
       // message's own chain (references, in-reply-to, or its own id) points
@@ -122,11 +161,12 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
       const isPlaceholder = env.providerMessageId.startsWith('sent:');
       const replaces = !isPlaceholder && env.replacesProviderMessageId?.startsWith('sent:') ? env.replacesProviderMessageId : null;
       const existing = (existingStmt.get(account.id, env.providerMessageId)
-        ?? (replaces ? placeholderByIdStmt.get(account.id, replaces) : undefined)
+        ?? (replaces ? existingStmt.get(account.id, replaces) : undefined)
         // Only a placeholder is adopted this way: two REAL ids that happen to
         // share a Message-ID (the same message filed in two mailboxes) stay
         // two rows, which is what the folder list expects.
-        ?? (mid && !isPlaceholder ? sentPlaceholderStmt.get(account.id, mid) : undefined)) as { id: string; threadKey: string } | undefined;
+        ?? (mid && !isPlaceholder ? sentPlaceholderStmt.get(account.id, mid) : undefined)
+        ?? (isPlaceholder ? undefined : matchPlaceholder(env))) as { id: string; threadKey: string } | undefined;
       const id = existing?.id ?? uuidv4();
       const now = new Date().toISOString();
       const folderIds = (env.folderProviderIds || []).map(p => fmap.get(p)).filter((x): x is string => !!x);
@@ -173,6 +213,34 @@ export function removeMessages(ctx: MailContext, account: MailAccountRow, provid
   for (const key of touched) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'updated', byUserId: account.userId });
 }
 
+/** Drops `sent:` placeholders that have outlived their usefulness: the real
+ *  message reached the index under some OTHER id, so the placeholder is now a
+ *  visible duplicate of the user's own sent message. A placeholder whose thread
+ *  holds nothing else of ours is KEPT — it is the only record the user has that
+ *  they sent the thing, and showing a stale row beats losing the message. */
+export function sweepSentPlaceholders(ctx: MailContext, account: MailAccountRow): number {
+  const { db } = ctx;
+  const cutoff = new Date(Date.now() - PLACEHOLDER_TTL_MS).toISOString();
+  const stale = db.prepare(`SELECT id, threadKey FROM mail_messages
+    WHERE accountId = ? AND providerMessageId >= 'sent:' AND providerMessageId < 'sent;' AND createdAt < ?`).all(account.id, cutoff) as { id: string; threadKey: string }[];
+  if (!stale.length) return 0;
+  const supersededStmt = db.prepare(`SELECT 1 FROM mail_messages m
+    JOIN mail_accounts a ON LOWER(a.emailAddress) = m.fromAddr
+    WHERE m.accountId = ? AND m.threadKey = ? AND m.id <> ?
+      AND NOT (m.providerMessageId >= 'sent:' AND m.providerMessageId < 'sent;') LIMIT 1`);
+  const touched = new Set<string>();
+  db.transaction(() => {
+    for (const row of stale) {
+      if (!supersededStmt.get(account.id, row.threadKey, row.id)) continue;
+      db.prepare('DELETE FROM mail_messages WHERE id = ?').run(row.id);
+      touched.add(row.threadKey);
+    }
+    for (const key of touched) rebuildThread(db, account.id, key);
+  })();
+  for (const key of touched) ctx.broadcastChange({ type: 'mailThread', id: key, action: 'updated', byUserId: account.userId });
+  return touched.size;
+}
+
 async function guarded(ctx: MailContext, account: MailAccountRow, fn: () => Promise<void>): Promise<void> {
   try { await fn(); accounts.updateAccount(ctx.db, account.id, { status: 'ok', lastSyncAt: new Date().toISOString(), lastError: null }); }
   catch (e: any) {
@@ -217,6 +285,7 @@ export async function runIncremental(ctx: MailContext, account: MailAccountRow, 
     }
     if (r.upserts.length) { upsertFolders(ctx.db, account.id, await provider.listFolders()); upsertEnvelopes(ctx, account, r.upserts); }
     if (r.deletes.length) removeMessages(ctx, account, r.deletes);
+    sweepSentPlaceholders(ctx, account);
     accounts.updateAccount(ctx.db, account.id, { syncState: JSON.stringify(r.state) });
   });
 }

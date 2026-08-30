@@ -10,7 +10,7 @@ import * as accounts from '../accountStore';
 import { FakeMailProvider } from '../providers/fake';
 import type { MailContext } from '../context';
 import type { Envelope, MailProvider, SyncState } from '../providers/types';
-import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages } from './engine';
+import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages, sweepSentPlaceholders } from './engine';
 
 let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountRow; let provider: FakeMailProvider; let events: any[];
 const crypto = new MailCrypto(Buffer.alloc(32, 9));
@@ -103,6 +103,71 @@ describe('engine', () => {
     upsertEnvelopes(ctx, acct, [env('real-a', { messageIdHeader: 'a@bb.com' })]);
     upsertEnvelopes(ctx, acct, [env('real-b', { messageIdHeader: 'b@bb.com', replacesProviderMessageId: 'real-a' })]);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+  });
+  it('threads two headerless messages by the provider conversation they share', () => {
+    // A Microsoft 365 tenant that omits internetMessageHeaders from its delta
+    // projection gives us nothing but the conversationId to thread on.
+    upsertEnvelopes(ctx, acct, [env('g1', { messageIdHeader: undefined, providerThreadId: 'CONV-1', date: '2026-08-10T10:00:00.000Z' })]);
+    upsertEnvelopes(ctx, acct, [env('g2', { messageIdHeader: undefined, providerThreadId: 'CONV-1', date: '2026-08-10T11:00:00.000Z' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 1 });
+    expect((db.prepare('SELECT messageCount FROM mail_threads').get() as any).messageCount).toBe(2);
+    // A different conversation stays its own thread.
+    upsertEnvelopes(ctx, acct, [env('g3', { messageIdHeader: undefined, providerThreadId: 'CONV-2' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 2 });
+  });
+  it('a message WITH headers still threads on the header chain, not the conversation', () => {
+    upsertEnvelopes(ctx, acct, [env('h1', { messageIdHeader: 'root@bb.com', providerThreadId: 'CONV-A' })]);
+    // Same conversation, but its References name the root — the header wins,
+    // and the two agree here anyway. The point is the key is the header's.
+    upsertEnvelopes(ctx, acct, [env('h2', { messageIdHeader: 'child@bb.com', references: ['root@bb.com'], providerThreadId: 'CONV-A' })]);
+    expect(db.prepare('SELECT DISTINCT threadKey FROM mail_messages').all()).toEqual([{ threadKey: 'root@bb.com' }]);
+  });
+  it('re-keys a sent: placeholder that the provider could not name, by conversation and by subject+time', () => {
+    upsertFolders(db, acct.id, [{ providerId: 'SENT', name: 'Sent', role: 'sent' }]);
+    const mine = { from: { addr: 'me@bb.com' }, isRead: true, folderProviderIds: ['SENT'] };
+    // A Graph REPLY carries no correlation header, so the real copy names nothing.
+    upsertEnvelopes(ctx, acct, [env('sent:c-1@bb.com', { ...mine, messageIdHeader: 'c-1@bb.com', providerThreadId: 'CONV-R' })], { sentFromApp: true });
+    upsertEnvelopes(ctx, acct, [env('AAMkByConv', { ...mine, messageIdHeader: 'graph-1@outlook.com', providerThreadId: 'CONV-R' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    expect((db.prepare('SELECT providerMessageId FROM mail_messages').get() as any).providerMessageId).toBe('AAMkByConv');
+
+    // No conversation to match on either: same subject, minutes apart.
+    upsertEnvelopes(ctx, acct, [env('sent:c-2@bb.com', { ...mine, messageIdHeader: 'c-2@bb.com', subject: 'Change Order 9', date: '2026-08-10T10:00:00.000Z' })], { sentFromApp: true });
+    upsertEnvelopes(ctx, acct, [env('AAMkBySubject', { ...mine, messageIdHeader: 'graph-2@outlook.com', subject: 'Change Order 9', date: '2026-08-10T10:02:00.000Z' })]);
+    expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE providerMessageId LIKE 'sent:%'`).get()).toEqual({ c: 0 });
+  });
+  it('never re-keys a placeholder onto an INBOUND message that merely shares the subject', () => {
+    upsertFolders(db, acct.id, [{ providerId: 'SENT', name: 'Sent', role: 'sent' }, { providerId: 'INBOX', name: 'Inbox', role: 'inbox' }]);
+    upsertEnvelopes(ctx, acct, [env('sent:c-3@bb.com', { from: { addr: 'me@bb.com' }, messageIdHeader: 'c-3@bb.com', subject: 'Change Order 9', date: '2026-08-10T10:00:00.000Z', folderProviderIds: ['SENT'] })], { sentFromApp: true });
+    // normalizeSubject strips "Re:", so this reply looks identical by subject
+    // and lands two minutes later — matching it would destroy the sent row.
+    upsertEnvelopes(ctx, acct, [env('inbound-1', { from: { addr: 'gc@teg.com' }, messageIdHeader: 'reply@teg.com', subject: 'Re: Change Order 9', date: '2026-08-10T10:02:00.000Z' })]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+    expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE providerMessageId = 'sent:c-3@bb.com'`).get()).toEqual({ c: 1 });
+  });
+  it('sweeps a stale placeholder once the real message is in its thread, but never the last copy', () => {
+    const old = new Date(Date.now() - 3 * 3600_000).toISOString();
+    const mine = { from: { addr: 'me@bb.com' }, isRead: true, references: ['root@bb.com'] };
+    // Every reconciliation rule misses this one: the provider named nothing, it
+    // rewrote the Message-ID, there is no conversation id, and the real copy
+    // only reached the index three hours later — well past the subject window.
+    // References still put both rows in the one thread, so the user sees their
+    // own sent message twice.
+    upsertEnvelopes(ctx, acct, [env('sent:s-1@bb.com', { ...mine, messageIdHeader: 's-1@bb.com', date: '2026-08-10T10:00:00.000Z' })], { sentFromApp: true });
+    upsertEnvelopes(ctx, acct, [env('AAMkReal', { ...mine, messageIdHeader: 'graph-s1@outlook.com', date: '2026-08-10T13:00:00.000Z' })]);
+    db.prepare(`UPDATE mail_messages SET createdAt = ? WHERE providerMessageId LIKE 'sent:%'`).run(old);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 2 });
+    expect(db.prepare('SELECT COUNT(DISTINCT threadKey) c FROM mail_messages').get()).toEqual({ c: 1 });
+
+    expect(sweepSentPlaceholders(ctx, acct)).toBe(1);
+    expect(db.prepare('SELECT providerMessageId FROM mail_messages').all()).toEqual([{ providerMessageId: 'AAMkReal' }]);
+
+    // A placeholder that is the ONLY record of the message is kept: a stale row
+    // beats the user losing a message they know they sent.
+    upsertEnvelopes(ctx, acct, [env('sent:s-2@bb.com', { from: { addr: 'me@bb.com' }, isRead: true, messageIdHeader: 's-2@bb.com' })], { sentFromApp: true });
+    db.prepare(`UPDATE mail_messages SET createdAt = ? WHERE providerMessageId = 'sent:s-2@bb.com'`).run(old);
+    expect(sweepSentPlaceholders(ctx, acct)).toBe(0);
+    expect(db.prepare(`SELECT COUNT(*) c FROM mail_messages WHERE providerMessageId = 'sent:s-2@bb.com'`).get()).toEqual({ c: 1 });
   });
   it('only the sent: placeholder is re-keyed — two real ids sharing a Message-ID stay separate rows', () => {
     upsertEnvelopes(ctx, acct, [env('real-1', { messageIdHeader: 'dup@bb.com' })]);

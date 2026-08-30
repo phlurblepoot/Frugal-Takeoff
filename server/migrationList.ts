@@ -1564,4 +1564,15 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 32,
+    name: 'mail_messages providerThreadId index',
+    // deriveThreadKey now resolves a provider conversation id to a thread we
+    // already hold, which is one lookup per synced message. Without this index
+    // that is a full scan of mail_messages per message — on a real mailbox,
+    // a delta page would cost millions of row visits.
+    up({ db }) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_mail_messages_acct_pthread ON mail_messages(accountId, providerThreadId);');
+    },
+  },
 ];

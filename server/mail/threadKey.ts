@@ -21,13 +21,24 @@ export function normalizeSubject(s: string): string {
 }
 export function deriveThreadKey(
   lookup: (messageIdHeader: string) => string | null,
-  env: { messageIdHeader: string | null; inReplyTo: string | null; references: string[]; fallbackSeed: string },
+  env: { messageIdHeader: string | null; inReplyTo: string | null; references: string[]; fallbackSeed: string; providerThreadId?: string | null },
+  // The provider's own conversation id, resolved to a thread we already hold.
+  // Threading otherwise rests entirely on In-Reply-To/References, and some
+  // Microsoft 365 tenants omit `internetMessageHeaders` from a delta
+  // projection — without this every message in such a mailbox would be its own
+  // one-message thread. It ranks BELOW the header chain, which is the
+  // cross-provider truth, and above inventing a key from an unseen reference.
+  lookupByProviderThread?: (providerThreadId: string) => string | null,
 ): { threadKey: string; synthetic: boolean } {
   const refs = env.references.map(normalizeMessageId).filter((x): x is string => !!x);
   const irt = normalizeMessageId(env.inReplyTo);
   const own = normalizeMessageId(env.messageIdHeader);
   const candidates = [...refs, ...(irt ? [irt] : []), ...(own ? [own] : [])];
   for (const c of candidates) { const k = lookup(c); if (k) return { threadKey: k, synthetic: false }; }
+  if (env.providerThreadId && lookupByProviderThread) {
+    const k = lookupByProviderThread(env.providerThreadId);
+    if (k) return { threadKey: k, synthetic: false };
+  }
   if (refs.length) return { threadKey: refs[0], synthetic: false };
   if (irt) return { threadKey: irt, synthetic: false };
   if (own) return { threadKey: own, synthetic: false };

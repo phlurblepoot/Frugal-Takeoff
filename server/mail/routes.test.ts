@@ -167,6 +167,22 @@ describe('mail routes', () => {
     expect((await request(app).get(`/api/mail/messages/${id}/body`)).status).toBe(404);
   });
 
+  it('a message the provider has not filed yet is pending, not an error', async () => {
+    // A send whose Sent Items read-back lost the race is indexed under a
+    // "sent:" placeholder; asking the provider for it would 404 on the user's
+    // own message.
+    upsertEnvelopes(ctx, acct, [env('sent:out-9@bb.com', { messageIdHeader: 'out-9@bb.com', from: { addr: 'me@bb.com' }, subject: 'Pending one' })], { sentFromApp: true });
+    const id = (db.prepare('SELECT id FROM mail_messages WHERE providerMessageId = ?').get('sent:out-9@bb.com') as { id: string }).id;
+
+    const b = await request(app).get(`/api/mail/messages/${id}/body`);
+    expect(b.status).toBe(202);
+    expect(b.body).toEqual({ pending: true });
+
+    const a = await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
+    expect(a.status).toBe(404);
+    expect(a.body.error).toMatch(/still being filed/);
+  });
+
   it('attachment streams with token auth and content-disposition; save persists to Documents', async () => {
     const id = firstMessageId();
     const r = await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });

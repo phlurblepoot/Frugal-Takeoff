@@ -29,7 +29,10 @@ function fakeFetch(routes: Route[]): FakeFetch {
 }
 
 const tokens = (): TokenSource => new TokenSource({ refreshToken: 'r', refresh: async () => ({ accessToken: 'AT', expiresInSec: 3600 }) });
-const provider = (f: typeof fetch): GraphProvider => new GraphProvider(tokens(), { fetch: f });
+// The sent-items read-back backs off between attempts; no test should spend
+// real seconds on that, so the wait is injected and recorded instead.
+const provider = (f: typeof fetch, slept?: number[]): GraphProvider =>
+  new GraphProvider(tokens(), { fetch: f, sleep: async ms => { slept?.push(ms); } });
 
 const outgoing = (): OutgoingMessage => ({
   from: { addr: 'me@x' }, to: [{ addr: 'y@z', name: 'Why Zed' }], cc: [], bcc: [],
@@ -295,6 +298,28 @@ describe('GraphProvider', () => {
     // A read-back that outright fails must not fail the send either.
     const broken = fakeFetch([[/\/me\/sendMail$/, () => new Response(null, { status: 202 })]]);
     expect(await provider(broken).send(outgoing())).toEqual({ providerMessageId: 'sent:mid@x' });
+  });
+
+  it('retries the sent-items read-back, because Exchange files the copy after it answers 202', async () => {
+    let look = 0;
+    const f = fakeFetch([
+      [/\/me\/sendMail$/, () => new Response(null, { status: 202 })],
+      // Not filed yet on the first look — the race a single read-back loses.
+      [/sentitems\/messages\?/, () => (look++ === 0 ? { value: [] } : sentItemsNow())],
+    ]);
+    const slept: number[] = [];
+    expect((await provider(f, slept).send(outgoing())).providerMessageId).toBe('SENT-1');
+    expect(look).toBe(2);
+    expect(slept).toEqual([500]);
+
+    // Four attempts in all, then the placeholder.
+    const never = fakeFetch([
+      [/\/me\/sendMail$/, () => new Response(null, { status: 202 })],
+      [/sentitems\/messages\?/, () => ({ value: [] })],
+    ]);
+    const waits: number[] = [];
+    expect((await provider(never, waits).send(outgoing())).providerMessageId).toBe('sent:mid@x');
+    expect(waits).toEqual([500, 1000, 2000]);
   });
 
   it('a reply is built with createReply so Graph writes the threading headers itself', async () => {
