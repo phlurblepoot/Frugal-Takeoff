@@ -3,10 +3,7 @@ import type { BroadcastChange } from '../realtime/changeFeed';
 import type { MailCrypto } from './crypto';
 import type { MailAccountRow, ImapAuth, OAuthAuth } from './accountStore';
 import type { MailProvider } from './providers/types';
-
-// TODO(Task 8): tighten types. MailScheduler lands with the sync scheduler
-// (Task 8, server/mail/sync/scheduler.ts) and is a placeholder until then.
-export type MailScheduler = unknown;
+import type { MailScheduler } from './sync/scheduler';
 
 export interface MailContext {
   db: Database.Database;
