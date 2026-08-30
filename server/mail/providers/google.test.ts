@@ -235,6 +235,31 @@ describe('GmailProvider', () => {
     expect(f.calls.slice(before).every(c => /\/drafts\?/.test(c.url))).toBe(true);
   });
 
+  it('reads a draft body and downloads its attachment through the draft id', async () => {
+    const draft = { id: 'd1', message: { ...fx('gmail-message-full.json'), id: 'dm1' } };
+    const f = fakeFetch([
+      [/\/drafts\/d1\?/, () => draft],
+      [/\/attachments\//, () => fx('gmail-attachment.json')],
+    ]);
+    const p = provider(f);
+    const b = await p.getBody('draft:d1');
+    expect(b.text).toContain('Mike here');
+    const a = await p.getAttachment('draft:d1', 'ANGjdJ9x7QdVpk');
+    expect(a.name).toBe('COR-4.pdf');
+    // The bytes hang off the draft's MESSAGE — a draft id in that path 404s.
+    expect(f.calls.some(c => /\/messages\/dm1\/attachments\/ANGjdJ9x7QdVpk$/.test(c.url))).toBe(true);
+    expect(f.calls.some(c => /draft(%3A|:)d1\/attachments/.test(c.url))).toBe(false);
+  });
+
+  it('saveDraft writes a new draft when the one it was updating is gone', async () => {
+    const f = fakeFetch([
+      [/\/drafts\/gone$/, () => new Response('{}', { status: 404 })],
+      [/\/drafts$/, () => ({ id: 'd2', message: { id: 'dm2' } })],
+    ]);
+    expect(await provider(f).saveDraft(outgoing(), 'draft:gone')).toEqual({ providerMessageId: 'draft:d2' });
+    expect(f.calls.map(c => c.init.method)).toEqual(['PUT', 'POST']);
+  });
+
   it('search appends a before: filter and maps the hits', async () => {
     const f = fakeFetch([
       [/\/messages\?/, url => { expect(url).toMatch(/q=cor-4\+before%3A2026%2F03%2F10/); return fx('gmail-list.json'); }],
@@ -277,5 +302,9 @@ describe('GmailProvider', () => {
 
     const bad = fakeFetch([[/token/, () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'expired' }), { status: 400 })]]);
     await expect(googleRefresh({ GOOGLE_OAUTH_CLIENT_ID: 'i', GOOGLE_OAUTH_CLIENT_SECRET: 's' } as NodeJS.ProcessEnv, 'rt', bad)).rejects.toThrow(/invalid_grant/);
+
+    // A 200 with no token must not be cached as an empty Bearer.
+    const empty = fakeFetch([[/token/, () => ({ expires_in: 3599 })]]);
+    await expect(googleRefresh({ GOOGLE_OAUTH_CLIENT_ID: 'i', GOOGLE_OAUTH_CLIENT_SECRET: 's' } as NodeJS.ProcessEnv, 'rt', empty)).rejects.toThrow(/no access token/);
   });
 });

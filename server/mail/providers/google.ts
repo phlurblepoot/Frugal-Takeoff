@@ -138,8 +138,11 @@ export async function googleRefresh(
   });
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; refresh_token?: string; error?: string; error_description?: string };
   if (!res.ok) throw new Error(`${body.error || res.status}: ${body.error_description || ''}`);
+  // A 200 with no token would otherwise be cached as an empty Bearer and every
+  // later call would 401 in a way that looks like a revoked grant.
+  if (!body.access_token) throw new Error('Google returned no access token for the refresh');
   return {
-    accessToken: String(body.access_token ?? ''),
+    accessToken: String(body.access_token),
     expiresInSec: Number(body.expires_in) || 3600,
     refreshToken: body.refresh_token,
   };
@@ -408,6 +411,15 @@ export class GmailProvider implements MailProvider {
     return this.getMessage(providerMessageId);
   }
 
+  /** The id the messages.* endpoints answer to. A draft's parts hang off its
+   *  MESSAGE, so downloading one needs the message id, not the draft id. */
+  private async underlyingMessageId(providerMessageId: string): Promise<string> {
+    if (!providerMessageId.startsWith(DRAFT_PREFIX)) return providerMessageId;
+    const d = await this.api<GmailDraft>(`drafts/${encodeURIComponent(providerMessageId.slice(DRAFT_PREFIX.length))}`, { query: { format: 'minimal' } });
+    if (!d.message?.id) throw new ProviderNotFoundError(providerMessageId);
+    return d.message.id;
+  }
+
   async getBody(providerMessageId: string): Promise<{ html?: string; text?: string; attachments: AttachmentMeta[] }> {
     const m = await this.messageFor(providerMessageId);
     let html: string | undefined;
@@ -426,7 +438,10 @@ export class GmailProvider implements MailProvider {
     };
     walk(m.payload);
     const attachments = this.attachmentsOf(m.payload);
-    this.rememberParts(m.id ?? providerMessageId, attachments);
+    // Cached under the id the CALLER used (which may be a "draft:" one) as
+    // well as the message's own, so either reaches the list from getAttachment.
+    this.rememberParts(providerMessageId, attachments);
+    if (m.id && m.id !== providerMessageId) this.rememberParts(m.id, attachments);
     return { html, text, attachments };
   }
 
@@ -440,7 +455,7 @@ export class GmailProvider implements MailProvider {
     }
     if (!meta) throw new ProviderNotFoundError(attId);
     const r = await this.api<GmailAttachment>(
-      `messages/${encodeURIComponent(providerMessageId)}/attachments/${encodeURIComponent(attId)}`,
+      `messages/${encodeURIComponent(await this.underlyingMessageId(providerMessageId))}/attachments/${encodeURIComponent(attId)}`,
     );
     const buf = fromB64url(r.data ?? '');
     return { stream: Readable.from(buf), mime: meta.mime, size: buf.length, name: meta.name };
@@ -534,9 +549,13 @@ export class GmailProvider implements MailProvider {
   async saveDraft(draft: OutgoingMessage, existingProviderId?: string): Promise<{ providerMessageId: string }> {
     const raw = b64url(await buildRawMime(draft));
     const existing = existingProviderId ? await this.draftIdFor(existingProviderId) : null;
+    const create = (): Promise<GmailDraft> => this.api<GmailDraft>('drafts', { method: 'POST', body: JSON.stringify({ message: { raw } }) });
     const r = existing
       ? await this.api<GmailDraft>(`drafts/${encodeURIComponent(existing)}`, { method: 'PUT', body: JSON.stringify({ id: existing, message: { raw } }) })
-      : await this.api<GmailDraft>('drafts', { method: 'POST', body: JSON.stringify({ message: { raw } }) });
+        // The draft was discarded elsewhere while it was open here: saving must
+        // still keep the user's words, so fall back to writing a new one.
+        .catch(e => { if (e instanceof ProviderNotFoundError) return create(); throw e; })
+      : await create();
     const id = r.id ?? existing;
     if (!id) throw new Error('Gmail stored the draft but did not return its id — reopen it from Drafts');
     return { providerMessageId: DRAFT_PREFIX + id };
