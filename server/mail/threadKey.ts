@@ -26,8 +26,8 @@ export function deriveThreadKey(
   // Threading otherwise rests entirely on In-Reply-To/References, and some
   // Microsoft 365 tenants omit `internetMessageHeaders` from a delta
   // projection — without this every message in such a mailbox would be its own
-  // one-message thread. It ranks BELOW the header chain, which is the
-  // cross-provider truth, and above inventing a key from an unseen reference.
+  // one-message thread. Consulted ONLY when the message carries no chain of its
+  // own (see the gate below).
   lookupByProviderThread?: (providerThreadId: string) => string | null,
 ): { threadKey: string; synthetic: boolean } {
   const refs = env.references.map(normalizeMessageId).filter((x): x is string => !!x);
@@ -35,7 +35,12 @@ export function deriveThreadKey(
   const own = normalizeMessageId(env.messageIdHeader);
   const candidates = [...refs, ...(irt ? [irt] : []), ...(own ? [own] : [])];
   for (const c of candidates) { const k = lookup(c); if (k) return { threadKey: k, synthetic: false }; }
-  if (env.providerThreadId && lookupByProviderThread) {
+  // Strictly a substitute for headers this message does not have. A message
+  // WITH a chain whose parent simply has not synced yet must keep falling
+  // through to refs[0]/irt, which is what lets the real parent bridge the two
+  // groups later — Gmail puts a threadId on every message and groups by
+  // subject, so trusting it here would merge two unrelated conversations.
+  if (!refs.length && !irt && env.providerThreadId && lookupByProviderThread) {
     const k = lookupByProviderThread(env.providerThreadId);
     if (k) return { threadKey: k, synthetic: false };
   }

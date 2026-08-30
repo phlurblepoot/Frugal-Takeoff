@@ -29,6 +29,16 @@ describe('deriveThreadKey', () => {
     // An unknown conversation still falls through to the synthetic key.
     expect(deriveThreadKey(none, { messageIdHeader: null, inReplyTo: null, references: [], fallbackSeed: 'a', providerThreadId: 'CONV-9' }, byThread).synthetic).toBe(true);
   });
+  it('a message with its own chain never consults the provider conversation', () => {
+    // Gmail stamps a threadId on EVERY message and groups by subject, so a
+    // reply whose parent has not synced yet must keep its provisional
+    // References key — trusting the conversation here merges strangers.
+    const byThread = () => 'other-thread';
+    expect(deriveThreadKey(none, { messageIdHeader: 'b@x', inReplyTo: null, references: ['z@x'], fallbackSeed: 'a', providerThreadId: 'T' }, byThread))
+      .toEqual({ threadKey: 'z@x', synthetic: false });
+    expect(deriveThreadKey(none, { messageIdHeader: 'b@x', inReplyTo: 'z@x', references: [], fallbackSeed: 'a', providerThreadId: 'T' }, byThread))
+      .toEqual({ threadKey: 'z@x', synthetic: false });
+  });
   it('the header chain outranks the provider conversation', () => {
     const byThread = () => 'from-conversation';
     // A known References entry wins outright...

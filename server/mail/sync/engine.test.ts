@@ -115,6 +115,15 @@ describe('engine', () => {
     upsertEnvelopes(ctx, acct, [env('g3', { messageIdHeader: undefined, providerThreadId: 'CONV-2' })]);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 2 });
   });
+  it('a message whose parent has not synced keeps its own key, even sharing a conversation', () => {
+    // Gmail-style: every message carries a threadId. A must not swallow B just
+    // because Gmail filed them together — B's real parent may still arrive.
+    upsertEnvelopes(ctx, acct, [env('A', { messageIdHeader: 'a@x', references: [], providerThreadId: 'T' })]);
+    upsertEnvelopes(ctx, acct, [env('B', { messageIdHeader: 'b@x', references: ['z@x'], providerThreadId: 'T' })]);
+    const keys = (db.prepare('SELECT providerMessageId, threadKey FROM mail_messages ORDER BY providerMessageId').all() as any[]);
+    expect(keys).toEqual([{ providerMessageId: 'A', threadKey: 'a@x' }, { providerMessageId: 'B', threadKey: 'z@x' }]);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 2 });
+  });
   it('a message WITH headers still threads on the header chain, not the conversation', () => {
     upsertEnvelopes(ctx, acct, [env('h1', { messageIdHeader: 'root@bb.com', providerThreadId: 'CONV-A' })]);
     // Same conversation, but its References name the root — the header wins,

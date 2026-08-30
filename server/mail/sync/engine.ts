@@ -133,9 +133,12 @@ export function upsertEnvelopes(ctx: MailContext, account: MailAccountRow, envel
     if (!rows.length) return undefined;
     const when = Date.parse(env.date);
     const subject = normalizeSubject(env.subject || '');
-    const hit = rows.find(r => env.providerThreadId && r.providerThreadId === env.providerThreadId)
-      ?? rows.find(r => normalizeSubject(r.subject || '') === subject
-        && Number.isFinite(when) && Math.abs(Date.parse(r.date) - when) <= SENT_MATCH_WINDOW_MS);
+    // Subject ties are broken by time: with two sends of the same subject in
+    // flight, the nearest in time is the one this copy is of.
+    const nearestBySubject = rows
+      .filter(r => normalizeSubject(r.subject || '') === subject && Number.isFinite(when) && Math.abs(Date.parse(r.date) - when) <= SENT_MATCH_WINDOW_MS)
+      .sort((a, b) => Math.abs(Date.parse(a.date) - when) - Math.abs(Date.parse(b.date) - when))[0];
+    const hit = rows.find(r => env.providerThreadId && r.providerThreadId === env.providerThreadId) ?? nearestBySubject;
     return hit ? { id: hit.id, threadKey: hit.threadKey } : undefined;
   };
 
