@@ -534,6 +534,9 @@ describe('mail routes', () => {
     expect(url.searchParams.get('code_challenge')).not.toBe(verifyState(JWT_SECRET, url.searchParams.get('state')!).verifier);
     // Nothing here may carry the client secret.
     expect(r.headers.location).not.toContain('gs');
+    // ?token= is in this request's own url; the browser must not pass it along
+    // as the Referer when it follows the hop to the provider.
+    expect(r.headers['referrer-policy']).toBe('no-referrer');
   });
 
   it('start rejects an unknown provider, a bad token, a missing publicUrl and missing env', async () => {
@@ -577,7 +580,8 @@ describe('mail routes', () => {
     const first = accounts.listAccounts(db, 'u1').find(a => a.emailAddress === 'oauth@bb.com')!;
     accounts.updateAccount(db, first.id, { status: 'auth_error', lastError: 'expired' });
     const dropSpy = vi.spyOn(ctx.scheduler!, 'dropProvider');
-    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'oauth@bb.com', name: 'OAuth Nate' });
+    // Same mailbox, different casing from the provider — still one account.
+    oauthStub = async () => ({ refreshToken: 'RT2', accessToken: 'AT', email: 'OAuth@BB.com', name: 'OAuth Nate' });
     const r = await request(app).get('/api/mail/oauth/google/callback').query({ code: 'c2', state: state() });
     expect(r.headers.location).toBe(`/settings?tab=mail&connected=${first.id}`);
     expect(accounts.listAccounts(db, 'u1').filter(a => a.emailAddress === 'oauth@bb.com')).toHaveLength(1);

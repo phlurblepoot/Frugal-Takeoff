@@ -206,6 +206,10 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       // A missing client id/secret is a deployment gap, not a request error.
       return res.status(503).json({ error: e?.message || 'This mail provider is not configured' });
     }
+    // The ?token= above sits in THIS url, and a browser sends the redirecting
+    // url as the Referer of the hop it takes next — which would hand the app's
+    // session token to the provider. Suppress it for this response only.
+    res.setHeader('Referrer-Policy', 'no-referrer');
     res.redirect(url);
   });
 
@@ -232,7 +236,11 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
 
     try {
       const exchange = deps.oauthExchange ?? exchangeCode;
-      const { refreshToken, email, name } = await exchange(provider, deps.env, deps.publicUrl, code, state.verifier, undefined);
+      const r = await exchange(provider, deps.env, deps.publicUrl, code, state.verifier, undefined);
+      const { refreshToken, name } = r;
+      // createAccount stores addresses folded; fold here too or a reconnect
+      // whose provider answered with different casing would miss and duplicate.
+      const email = r.email.trim().toLowerCase();
       // Reconnecting the SAME mailbox updates the account in place — a second
       // row would double every sync and split the user's threads.
       const existing = accounts.listAccounts(db, state.userId)
