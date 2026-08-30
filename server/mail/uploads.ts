@@ -16,6 +16,7 @@ export function readUpload(dataDir: string, uploadId: string): { name: string; m
   return { name, mime, buf: fs.readFileSync(bin) };
 }
 export function discardUpload(dataDir: string, uploadId: string): void {
+  if (!/^[0-9a-f-]{36}$/.test(uploadId)) return;
   const d = dirOf(dataDir); for (const ext of ['.bin', '.json']) { try { fs.unlinkSync(path.join(d, uploadId + ext)); } catch { /* gone */ } }
 }
 export function sweepUploads(dataDir: string, maxAgeMs = 3_600_000): void {

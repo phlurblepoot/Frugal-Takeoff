@@ -9,6 +9,7 @@ import { upsertEnvelopes } from './sync/engine';
 import { createLink, type ItemType } from './links';
 import { applySendEffects } from './itemSendEffects';
 import { readUpload, discardUpload } from './uploads';
+import type { EntityChangedEvent } from '../realtime/changeFeed';
 
 export class MailSendError extends Error { constructor(msg: string, public status = 400) { super(msg); } }
 export interface SendRequest {
@@ -42,6 +43,10 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
 
   let inReplyTo: string | undefined; let references: string[] | undefined;
   if (req.replyTo) {
+    // The reply target's accountId comes straight from the request — scope it to an
+    // account this user owns, or a user could probe another account's threads (IDOR).
+    const replyAccount = accounts.getOwned(db, user.id, req.replyTo.accountId);
+    if (!replyAccount) throw new MailSendError('Reply target not found', 404);
     const last = db.prepare('SELECT messageIdHeader, referencesJson FROM mail_messages WHERE accountId = ? AND threadKey = ? AND messageIdHeader IS NOT NULL ORDER BY date DESC LIMIT 1').get(req.replyTo.accountId, req.replyTo.threadKey) as { messageIdHeader: string; referencesJson: string } | undefined;
     if (last) { inReplyTo = last.messageIdHeader; references = [...JSON.parse(last.referencesJson || '[]'), last.messageIdHeader].filter((x, i, arr) => arr.indexOf(x) === i); }
   }
@@ -52,33 +57,52 @@ export async function send(ctx: MailContext, user: { id: string; role: string },
     attachments, inReplyTo, references, messageIdHeader: newMessageIdHeader(domain),
   };
   const sent = await provider.send(msg);
-  usedUploads.forEach(id => discardUpload(ctx.dataDir, id));
-  if (req.draftProviderId) { try { await provider.deleteDraft(req.draftProviderId); } catch { /* best effort */ } }
 
-  const { messageIds, threadKeys } = upsertEnvelopes(ctx, account, [{
-    providerMessageId: sent.providerMessageId, providerThreadId: sent.providerThreadId, messageIdHeader: msg.messageIdHeader, inReplyTo, references: references ?? [],
-    from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: snippetOf(msg.text), date: new Date().toISOString(),
-    isRead: true, isStarred: false, isDraft: false, attachments: attachments.map((a, i) => ({ attId: 'out' + i, name: a.name, mime: a.mime, size: a.content.length })), sizeBytes: msg.html.length,
-    folderProviderIds: ['SENT'],
-  }], { sentFromApp: true });
-  const messageId = messageIds[0];
-  const threadKey = (db.prepare('SELECT threadKey FROM mail_messages WHERE id = ?').get(messageId) as { threadKey: string }).threadKey;
+  // Everything below is local bookkeeping AFTER the provider has already accepted
+  // the message — it must never look like the send itself failed. If any of it
+  // throws, the message is irretrievably sent but not indexed locally; surface a
+  // distinct error telling the caller not to resend rather than letting a DB/link
+  // error masquerade as a send failure (which would invite a duplicate send).
+  try {
+    if (req.draftProviderId) { try { await provider.deleteDraft(req.draftProviderId); } catch { /* best effort */ } }
 
-  const effectsSkipped: ItemType[] = []; const to = req.to.map(a => a.addr).join(', ');
-  const seen = new Set<string>();
-  for (const t of tagged) {
-    const key = t.itemType + ':' + t.itemId; if (seen.has(key)) continue; seen.add(key);
-    createLink(db, { threadKey, itemType: t.itemType, itemId: t.itemId, linkedByUserId: user.id, subjectSnapshot: msg.subject, firstDate: new Date().toISOString(), participants: [msg.from, ...msg.to] });
-    const eff = applySendEffects(db, { itemType: t.itemType, itemId: t.itemId, userId: user.id, role: user.role, to, threadKey });
-    if (eff.skipped === 'role') effectsSkipped.push(t.itemType);
-    if (eff.broadcast) ctx.broadcastChange({ ...eff.broadcast, action: 'updated', byUserId: user.id });
+    const { messageIds, threadKeys } = upsertEnvelopes(ctx, account, [{
+      providerMessageId: sent.providerMessageId, providerThreadId: sent.providerThreadId, messageIdHeader: msg.messageIdHeader, inReplyTo, references: references ?? [],
+      from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: snippetOf(msg.text), date: new Date().toISOString(),
+      isRead: true, isStarred: false, isDraft: false, attachments: attachments.map((a, i) => ({ attId: 'out' + i, name: a.name, mime: a.mime, size: a.content.length })), sizeBytes: msg.html.length,
+      folderProviderIds: ['SENT'],
+    }], { sentFromApp: true });
+    const messageId = messageIds[0];
+    const threadKey = (db.prepare('SELECT threadKey FROM mail_messages WHERE id = ?').get(messageId) as { threadKey: string }).threadKey;
+
+    const effectsSkipped: ItemType[] = []; const to = req.to.map(a => a.addr).join(', ');
+    const seen = new Set<string>();
+    const broadcasts: EntityChangedEvent[] = [];
+    db.transaction(() => {
+      for (const t of tagged) {
+        const key = t.itemType + ':' + t.itemId; if (seen.has(key)) continue; seen.add(key);
+        createLink(db, { threadKey, itemType: t.itemType, itemId: t.itemId, linkedByUserId: user.id, subjectSnapshot: msg.subject, firstDate: new Date().toISOString(), participants: [msg.from, ...msg.to] });
+        const eff = applySendEffects(db, { itemType: t.itemType, itemId: t.itemId, userId: user.id, role: user.role, to, threadKey });
+        if (eff.skipped === 'role') effectsSkipped.push(t.itemType);
+        if (eff.broadcast) broadcasts.push({ ...eff.broadcast, action: 'updated', byUserId: user.id });
+      }
+    })();
+    broadcasts.forEach(b => ctx.broadcastChange(b));
+
+    // Reply-state for a thread that only became linked by this send.
+    const now = new Date().toISOString();
+    if (tagged.length) {
+      db.prepare('INSERT OR IGNORE INTO mail_thread_reply_state (threadKey, updatedAt) VALUES (?, ?)').run(threadKey, now);
+      db.prepare(`UPDATE mail_thread_reply_state SET lastOutboundDate = MAX(COALESCE(lastOutboundDate,''), ?), updatedAt = ? WHERE threadKey = ?`).run(now, now, threadKey);
+    }
+
+    // Only discard staged uploads once the send is fully recorded — on failure the
+    // sweeper still reaps them within the hour, but they stay around for diagnosis.
+    usedUploads.forEach(id => discardUpload(ctx.dataDir, id));
+    void threadKeys;
+    return { messageId, threadKey, accountId: account.id, effectsSkipped };
+  } catch (e) {
+    console.error('[mail] sent but not recorded', e);
+    throw new MailSendError('Message was sent but could not be recorded locally — do not resend; it will appear after the next sync', 502);
   }
-  // Reply-state for a thread that only became linked by this send.
-  const now = new Date().toISOString();
-  if (tagged.length) {
-    db.prepare('INSERT OR IGNORE INTO mail_thread_reply_state (threadKey, updatedAt) VALUES (?, ?)').run(threadKey, now);
-    db.prepare(`UPDATE mail_thread_reply_state SET lastOutboundDate = MAX(COALESCE(lastOutboundDate,''), ?), updatedAt = ? WHERE threadKey = ?`).run(now, now, threadKey);
-  }
-  void threadKeys;
-  return { messageId, threadKey, accountId: account.id, effectsSkipped };
 }

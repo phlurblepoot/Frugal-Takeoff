@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import type Database from 'better-sqlite3';
 import { openDb } from '../db'; import { runMigrations } from '../migrations'; import { migrations } from '../migrationList';
@@ -10,6 +10,12 @@ import type { MailContext } from './context';
 import { send, MailSendError } from './sendService';
 import { stageUpload } from './uploads';
 import { listLinksForThread } from './links';
+import { upsertEnvelopes } from './sync/engine';
+
+vi.mock('./sync/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sync/engine')>();
+  return { ...actual, upsertEnvelopes: vi.fn(actual.upsertEnvelopes) };
+});
 
 let db: Database.Database; let ctx: MailContext; let provider: FakeMailProvider; let dir: string; let acct: accounts.MailAccountRow;
 const crypto = new MailCrypto(Buffer.alloc(32, 5)); const user = { id: 'u1', role: 'user' };
@@ -60,5 +66,19 @@ describe('sendService.send', () => {
     await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toBeInstanceOf(MailSendError);
     accounts.deleteAccount(db, acct.id);
     await expect(send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] })).rejects.toThrow(/no mail account/i);
+  });
+  it('rejects a replyTo.accountId the user does not own, and sends nothing', async () => {
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
+    const otherAcct = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@bb.com', displayName: 'Other', auth: { refreshToken: 'r' } });
+    const p = send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [], replyTo: { accountId: otherAcct.id, threadKey: 'root@teg.com' } });
+    await expect(p).rejects.toMatchObject({ status: 404 });
+    expect(provider.sent.length).toBe(0);
+  });
+  it('recovers cleanly when the sent message cannot be recorded locally, without asking to resend', async () => {
+    (upsertEnvelopes as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(() => { throw new Error('db boom'); });
+    const p = send(ctx, user, { to: [{ addr: 'a@b' }], subject: 's', html: 'h', attachments: [] });
+    await expect(p).rejects.toMatchObject({ status: 502 });
+    await expect(p).rejects.toThrow(/do not resend/i);
+    expect(provider.sent.length).toBe(1);
   });
 });
