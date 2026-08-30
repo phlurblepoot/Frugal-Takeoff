@@ -7,7 +7,7 @@ import { getIssue, markIssueSent } from '../issueStore';
 import { getRfi, markRfiSent } from '../rfiStore';
 import { getDailyReport } from '../dailyReportStore';
 import type { EntityType } from '../realtime/changeFeed';
-import type { ItemType } from './links';
+import { resolveChain, type ItemType } from './links';
 // Verified locations: proposalStore.ts:126/311, billingStore.ts:64/199/263/339,
 // issueStore.ts (getIssue, markIssueSent:112), rfiStore.ts, dailyReportStore.ts:39.
 
@@ -62,9 +62,9 @@ export function applySendEffects(db: Database.Database, i: SendEffectsInput): Se
       return { applied: true };
     }
     case 'payApp': {
-      const row = db.prepare('SELECT projectId FROM aia_pay_apps WHERE id = ?').get(i.itemId) as { projectId: string } | undefined;
-      if (!row) return { applied: false, skipped: 'missing' };
-      logActivity(db, { projectId: row.projectId, userId: i.userId, type: 'payapp_sent', message: `Pay application emailed to ${i.to}` });
+      const { projectId } = resolveChain(db, 'payApp', i.itemId);
+      if (projectId === null) return { applied: false, skipped: 'missing' };
+      logActivity(db, { projectId, userId: i.userId, type: 'pay_app_sent', message: `Pay application emailed to ${i.to}` });
       return { applied: true };
     }
     default: return { applied: false, skipped: 'noop' };
