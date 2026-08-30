@@ -238,9 +238,28 @@ interface SendRequest {
   draftProviderId?: string;          // delete this draft after a successful send
 }
 ```
-Steps: resolve account → build MIME/outgoing → `provider.send` → upsert the sent envelope into `mail_messages` (`sentFromApp=1`, `threadKey` via §3.1 so replies land in the same thread) → for each link (explicit + attachment item tags) `links.create` with resolved chain (idempotent on the unique key) → `mail_thread_reply_state.lastOutboundDate` → `broadcastChange`. For IMAP the provider APPENDs the sent MIME to the Sent folder (`\Seen`). Gmail/Graph save Sent automatically.
+Steps: resolve account → build MIME/outgoing → `provider.send` → upsert the sent envelope into `mail_messages` (`sentFromApp=1`, `threadKey` via §3.1 so replies land in the same thread) → for each link (explicit + attachment item tags) `links.create` with resolved chain (idempotent on the unique key) → **run item send effects (§4.6) for every linked item** → `mail_thread_reply_state.lastOutboundDate` → `broadcastChange`. For IMAP the provider APPENDs the sent MIME to the Sent folder (`\Seen`). Gmail/Graph save Sent automatically.
 
-The seven existing item send routes keep their URL, auth, and side effects but replace `sendProjectEmail` with `sendService.send`, passing `links: [{ itemType, itemId }]` and the generated PDF as `{ fileId }`. `registerEmailRoutes`' SMTP config/test routes (`/api/email/smtp`, `/api/email/test-smtp`) are removed; `getUserSmtp`/`buildTransporter` in `server.ts` are removed.
+The seven existing item send routes keep their URL and auth but replace `sendProjectEmail` with `sendService.send`, passing `links: [{ itemType, itemId }]` and the generated PDF as `{ fileId }`; their status/activity side effects move into §4.6 so they run identically from either path. `registerEmailRoutes`' SMTP config/test routes (`/api/email/smtp`, `/api/email/test-smtp`) are removed; `getUserSmtp`/`buildTransporter` in `server.ts` are removed.
+
+### 4.6 Item send effects (`server/mail/itemSendEffects.ts`)
+One function `applySendEffects(db, { itemType, itemId, userId, role, threadKey, messageId })` holding the per-item side effects that today are inlined in the seven routes:
+
+| itemType | effect (unchanged from today) |
+|---|---|
+| `proposal` | `markSent` (if not already sent/accepted), activity `proposal_sent`, broadcast |
+| `invoice` | `setInvoiceStatus('sent')` unless already sent/paid |
+| `changeOrder` | `setChangeOrderStatus('sent')` unless sent/approved/rejected |
+| `issue` | `markIssueSent` |
+| `rfi` | `markRfiSent` |
+| `dailyReport`, `punch`, `payApp` | activity row only |
+| `task`, `project`, `customer` | none (link only) |
+
+It is invoked **both** by the item send routes and by `sendService` when a send carries an item tag — which is the case when a user replies in an existing thread and attaches a proposal (or any item document) from the Documents picker. So "send a proposal into an existing thread" marks the proposal sent exactly as the proposal's own Send button would, and the activity row records the thread it went to. Effects are idempotent (already-sent items are left alone), so resending the same document later only adds activity.
+
+Role rule: effects for admin-gated item types (`proposal`, `invoice`, `changeOrder`, `payApp`) run only when the sending user is an admin — the same gate as their routes. Non-admins cannot pick those documents in the first place (`NON_ADMIN_EXCLUDED_KINDS` hides them from the picker), so in practice the gate is a server-side safety check; if it trips, the send still goes out and the link is still written, but the status is untouched and the response carries `effectsSkipped: [...]` so the composer can show a note.
+
+Version note: the picker attaches the document's stored bytes as-is. If the item's generated PDF is stale relative to its data (the freshness chip in `DocumentActionsBar`), the composer shows the same "out of date — regenerate?" hint before send; it does not regenerate silently.
 
 ---
 
@@ -327,7 +346,7 @@ No admin setup. Users need IMAP + SMTP hosts and (usually) an app password.
 | Layer | What |
 |---|---|
 | Unit (server) | `crypto` round-trip + key-file creation; `threadKey` (References walk, normalization, merge on late root, synthetic keys); `sanitize` allowlist + cid rewrite + image blocking; `mime` build/parse; `links.resolveChain`; sync engine against `providers/fake.ts` (backfill window, incremental upserts/deletes, folder counts, thread denormalization, reply-state); migration 31 on a seeded DB with `smtp.*` prefs (row created, sealed, prefs deleted, `needs_review`) |
-| Routes (supertest) | every `/api/mail/*` with the fake provider injected; ownership isolation between two users; optimistic action revert on provider failure; attachment save writes files with `sourceType='mailMessage'`; the seven item send routes asserting side effects + link rows + sent index row; OAuth start/callback with a stubbed token exchange; Graph webhook validation |
+| Routes (supertest) | every `/api/mail/*` with the fake provider injected; ownership isolation between two users; optimistic action revert on provider failure; attachment save writes files with `sourceType='mailMessage'`; the seven item send routes asserting side effects + link rows + sent index row; `POST /api/mail/send` with a tagged proposal attachment into an existing thread → proposal marked sent + activity + link (and unchanged when already sent; `effectsSkipped` for a non-admin); OAuth start/callback with a stubbed token exchange; Graph webhook validation |
 | Provider adapters | contract tests against recorded JSON fixtures for Gmail and Graph (no network); IMAP adapter against a fake imapflow client; `npm run mail:smoke -- --account <id>` manual live check |
 | UI (vitest/jsdom) | ThreadList/ThreadRow rendering + unread/link chips; Composer autocomplete + always-CC prefill + attachment item tagging; SaveAttachmentsModal pre-fill/remove; Settings account cards + disabled OAuth buttons; Sidebar badge |
 | E2E (Playwright, `MAIL_FAKE_PROVIDER=1`) | connect fake account → seeded threads visible → open thread → body renders in iframe, remote image blocked → reply inline → row moves to top; send an invoice from its editor → link chip appears → thread opens from chip; save attachment → appears in Documents |
