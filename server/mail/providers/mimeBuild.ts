@@ -9,13 +9,18 @@ import { formatAddress } from '../mime';
 
 const angle = (id: string): string => `<${id.replace(/^<+|>+$/g, '')}>`;
 
-export async function buildRawMime(msg: OutgoingMessage): Promise<Buffer> {
+/** `keepBcc` leaves the Bcc header in the built bytes. It is OFF by default —
+ *  an SMTP send carries bcc in the envelope, so a header would leak the list to
+ *  every recipient. Gmail's `messages/send` is the exception: it has no
+ *  envelope of ours to read and derives the recipients from the headers alone,
+ *  so a stripped Bcc there means the blind copies simply never go out. */
+export async function buildRawMime(msg: OutgoingMessage, opts: { keepBcc?: boolean } = {}): Promise<Buffer> {
   const composer = new MailComposer({
     from: formatAddress(msg.from),
     to: msg.to.map(formatAddress).join(', '),
     cc: msg.cc.length ? msg.cc.map(formatAddress).join(', ') : undefined,
-    // Bcc is deliberately handed to the composer too: mime-node strips it from
-    // the built headers (keepBcc is off), so it never travels with the message.
+    // Bcc is handed to the composer either way: mime-node strips it from the
+    // built headers unless keepBcc is set below.
     bcc: msg.bcc.length ? msg.bcc.map(formatAddress).join(', ') : undefined,
     subject: msg.subject,
     html: msg.html,
@@ -28,5 +33,7 @@ export async function buildRawMime(msg: OutgoingMessage): Promise<Buffer> {
       ...(a.contentId ? { cid: a.contentId } : {}),
     })),
   });
-  return composer.compile().build();
+  const node = composer.compile();
+  if (opts.keepBcc) node.keepBcc = true;
+  return node.build();
 }

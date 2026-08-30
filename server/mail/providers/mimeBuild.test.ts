@@ -48,4 +48,11 @@ describe('buildRawMime', () => {
     const raw = (await buildRawMime({ ...base, bcc: [{ addr: 'secret@y.com' }] })).toString();
     expect(raw).not.toContain('secret@y.com');
   });
+
+  // ...unless the caller asks for it, which only an API with no envelope of
+  // ours to read (Gmail's messages/send) ever does.
+  it('keeps the Bcc header when keepBcc is set', async () => {
+    const raw = (await buildRawMime({ ...base, bcc: [{ addr: 'secret@y.com' }] }, { keepBcc: true })).toString();
+    expect(raw).toMatch(/^Bcc: secret@y\.com/m);
+  });
 });

@@ -91,6 +91,14 @@ function decodeText(data: string | undefined, contentType: string | undefined): 
   return fromB64url(data).toString(enc);
 }
 
+/** A 4xx that is about the REQUEST, not about the credentials (401) or the
+ *  quota (429/503, which arrive as their own error types and carry no status).
+ *  Used to decide that a send is worth one retry with the threadId dropped. */
+const isThreadRejection = (e: unknown): boolean => {
+  const s = (e as { status?: number } | null)?.status;
+  return typeof s === 'number' && s >= 400 && s < 500 && s !== 401 && s !== 429;
+};
+
 /** Runs `fn` over `items` with at most `limit` in flight, preserving order. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
@@ -188,13 +196,13 @@ export class GmailProvider implements MailProvider {
       throw new AuthExpiredError('Google rejected the access token — reconnect the account in Settings → Mail');
     }
     if (res.status === 429 || res.status === 503) throw this.rateLimited(res);
-    if (res.status === 404) throw new ProviderNotFoundError(path);
+    if (res.status === 404) throw Object.assign(new ProviderNotFoundError(path), { status: 404 });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       if (res.status === 403 && /rateLimitExceeded|userRateLimitExceeded/i.test(body)) throw this.rateLimited(res);
       // Deliberately only the response text: the request's Authorization
       // header must never reach a log or an error surfaced to the UI.
-      throw new Error(`Gmail ${res.status}: ${body.slice(0, 200)}`);
+      throw Object.assign(new Error(`Gmail ${res.status}: ${body.slice(0, 200)}`), { status: res.status });
     }
     const text = await res.text();
     if (!text) return undefined as T;
@@ -463,15 +471,31 @@ export class GmailProvider implements MailProvider {
   // -- sending --------------------------------------------------------------
 
   async send(msg: OutgoingMessage): Promise<{ providerMessageId: string; providerThreadId?: string; messageIdHeader?: string }> {
-    const raw = b64url(await buildRawMime(msg));
+    // keepBcc: Gmail has no SMTP envelope of ours to read — it takes the
+    // recipient list from the headers, so a stripped Bcc is a bcc nobody gets.
+    const raw = b64url(await buildRawMime(msg, { keepBcc: true }));
     // Matching In-Reply-To/References is not enough for Gmail's OWN UI: without
     // an explicit threadId it files the reply as a new conversation. Only a
     // reply pays for the lookup, and a miss just sends it unthreaded.
     const threadId = msg.inReplyTo ? await this.threadIdOf(msg.inReplyTo) : undefined;
-    const r = await this.api<GmailMessage>('messages/send', {
-      method: 'POST',
-      body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
-    });
+    const post = (body: Record<string, string>): Promise<GmailMessage> =>
+      this.api<GmailMessage>('messages/send', { method: 'POST', body: JSON.stringify(body) });
+    let r: GmailMessage;
+    if (threadId) {
+      try {
+        r = await post({ raw, threadId });
+      } catch (e) {
+        // Gmail rejects a threadId whose subject no longer matches, or one that
+        // was deleted between the lookup and the send. That is a threading
+        // detail — losing the whole message over it would be far worse, so the
+        // send is retried once as a new conversation.
+        if (!isThreadRejection(e)) throw e;
+        console.warn('[gmail] send with threadId was rejected, retrying unthreaded:', (e as Error).message);
+        r = await post({ raw });
+      }
+    } else {
+      r = await post({ raw });
+    }
     const messageIdHeader = await this.sentMessageIdHeader(r.id);
     return { providerMessageId: r.id, providerThreadId: r.threadId, ...(messageIdHeader ? { messageIdHeader } : {}) };
   }

@@ -32,7 +32,7 @@ export interface MailRouteDeps {
   /** Injectable so route tests never reach a real provider. */
   oauthExchange?: typeof exchangeCode;
   /** Rate limiter for the unauthenticated Graph webhook. Injectable so a test
-   *  can assert the limiter is consulted; defaults to 120/min per IP. */
+   *  can assert the limiter is consulted; defaults to WEBHOOK_RATE_LIMIT_PER_MIN. */
   webhookRateLimit?: express.RequestHandler;
 }
 
@@ -40,6 +40,35 @@ export interface MailRouteDeps {
  *  anywhere near this is not Microsoft. Also mounted as the webhook's own JSON
  *  limit, so the app-level parser's (much larger) limit does not apply here. */
 export const WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
+
+/** Per-IP ceiling on the Graph webhook. Graph batches its notifications, so a
+ *  busy tenant sits far under this — it is here to cap an abusive caller, not
+ *  to shape real traffic, and the old 120 was low enough that a burst across
+ *  several accounts could trip it and cost real notifications. */
+export const WEBHOOK_RATE_LIMIT_PER_MIN = 600;
+
+/** The limiter for WEBHOOK_PATH. Exported (and parameterised) so a test can
+ *  drive the throttle without issuing hundreds of requests. */
+export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN): express.RequestHandler {
+  // Dropped notifications are invisible otherwise — the only symptom is mail
+  // that arrives late. One line a minute names the cause without flooding the
+  // log with the very burst that tripped the limit.
+  let lastWarnedAt = 0;
+  return rateLimit({
+    windowMs: 60_000,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      const now = Date.now();
+      if (now - lastWarnedAt >= 60_000) {
+        lastWarnedAt = now;
+        console.warn(`[mail] Graph webhook rate limit hit (${max}/min per IP) — notifications are being dropped`);
+      }
+      res.status(429).json({ error: 'Too many notifications' });
+    },
+  });
+}
 
 // The runtime twin of the ItemType union — typed as ItemType[] so a typo here is a compile error.
 const ITEM_TYPES: readonly ItemType[] = ['proposal', 'invoice', 'changeOrder', 'payApp', 'issue', 'rfi', 'dailyReport', 'punch', 'task', 'project', 'customer'];
@@ -302,13 +331,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   //     that declares no length — but it only bites if the HOST app let this
   //     path past its own parser (server.ts exempts WEBHOOK_PATH for exactly
   //     that reason; a body-parser that already ran wins and this one no-ops).
-  const webhookLimiter: express.RequestHandler = deps.webhookRateLimit ?? rateLimit({
-    windowMs: 60_000,
-    max: 120,   // Graph batches; 120 notification POSTs a minute from one IP is already unreal
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many notifications' },
-  });
+  const webhookLimiter: express.RequestHandler = deps.webhookRateLimit ?? createWebhookRateLimit();
   const webhookSizeGuard: express.RequestHandler = (req, res, next) => {
     const declared = Number(req.headers['content-length']);
     if (Number.isFinite(declared) && declared > WEBHOOK_MAX_BODY_BYTES) return res.status(413).end();
@@ -501,13 +524,28 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         : action === 'trash' ? roleFolder('trash')
           : action === 'move' ? db.prepare('SELECT id, providerId FROM mail_folders WHERE id = ? AND accountId = ?').get(folderId, accountId) as { id: string; providerId: string } | undefined
             : null;
-      if ((action === 'archive' || action === 'trash' || action === 'move') && !target) throw new MailSendError('Folder not found', 400);
+      // Archive is the one action that works WITHOUT a destination folder:
+      // Gmail (and Gmail-over-IMAP) has no Archive mailbox — archiving there
+      // just removes the Inbox label — so the provider is asked to archive and
+      // the local row simply drops the inbox folder instead of moving.
+      if ((action === 'trash' || action === 'move') && !target) throw new MailSendError('Folder not found', 400);
+      const inboxId = action === 'archive' && !target ? roleFolder('inbox')?.id : undefined;
+      // Where each row's folder list lands, computed once so the optimistic
+      // write and the post-move re-key cannot disagree.
+      const foldersAfter = new Map<string, string>();
+      if (action === 'archive' || action === 'trash' || action === 'move') {
+        for (const r of list) {
+          foldersAfter.set(r.id, target
+            ? JSON.stringify([target.id])
+            : JSON.stringify((JSON.parse(r.folderIdsJson || '[]') as string[]).filter(f => f !== inboxId)));
+        }
+      }
       const keys = new Set<string>(list.map(r => r.threadKey));
       db.transaction(() => {
         for (const r of list) {
           if (action === 'read' || action === 'unread') db.prepare('UPDATE mail_messages SET isRead = ? WHERE id = ?').run(action === 'read' ? 1 : 0, r.id);
           else if (action === 'star' || action === 'unstar') db.prepare('UPDATE mail_messages SET isStarred = ? WHERE id = ?').run(action === 'star' ? 1 : 0, r.id);
-          else db.prepare('UPDATE mail_messages SET folderIdsJson = ? WHERE id = ?').run(JSON.stringify([target!.id]), r.id);
+          else db.prepare('UPDATE mail_messages SET folderIdsJson = ? WHERE id = ?').run(foldersAfter.get(r.id)!, r.id);
         }
         for (const k of keys) rebuildThread(db, accountId, k);
       })();
@@ -525,12 +563,23 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         // second message and the old row points at nothing.
         if (moved?.length) {
           const byFrom = new Map(list.map(r => [r.providerMessageId, r]));
+          const snapById = new Map(snapshot.map(sn => [sn.id, sn]));
           try {
             db.transaction(() => {
               for (const m of moved!) {
                 const row = byFrom.get(m.from);
-                if (!row || m.to === m.from) continue;
-                if (m.to) db.prepare('UPDATE mail_messages SET providerMessageId = ?, folderIdsJson = ? WHERE id = ?').run(m.to, JSON.stringify([target!.id]), row.id);
+                if (!row) continue;
+                // The server refused this one (an unreadable mailbox, a MOVE
+                // the host rejected). It is still where it was, so undo the
+                // optimistic re-file — deleting or re-keying it here would
+                // throw away a message that never actually moved.
+                if (m.failed) {
+                  const sn = snapById.get(row.id);
+                  if (sn) db.prepare('UPDATE mail_messages SET folderIdsJson = ? WHERE id = ?').run(sn.folderIdsJson, row.id);
+                  continue;
+                }
+                if (m.to === m.from) continue;
+                if (m.to) db.prepare('UPDATE mail_messages SET providerMessageId = ?, folderIdsJson = ? WHERE id = ?').run(m.to, foldersAfter.get(row.id)!, row.id);
                 // Trashed and untraceable: the server copy can no longer be
                 // addressed, so keeping a local row would only ever be a ghost.
                 else if (action === 'trash') db.prepare('DELETE FROM mail_messages WHERE id = ?').run(row.id);

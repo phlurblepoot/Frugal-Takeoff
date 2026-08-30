@@ -54,9 +54,21 @@ const ROLE_BY_NAME: Array<[RegExp, FolderRole]> = [
   [/^(archive|archives|all mail)$/i, 'archive'],
 ];
 
+/** Gmail-over-IMAP exposes "[Gmail]/All Mail" (\\All), which holds a copy of
+ *  every message that also lives in its own label folder. Syncing it would
+ *  index each message twice under two different UIDs. It stays in the folder
+ *  LIST (users navigate to it, and archive still moves into it) — only the
+ *  message walks skip it. */
+const isAllMailBox = (b: ImapListItem): boolean => b.specialUse === '\\All';
+
 /** How far back each incremental poll re-reads flags so a read/star toggled in
  *  another client shows up here. Newer than this is covered by the UID walk. */
 const FLAG_RESCAN_WINDOW = 200;
+/** Ceiling on the messages one backfill() call returns. A first sync of a large
+ *  mailbox used to build ONE array of every message since the cutoff and hand
+ *  it to the engine in a single transaction; this hands back a cursor instead
+ *  so memory stays flat however big the mailbox is. */
+const BACKFILL_PAGE = 500;
 /** The flags that map to a column the engine stores, in a fixed order so the
  *  code is comparable between polls. Anything else is not worth a re-index. */
 const TRACKED_FLAGS: Array<[string, string]> = [['\\Seen', 'S'], ['\\Flagged', 'F'], ['\\Draft', 'D']];
@@ -125,6 +137,25 @@ type FolderState = {
 };
 type ImapSyncState = { folders: Record<string, FolderState> };
 
+/** Where a paged backfill resumes. A cursor we cannot read restarts from the
+ *  top rather than throwing: re-reading is harmless (upserts are idempotent),
+ *  a hard failure would strand the account mid-sync. */
+type BackfillCursor = { folderIndex: number; lastUid: number };
+function parseBackfillCursor(raw: string | undefined): BackfillCursor {
+  if (!raw) return { folderIndex: 0, lastUid: 0 };
+  try {
+    const c = JSON.parse(raw) as Partial<BackfillCursor>;
+    const folderIndex = Number(c?.folderIndex);
+    const lastUid = Number(c?.lastUid);
+    return {
+      folderIndex: Number.isInteger(folderIndex) && folderIndex >= 0 ? folderIndex : 0,
+      lastUid: Number.isInteger(lastUid) && lastUid >= 0 ? lastUid : 0,
+    };
+  } catch {
+    return { folderIndex: 0, lastUid: 0 };
+  }
+}
+
 const FETCH_QUERY = {
   uid: true, envelope: true, flags: true, size: true, internalDate: true,
   bodyStructure: true, headers: ['references'],
@@ -150,6 +181,13 @@ export class ImapMailProvider implements MailProvider {
    *  only fail the same way (and hammer the server into rate-limiting us), so
    *  push stays down until the account is rebuilt with new credentials. */
   private pushDead = false;
+  /** Bumped by every startPush AND every stopPush. A loop captures the value it
+   *  started with and exits the moment it no longer matches, which is what
+   *  stops a stop→start cycle from leaving the previous loop alive: stopPush
+   *  cannot wait for a loop parked inside idle(), so the old loop wakes up
+   *  AFTER the new one is already running and would otherwise keep idling
+   *  (and firing onChange) forever alongside it. */
+  private pushEpoch = 0;
 
   constructor(private auth: ImapAuth, private opts: ImapProviderOpts) {}
 
@@ -289,31 +327,49 @@ export class ImapMailProvider implements MailProvider {
     return { msgs, maxUid };
   }
 
-  private async scanFolder(
-    c: ImapClientLike, path: string, range: string | { since: Date }, limit?: number,
-  ): Promise<{ uidValidity: number; uidNext: number; msgs: Envelope[]; maxUid: number }> {
-    const box = await c.mailboxOpen(path);
-    const uidValidity = Number(box.uidValidity);
-    const uidNext = Number(box.uidNext ?? 1);
-    return { uidValidity, uidNext, ...(await this.fetchRange(c, path, uidValidity, range, limit)) };
-  }
-
   // -- sync -----------------------------------------------------------------
 
+  /** Walks the syncable folders in list order, at most BACKFILL_PAGE messages
+   *  per call. The cursor names where to resume: which folder, and the last UID
+   *  already handed back inside it. `runBackfill` calls again until `done`. */
   async backfill(opts: { since: Date; cursor?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean }> {
+    const start = parseBackfillCursor(opts.cursor);
     return this.withClient(async c => {
-      const messages: Envelope[] = [];
-      for (const b of await this.selectable(c)) {
+      const boxes = (await this.selectable(c)).filter(b => {
         const role = this.roleOf(b);
-        if (role === 'trash' || role === 'spam') continue;        // history nobody asked to import
+        return role !== 'trash' && role !== 'spam' && !isAllMailBox(b);   // history nobody asked to import
+      });
+      const messages: Envelope[] = [];
+      let folderIndex = Math.max(0, Math.min(start.folderIndex, boxes.length));
+      let lastUid = start.lastUid;
+      const more = (): { messages: Envelope[]; cursor: string; done: false } =>
+        ({ messages, cursor: JSON.stringify({ folderIndex, lastUid }), done: false });
+
+      while (folderIndex < boxes.length) {
+        const b = boxes[folderIndex];
         try {
-          const r = await this.scanFolder(c, b.path, { since: opts.since });
-          messages.push(...r.msgs);
+          const box = await c.mailboxOpen(b.path);
+          const uidValidity = Number(box.uidValidity);
+          // SINCE first, then a UID-ranged fetch of one page of the result: the
+          // server-side search is cheap, and it is the UID list that lets a
+          // later call resume in the middle of a folder.
+          const found = await c.search({ since: opts.since }, { uid: true });
+          const pending = (found || []).filter(u => u > lastUid).sort((x, y) => x - y);
+          const chunk = pending.slice(0, BACKFILL_PAGE - messages.length);
+          if (chunk.length) {
+            const r = await this.fetchRange(c, b.path, uidValidity, chunk.join(','));
+            messages.push(...r.msgs);
+            lastUid = chunk[chunk.length - 1];
+          }
+          if (chunk.length < pending.length) return more();          // page full, folder not
         } catch (e) {
           // One unreadable mailbox (permissions, a shared folder that vanished)
           // must not cost the account every other folder's history.
           console.warn(`[imap] skipping folder ${b.path}: ${(e as Error).message}`);
         }
+        folderIndex += 1;
+        lastUid = 0;
+        if (messages.length >= BACKFILL_PAGE && folderIndex < boxes.length) return more();
       }
       return { messages, done: true };
     });
@@ -327,6 +383,7 @@ export class ImapMailProvider implements MailProvider {
     return this.withClient(async c => {
       const byId = new Map<string, Envelope>();
       for (const b of await this.selectable(c)) {
+        if (isAllMailBox(b)) continue;                  // every message here is already indexed under its own folder
         const prev = prevFolders[b.path];
         try {
           const box = await c.mailboxOpen(b.path);
@@ -510,8 +567,11 @@ export class ImapMailProvider implements MailProvider {
             out.push({ from: e.id, to: newUid && destValidity != null ? makePmid(dest, destValidity, newUid) : null });
           }
         } catch (err) {
+          // `failed`, not a plain null mapping: the messages are still sitting
+          // in their old mailbox, and a caller that read this as "moved but
+          // unnamed" would delete or re-file rows the server never touched.
           console.warn(`[imap] skipping folder ${folder}: ${(err as Error).message}`);
-          out.push(...entries.map(e => ({ from: e.id, to: null })));
+          out.push(...entries.map(e => ({ from: e.id, to: null, failed: true as const })));
         }
       }
     });
@@ -525,6 +585,9 @@ export class ImapMailProvider implements MailProvider {
     return nodemailer.createTransport({
       host: this.auth.smtpHost, port: this.auth.smtpPort, secure: this.auth.smtpSecure,
       auth: { user: this.auth.username, pass: this.auth.password },
+      // Without these a wrong host/port hangs the request until the platform's
+      // TCP timeout — minutes with nothing on screen.
+      connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000,
     });
   }
 
@@ -604,6 +667,7 @@ export class ImapMailProvider implements MailProvider {
       const out: Envelope[] = [];
       for (const b of await this.selectable(c)) {
         if (out.length >= opts.limit) break;
+        if (isAllMailBox(b)) continue;                  // its hits are duplicates of the per-folder ones
         try {
           const box = await c.mailboxOpen(b.path);
           const criteria = { or: [{ subject: q }, { from: q }, { body: q }], ...(opts.before ? { before: opts.before } : {}) };
@@ -629,24 +693,26 @@ export class ImapMailProvider implements MailProvider {
   async startPush(onChange: () => void, onAuthError?: (err: Error) => void): Promise<void> {
     if (!this.pushStopped || this.pushDead) return;                    // already running, or dead credentials
     this.pushStopped = false;
+    const epoch = ++this.pushEpoch;
+    const current = (): boolean => !this.pushStopped && epoch === this.pushEpoch;
     const rearm = this.opts.pushRearmMs ?? PUSH_REARM_MS;
     const baseBackoff = this.opts.pushBackoffMs ?? PUSH_BACKOFF_MS;
     const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
 
     const loop = async (): Promise<void> => {
       let backoff = baseBackoff;
-      while (!this.pushStopped) {
+      while (current()) {
         const c = this.newClient(true);
         this.pushClient = c;
         try {
           await this.connect(c);
           await c.mailboxOpen('INBOX');
           backoff = baseBackoff;
-          c.on('exists', () => { if (!this.pushStopped) onChange(); });
-          c.on('flags', () => { if (!this.pushStopped) onChange(); });
-          while (!this.pushStopped) {
+          c.on('exists', () => { if (current()) onChange(); });
+          c.on('flags', () => { if (current()) onChange(); });
+          while (current()) {
             await c.idle();
-            if (!this.pushStopped && rearm) await sleep(rearm);
+            if (current() && rearm) await sleep(rearm);
           }
         } catch (e) {
           const err = e as Error & { authenticationFailed?: boolean };
@@ -657,14 +723,14 @@ export class ImapMailProvider implements MailProvider {
             this.pushStopped = true;
             console.warn('[imap] IDLE stopped: the mailbox rejected the stored credentials');
             try { onAuthError?.(err); } catch { /* the caller's problem, not ours */ }
-          } else if (!this.pushStopped) {
+          } else if (current()) {
             console.warn('[imap] IDLE connection dropped:', err.message);
           }
         } finally {
           await c.logout().catch(() => {});
           if (this.pushClient === c) this.pushClient = null;
         }
-        if (this.pushStopped) break;
+        if (!current()) break;
         await sleep(backoff);
         backoff = Math.min(backoff * 2, PUSH_BACKOFF_MAX_MS);
       }
@@ -675,9 +741,14 @@ export class ImapMailProvider implements MailProvider {
 
   async stopPush(): Promise<void> {
     this.pushStopped = true;
-    // Breaks the socket out of IDLE so the loop's `await idle()` settles.
-    await this.pushClient?.logout().catch(() => {});
+    // Invalidates any loop still running: one parked in idle() only wakes when
+    // the socket below closes, by which time startPush may already have set
+    // pushStopped back to false.
+    this.pushEpoch += 1;
+    const c = this.pushClient;
     this.pushClient = null;
+    // Breaks the socket out of IDLE so the loop's `await idle()` settles.
+    await c?.logout().catch(() => {});
     // The loop is not awaited: it may still be parked inside idle() until the
     // socket actually closes, and stopPush must not block on the network.
     this.pushLoop = null;

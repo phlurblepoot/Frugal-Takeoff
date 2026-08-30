@@ -19,8 +19,12 @@ export interface Envelope {
   replacesProviderMessageId?: string;
 }
 /** One `move`/`archive`/`trash` outcome: `to` is the message's new
- *  providerMessageId, or null when the provider did not report one. */
-export interface MoveResult { from: string; to: string | null }
+ *  providerMessageId, or null when the provider did not report one.
+ *  `failed` means the move did NOT happen (the server refused it, the mailbox
+ *  was unreadable). It has to be distinguishable from "moved but unnamed": the
+ *  caller deletes/re-keys the local row for the latter, and must instead put
+ *  the row back where it was for the former. */
+export interface MoveResult { from: string; to: string | null; failed?: true }
 export interface ProviderFolder { providerId: string; name: string; role: FolderRole | null; unreadCount?: number; totalCount?: number; sortOrder?: number }
 export type FolderRole = 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam' | 'starred';
 export type SyncState = Record<string, unknown>;

@@ -23,7 +23,21 @@ interface Script {
   /** Folders whose mailboxOpen blows up, the way an unreadable share does. */
   openFails?: string[];
   moveResult?: { uidValidity?: bigint; uidMap?: Map<number, number> } | false;
+  /** Makes MOVE blow up the way a server that refuses the destination does. */
+  moveThrows?: boolean;
 }
+
+/** The fake honours UID ranges ("5", "1,2,3", "9:*", "100:300") so the paged
+ *  backfill and the flag re-scan are exercised against real slicing rather than
+ *  a client that hands back every message whatever it was asked for. */
+const inUidRange = (range: unknown, uid: number): boolean => {
+  if (typeof range !== 'string') return true;                 // { since: … } and friends
+  return range.split(',').some(part => {
+    const [lo, hi] = part.split(':');
+    if (hi === undefined) return uid === Number(lo);
+    return uid >= Number(lo) && uid <= (hi === '*' ? Infinity : Number(hi));
+  });
+};
 
 const DEFAULT_FOLDERS: FakeFolder[] = [
   { path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox', flags: new Set() },
@@ -65,7 +79,7 @@ function fakeClient(script: Script) {
     },
     async *fetch(range: unknown, q: unknown, opts: unknown) {
       client.calls.push(['fetch', range, opts, q]);
-      for (const m of script.messages?.[client.mailbox!.path] ?? []) yield m;
+      for (const m of script.messages?.[client.mailbox!.path] ?? []) if (inUidRange(range, m.uid)) yield m;
     },
     async fetchOne(range: unknown, _q: unknown, opts: unknown) {
       client.calls.push(['fetchOne', range, opts]);
@@ -81,14 +95,26 @@ function fakeClient(script: Script) {
     },
     async messageFlagsAdd(range: unknown, flags: string[]) { client.calls.push(['add', range, flags]); return true; },
     async messageFlagsRemove(range: unknown, flags: string[]) { client.calls.push(['remove', range, flags]); return true; },
-    async messageMove(range: unknown, dest: string) { client.calls.push(['move', range, dest]); return script.moveResult === undefined ? {} : script.moveResult; },
+    async messageMove(range: unknown, dest: string) {
+      client.calls.push(['move', range, dest]);
+      if (script.moveThrows) throw new Error('[CANNOT] move refused');
+      return script.moveResult === undefined ? {} : script.moveResult;
+    },
     async messageDelete(range: unknown) { client.calls.push(['delete', range]); return true; },
     async append(path: string, _raw: Buffer, flags: string[]) {
       client.calls.push(['append', path, flags]);
       if (script.appendThrows) throw new Error('APPEND rejected');
       return script.appendResult === undefined ? { uid: 99, uidValidity: 7n } : script.appendResult;
     },
-    async search(query: unknown) { client.calls.push(['search', query]); return script.searchResult ?? []; },
+    async search(query: unknown) {
+      client.calls.push(['search', query]);
+      if (script.searchResult) return script.searchResult;
+      // A backfill's SINCE search: answer with the UIDs actually in the box.
+      if (query && typeof query === 'object' && 'since' in (query as object)) {
+        return (script.messages?.[client.mailbox!.path] ?? []).map(m => m.uid);
+      }
+      return [];
+    },
     async idle() { client.idleCount += 1; client.calls.push(['idle']); await (script.idleGate?.() ?? Promise.resolve()); return true; },
     on(event: string, fn: (...a: unknown[]) => void) {
       client.listeners.set(event, [...(client.listeners.get(event) ?? []), fn]);
@@ -184,7 +210,61 @@ describe('ImapMailProvider', () => {
     });
     expect(m.attachments).toEqual([{ attId: '2', name: 'a.pdf', mime: 'application/pdf', size: 4 }]);
     // SINCE-limited server-side search, not a full folder walk
-    expect(c.calls.some(x => x[0] === 'fetch' && (x[1] as { since?: Date }).since instanceof Date)).toBe(true);
+    expect(c.calls.some(x => x[0] === 'search' && (x[1] as { since?: Date }).since instanceof Date)).toBe(true);
+  });
+
+  // A first sync of a big mailbox used to build ONE array of every message and
+  // hand it over in a single transaction. It is paged now, 500 at a time.
+  it('backfill pages a large folder and reports done only on the last call', async () => {
+    const many = Array.from({ length: 1200 }, (_, i) => env(i + 1));
+    const c = fakeClient({ messages: { INBOX: many } });
+    const p = provider(c);
+    const uids: number[] = [];
+    let cursor: string | undefined;
+    let calls = 0;
+    let done = false;
+    while (!done) {
+      const r = await p.backfill({ since: new Date('2026-01-01'), cursor });
+      calls += 1;
+      uids.push(...r.messages.map(m => parsePmid(m.providerMessageId).uid));
+      cursor = r.cursor;
+      done = r.done;
+      expect(r.messages.length).toBeLessThanOrEqual(500);
+      if (!done) expect(r.cursor).toBeTruthy();
+      expect(calls).toBeLessThan(10);                       // never a runaway loop
+    }
+    expect(calls).toBe(3);
+    expect(uids).toEqual(many.map(m => m.uid));             // every message, exactly once
+  });
+
+  it('backfill resumes mid-folder from a cursor and survives a corrupt one', async () => {
+    const c = fakeClient({ messages: { INBOX: [env(1), env(2), env(3)] } });
+    const p = provider(c);
+    const resumed = await p.backfill({ since: new Date('2026-01-01'), cursor: JSON.stringify({ folderIndex: 0, lastUid: 2 }) });
+    expect(resumed.messages.map(m => parsePmid(m.providerMessageId).uid)).toEqual([3]);
+    const garbage = await p.backfill({ since: new Date('2026-01-01'), cursor: 'not json' });
+    expect(garbage.messages.map(m => parsePmid(m.providerMessageId).uid)).toEqual([1, 2, 3]);
+  });
+
+  // Gmail over IMAP puts a copy of every message in All Mail. Indexing that too
+  // would give each message a second row under a different UID.
+  it('skips the Gmail All Mail folder when syncing but still lists it', async () => {
+    const folders = [...DEFAULT_FOLDERS, { path: '[Gmail]/All Mail', name: 'All Mail', specialUse: '\\All', flags: new Set<string>() }];
+    const messages = { INBOX: [env(5)], '[Gmail]/All Mail': [env(5)] };
+    const c = fakeClient({ folders, messages });
+    const p = provider(c);
+
+    expect((await p.listFolders()).some(f => f.providerId === '[Gmail]/All Mail')).toBe(true);
+
+    const b = await p.backfill({ since: new Date('2026-01-01') });
+    expect(b.messages.map(m => parsePmid(m.providerMessageId).folder)).toEqual(['INBOX']);
+
+    const inc = await p.incremental({});
+    expect(Object.keys((inc.state as { folders: Record<string, unknown> }).folders)).not.toContain('[Gmail]/All Mail');
+
+    const found = await p.search('Hello', { limit: 10 });
+    expect(found.every(m => parsePmid(m.providerMessageId).folder !== '[Gmail]/All Mail')).toBe(true);
+    expect(c.calls).not.toContainEqual(['mailboxOpen', '[Gmail]/All Mail']);
   });
 
   it('incremental fetches UIDs above lastUid per folder and advances state', async () => {
@@ -319,6 +399,14 @@ describe('ImapMailProvider', () => {
   it('move reports null when the server sends no UIDPLUS mapping', async () => {
     const c = fakeClient({ moveResult: {} });
     expect(await provider(c).trash([makePmid('INBOX', 7, 5)])).toEqual([{ from: 'INBOX 7 5', to: null }]);
+  });
+
+  // "moved but unnamed" and "not moved at all" must not look alike: the caller
+  // deletes/re-files a row for the first and has to put it back for the second.
+  it('move flags a refused MOVE as failed rather than as an unnamed success', async () => {
+    const c = fakeClient({ moveThrows: true });
+    expect(await provider(c).trash([makePmid('INBOX', 7, 5)]))
+      .toEqual([{ from: 'INBOX 7 5', to: null, failed: true }]);
   });
 
   it('move reports a null mapping for an id that never named a server message', async () => {
@@ -482,5 +570,36 @@ describe('ImapMailProvider', () => {
     await new Promise(r => setTimeout(r, 10));
     expect(c.idleCount).toBe(idlesAtStop);   // loop really stopped
     expect(c.loggedOut).toBeGreaterThan(0);
+  });
+
+  // stopPush cannot wait for a loop parked inside idle(): the socket only lets
+  // go when it closes. So the OLD loop wakes up after the new one is already
+  // running, and without an epoch it would keep idling (and firing onChange)
+  // alongside it forever.
+  it('a stop → start cycle leaves exactly one live IDLE loop', async () => {
+    const releases: Array<() => void> = [];
+    const c = fakeClient({ idleGate: () => new Promise<void>(r => releases.push(r)) });
+    const p = provider(c, { pushRearmMs: 0, pushBackoffMs: 0 });
+    const settle = () => new Promise(r => setTimeout(r, 10));
+
+    let changes = 0;
+    await p.startPush(() => { changes += 1; });
+    await settle();
+    await p.stopPush();
+    await p.startPush(() => { changes += 1; });
+    await settle();
+    expect(releases).toHaveLength(2);                    // the stopped loop is still parked
+
+    releases.splice(0).forEach(r => r());                // both idles settle at once
+    await settle();
+    // Only the loop started last re-arms; the first sees a newer epoch and exits.
+    expect(releases).toHaveLength(1);
+
+    changes = 0;
+    c.emit('exists', { path: 'INBOX' });
+    expect(changes).toBe(1);                             // and only one loop reports the change
+    await p.stopPush();
+    releases.splice(0).forEach(r => r());
+    await settle();
   });
 });

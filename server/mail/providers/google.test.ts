@@ -249,6 +249,55 @@ describe('GmailProvider', () => {
     expect(Object.keys(JSON.parse(f.calls[1].init.body))).toEqual(['raw']);
   });
 
+  // Gmail takes its recipients from the headers — there is no envelope of ours
+  // for it to read — so a stripped Bcc is a blind copy that never goes out.
+  it('send keeps the Bcc header in the raw it uploads', async () => {
+    const f = fakeFetch([
+      [/\/messages\/send$/, () => ({ id: 's5', threadId: 't5' })],
+      [/\/messages\/s5\?/, () => ({ id: 's5', payload: { headers: [] } })],
+    ]);
+    await provider(f).send({ ...outgoing(), bcc: [{ addr: 'blind@z.com' }] });
+    const raw = JSON.parse(f.calls[0].init.body).raw as string;
+    const mime = Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString();
+    expect(mime).toMatch(/^Bcc: blind@z\.com/m);
+  });
+
+  // A threadId can go stale between the lookup and the send (subject changed,
+  // thread deleted). Losing the whole message over a threading detail would be
+  // far worse than filing it as a new conversation.
+  it('retries a rejected threadId once as a new conversation', async () => {
+    let sends = 0;
+    const f = fakeFetch([
+      [/\/messages\?/, () => ({ messages: [{ id: 'p1', threadId: 't1' }] })],
+      [/\/messages\/send$/, () => {
+        sends += 1;
+        return sends === 1
+          ? new Response('{"error":{"message":"Invalid thread_id"}}', { status: 400 })
+          : new Response(JSON.stringify({ id: 's6', threadId: 't6' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }],
+      [/\/messages\/s6\?/, () => ({ id: 's6', payload: { headers: [] } })],
+    ]);
+    const r = await provider(f).send({ ...outgoing(), inReplyTo: 'root-1@x.com' });
+    expect(r).toMatchObject({ providerMessageId: 's6' });
+    expect(sends).toBe(2);
+    expect(JSON.parse(f.calls[1].init.body)).toEqual({ raw: expect.any(String), threadId: 't1' });
+    expect(Object.keys(JSON.parse(f.calls[2].init.body))).toEqual(['raw']);   // the retry drops it
+  });
+
+  // ...but a dead grant or a quota wall is not a threading problem, and sending
+  // twice into one of those is the wrong answer.
+  it('does not retry a send that failed on auth', async () => {
+    let sends = 0;
+    const f = fakeFetch([
+      [/\/messages\?/, () => ({ messages: [{ id: 'p1', threadId: 't1' }] })],
+      [/\/messages\/send$/, () => { sends += 1; return new Response('{}', { status: 401 }); }],
+    ]);
+    await expect(provider(f).send({ ...outgoing(), inReplyTo: 'root-1@x.com' })).rejects.toBeInstanceOf(AuthExpiredError);
+    expect(sends).toBe(2);   // the api layer's own one-shot token refresh, not a threadId retry
+    const sendBodies = f.calls.filter(c => /messages\/send$/.test(c.url)).map(c => JSON.parse(c.init.body));
+    expect(sendBodies.every(b => b.threadId === 't1')).toBe(true);   // never re-sent unthreaded
+  });
+
   it('send still succeeds when the Message-ID read-back fails', async () => {
     const f = fakeFetch([[/\/messages\/send$/, () => ({ id: 's1', threadId: 't9' })]]);   // the read-back 404s
     expect(await provider(f).send(outgoing())).toEqual({ providerMessageId: 's1', providerThreadId: 't9' });

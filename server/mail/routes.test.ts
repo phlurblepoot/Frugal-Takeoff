@@ -16,7 +16,7 @@ import { MailCrypto } from './crypto';
 import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
-import { registerMailRoutes, WEBHOOK_MAX_BODY_BYTES, type MailRouteDeps } from './routes';
+import { registerMailRoutes, createWebhookRateLimit, WEBHOOK_MAX_BODY_BYTES, WEBHOOK_RATE_LIMIT_PER_MIN, type MailRouteDeps } from './routes';
 import { getWebhookSecret } from './push';
 import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
@@ -321,6 +321,45 @@ describe('mail routes', () => {
     expect(db.prepare('SELECT id FROM mail_messages WHERE id = ?').get(id)).toBeUndefined();
     // the thread rollup is rebuilt, not left pointing at a message that is gone
     expect(db.prepare('SELECT id FROM mail_threads').get()).toBeUndefined();
+  });
+
+  // Gmail has no Archive mailbox — archiving is "drop the Inbox label" — so a
+  // 400 here would put Archive out of reach for every Gmail account.
+  it('archives a mailbox that has no Archive folder by dropping the inbox', async () => {
+    db.prepare(`DELETE FROM mail_folders WHERE accountId = ? AND role = 'archive'`).run(acct.id);
+    const inboxId = (db.prepare(`SELECT id FROM mail_folders WHERE accountId = ? AND role = 'inbox'`).get(acct.id) as { id: string }).id;
+    const id = firstMessageId();
+    let archived: string[] = [];
+    provider.archive = async (ids: string[]) => { archived = ids; return ids.map(from => ({ from, to: from })); };
+
+    const r = await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'archive' });
+    expect(r.status).toBe(200);
+    expect(archived).toHaveLength(1);
+    const row = db.prepare('SELECT folderIdsJson FROM mail_messages WHERE id = ?').get(id) as { folderIdsJson: string };
+    expect(JSON.parse(row.folderIdsJson)).not.toContain(inboxId);
+  });
+
+  // Trash and move still need one: there is nowhere to put the message.
+  it('still refuses trash and move when the destination folder is missing', async () => {
+    db.prepare(`DELETE FROM mail_folders WHERE accountId = ? AND role = 'trash'`).run(acct.id);
+    const id = firstMessageId();
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'trash' })).status).toBe(400);
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'move', folderId: 'nope' })).status).toBe(400);
+  });
+
+  // A refused IMAP MOVE leaves the message exactly where it was. Reading that
+  // as "moved, id unknown" would delete a message the server never touched.
+  it('puts the row back when the provider reports the move failed', async () => {
+    const id = firstMessageId();
+    const inboxId = (db.prepare(`SELECT id FROM mail_folders WHERE accountId = ? AND role = 'inbox'`).get(acct.id) as { id: string }).id;
+    const before = db.prepare('SELECT providerMessageId, folderIdsJson FROM mail_messages WHERE id = ?').get(id) as { providerMessageId: string; folderIdsJson: string };
+    provider.trash = async (ids: string[]) => ids.map(from => ({ from, to: null, failed: true as const }));
+
+    expect((await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'trash' })).status).toBe(200);
+    const after = db.prepare('SELECT providerMessageId, folderIdsJson FROM mail_messages WHERE id = ?').get(id) as { providerMessageId: string; folderIdsJson: string };
+    expect(after).toBeTruthy();                                   // NOT deleted
+    expect(after.providerMessageId).toBe(before.providerMessageId);
+    expect(JSON.parse(after.folderIdsJson)).toEqual([inboxId]);    // and back in the inbox
   });
 
   it('an unchanged mapping leaves the row alone', async () => {
@@ -737,6 +776,27 @@ describe('POST /api/mail/ms/webhook', () => {
     expect(r.status).toBe(202);
     expect(poke).toHaveBeenCalledWith(acct.id);
     poke.mockRestore();
+  });
+
+  // 600, not the old 120: Graph batches several accounts' notifications through
+  // one IP, and a burst that trips the limiter costs real mail its latency.
+  it('throttles at the documented ceiling and warns at most once a minute', async () => {
+    expect(WEBHOOK_RATE_LIMIT_PER_MIN).toBe(600);
+    subscribe('sub-9');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const limited = altApp({ webhookRateLimit: createWebhookRateLimit(2) });
+    const post = () => request(limited).post('/api/mail/ms/webhook').send({
+      value: [{ subscriptionId: 'sub-9', clientState: getWebhookSecret(db) }],
+    });
+    expect((await post()).status).toBe(202);
+    expect((await post()).status).toBe(202);
+    const third = await post();
+    expect(third.status).toBe(429);
+    expect(third.body).toEqual({ error: 'Too many notifications' });
+    expect((await post()).status).toBe(429);
+    // Two rejections, one log line — the burst that tripped it must not flood.
+    expect(warn.mock.calls.filter(c => String(c[0]).includes('rate limit'))).toHaveLength(1);
+    warn.mockRestore();
   });
 
   it('runs the injected rate limiter before the handler', async () => {
