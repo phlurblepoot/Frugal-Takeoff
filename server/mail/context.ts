@@ -2,12 +2,10 @@ import type Database from 'better-sqlite3';
 import type { BroadcastChange } from '../realtime/changeFeed';
 import type { MailCrypto } from './crypto';
 import type { MailAccountRow, ImapAuth, OAuthAuth } from './accountStore';
+import type { MailProvider } from './providers/types';
 
-// TODO(Task 5/8): tighten types. MailProvider lands with the provider
-// implementations (Task 5, server/mail/providers/types.ts); MailScheduler
-// lands with the sync scheduler (Task 8, server/mail/sync/scheduler.ts).
-// Both are placeholders until those modules exist.
-export type MailProvider = unknown;
+// TODO(Task 8): tighten types. MailScheduler lands with the sync scheduler
+// (Task 8, server/mail/sync/scheduler.ts) and is a placeholder until then.
 export type MailScheduler = unknown;
 
 export interface MailContext {

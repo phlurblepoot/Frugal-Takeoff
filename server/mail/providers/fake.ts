@@ -1,0 +1,74 @@
+import { Readable } from 'stream';
+import { v4 as uuidv4 } from 'uuid';
+import type { MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta } from './types';
+import { ProviderNotFoundError } from './types';
+
+type Seeded = Envelope & { html?: string; text?: string; attachmentBytes?: Record<string, Buffer> };
+
+export class FakeMailProvider implements MailProvider {
+  kind = 'fake' as const;
+  private msgs = new Map<string, Seeded>();
+  private log: Array<{ seq: number; upsert?: string; delete?: string }> = [];
+  private seq = 0;
+  sent: OutgoingMessage[] = [];
+  drafts = new Map<string, OutgoingMessage>();
+  folders: ProviderFolder[] = [
+    { providerId: 'INBOX', name: 'Inbox', role: 'inbox' }, { providerId: 'SENT', name: 'Sent', role: 'sent' },
+    { providerId: 'DRAFTS', name: 'Drafts', role: 'drafts' }, { providerId: 'TRASH', name: 'Trash', role: 'trash' },
+    { providerId: 'ARCHIVE', name: 'Archive', role: 'archive' },
+  ];
+  private nextFailure: Error | null = null;
+
+  seed(list: Seeded[]): void { this.msgs.clear(); this.log = []; list.forEach(m => this.msgs.set(m.providerMessageId, m)); }
+  injectInbound(m: Seeded): void { this.msgs.set(m.providerMessageId, m); this.log.push({ seq: ++this.seq, upsert: m.providerMessageId }); }
+  failNextWith(err: Error): void { this.nextFailure = err; }
+  private guard(): void { if (this.nextFailure) { const e = this.nextFailure; this.nextFailure = null; throw e; } }
+
+  async listFolders(): Promise<ProviderFolder[]> { this.guard(); return this.folders; }
+  async backfill(opts: { since: Date; cursor?: string }) {
+    this.guard();
+    const messages = [...this.msgs.values()].filter(m => new Date(m.date) >= opts.since && !m.isDraft);
+    return { messages, done: true };
+  }
+  async incremental(state: SyncState) {
+    this.guard();
+    const cursor = typeof state.cursor === 'number' ? state.cursor : 0;
+    const entries = this.log.filter(e => e.seq > cursor);
+    const upserts = entries.filter(e => e.upsert).map(e => this.msgs.get(e.upsert!)!).filter(Boolean);
+    const deletes = entries.filter(e => e.delete).map(e => e.delete!);
+    return { upserts, deletes, state: { cursor: this.seq } };
+  }
+  async getBody(id: string) {
+    this.guard(); const m = this.msgs.get(id); if (!m) throw new ProviderNotFoundError(id);
+    return { html: m.html, text: m.text, attachments: m.attachments };
+  }
+  async getAttachment(id: string, attId: string) {
+    this.guard(); const m = this.msgs.get(id); const meta = m?.attachments.find(a => a.attId === attId);
+    if (!m || !meta) throw new ProviderNotFoundError(attId);
+    const buf = m.attachmentBytes?.[attId] ?? Buffer.from('fake-bytes');
+    return { stream: Readable.from(buf), mime: meta.mime, size: buf.length, name: meta.name };
+  }
+  async send(msg: OutgoingMessage) {
+    this.guard(); this.sent.push(msg);
+    const id = 'sent-' + uuidv4();
+    const env: Seeded = { providerMessageId: id, messageIdHeader: msg.messageIdHeader, inReplyTo: msg.inReplyTo, references: msg.references ?? [],
+      from: msg.from, to: msg.to, cc: msg.cc, bcc: msg.bcc, subject: msg.subject, snippet: msg.text.slice(0, 200), date: new Date().toISOString(),
+      isRead: true, isStarred: false, isDraft: false, sizeBytes: msg.html.length,
+      attachments: msg.attachments.map((a, i): AttachmentMeta => ({ attId: 'att' + i, name: a.name, mime: a.mime, size: a.content.length })),
+      folderProviderIds: ['SENT'], html: msg.html, text: msg.text };
+    this.msgs.set(id, env); this.log.push({ seq: ++this.seq, upsert: id });
+    return { providerMessageId: id };
+  }
+  async setFlags(ids: string[], flags: { read?: boolean; starred?: boolean }) {
+    this.guard(); ids.forEach(id => { const m = this.msgs.get(id); if (!m) return; if (flags.read !== undefined) m.isRead = flags.read; if (flags.starred !== undefined) m.isStarred = flags.starred; this.log.push({ seq: ++this.seq, upsert: id }); });
+  }
+  async move(ids: string[], folder: string) { this.guard(); ids.forEach(id => { const m = this.msgs.get(id); if (m) { m.folderProviderIds = [folder]; this.log.push({ seq: ++this.seq, upsert: id }); } }); }
+  async archive(ids: string[]) { return this.move(ids, 'ARCHIVE'); }
+  async trash(ids: string[]) { return this.move(ids, 'TRASH'); }
+  async saveDraft(draft: OutgoingMessage, existing?: string) { this.guard(); const id = existing ?? 'draft-' + uuidv4(); this.drafts.set(id, draft); return { providerMessageId: id }; }
+  async deleteDraft(id: string) { this.guard(); this.drafts.delete(id); }
+  async search(query: string, opts: { before?: Date; limit: number }) {
+    this.guard(); const q = query.toLowerCase();
+    return [...this.msgs.values()].filter(m => (!opts.before || new Date(m.date) < opts.before) && (m.subject.toLowerCase().includes(q) || (m.text ?? '').toLowerCase().includes(q))).slice(0, opts.limit);
+  }
+}
