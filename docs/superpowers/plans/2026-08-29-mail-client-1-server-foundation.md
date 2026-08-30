@@ -318,7 +318,7 @@ describe('migration 31 mail-client', () => {
   });
   it('migrates smtp.* prefs into a sealed imap account and deletes the prefs', () => {
     const { db, dir } = setup();
-    db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u9','nate','x','admin',1)`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
     const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
     for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.port': '465', 'smtp.secure': 'true',
       'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'nate@example.com', 'theme': 'dark' })) ins.run('u9', k, v);
@@ -338,7 +338,7 @@ describe('migration 31 mail-client', () => {
   });
   it('skips the transform (keeps prefs) when no crypto is supplied', () => {
     const { db, dir } = setup();
-    db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u9','nate','x','admin',1)`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
     db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('u9', 'smtp.host', 'h');
     runMigrations(db, dir, migrations);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
@@ -496,7 +496,7 @@ const imapAuth: store.ImapAuth = { imapHost: 'imap.x', imapPort: 993, imapSecure
 beforeEach(() => {
   db = openDb(':memory:');
   runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-as-')), migrations, { mailCrypto: crypto });
-  db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','admin',1), ('u2','b','x','user',1)`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin'), ('u2','b','x','user')`).run();
 });
 
 describe('accountStore', () => {
@@ -716,7 +716,7 @@ describe('mergeThreadKeys', () => {
   it('rewrites messages, links, reply state and drops the stale thread rollup', () => {
     const db = openDb(':memory:');
     runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-tk-')), migrations);
-    db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','admin',1)`).run();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
     db.prepare(`INSERT INTO mail_accounts (id,userId,provider,emailAddress,isDefault,authBlob,indexedSince,status,createdAt,updatedAt) VALUES ('a1','u1','fake','a@x',1,'v1:x','2026-01-01','ok','t','t')`).run();
     const ins = db.prepare(`INSERT INTO mail_messages (id,accountId,providerMessageId,threadKey,date,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)`);
     ins.run('m1', 'a1', 'p1', 'child@x', '2026-01-02', 't', 't'); ins.run('m2', 'a1', 'p2', 'root@x', '2026-01-01', 't', 't');
@@ -1185,7 +1185,7 @@ const env = (id: string, o: Partial<Envelope> = {}): Envelope => ({ providerMess
 beforeEach(() => {
   db = openDb(':memory:'); const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-se-'));
   runMigrations(db, dir, migrations, { mailCrypto: crypto });
-  db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','admin',1)`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
   acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
   provider = new FakeMailProvider(); provider.seed([]);
   events = [];
@@ -1492,7 +1492,7 @@ const flush = () => new Promise(r => setTimeout(r, 0));
 
 beforeEach(() => {
   const db = openDb(':memory:'); runMigrations(db, fs.mkdtempSync(path.join(os.tmpdir(), 'ft-sc-')), migrations, { mailCrypto: crypto });
-  db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','admin',1)`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin')`).run();
   acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider(); provider.seed([env('seeded')]);
   ctx = { db, dataDir: '', crypto, providerFactory: () => provider, broadcastChange: () => {} };
@@ -1950,7 +1950,7 @@ let db: Database.Database; let ctx: MailContext; let provider: FakeMailProvider;
 const crypto = new MailCrypto(Buffer.alloc(32, 5)); const user = { id: 'u1', role: 'user' };
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ss-')); db = openDb(':memory:'); runMigrations(db, dir, migrations, { mailCrypto: crypto });
-  db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','user',1)`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','user')`).run();
   createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
   acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', displayName: 'Me', auth: { refreshToken: 'r' } });
   provider = new FakeMailProvider(); provider.seed([]);
@@ -2169,7 +2169,7 @@ const env = (id: string, o: any = {}) => ({ providerMessageId: id, references: [
 beforeEach(async () => {
   resetFakes(); currentUser = { id: 'u1', role: 'admin' };
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-mr-')); db = openDb(':memory:'); runMigrations(db, dir, migrations, { mailCrypto: crypto });
-  db.prepare(`INSERT INTO users (id, username, password, role, createdAt) VALUES ('u1','a','x','admin',1), ('u2','b','x','user',1)`).run();
+  db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u1','a','x','admin'), ('u2','b','x','user')`).run();
   createProject(db, { id: 'p1', name: 'P', createdAt: 1, pages: [], takeoffs: [] } as any);
   acct = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'me@bb.com', auth: { refreshToken: 'r' } });
   provider = getFakeProvider(acct.id); provider.seed([env('m1')]);
