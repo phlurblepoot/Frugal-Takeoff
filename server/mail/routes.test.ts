@@ -5,6 +5,7 @@ import request from 'supertest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { Readable } from 'stream';
 import type Database from 'better-sqlite3';
 import { openDb } from '../db';
 import { runMigrations } from '../migrations';
@@ -192,6 +193,44 @@ describe('mail routes', () => {
     expect(rows).toEqual([{ name: 'one.pdf', kind: 'email-attachment' }, { name: 'two.pdf', kind: 'email-attachment' }]);
   });
 
+  it('attachment save is per item: one failure does not discard the others', async () => {
+    const twoAtts = [{ attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 }, { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 }];
+    provider.seed([env('m1', { attachments: twoAtts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: twoAtts })]);
+    const id = firstMessageId();
+    provider.failNextWith(new Error('provider blew up on the first fetch'));
+    const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1' }, { attId: 'a2' }] });
+    expect(s.status).toBe(200);
+    expect(s.body.fileIds.length).toBe(1);
+    expect(s.body.saved).toEqual([{ attId: 'a2', fileId: s.body.fileIds[0] }]);
+    expect(s.body.failed).toEqual([{ attId: 'a1', error: 'Could not save this attachment' }]);
+    // The one that worked really landed in Documents; the raw provider message never leaks.
+    expect((db.prepare('SELECT name FROM files WHERE id = ?').get(s.body.fileIds[0]) as { name: string }).name).toBe('two.pdf');
+    expect(JSON.stringify(s.body)).not.toContain('blew up');
+  });
+
+  it('attachment save reports an attId that is not on the message instead of skipping it', async () => {
+    const id = firstMessageId();
+    const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'nope' }, { attId: 'a1' }] });
+    expect(s.status).toBe(200);
+    expect(s.body.saved.length).toBe(1);
+    expect(s.body.failed).toEqual([{ attId: 'nope', error: 'That attachment is not on this message' }]);
+  });
+
+  it('the attachment stream is released when the client goes away mid-download', async () => {
+    const id = firstMessageId();
+    const endless = new Readable({ read() { this.push(Buffer.alloc(64 * 1024)); } });
+    const destroyed = new Promise<void>(resolve => { endless.on('close', () => resolve()); });
+    vi.spyOn(provider, 'getAttachment').mockResolvedValue({ stream: endless, mime: 'application/pdf', size: 0, name: 'endless.pdf' });
+    const pending = request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
+    pending.end(() => {});   // superagent is lazy — actually put the request on the wire
+    // Let the response start flowing, then hang up the way a navigating browser does.
+    await new Promise(r => setTimeout(r, 50));
+    pending.abort();
+    await expect(destroyed).resolves.toBeUndefined();
+    expect(endless.destroyed).toBe(true);
+  });
+
   it('another user cannot read or save a message they do not own', async () => {
     const id = firstMessageId();
     currentUser = { id: 'u2', role: 'user' };
@@ -206,6 +245,8 @@ describe('mail routes', () => {
     provider.failNextWith(new Error('down'));
     const r = await request(app).post('/api/mail/messages/actions').send({ ids: [id], action: 'star' });
     expect(r.status).toBe(502);
+    expect(r.body.error).toBe('Mail provider request failed');   // §7: never echo the provider's raw message
+    expect(JSON.stringify(r.body)).not.toContain('down');
     expect((db.prepare('SELECT isStarred FROM mail_messages').get() as { isStarred: number }).isStarred).toBe(0);
     expect((await request(app).post('/api/mail/threads/actions').send({ accountId: acct.id, threadKeys: ['m1@teg.com'], action: 'archive' })).status).toBe(200);
     expect(JSON.parse((db.prepare('SELECT folderIdsJson FROM mail_messages').get() as { folderIdsJson: string }).folderIdsJson))

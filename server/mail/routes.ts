@@ -74,9 +74,19 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   const fail = (res: express.Response, e: any, fallback: string) => {
     if (e instanceof MailSendError) return res.status(e.status).json({ error: e.message });
     if (e instanceof AuthExpiredError) return res.status(409).json({ error: 'Mail account needs to be reconnected', code: 'auth_error' });
+    // Spec §7: a provider's raw error can carry hosts, credentials or internal
+    // detail. The client gets a fixed string; the detail stays in the log.
     console.error(fallback, e);
-    return res.status(502).json({ error: e?.message || fallback });
+    return res.status(502).json({ error: 'Mail provider request failed' });
   };
+
+  // NodeJS.ReadableStream has no destroy() in its type; provider streams are
+  // real Readables, so release the socket when we stop reading early.
+  const endStream = (stream: NodeJS.ReadableStream) => { (stream as { destroy?: () => void }).destroy?.(); };
+  const itemError = (e: unknown) =>
+    e instanceof MailSendError ? e.message
+      : e instanceof AuthExpiredError ? 'Mail account needs to be reconnected'
+        : 'Could not save this attachment';
 
   // ── accounts ──
   app.get('/api/mail/accounts', authenticateToken, (req, res) => {
@@ -275,6 +285,9 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       if (att.size) res.setHeader('Content-Length', String(att.size));
       res.setHeader('Content-Disposition', `${req.query.inline === '1' ? 'inline' : 'attachment'}; filename="${(att.name || 'attachment').replace(/["\r\n]/g, '')}"`);
       att.stream.on('error', err => { console.error('[mail] attachment stream failed', err); res.destroy(); });
+      // A client that navigates away mid-download closes the response; without
+      // this the provider stream keeps pulling bytes nobody will ever read.
+      res.on('close', () => { if (!res.writableEnded) endStream(att.stream); });
       att.stream.pipe(res);
     } catch (e) { fail(res, e, 'Failed to load attachment'); }
   });
@@ -285,19 +298,26 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'items required' });
     const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson);
+    // Per item, not all-or-nothing: one bad attachment used to abort the whole
+    // request with a 502, leaving the items already written to Documents saved
+    // and broadcast but invisible to a client that got no fileIds back.
     const fileIds: string[] = [];
-    try {
-      for (const it of items) {
-        const meta = metas.find(x => x.attId === it.attId);
-        if (!meta) continue;
+    const saved: Array<{ attId: string; fileId: string }> = [];
+    const failed: Array<{ attId: string; error: string }> = [];
+    for (const it of items) {
+      const meta = metas.find(x => x.attId === it.attId);
+      if (!meta) { failed.push({ attId: String(it?.attId ?? ''), error: 'That attachment is not on this message' }); continue; }
+      try {
         const att = await providerFor(m.accountId).getAttachment(m.providerMessageId, it.attId);
         const chunks: Buffer[] = [];
         let total = 0;
-        for await (const c of att.stream as AsyncIterable<Buffer>) {
-          total += c.length;
-          if (total > 100 * 1024 * 1024) throw new MailSendError('Attachment exceeds 100 MB', 413);
-          chunks.push(c);
-        }
+        try {
+          for await (const c of att.stream as AsyncIterable<Buffer>) {
+            total += c.length;
+            if (total > 100 * 1024 * 1024) throw new MailSendError('Attachment exceeds 100 MB', 413);
+            chunks.push(c);
+          }
+        } catch (e) { endStream(att.stream); throw e; }
         // 'email-attachment' is a MULTI_INSTANCE kind, so several attachments off
         // one message stay separate documents instead of versioning each other.
         const r = putBuffer(db, ctx.dataDir, uuidv4(), Buffer.concat(chunks), att.mime, {
@@ -306,10 +326,14 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
           name: it.name || meta.name, sourceType: 'mailMessage', sourceId: m.id,
         });
         fileIds.push(r.id);
+        saved.push({ attId: meta.attId, fileId: r.id });
         ctx.broadcastChange({ type: 'file', id: r.id, projectId: it.projectId || undefined, action: 'created', byUserId: userOf(req).id });
+      } catch (e) {
+        console.error('[mail] could not save attachment', meta.attId, e);
+        failed.push({ attId: meta.attId, error: itemError(e) });
       }
-      res.json({ fileIds });
-    } catch (e) { fail(res, e, 'Failed to save attachment'); }
+    }
+    res.json({ fileIds, saved, failed });
   });
 
   // ── actions (optimistic local write, provider call, revert on failure) ──
