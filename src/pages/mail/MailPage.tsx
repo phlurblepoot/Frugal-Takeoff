@@ -2,13 +2,14 @@
 // list, and the reading pane. All of the page's state lives in the URL
 // (`/mail/:accountId/:folderId/:threadKey` + `?q=` + `?compose=1`) so a thread
 // can be linked to from anywhere in the app.
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Mail, MailOpen } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
 import { FolderRail, orderFolders } from './FolderRail';
+import { SaveAttachmentsModal } from './SaveAttachmentsModal';
 import { ThreadList } from './ThreadList';
 import { useMailAccounts } from './useMailAccounts';
 import { useMailFolders } from './useMailFolders';
@@ -51,6 +52,10 @@ export const MailPage: React.FC = () => {
     const inbox = folders.find(f => f.role === 'inbox');
     navigate(`/mail/${accountId}/${inbox?.id ?? NO_FOLDER}${search}`, { replace: true });
   }, [accountId, folderId, folders, foldersLoading, navigate, search]);
+
+  // Task 5: "Save to Documents…" on a message's attachments — set by
+  // ThreadView's onSaveAttachments, read by SaveAttachmentsModal below.
+  const [saveAttachmentsMessage, setSaveAttachmentsMessage] = useState<MessageRow | null>(null);
 
   const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
 
@@ -214,6 +219,7 @@ export const MailPage: React.FC = () => {
                     onBack={backToList}
                     onReply={openReply}
                     onOpenInComposer={openCompose}
+                    onSaveAttachments={message => setSaveAttachmentsMessage(message)}
                   />
                 )}
               </div>
@@ -229,6 +235,15 @@ export const MailPage: React.FC = () => {
           )}
         </section>
       </div>
+
+      {saveAttachmentsMessage && (
+        <SaveAttachmentsModal
+          open
+          onClose={() => setSaveAttachmentsMessage(null)}
+          messageId={saveAttachmentsMessage.id}
+          attachments={saveAttachmentsMessage.attachments}
+        />
+      )}
     </div>
   );
 };
