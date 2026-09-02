@@ -231,6 +231,7 @@ export const MailPage: React.FC = () => {
 
           <div className="min-h-0 flex-1">
             <ThreadList
+              accountId={accountId}
               threads={list.threads}
               loading={list.loading}
               hasMore={list.hasMore}
@@ -243,6 +244,7 @@ export const MailPage: React.FC = () => {
               ownAddresses={ownAddresses}
               onOpen={openThread}
               onToggleStar={toggleStar}
+              onReload={reloadList}
             />
           </div>
         </section>
@@ -311,6 +313,7 @@ export const MailPage: React.FC = () => {
           accounts={accounts}
           defaultAccountId={accountId ?? undefined}
           mode="new"
+          onSent={reloadList}
         />
       )}
     </div>

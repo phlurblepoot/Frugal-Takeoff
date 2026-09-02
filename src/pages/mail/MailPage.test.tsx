@@ -280,6 +280,23 @@ describe('MailPage', () => {
       expect(screen.getByTestId('composer-body')).toHaveValue('Sounds good, thanks!');
     });
 
+    // A brand-new message never lands in an open thread, and the live event is
+    // suppressed for the tab that sent it, so the list has to be told.
+    it('refreshes the thread list after sending a brand-new message', async () => {
+      mount('/mail/a1/f-inbox?compose=1');
+      await screen.findByText('Roof detail');
+      await waitFor(() => expect(h.threads).toHaveBeenCalledTimes(1));
+
+      const to = screen.getByLabelText('To');
+      fireEvent.change(to, { target: { value: 'bob@acme.com' } });
+      fireEvent.keyDown(to, { key: 'Enter' });
+      fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'New scope' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+      await waitFor(() => expect(h.send).toHaveBeenCalled());
+      await waitFor(() => expect(h.threads).toHaveBeenCalledTimes(2));
+    });
+
     it('closes the composer and reloads the thread after a successful send', async () => {
       mount('/mail/a1/f-inbox/tk-1');
       await screen.findByText('Roof detail');

@@ -315,8 +315,10 @@ export const ThreadView: React.FC<{
                 <button type="button" className={`${MENU_ITEM} sm:hidden`} onClick={() => run('unread', { back: true, failure: 'Could not mark this conversation unread.' })}>
                   <Mail size={15} /> Mark unread
                 </button>
+                {/* A blank composer — not "open THIS thread in the composer",
+                    which is what the inline reply's own promote button does. */}
                 <button type="button" className={MENU_ITEM} onClick={() => { setMenuOpen(false); onOpenInComposer(); }}>
-                  <PenSquare size={15} /> Open in composer
+                  <PenSquare size={15} /> New message
                 </button>
               </div>
             </>

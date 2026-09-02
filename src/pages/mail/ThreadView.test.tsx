@@ -235,11 +235,13 @@ describe('ThreadView', () => {
     ]);
   });
 
-  it('opens the composer from the overflow menu', () => {
+  it('opens a blank composer from the overflow menu', () => {
     const onOpenInComposer = vi.fn();
     render(<ThreadView {...props} onOpenInComposer={onOpenInComposer} />);
     fireEvent.click(screen.getByRole('button', { name: /More actions/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Open in composer/i }));
+    // Labelled "New message": it composes a fresh mail, it does not carry this
+    // thread into the composer.
+    fireEvent.click(screen.getByRole('button', { name: /New message/i }));
     expect(onOpenInComposer).toHaveBeenCalledTimes(1);
   });
 

@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { BodyPayload } from './types';
 
-const h = vi.hoisted(() => ({ body: vi.fn() }));
-vi.mock('../../utils/mailApi', () => ({ mailApi: h }));
+const h = vi.hoisted(() => ({ body: vi.fn(), getMailToken: vi.fn(() => 'tok en/123') }));
+vi.mock('../../utils/mailApi', () => ({ mailApi: h, getMailToken: h.getMailToken }));
 
 import { MessageBodyFrame } from './MessageBodyFrame';
 
@@ -142,6 +142,32 @@ describe('MessageBodyFrame', () => {
     h.body.mockRejectedValue(new Error('Failed to load message'));
     render(<MessageBodyFrame messageId="m1" />);
     await waitFor(() => expect(screen.getByText(/Failed to load message/i)).toBeInTheDocument());
+  });
+
+  // The frame is an opaque origin, so it cannot send our Authorization header:
+  // without the token in the URL every inline (cid:) image 401s.
+  it('carries the auth token on the inline attachment URLs it hands the frame', async () => {
+    h.body.mockResolvedValue(payload({
+      html: '<img src="/api/mail/messages/m1/attachments/a1?inline=1">'
+        + '<img src="" data-blocked-src="https://tracker.test/pixel.png">',
+    }));
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    const doc = frame().getAttribute('srcdoc') ?? '';
+    expect(doc).toContain('src="/api/mail/messages/m1/attachments/a1?inline=1&token=tok%20en%2F123"');
+    // The blocked remote image is not ours to authorize — it stays as it was.
+    expect(doc).toContain('data-blocked-src="https://tracker.test/pixel.png"');
+    expect(doc).not.toContain('tracker.test/pixel.png?token');
+    expect(doc).not.toContain('tracker.test/pixel.png&token');
+  });
+
+  it('leaves the body alone when there is no token to add', async () => {
+    h.getMailToken.mockReturnValueOnce('');
+    h.body.mockResolvedValue(payload({ html: '<img src="/api/mail/messages/m1/attachments/a1?inline=1">' }));
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(frame().getAttribute('srcdoc') ?? '').toContain('src="/api/mail/messages/m1/attachments/a1?inline=1">');
   });
 
   it('refetches when the message changes', async () => {

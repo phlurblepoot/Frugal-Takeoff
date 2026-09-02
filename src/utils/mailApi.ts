@@ -63,6 +63,15 @@ export type DraftInput = { accountId: string; to: Addr[]; cc?: Addr[]; bcc?: Add
 
 const jsonHeaders = (): Record<string, string> => ({ 'Content-Type': 'application/json', ...getAuthHeaders() });
 
+/**
+ * The app's JWT, for the handful of URLs the browser fetches WITHOUT going
+ * through fetch() — `<img src>`, a top-level navigation, an opaque-origin
+ * iframe — none of which can carry an Authorization header. Those URLs take
+ * the token as a `?token=` query param instead; read from localStorage the
+ * same way getAuthHeaders() does.
+ */
+export const getMailToken = (): string => localStorage.getItem('token') || '';
+
 async function apiFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(url, init);
   await handleResponse(res);
@@ -107,7 +116,7 @@ export const mailApi = {
   // so it can't carry an Authorization header — the token rides in the query
   // string instead, read from localStorage the same way getAuthHeaders() does.
   oauthStartUrl: (provider: 'google' | 'microsoft'): string => {
-    const token = localStorage.getItem('token') || '';
+    const token = getMailToken();
     return `/api/mail/oauth/${provider}/start?token=${encodeURIComponent(token)}`;
   },
 
@@ -131,7 +140,7 @@ export const mailApi = {
   // oauthStartUrl) carries the token in the query string; ?inline=1 asks the
   // server for an inline Content-Disposition instead of a download prompt.
   attachmentUrl: (messageId: string, attId: string, opts?: { inline?: boolean }): string => {
-    const token = localStorage.getItem('token') || '';
+    const token = getMailToken();
     return `/api/mail/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}${qs({
       token,
       inline: opts?.inline ? 1 : undefined,

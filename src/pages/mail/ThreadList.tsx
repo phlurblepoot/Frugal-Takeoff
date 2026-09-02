@@ -4,6 +4,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Inbox, Search } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
+import { useToast } from '../../components/Toast';
+import { mailApi } from '../../utils/mailApi';
 import { ThreadRow } from './ThreadRow';
 import type { ThreadListRow } from './types';
 
@@ -16,6 +18,7 @@ const sinceLabel = (iso: string | null): string => {
 };
 
 export const ThreadList: React.FC<{
+  accountId: string | null;
   threads: ThreadListRow[];
   loading: boolean;
   hasMore: boolean;
@@ -28,10 +31,13 @@ export const ThreadList: React.FC<{
   ownAddresses: string[];
   onOpen: (row: ThreadListRow) => void;
   onToggleStar: (row: ThreadListRow) => void;
+  /** Re-runs the list query — used after a server-side search files new hits. */
+  onReload: () => void;
 }> = ({
-  threads, loading, hasMore, onLoadMore, indexedSince, onLoadOlder,
-  q, onQueryChange, selectedKey, ownAddresses, onOpen, onToggleStar,
+  accountId, threads, loading, hasMore, onLoadMore, indexedSince, onLoadOlder,
+  q, onQueryChange, selectedKey, ownAddresses, onOpen, onToggleStar, onReload,
 }) => {
+  const { toast } = useToast();
   // The input is local so typing stays responsive; the URL only learns about
   // it after the debounce. `lastQ` keeps an external change (navigation, a
   // cleared search) from stomping on characters typed since.
@@ -55,6 +61,26 @@ export const ThreadList: React.FC<{
       onQueryChange(value);
     }, SEARCH_DEBOUNCE_MS);
   }, [onQueryChange]);
+
+  // The local index only goes back as far as `indexedSince`, so a search that
+  // finds nothing here may still match older mail on the provider. That search
+  // files whatever it finds into the index, which is why the same local query
+  // finds it on the reload right after.
+  const [searchingServer, setSearchingServer] = useState(false);
+  const runServerSearch = useCallback(async () => {
+    const term = q.trim();
+    if (!accountId || !term || searchingServer) return;
+    setSearchingServer(true);
+    try {
+      const { count } = await mailApi.searchServer(accountId, term);
+      toast(count > 0 ? `Found ${count} message${count === 1 ? '' : 's'} on the server.` : 'No matching mail on the server.');
+      onReload();
+    } catch {
+      toast('Could not search the mailbox.', { type: 'error' });
+    } finally {
+      setSearchingServer(false);
+    }
+  }, [accountId, q, searchingServer, toast, onReload]);
 
   // Auto-page when the sentinel scrolls into view; the button below it stays
   // as the keyboard/no-IntersectionObserver path.
@@ -97,7 +123,23 @@ export const ThreadList: React.FC<{
             <EmptyState
               icon={<Inbox size={20} />}
               title={q ? 'No matching mail' : 'Nothing here'}
-              description={q ? 'Try a different search term.' : 'This folder has no conversations yet.'}
+              description={
+                q
+                  ? 'Nothing matches in the mail indexed on this device.'
+                  : 'This folder has no conversations yet.'
+              }
+              action={
+                q ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={runServerSearch}
+                    disabled={searchingServer || !accountId}
+                  >
+                    {searchingServer ? 'Searching…' : 'Search the whole mailbox'}
+                  </Button>
+                ) : undefined
+              }
             />
           </div>
         ) : (

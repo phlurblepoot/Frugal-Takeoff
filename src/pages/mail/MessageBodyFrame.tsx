@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ImageOff } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { Skeleton } from '../../components/ui';
-import { mailApi } from '../../utils/mailApi';
+import { getMailToken, mailApi } from '../../utils/mailApi';
 import type { BodyPayload } from './types';
 
 /** Tallest frame we will grow to; past this the body scrolls inside itself. */
@@ -49,6 +49,25 @@ const heightScript = `
   setTimeout(report, 1500);
 })();
 `.trim();
+
+// Attributes the server may have pointed at our own attachment route when it
+// resolved a `cid:` reference (server/mail/sanitize.ts REMOTE_FETCH_ATTRS).
+const INLINE_URL_RE = /(\s(?:src|background|poster|dynsrc|lowsrc)=)(["'])(\/api\/mail\/messages\/[^"'\s]*)\2/gi;
+
+/**
+ * Inline images arrive as `<img src="/api/mail/messages/…/attachments/…?inline=1">`,
+ * but the frame is an OPAQUE origin: it cannot send our Authorization header,
+ * so every one of those requests would 401 and the message would render with
+ * broken images. Same escape hatch as mailApi.attachmentUrl — the token rides
+ * in the query string. Remote images the sanitizer parked in `data-blocked-src`
+ * are untouched: they are not our URLs, and they stay blocked until the user
+ * asks for them.
+ */
+export function authorizeInlineUrls(html: string, token: string): string {
+  if (!token) return html;
+  return html.replace(INLINE_URL_RE, (_m, attr: string, quote: string, url: string) =>
+    `${attr}${quote}${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}${quote}`);
+}
 
 export function buildFrameDoc(html: string, nonce: string, origin: string): string {
   const csp = `default-src 'none'; img-src ${origin} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'`;
@@ -127,7 +146,9 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
   // A fresh nonce per document: a nonce that repeats across renders would let
   // any inline script that ever slipped past the sanitizer keep running.
   const doc = useMemo(
-    () => (payload ? buildFrameDoc(payload.html, uuidv4(), window.location.origin) : null),
+    () => (payload
+      ? buildFrameDoc(authorizeInlineUrls(payload.html, getMailToken()), uuidv4(), window.location.origin)
+      : null),
     [payload],
   );
 

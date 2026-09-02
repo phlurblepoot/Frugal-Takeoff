@@ -6,8 +6,17 @@ import { X } from 'lucide-react';
 
 const WIDTHS = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl', full: 'max-w-[95vw]' } as const;
 
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// `:not([tabindex="-1"])` has to hang off EVERY clause, not just the last one:
+// a `<button tabIndex={-1}>` is deliberately out of the tab order, and without
+// the per-clause guard the `button:not([disabled])` clause matched it anyway.
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]',
+].map(sel => `${sel}:not([tabindex="-1"])`).join(', ');
 
 // Tabbable descendants in DOM order, minus the ones hidden from assistive tech.
 // Deliberately cheap: no layout reads, so it stays correct under jsdom too.
@@ -15,6 +24,32 @@ const focusable = (root: HTMLElement): HTMLElement[] =>
   Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
     el => !el.hasAttribute('hidden') && el.getAttribute('aria-hidden') !== 'true'
   );
+
+// Every open Modal portals to document.body, so a nested modal is a SIBLING of
+// the one that opened it, not a descendant — without this stack both traps see
+// the same Tab, and the outer one keeps yanking focus back to its own panel.
+// Only the modal on top of the stack traps; the rest stand down until it closes.
+type PanelRef = { current: HTMLDivElement | null };
+
+const trapStack: PanelRef[] = [];
+
+// Searched from the top so an abrupt unmount of an inner modal removes ITS
+// entry rather than whichever one happens to be last.
+const popTrap = (ref: PanelRef): void => {
+  const i = trapStack.lastIndexOf(ref);
+  if (i >= 0) trapStack.splice(i, 1);
+};
+
+const pushTrap = (ref: PanelRef): void => {
+  popTrap(ref);
+  trapStack.push(ref);
+};
+
+const isTopTrap = (ref: PanelRef): boolean =>
+  trapStack.length > 0 && trapStack[trapStack.length - 1] === ref;
+
+/** Test-only: the trap stack is module state, so a leak across tests is real. */
+export const __trapDepth = (): number => trapStack.length;
 
 export interface ModalProps {
   open: boolean;
@@ -47,6 +82,7 @@ export const Modal: React.FC<ModalProps> = ({
   useEffect(() => {
     if (!open) return;
     const restoreTo = document.activeElement as HTMLElement | null;
+    pushTrap(panelRef);
     // The panel mounts with the animation, so focus on the next frame.
     const id = window.setTimeout(() => {
       const p = panelRef.current;
@@ -54,7 +90,7 @@ export const Modal: React.FC<ModalProps> = ({
       (focusable(p)[0] ?? p).focus();
     }, 0);
     const onTab = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
+      if (e.key !== 'Tab' || !isTopTrap(panelRef)) return;
       const p = panelRef.current;
       if (!p) return;
       const items = focusable(p);
@@ -81,6 +117,7 @@ export const Modal: React.FC<ModalProps> = ({
     return () => {
       window.clearTimeout(id);
       document.removeEventListener('keydown', onTab, true);
+      popTrap(panelRef);
       if (restoreTo && document.contains(restoreTo)) restoreTo.focus();
     };
   }, [open]);

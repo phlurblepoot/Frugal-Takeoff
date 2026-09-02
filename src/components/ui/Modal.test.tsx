@@ -1,7 +1,8 @@
 // src/components/ui/Modal.test.tsx
+import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
-import { Modal } from './Modal';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
+import { Modal, __trapDepth } from './Modal';
 
 describe('Modal', () => {
   it('renders nothing when closed', () => {
@@ -76,6 +77,26 @@ describe('Modal', () => {
       expect(document.activeElement).toBe(send);
     });
 
+    // A `tabIndex={-1}` control is deliberately out of the tab order. The
+    // selector only excluded it on its last clause, so `button:not([disabled])`
+    // matched it anyway and the trap treated it as the modal's last stop.
+    it('skips a tabIndex={-1} control when it wraps', async () => {
+      render(
+        <Modal open onClose={() => {}} title="Hi">
+          <button>Real</button>
+          <button tabIndex={-1}>Skipped</button>
+        </Modal>
+      );
+      await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+      const real = screen.getByRole('button', { name: 'Real' });
+      const close = screen.getByRole('button', { name: 'Close dialog' });
+
+      real.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(close);
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Skipped' }));
+    });
+
     it('restores focus to the opener when it closes', async () => {
       const opener = document.createElement('button');
       document.body.appendChild(opener);
@@ -86,6 +107,86 @@ describe('Modal', () => {
       rerender(<Modal open={false} onClose={() => {}} title="Hi">body</Modal>);
       expect(document.activeElement).toBe(opener);
       opener.remove();
+    });
+  });
+
+  // Nested modals (a picker opened from inside another modal). Both panels are
+  // portalled to document.body, so they are siblings, not ancestor/descendant:
+  // before the trap stack the OUTER modal saw every Tab as "focus escaped my
+  // panel" and yanked it back, so Tab inside the inner modal was unusable.
+  describe('nested modals', () => {
+    const Nested: React.FC<{ inner: boolean }> = ({ inner }) => (
+      <>
+        <Modal open onClose={() => {}} title="Outer">
+          <button>Outer A</button>
+          <button>Outer B</button>
+        </Modal>
+        <Modal open={inner} onClose={() => {}} title="Inner">
+          <button>Inner X</button>
+          <button>Inner Y</button>
+        </Modal>
+      </>
+    );
+
+    const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    it('lets Tab move inside the inner modal without the outer one stealing focus', async () => {
+      render(<Nested inner />);
+      await settle();
+      const outer = screen.getByRole('dialog', { name: 'Outer' });
+      const inner = screen.getByRole('dialog', { name: 'Inner' });
+      const innerX = within(inner).getByRole('button', { name: 'Inner X' });
+
+      // Mid-list: the inner trap must NOT intervene at all, so the browser's
+      // own Tab moves on to "Inner Y".
+      innerX.focus();
+      const notPrevented = fireEvent.keyDown(document, { key: 'Tab' });
+      expect(notPrevented).toBe(true);
+      expect(document.activeElement).toBe(innerX);
+      expect(outer.contains(document.activeElement)).toBe(false);
+    });
+
+    it('wraps within the inner modal only, never into the outer one', async () => {
+      render(<Nested inner />);
+      await settle();
+      const outer = screen.getByRole('dialog', { name: 'Outer' });
+      const inner = screen.getByRole('dialog', { name: 'Inner' });
+      const innerClose = within(inner).getByRole('button', { name: 'Close dialog' });
+      const innerY = within(inner).getByRole('button', { name: 'Inner Y' });
+
+      innerY.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(innerClose);
+      fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+      expect(document.activeElement).toBe(innerY);
+      expect(outer.contains(document.activeElement)).toBe(false);
+    });
+
+    it('hands trapping back to the outer modal when the inner one closes', async () => {
+      const { rerender } = render(<Nested inner />);
+      await settle();
+      expect(__trapDepth()).toBe(2);
+
+      rerender(<Nested inner={false} />);
+      await settle();
+      // (The inner panel itself lingers for its exit animation; what matters
+      // is that it no longer owns the trap.)
+      expect(__trapDepth()).toBe(1);
+
+      const outer = screen.getByRole('dialog', { name: 'Outer' });
+      const outerB = within(outer).getByRole('button', { name: 'Outer B' });
+      const outerClose = within(outer).getByRole('button', { name: 'Close dialog' });
+      outerB.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(outerClose);
+    });
+
+    it('drops its trap even when unmounted while still open', async () => {
+      const { unmount } = render(<Modal open onClose={() => {}} title="Hi">body</Modal>);
+      await settle();
+      expect(__trapDepth()).toBe(1);
+      unmount();
+      expect(__trapDepth()).toBe(0);
     });
   });
 });
