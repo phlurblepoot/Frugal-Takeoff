@@ -17,6 +17,7 @@ import * as accounts from './mail/accountStore';
 import type { FakeMailProvider } from './mail/providers/fake';
 import { getFakeProvider, resetFakes } from './mail/providers/fakeRegistry';
 import { upsertFolders } from './mail/sync/engine';
+import { stageUpload } from './mail/uploads';
 import type { MailContext } from './mail/context';
 import type { EntityChangedEvent } from './realtime/changeFeed';
 
@@ -1504,6 +1505,19 @@ describe('email send routes', () => {
     expect(m.subject).toBe('RFI RFI-001 — Ceiling height');
     expect(addrs(m.bcc)).toEqual(['log@example.com']);
     expect(names(m.attachments)).toEqual(['RFI-001.pdf', 'Photo.jpg']);
+  });
+
+  // The composer's "Attach file" stages the bytes before the send, exactly as
+  // it does for a plain mail — an item send has to carry them through or the
+  // user's attachment disappears silently between Send and the mailbox.
+  it('rfi send: staged uploadIds ride along with the generated document', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    const { uploadId } = stageUpload(dir, 'Sketch.png', 'image/png', Buffer.from('PNGBYTES'));
+    const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({
+      to: 'gc@example.com', fileId: 'primary', attachmentFileIds: ['extra1'], uploadIds: [uploadId],
+    });
+    expect(res.status).toBe(200);
+    expect(names(provider.sent[0].attachments)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Sketch.png']);
   });
 
   it('rfi send: requires to + fileId; 404 for unknown rfi', async () => {

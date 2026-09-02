@@ -64,7 +64,7 @@ import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
 import { registerProposalRoutes } from './proposalRoutes';
 import { getProposal } from './proposalStore';
-import { send as mailSend, MailSendError, type SendResult } from './mail/sendService';
+import { send as mailSend, MailSendError, type SendRequest as MailSendRequest, type SendResult } from './mail/sendService';
 import { AuthExpiredError } from './mail/providers/types';
 import type { MailContext } from './mail/context';
 import type { ItemType } from './mail/links';
@@ -1654,6 +1654,10 @@ interface SendBody {
   body?: string;
   html?: string;
   attachmentFileIds?: string[];
+  /** Files the sender attached from their device, staged by POST /api/mail/uploads.
+   *  The composer offers this on every send site, so an item send has to carry
+   *  them too or the attachment would vanish between Send and the mailbox. */
+  uploadIds?: string[];
   replyTo?: { accountId: string; threadKey: string };
   accountId?: string;
 }
@@ -1689,12 +1693,16 @@ export function registerEmailRoutes(app: express.Express, deps: EmailRouteDeps):
     res: express.Response,
     item: SendItemSpec,
   ): Promise<SendResult | null> => {
-    const { to, fileId, message, cc, bcc, subject, body, html, attachmentFileIds, replyTo, accountId } = req.body as SendBody;
+    const { to, fileId, message, cc, bcc, subject, body, html, attachmentFileIds, uploadIds, replyTo, accountId } = req.body as SendBody;
     if (!to || !fileId) { res.status(400).json({ error: 'to and fileId are required' }); return null; }
     // The primary attachment carries the item tag: sendService links the thread
     // to it and applies the item's "sent" side effects exactly once.
-    const attachments = buildSendAttachments(db, { fileId, attachmentName: item.primaryName }, attachmentFileIds)
-      .map((a, i) => ({ fileId: a.fileId, name: a.attachmentName, ...(i === 0 ? { itemType: item.itemType, itemId: item.itemId } : {}) }));
+    const attachments: MailSendRequest['attachments'] =
+      buildSendAttachments(db, { fileId, attachmentName: item.primaryName }, attachmentFileIds)
+        .map((a, i) => ({ fileId: a.fileId, name: a.attachmentName, ...(i === 0 ? { itemType: item.itemType, itemId: item.itemId } : {}) }));
+    if (Array.isArray(uploadIds)) {
+      for (const uploadId of uploadIds) if (typeof uploadId === 'string' && uploadId) attachments.push({ uploadId });
+    }
     try {
       return await mailSend(mailCtx, (req as any).user, {
         accountId,

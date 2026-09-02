@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
 import { CLIENT_SESSION_ID } from './clientSession';
+import type { ItemSendPayload } from './itemSend';
+import type { SendResult } from '../pages/mail/types';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -358,6 +360,23 @@ export const pickSendableAccount = (list: MailAccountSummary[]): MailAccountSumm
   const usable = list.filter(a => a.status === 'ok' || a.status === 'syncing');
   return usable.find(a => a.isDefault) ?? usable[0] ?? null;
 };
+
+/** Everything an item send route accepts. `to` and `fileId` are the only
+ *  required parts; subject/body fall back to the route's own defaults, and
+ *  html (the composer's rich text) supersedes the legacy plain-text `body`. */
+export interface ItemSendBody extends Partial<ItemSendPayload> {
+  to: string;
+  fileId: string;
+  /** Legacy plain text, still accepted server-side for API callers. */
+  body?: string;
+  /** Legacy alias for `body` (the pre-composer proposal/invoice routes). */
+  message?: string;
+}
+
+/** What every item send route returns once the provider has accepted the mail.
+ *  `effectsSkipped` names the item statuses the server could NOT move, so the
+ *  composer can warn instead of letting a half-applied send pass unnoticed. */
+export type ItemSendResult = SendResult & { success: boolean };
 
 export const NO_MAIL_ACCOUNT_REASON = 'Connect a mail account in Settings → Mail';
 
@@ -1050,16 +1069,17 @@ export const addCOPhoto = async (coId: string, fileId: string): Promise<void> =>
 export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendChangeOrder = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res);
+export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const sendInvoice = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
+export const sendInvoice = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
+  return res.json();
 };
 
 // ── Phase 4b: issues ─────────────────────────────────────────────────────────
@@ -1120,8 +1140,8 @@ export const addIssuePhoto = async (issueId: string, fileId: string): Promise<vo
 export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
   const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
+export const sendIssue = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 
 // ── RFIs ─────────────────────────────────────────────────────────────────────
@@ -1195,8 +1215,8 @@ export const removeRfiPhoto = async (rfiId: string, fileId: string): Promise<voi
 export const setRfiResponse = async (id: string, input: { fileId?: string; text?: string }): Promise<void> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/response`, input); await handleResponse(res);
 };
-export const sendRfi = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res);
+export const sendRfi = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 
 // ── Daily Reports ──────────────────────────────────────────────────────────
@@ -1260,8 +1280,8 @@ export const addDailyReportPhoto = async (id: string, fileId: string): Promise<v
 export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
   const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendDailyReport = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
-  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res);
+export const sendDailyReport = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
   // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
@@ -1362,12 +1382,12 @@ export const removeProposalAttachment = attachmentsApi.remove;
 export const setProposalStatus = async (id: string, status: 'accepted' | 'declined', signedFileId?: string | null): Promise<{ version: number }> => {
   const res = await proposalJson('POST', `/api/proposals/${id}/status`, { status, signedFileId: signedFileId ?? null }); await handleResponse(res); return res.json();
 };
-export const sendProposal = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<{ version: number }> => {
+export const sendProposal = async (id: string, payload: ItemSendBody): Promise<ItemSendResult & { version: number }> => {
   const res = await proposalJson('POST', `/api/proposals/${id}/send`, payload); await handleProposalResponse(res, id); return res.json();
 };
 
-export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
-  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
+export const sendPunchReport = async (projectId: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res); return res.json();
 };
 
 // ── Phase 4c: punch list ──────────────────────────────────────────────────────
