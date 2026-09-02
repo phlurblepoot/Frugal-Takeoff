@@ -16,7 +16,7 @@ import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
 import type { AttachmentMeta, Addr, MailProvider, MoveResult } from './providers/types';
-import { AuthExpiredError } from './providers/types';
+import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
 
 export interface BodyPayload { html: string; text: string; blockedRemoteImages: number; attachments: AttachmentMeta[] }
 export interface MailRouteDeps {
@@ -131,6 +131,51 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     e instanceof MailSendError ? e.message
       : e instanceof AuthExpiredError ? 'Mail account needs to be reconnected'
         : 'Could not save this attachment';
+
+  /**
+   * getAttachment, but tolerant of an attachment id that has gone stale.
+   *
+   * Gmail's `attachmentId`s are NOT durable: they are minted per message fetch
+   * and change when the message is re-indexed, so the ids we wrote into
+   * `mail_messages.attachmentsJson` at SYNC time routinely 404 by the time the
+   * user clicks the chip days later — which is exactly what "attachment save
+   * fails" looked like against a real mailbox.
+   *
+   * On a 404 (and only a 404), re-read the message for a fresh part list, find
+   * the same file in it — by name AND size, or failing that by the position the
+   * stale entry held, still requiring the name to agree — and retry. The fresh
+   * list is written back to the row, so the next click hits first time and a
+   * multi-attachment save does not pay for this once per file.
+   */
+  const getAttachmentFresh = async (m: MessageRowRaw, attId: string): Promise<{
+    att: Awaited<ReturnType<MailProvider['getAttachment']>>; attId: string;
+  }> => {
+    const provider = providerFor(m.accountId);
+    try {
+      return { att: await provider.getAttachment(m.providerMessageId, attId), attId };
+    } catch (e) {
+      if (!(e instanceof ProviderNotFoundError)) throw e;
+      const stale: AttachmentMeta[] = JSON.parse(m.attachmentsJson || '[]');
+      const at = stale.findIndex(x => x.attId === attId);
+      const want = at >= 0 ? stale[at] : null;
+      const fresh = (await provider.getBody(m.providerMessageId)).attachments;
+      // Persist whatever the provider says now, even if the match below fails:
+      // reaching this branch already proves the indexed list is out of date.
+      if (fresh.length) {
+        const json = JSON.stringify(fresh);
+        db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(json, m.id);
+        m.attachmentsJson = json;
+      }
+      const match = want
+        && (fresh.find(f => f.name === want.name && f.size === want.size)
+          ?? (at < fresh.length && fresh[at]?.name === want.name ? fresh[at] : undefined));
+      // No confident match (or the provider handed back the same dead id):
+      // the original 404 is the honest answer.
+      if (!match || match.attId === attId) throw e;
+      console.warn(`[mail] attachment id went stale on message=${m.id} account=${m.accountId}; retrying ${attId} as ${match.attId}`);
+      return { att: await provider.getAttachment(m.providerMessageId, match.attId), attId: match.attId };
+    }
+  };
 
   // ── accounts ──
   app.get('/api/mail/accounts', authenticateToken, (req, res) => {
@@ -466,7 +511,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     if (!m) return res.status(404).json({ error: 'Message not found' });
     if (isPending(m)) return res.status(404).json({ error: 'This message is still being filed by the mail server — its attachments will be available in a minute' });
     try {
-      const att = await providerFor(m.accountId).getAttachment(m.providerMessageId, req.params.attId);
+      const { att } = await getAttachmentFresh(m, req.params.attId);
       res.setHeader('Content-Type', att.mime || 'application/octet-stream');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       if (att.size) res.setHeader('Content-Length', String(att.size));
@@ -476,7 +521,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       // this the provider stream keeps pulling bytes nobody will ever read.
       res.on('close', () => { if (!res.writableEnded) endStream(att.stream); });
       att.stream.pipe(res);
-    } catch (e) { fail(res, e, 'Failed to load attachment'); }
+    } catch (e) { fail(res, e, `Failed to load attachment attId=${req.params.attId} message=${m.id} account=${m.accountId}`); }
   });
 
   app.post('/api/mail/messages/:id/attachments/save', authenticateToken, async (req, res) => {
@@ -485,6 +530,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: 'items required' });
     const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson);
+    const providerKind = accounts.getAccountAny(db, m.accountId)?.provider ?? 'unknown';
     // Per item, not all-or-nothing: one bad attachment used to abort the whole
     // request with a 502, leaving the items already written to Documents saved
     // and broadcast but invisible to a client that got no fileIds back.
@@ -495,7 +541,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       const meta = metas.find(x => x.attId === it.attId);
       if (!meta) { failed.push({ attId: String(it?.attId ?? ''), error: 'That attachment is not on this message' }); continue; }
       try {
-        const att = await providerFor(m.accountId).getAttachment(m.providerMessageId, it.attId);
+        const { att } = await getAttachmentFresh(m, it.attId);
         const chunks: Buffer[] = [];
         let total = 0;
         try {
@@ -516,7 +562,11 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         saved.push({ attId: meta.attId, fileId: r.id });
         ctx.broadcastChange({ type: 'file', id: r.id, projectId: it.projectId || undefined, action: 'created', byUserId: userOf(req).id });
       } catch (e) {
-        console.error('[mail] could not save attachment', meta.attId, e);
+        // The client only ever sees itemError()'s fixed string, so this line is
+        // the ONLY record of why a save failed — it has to name the account,
+        // its provider, the message and the attachment, or the next report of
+        // "attachment save fails" is undiagnosable all over again.
+        console.error(`[mail] could not save attachment attId=${meta.attId} name=${meta.name} message=${m.id} account=${m.accountId} provider=${providerKind}`, e);
         failed.push({ attId: meta.attId, error: itemError(e) });
       }
     }

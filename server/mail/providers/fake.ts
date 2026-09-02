@@ -25,6 +25,21 @@ export class FakeMailProvider implements MailProvider {
   seed(list: Seeded[]): void { this.msgs.clear(); this.log = []; list.forEach(m => this.msgs.set(m.providerMessageId, m)); }
   injectInbound(m: Seeded): void { this.msgs.set(m.providerMessageId, m); this.log.push({ seq: ++this.seq, upsert: m.providerMessageId }); }
   failNextWith(err: Error): void { this.nextFailure = err; }
+  /** Mimics Gmail: the attachment ids handed out at sync time stop resolving,
+   *  and the message's CURRENT part list names the same files under new ones.
+   *  getAttachment then 404s on the indexed id exactly as the real thing does,
+   *  while getBody serves the fresh list. */
+  rotateAttachmentIds(providerMessageId: string, rename: (attId: string) => string): void {
+    const m = this.msgs.get(providerMessageId);
+    if (!m) return;
+    const bytes: Record<string, Buffer> = {};
+    m.attachments = m.attachments.map(a => {
+      const next = rename(a.attId);
+      bytes[next] = m.attachmentBytes?.[a.attId] ?? Buffer.from('fake-bytes');
+      return { ...a, attId: next };
+    });
+    m.attachmentBytes = bytes;
+  }
   private guard(): void { if (this.nextFailure) { const e = this.nextFailure; this.nextFailure = null; throw e; } }
 
   async listFolders(): Promise<ProviderFolder[]> { this.guard(); return this.folders; }

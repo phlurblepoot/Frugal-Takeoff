@@ -70,7 +70,11 @@ export const SaveAttachmentsModal: React.FC<{
       toast(`Saved ${ok} file${ok === 1 ? '' : 's'} to Documents`, { type: 'success' });
       onClose();
     } else if (ok === 0) {
-      toast(`Failed to save ${failedCount} file${failedCount === 1 ? '' : 's'}`, { type: 'error' });
+      // Nothing landed, so the count alone says nothing about WHY. The server's
+      // per-item reason is the only thing that distinguishes "reconnect the
+      // account" from "that attachment is not on this message".
+      const why = result.failed.find(f => f.error)?.error;
+      toast(`Failed to save ${failedCount} file${failedCount === 1 ? '' : 's'}${why ? ` — ${why}` : ''}`, { type: 'error' });
     } else {
       toast(`Saved ${ok} of ${total} files to Documents — ${failedCount} failed`, { type: 'warning' });
       const failedIds = new Set(result.failed.map(f => f.attId));

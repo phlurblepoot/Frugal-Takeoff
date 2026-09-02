@@ -267,6 +267,63 @@ describe('mail routes', () => {
     expect(s.body.failed).toEqual([{ attId: 'nope', error: 'That attachment is not on this message' }]);
   });
 
+  // Gmail mints attachment ids per message fetch, so the ids indexed at sync
+  // time routinely 404 days later. Both attachment routes have to recover.
+  describe('a stale provider attachment id', () => {
+    const attsOf = (id: string) =>
+      JSON.parse((db.prepare('SELECT attachmentsJson FROM mail_messages WHERE id = ?').get(id) as { attachmentsJson: string }).attachmentsJson);
+
+    it('is re-resolved by the download route, which then re-indexes the fresh ids', async () => {
+      const id = firstMessageId();
+      provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+      const r = await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
+      expect(r.status).toBe(200);
+      expect(r.headers['content-disposition']).toContain('cor.pdf');
+      expect(r.body.toString()).toBe('%PDF');
+      // Re-indexed, so the NEXT click resolves without the extra round trip.
+      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4 }]);
+      const again = await request(app).get(`/api/mail/messages/${id}/attachments/a1-rotated`).query({ token: 'tok' });
+      expect(again.status).toBe(200);
+    });
+
+    it('is re-resolved by the save route, so the file still lands in Documents', async () => {
+      const id = firstMessageId();
+      provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+      const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', name: 'COR-4.pdf', kind: 'document', projectId: 'p1' }] });
+      expect(s.status).toBe(200);
+      expect(s.body.failed).toEqual([]);
+      expect(s.body.saved).toEqual([{ attId: 'a1', fileId: s.body.fileIds[0] }]);
+      expect((db.prepare('SELECT name FROM files WHERE id = ?').get(s.body.fileIds[0]) as { name: string }).name).toBe('COR-4.pdf');
+      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4 }]);
+    });
+
+    it('matches by position + name when two attachments share a name but not a size', async () => {
+      const atts = [
+        { attId: 'a1', name: 'plan.pdf', mime: 'application/pdf', size: 4 },
+        { attId: 'a2', name: 'plan.pdf', mime: 'application/pdf', size: 9 },
+      ];
+      provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF12345') } })]);
+      upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+      const id = firstMessageId();
+      provider.rotateAttachmentIds('m1', a => `${a}-x`);
+      const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a2' }] });
+      expect(s.body.failed).toEqual([]);
+      // The 9-byte twin, not the 4-byte one.
+      expect((db.prepare('SELECT size FROM files WHERE id = ?').get(s.body.fileIds[0]) as { size: number }).size).toBe(9);
+    });
+
+    it('still fails honestly when the attachment is genuinely gone', async () => {
+      const id = firstMessageId();
+      // The message now has no attachment answering to the indexed name.
+      provider.seed([env('m1', { attachments: [], attachmentBytes: {} })]);
+      const r = await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
+      expect(r.status).toBe(502);
+      const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1' }] });
+      expect(s.body.saved).toEqual([]);
+      expect(s.body.failed).toEqual([{ attId: 'a1', error: 'Could not save this attachment' }]);
+    });
+  });
+
   it('the attachment stream is released when the client goes away mid-download', async () => {
     const id = firstMessageId();
     const endless = new Readable({ read() { this.push(Buffer.alloc(64 * 1024)); } });

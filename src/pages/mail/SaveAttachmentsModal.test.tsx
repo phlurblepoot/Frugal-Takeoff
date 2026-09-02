@@ -111,8 +111,19 @@ describe('SaveAttachmentsModal', () => {
     await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
-    await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'error' })));
+    // The reason travels with the count: a bare "Failed to save 1 file" is
+    // what made the live attachment bug undiagnosable from the UI.
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Failed to save 1 file — boom', { type: 'error' }));
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+  });
+
+  it('all failed with no reason given: still names the count', async () => {
+    h.saveAttachments.mockResolvedValue({ fileIds: [], saved: [], failed: [{ attId: 'a1', error: '' }] });
+    mount([att()]);
+    await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Failed to save 1 file', { type: 'error' }));
   });
 });
