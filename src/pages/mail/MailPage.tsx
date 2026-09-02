@@ -2,7 +2,7 @@
 // list, and the reading pane. All of the page's state lives in the URL
 // (`/mail/:accountId/:folderId/:threadKey` + `?q=` + `?compose=1`) so a thread
 // can be linked to from anywhere in the app.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Mail, MailOpen } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
@@ -19,6 +19,35 @@ import { useMailHeartbeat } from './useMailHeartbeat';
 import { ThreadView } from './ThreadView';
 import { NO_FOLDER, useThreadList } from './useThreadList';
 import type { MessageRow, ThreadListRow } from './types';
+
+// ── pane sizing ───────────────────────────────────────────────────────────
+// The three-pane layout is a CSS grid, and the two draggable widths ride into
+// it as custom properties rather than an inline `grid-template-columns`: the
+// px values must apply at `lg` ONLY (below that the grid is one or two
+// columns), and an inline template would win over the breakpoint. Bounds keep
+// a mis-drag from collapsing a pane to nothing or eating the reading pane.
+const RAIL = { key: 'mail.rail.w', min: 160, max: 320, initial: 208 };   // 13rem
+const LIST = { key: 'mail.list.w', min: 240, max: 520, initial: 320 };   // 20rem
+
+const clampW = (px: number, b: typeof RAIL): number => Math.min(b.max, Math.max(b.min, Math.round(px)));
+
+// localStorage is unavailable in a locked-down browser (and throws rather than
+// returning null), so a stored width is a nicety, never a requirement.
+const readW = (b: typeof RAIL): number => {
+  try {
+    const raw = Number(localStorage.getItem(b.key));
+    return Number.isFinite(raw) && raw > 0 ? clampW(raw, b) : b.initial;
+  } catch {
+    return b.initial;
+  }
+};
+const writeW = (b: typeof RAIL, px: number): void => {
+  try {
+    localStorage.setItem(b.key, String(px));
+  } catch {
+    /* private mode / storage disabled — the width just doesn't persist */
+  }
+};
 
 /** The data a reply/forward composer needs — everything but where it renders
  *  (modal vs. inline), which is tracked separately so promoting one to the
@@ -145,6 +174,79 @@ export const MailPage: React.FC = () => {
 
   const backToList = useCallback(() => navigate(`${listPath}${search}`), [navigate, listPath, search]);
 
+  // Drag-to-resize for the two divider handles. Pointer events on `window`
+  // rather than the handle itself so a fast drag that outruns the 4px strip
+  // keeps resizing instead of stopping dead.
+  const [railW, setRailW] = useState(() => readW(RAIL));
+  const [listW, setListW] = useState(() => readW(LIST));
+  const [drag, setDrag] = useState<{ which: 'rail' | 'list'; startX: number; startW: number } | null>(null);
+  // Read by the pointerup handler, which is created once per drag and would
+  // otherwise close over the width as it was when the drag STARTED.
+  const widthsRef = useRef({ rail: railW, list: listW });
+  widthsRef.current = { rail: railW, list: listW };
+
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const next = drag.startW + (e.clientX - drag.startX);
+      if (drag.which === 'rail') setRailW(clampW(next, RAIL));
+      else setListW(clampW(next, LIST));
+    };
+    const onUp = () => {
+      const bounds = drag.which === 'rail' ? RAIL : LIST;
+      writeW(bounds, drag.which === 'rail' ? widthsRef.current.rail : widthsRef.current.list);
+      setDrag(null);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [drag]);
+
+  const startDrag = useCallback(
+    (which: 'rail' | 'list') => (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setDrag({ which, startX: e.clientX, startW: which === 'rail' ? widthsRef.current.rail : widthsRef.current.list });
+    },
+    [],
+  );
+
+  // Keyboard parity for the mouse drag: the handle is a real separator, so
+  // arrows nudge it and the new width persists like a drag would.
+  const nudge = useCallback(
+    (which: 'rail' | 'list') => (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
+      if (!step) return;
+      e.preventDefault();
+      const bounds = which === 'rail' ? RAIL : LIST;
+      const next = clampW((which === 'rail' ? widthsRef.current.rail : widthsRef.current.list) + step, bounds);
+      if (which === 'rail') setRailW(next);
+      else setListW(next);
+      writeW(bounds, next);
+    },
+    [],
+  );
+
+  const handle = (which: 'rail' | 'list', label: string, value: number, bounds: typeof RAIL) => (
+    <div
+      role="separator"
+      tabIndex={0}
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuenow={value}
+      aria-valuemin={bounds.min}
+      aria-valuemax={bounds.max}
+      data-testid={`mail-resize-${which}`}
+      onPointerDown={startDrag(which)}
+      onKeyDown={nudge(which)}
+      className="absolute inset-y-0 right-0 z-10 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-accent-500/40 focus-visible:bg-accent-500/60 focus-visible:outline-none lg:block"
+    />
+  );
+
   // ThreadView's reply/reply-all/forward — from the toolbar (newest message)
   // or a specific message's own buttons — fetches that message's rendered
   // body, then opens the inline composer under the thread with it quoted.
@@ -196,8 +298,14 @@ export const MailPage: React.FC = () => {
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col bg-surface md:h-dvh">
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[13rem_minmax(0,1fr)] lg:grid-cols-[13rem_20rem_minmax(0,1fr)]">
-        <aside className="hidden min-h-0 border-r border-edge md:block">
+      <div
+        data-testid="mail-grid"
+        style={{ ['--mail-rail-w' as string]: `${railW}px`, ['--mail-list-w' as string]: `${listW}px` }}
+        className={`grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[13rem_minmax(0,1fr)] lg:grid-cols-[var(--mail-rail-w)_var(--mail-list-w)_minmax(0,1fr)] ${
+          drag ? 'cursor-col-resize select-none' : ''
+        }`}
+      >
+        <aside className="relative hidden min-h-0 border-r border-edge md:block">
           <FolderRail
             accounts={accounts}
             accountId={accountId}
@@ -207,11 +315,12 @@ export const MailPage: React.FC = () => {
             onSelectFolder={id => navigate(`/mail/${accountId}/${id}${search}`)}
             onCompose={openCompose}
           />
+          {handle('rail', 'Resize the folder rail', railW, RAIL)}
         </aside>
 
         {/* List: the only pane on a phone until a thread is opened, and one of
             two on a tablet; at lg it sits permanently beside the reading pane. */}
-        <section className={`min-h-0 flex-col border-edge lg:border-r ${threadKey ? 'hidden lg:flex' : 'flex'}`}>
+        <section className={`relative min-h-0 flex-col border-edge lg:border-r ${threadKey ? 'hidden lg:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 border-b border-edge px-3 py-2 md:hidden">
             <select
               aria-label="Folder"
@@ -247,6 +356,7 @@ export const MailPage: React.FC = () => {
               onReload={reloadList}
             />
           </div>
+          {handle('list', 'Resize the conversation list', listW, LIST)}
         </section>
 
         <section className={`min-h-0 flex-col ${threadKey ? 'flex' : 'hidden lg:flex'}`}>

@@ -87,6 +87,7 @@ const folderRow = (id: string): HTMLElement =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   h.accounts.mockResolvedValue([ACCOUNT]);
   h.folders.mockResolvedValue(FOLDERS);
   h.threads.mockResolvedValue({ threads: [THREAD], hasMore: false, indexedSince: '2026-02-01T00:00:00.000Z' });
@@ -310,6 +311,76 @@ describe('MailPage', () => {
       await waitFor(() => expect(h.send).toHaveBeenCalled());
       await waitFor(() => expect(screen.queryByTestId('mail-composer-inline')).toBeNull());
       await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  // The two widths ride into the grid as custom properties, not an inline
+  // grid-template — an inline template would beat the `lg:` breakpoint and
+  // pin the px widths on tablets and phones too.
+  describe('resizable panes', () => {
+    const grid = () => screen.getByTestId('mail-grid');
+
+    it('starts from the widths stored on this device', async () => {
+      localStorage.setItem('mail.rail.w', '260');
+      localStorage.setItem('mail.list.w', '420');
+      mount('/mail/a1/f-inbox');
+      await screen.findByText('Roof detail');
+      expect(grid().style.getPropertyValue('--mail-rail-w')).toBe('260px');
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('420px');
+      // The px values are scoped to lg; the narrower layouts keep their own columns.
+      expect(grid().className).toContain('lg:grid-cols-[var(--mail-rail-w)_var(--mail-list-w)_minmax(0,1fr)]');
+    });
+
+    it('falls back to the defaults when nothing is stored (or storage is unreadable)', async () => {
+      mount('/mail/a1/f-inbox');
+      await screen.findByText('Roof detail');
+      expect(grid().style.getPropertyValue('--mail-rail-w')).toBe('208px');
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('320px');
+    });
+
+    it('resizes the list on a drag and persists the width on release', async () => {
+      mount('/mail/a1/f-inbox');
+      await screen.findByText('Roof detail');
+
+      const handle = screen.getByTestId('mail-resize-list');
+      fireEvent.pointerDown(handle, { clientX: 500 });
+      fireEvent.pointerMove(window, { clientX: 560 });
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('380px');
+      // Nothing is written until the drag ends.
+      expect(localStorage.getItem('mail.list.w')).toBeNull();
+
+      fireEvent.pointerUp(window);
+      expect(localStorage.getItem('mail.list.w')).toBe('380');
+      // The pointer has been let go: further movement is not a resize.
+      fireEvent.pointerMove(window, { clientX: 700 });
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('380px');
+    });
+
+    it('clamps a drag that would collapse the rail or eat the reading pane', async () => {
+      mount('/mail/a1/f-inbox');
+      await screen.findByText('Roof detail');
+
+      const rail = screen.getByTestId('mail-resize-rail');
+      fireEvent.pointerDown(rail, { clientX: 200 });
+      fireEvent.pointerMove(window, { clientX: -400 });
+      expect(grid().style.getPropertyValue('--mail-rail-w')).toBe('160px');
+      fireEvent.pointerMove(window, { clientX: 2000 });
+      expect(grid().style.getPropertyValue('--mail-rail-w')).toBe('320px');
+      fireEvent.pointerUp(window);
+      expect(localStorage.getItem('mail.rail.w')).toBe('320');
+    });
+
+    it('nudges a pane from the keyboard, since the handle is a real separator', async () => {
+      mount('/mail/a1/f-inbox');
+      await screen.findByText('Roof detail');
+
+      const handle = screen.getByTestId('mail-resize-list');
+      expect(handle).toHaveAttribute('aria-valuenow', '320');
+      fireEvent.keyDown(handle, { key: 'ArrowRight' });
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('336px');
+      expect(localStorage.getItem('mail.list.w')).toBe('336');
+      fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+      expect(grid().style.getPropertyValue('--mail-list-w')).toBe('320px');
     });
   });
 
