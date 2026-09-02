@@ -131,11 +131,15 @@ export const mailApi = {
 
   folders: (accountId: string): Promise<MailFolder[]> => get(`/api/mail/folders${qs({ accountId })}`),
 
-  threads: (q: { accountId: string; folderId?: string; q?: string; before?: string; limit?: number }): Promise<{
+  // `threadKeys` asks for an explicit set of conversations and BYPASSES the
+  // folder and q filters server-side — it is how a server-search result is
+  // shown, since those hits are typically archived and matched on body text
+  // the local index never saw.
+  threads: (q: { accountId: string; folderId?: string; q?: string; before?: string; limit?: number; threadKeys?: string[] }): Promise<{
     threads: ThreadListRow[];
     hasMore: boolean;
     indexedSince: string;
-  }> => get(`/api/mail/threads${qs(q)}`),
+  }> => get(`/api/mail/threads${qs({ ...q, threadKeys: q.threadKeys?.length ? q.threadKeys.join(',') : undefined })}`),
 
   thread: (accountId: string, threadKey: string): Promise<{ thread: ThreadListRow; messages: MessageRow[]; links: ThreadLink[] }> =>
     get(`/api/mail/threads/${encodeURIComponent(accountId)}/${encodeURIComponent(threadKey)}`),
@@ -178,7 +182,9 @@ export const mailApi = {
       body: file,
     }),
 
-  searchServer: (accountId: string, q: string, before?: string): Promise<{ count: number }> =>
+  // `threadKeys` are the conversations the hits were filed into — feed them
+  // straight back to threads() to show results the normal list cannot reach.
+  searchServer: (accountId: string, q: string, before?: string): Promise<{ count: number; threadKeys: string[] }> =>
     get(`/api/mail/search${qs({ accountId, q, before })}`),
 
   recipients: (q: string): Promise<Recipient[]> => get(`/api/mail/recipients${qs({ q })}`),

@@ -36,11 +36,19 @@ export const ThreadList: React.FC<{
   ownAddresses: string[];
   onOpen: (row: ThreadListRow) => void;
   onToggleStar: (row: ThreadListRow) => void;
-  /** Re-runs the list query — used after a server-side search files new hits. */
+  /** Re-runs the list query — used after a manual refresh. */
   onReload: () => void;
+  /** Hands the conversations a whole-mailbox search filed to the list, which
+   *  then shows exactly those instead of the current folder. */
+  onServerResults: (threadKeys: string[]) => void;
+  /** How many conversations that search is showing — null when the list is in
+   *  its normal folder mode. */
+  serverResultCount: number | null;
+  onClearServerResults: () => void;
 }> = ({
   accountId, threads, loading, hasMore, onLoadMore, indexedSince, onLoadOlder,
   q, onQueryChange, selectedKey, ownAddresses, onOpen, onToggleStar, onReload,
+  onServerResults, serverResultCount, onClearServerResults,
 }) => {
   const { toast } = useToast();
   // The input is local so typing stays responsive; the URL only learns about
@@ -67,25 +75,38 @@ export const ThreadList: React.FC<{
     }, SEARCH_DEBOUNCE_MS);
   }, [onQueryChange]);
 
-  // The local index only goes back as far as `indexedSince`, so a search that
-  // finds nothing here may still match older mail on the provider. That search
-  // files whatever it finds into the index, which is why the same local query
-  // finds it on the reload right after.
+  // The local index only reaches back to `indexedSince` and only ever matched
+  // subject/from/snippet, so a search that finds nothing here may still match
+  // older mail — or body text — on the provider. The hits are filed locally,
+  // but showing them means asking for them BY KEY: they are usually archived,
+  // so the active folder filter would hide them, and they usually matched on
+  // body text the local LIKE still cannot see.
   const [searchingServer, setSearchingServer] = useState(false);
   const runServerSearch = useCallback(async () => {
     const term = q.trim();
     if (!accountId || !term || searchingServer) return;
     setSearchingServer(true);
     try {
-      const { count } = await mailApi.searchServer(accountId, term);
-      toast(count > 0 ? `Found ${count} message${count === 1 ? '' : 's'} on the server.` : 'No matching mail on the server.');
-      onReload();
+      const { count, threadKeys } = await mailApi.searchServer(accountId, term);
+      if (threadKeys?.length) {
+        toast(`Found ${count} message${count === 1 ? '' : 's'} on the server.`);
+        onServerResults(threadKeys);
+      } else {
+        toast('No matching mail on the server.');
+        onReload();
+      }
     } catch {
       toast('Could not search the mailbox.', { type: 'error' });
     } finally {
       setSearchingServer(false);
     }
-  }, [accountId, q, searchingServer, toast, onReload]);
+  }, [accountId, q, searchingServer, toast, onReload, onServerResults]);
+
+  const searchWholeMailbox = (
+    <Button variant="secondary" size="sm" onClick={runServerSearch} disabled={searchingServer || !accountId}>
+      {searchingServer ? 'Searching…' : 'Search the whole mailbox'}
+    </Button>
+  );
 
   // "Check for mail now". The server only pokes the scheduler, so the spinner
   // has to outlast the request itself — hence the settle delay before the
@@ -155,6 +176,24 @@ export const ThreadList: React.FC<{
         </button>
       </div>
 
+      {serverResultCount !== null && (
+        <div
+          data-testid="mail-server-results-banner"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-edge bg-accent-500/10 px-3 py-2 text-xs text-ink-soft"
+        >
+          <span>
+            Showing {serverResultCount} result{serverResultCount === 1 ? '' : 's'} from the full mailbox
+          </span>
+          <button
+            type="button"
+            onClick={onClearServerResults}
+            className="font-medium text-accent-600 hover:underline dark:text-accent-400"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading && threads.length === 0 ? (
           <div className="space-y-2 p-3">
@@ -170,18 +209,7 @@ export const ThreadList: React.FC<{
                   ? 'Nothing matches in the mail indexed on this device.'
                   : 'This folder has no conversations yet.'
               }
-              action={
-                q ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={runServerSearch}
-                    disabled={searchingServer || !accountId}
-                  >
-                    {searchingServer ? 'Searching…' : 'Search the whole mailbox'}
-                  </Button>
-                ) : undefined
-              }
+              action={q && serverResultCount === null ? searchWholeMailbox : undefined}
             />
           </div>
         ) : (
@@ -199,13 +227,20 @@ export const ThreadList: React.FC<{
 
         <div ref={sentinel} />
 
+        {/* Reachable even when the local index DID match: Gmail sees body text
+            and archived mail the local query never will, so "some results" is
+            not "all results". */}
+        {q && threads.length > 0 && serverResultCount === null && (
+          <div className="px-3 pb-1 text-center">{searchWholeMailbox}</div>
+        )}
+
         <div className="px-3 py-4 text-center text-xs text-ink-faint">
           {hasMore ? (
             <Button variant="ghost" size="sm" onClick={onLoadMore} disabled={loading}>
               {loading ? 'Loading…' : 'Load more'}
             </Button>
           ) : (
-            indexedSince && (
+            indexedSince && serverResultCount === null && (
               <>
                 <span>Showing mail since {sinceLabel(indexedSince)}</span>
                 <span aria-hidden="true"> · </span>

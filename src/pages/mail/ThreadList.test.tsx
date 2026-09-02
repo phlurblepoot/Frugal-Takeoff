@@ -40,6 +40,9 @@ const props = (over: Partial<Props> = {}): Props => ({
   onOpen: vi.fn(),
   onToggleStar: vi.fn(),
   onReload: vi.fn(),
+  onServerResults: vi.fn(),
+  serverResultCount: null,
+  onClearServerResults: vi.fn(),
   ...over,
 });
 
@@ -47,7 +50,7 @@ const searchBox = () => screen.getByPlaceholderText('Search mail…');
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.searchServer.mockResolvedValue({ count: 0 });
+  h.searchServer.mockResolvedValue({ count: 0, threadKeys: [] });
   h.refreshAccount.mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -136,22 +139,40 @@ describe('ThreadList', () => {
     expect(onReload).not.toHaveBeenCalled();
   });
 
-  // The local index only reaches back to `indexedSince`; the fallback asks the
-  // provider, which files its hits, so the same local query then finds them.
-  it('falls back to a server-side search and reloads with what it filed', async () => {
-    h.searchServer.mockResolvedValue({ count: 3 });
+  // The provider search files its hits and names the conversations they landed
+  // in. Those hits are typically archived and typically matched on body text,
+  // so re-running the LOCAL query would show nothing — the keys are what the
+  // list has to be handed. (That mismatch is why "search the whole mailbox"
+  // reported finds and then displayed an empty list.)
+  it('hands a server search\'s thread keys to the list rather than re-running the local query', async () => {
+    h.searchServer.mockResolvedValue({ count: 3, threadKeys: ['tk-9', 'tk-8'] });
+    const onServerResults = vi.fn();
     const onReload = vi.fn();
-    render(<ThreadList {...props({ threads: [], q: 'shingle', onReload })} />);
+    render(<ThreadList {...props({ threads: [], q: 'shingle', onServerResults, onReload })} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Search the whole mailbox/i }));
     await waitFor(() => expect(h.searchServer).toHaveBeenCalledWith('a1', 'shingle'));
-    await waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onServerResults).toHaveBeenCalledWith(['tk-9', 'tk-8']));
     expect(h.toast).toHaveBeenCalledWith('Found 3 messages on the server.');
+    expect(onReload).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a plain reload when the mailbox search matched nothing', async () => {
+    h.searchServer.mockResolvedValue({ count: 0, threadKeys: [] });
+    const onServerResults = vi.fn();
+    const onReload = vi.fn();
+    render(<ThreadList {...props({ threads: [], q: 'shingle', onServerResults, onReload })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Search the whole mailbox/i }));
+    await waitFor(() => expect(onReload).toHaveBeenCalledTimes(1));
+    expect(onServerResults).not.toHaveBeenCalled();
+    expect(h.toast).toHaveBeenCalledWith('No matching mail on the server.');
   });
 
   it('shows the mailbox search working and does not fire it twice', async () => {
-    let finish: (r: { count: number }) => void = () => {};
-    h.searchServer.mockReturnValue(new Promise<{ count: number }>(r => { finish = r; }));
+    type Hits = { count: number; threadKeys: string[] };
+    let finish: (r: Hits) => void = () => {};
+    h.searchServer.mockReturnValue(new Promise<Hits>(r => { finish = r; }));
     render(<ThreadList {...props({ threads: [], q: 'shingle' })} />);
 
     const button = screen.getByRole('button', { name: /Search the whole mailbox/i });
@@ -160,8 +181,44 @@ describe('ThreadList', () => {
     expect(busy).toBeDisabled();
 
     fireEvent.click(busy);
-    await act(async () => { finish({ count: 0 }); });
+    await act(async () => { finish({ count: 0, threadKeys: [] }); });
     expect(h.searchServer).toHaveBeenCalledTimes(1);
     expect(h.toast).toHaveBeenCalledWith('No matching mail on the server.');
+  });
+
+  // Local results are not all results: Gmail matches body text and archived
+  // mail the local index never sees, so the escape hatch has to stay reachable
+  // when the local query DID match something.
+  it('offers the mailbox search alongside local results too', () => {
+    render(<ThreadList {...props({ q: 'shingle' })} />);
+    expect(screen.getByRole('button', { name: /Search the whole mailbox/i })).toBeInTheDocument();
+  });
+
+  describe('server-results mode', () => {
+    it('banners the result count and clears back to the normal list', () => {
+      const onClearServerResults = vi.fn();
+      render(<ThreadList {...props({ q: 'shingle', serverResultCount: 4, onClearServerResults })} />);
+
+      const banner = screen.getByTestId('mail-server-results-banner');
+      expect(banner).toHaveTextContent('Showing 4 results from the full mailbox');
+      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      expect(onClearServerResults).toHaveBeenCalledTimes(1);
+    });
+
+    it('singularises one result', () => {
+      render(<ThreadList {...props({ q: 'shingle', serverResultCount: 1 })} />);
+      expect(screen.getByTestId('mail-server-results-banner')).toHaveTextContent('Showing 1 result from the full mailbox');
+    });
+
+    it('drops the folder-scoped footer and the search-again button while it is showing', () => {
+      render(<ThreadList {...props({ q: 'shingle', serverResultCount: 2, indexedSince: '2026-02-01T00:00:00.000Z' })} />);
+      expect(screen.queryByText(/Showing mail since/)).toBeNull();
+      expect(screen.queryByRole('button', { name: /Search the whole mailbox/i })).toBeNull();
+    });
+
+    it('shows no banner in the normal folder view', () => {
+      render(<ThreadList {...props()} />);
+      expect(screen.queryByTestId('mail-server-results-banner')).toBeNull();
+    });
   });
 });

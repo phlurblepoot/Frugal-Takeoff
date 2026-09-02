@@ -176,14 +176,64 @@ describe('mail routes', () => {
     expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, q: 'zzz' })).body.threads.length).toBe(0);
   });
 
-  it('GET /api/mail/search indexes provider hits older than the local window', async () => {
+  it('GET /api/mail/search indexes provider hits older than the local window and names the threads it filed', async () => {
     provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com' }));
     const r = await request(app).get('/api/mail/search').query({ accountId: acct.id, q: 'ancient' });
     expect(r.status).toBe(200);
     expect(r.body.count).toBe(1);
+    // The keys, not just a count: the hit is archived and matched on body text,
+    // so nothing but asking for it BY KEY will show it to the user.
+    expect(r.body.threadKeys).toEqual(['old1@teg.com']);
     expect(db.prepare('SELECT 1 FROM mail_messages WHERE messageIdHeader = ?').get('old1@teg.com')).toBeTruthy();
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/search').query({ accountId: acct.id, q: 'x' })).status).toBe(404);
+  });
+
+  // Why the bypass exists: Gmail matches body text the local LIKE cannot see,
+  // and the hit is usually archived, so the active Inbox filter would hide it.
+  describe('GET /api/mail/threads?threadKeys=', () => {
+    const fileArchived = () => {
+      provider.injectInbound(env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com', folderProviderIds: ['ARCHIVE'] }));
+      upsertEnvelopes(ctx, acct, [env('old1', { subject: 'ancient CO', date: '2020-01-01T00:00:00.000Z', messageIdHeader: 'old1@teg.com', folderProviderIds: ['ARCHIVE'] })]);
+    };
+    const inboxId = () => (db.prepare(`SELECT id FROM mail_folders WHERE accountId = ? AND role = 'inbox'`).get(acct.id) as { id: string }).id;
+
+    it('returns exactly those threads, past the folder filter and the q filter', async () => {
+      fileArchived();
+      // Both filters would hide it on their own.
+      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, folderId: inboxId() })).body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['m1@teg.com']);
+      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, q: 'nothing-matches-this' })).body.threads.length).toBe(0);
+
+      const r = await request(app).get('/api/mail/threads').query({
+        accountId: acct.id, folderId: inboxId(), q: 'nothing-matches-this', threadKeys: 'old1@teg.com',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(['old1@teg.com']);
+    });
+
+    it('accepts a comma-separated list or a repeated param, newest first', async () => {
+      fileArchived();
+      const both = ['m1@teg.com', 'old1@teg.com'];
+      const byComma = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: both.join(',') });
+      expect(byComma.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(both);   // 2026 before 2020
+      const byRepeat = await request(app).get(`/api/mail/threads?accountId=${acct.id}&threadKeys=${encodeURIComponent(both[0])}&threadKeys=${encodeURIComponent(both[1])}`);
+      expect(byRepeat.body.threads.map((t: { threadKey: string }) => t.threadKey)).toEqual(both);
+    });
+
+    it('caps the key list at 50 rather than building an unbounded IN clause', async () => {
+      const keys = Array.from({ length: 80 }, (_, i) => `k${i}`);
+      // 'm1@teg.com' sits past the cap, so it must NOT come back.
+      const r = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys, 'm1@teg.com'].join(',') });
+      expect(r.status).toBe(200);
+      expect(r.body.threads).toEqual([]);
+      const under = await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: [...keys.slice(0, 49), 'm1@teg.com'].join(',') });
+      expect(under.body.threads.length).toBe(1);
+    });
+
+    it('is still owner-scoped', async () => {
+      currentUser = { id: 'u2', role: 'user' };
+      expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id, threadKeys: 'm1@teg.com' })).status).toBe(404);
+    });
   });
 
   it('body is sanitized with remote images blocked, cached, and images=1 allows them', async () => {

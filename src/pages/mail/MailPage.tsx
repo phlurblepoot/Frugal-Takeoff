@@ -354,6 +354,9 @@ export const MailPage: React.FC = () => {
               onOpen={openThread}
               onToggleStar={toggleStar}
               onReload={reloadList}
+              onServerResults={list.showServerResults}
+              serverResultCount={list.serverResultKeys?.length ?? null}
+              onClearServerResults={list.clearServerResults}
             />
           </div>
           {handle('list', 'Resize the conversation list', listW, LIST)}

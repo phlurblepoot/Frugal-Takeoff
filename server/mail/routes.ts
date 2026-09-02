@@ -442,6 +442,21 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     links: links.get(t.threadKey) ?? [],
   });
 
+  /** `?threadKeys=` — comma-separated or repeated. Capped so a caller cannot
+   *  make us build a thousand-placeholder IN clause. */
+  const MAX_THREAD_KEYS = 50;
+  const threadKeysOf = (raw: unknown): string[] => {
+    const list = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+    const out: string[] = [];
+    for (const v of list) {
+      if (typeof v !== 'string') continue;
+      for (const k of v.split(',').map(x => x.trim()).filter(Boolean)) {
+        if (!out.includes(k)) out.push(k);
+      }
+    }
+    return out.slice(0, MAX_THREAD_KEYS);
+  };
+
   app.get('/api/mail/threads', authenticateToken, (req, res) => {
     const a = owned(req, String(req.query.accountId));
     if (!a) return res.status(404).json({ error: 'Account not found' });
@@ -449,16 +464,26 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
     const before = typeof req.query.before === 'string' ? req.query.before : null;
     const limit = Math.min(100, Number(req.query.limit) || 50);
+    const keys = threadKeysOf(req.query.threadKeys);
     const where = ['t.accountId = ?'];
     const params: unknown[] = [a.id];
-    // Folder ids are uuids inside a JSON array, so matching the QUOTED id is exact.
-    if (folderId) { where.push('instr(t.folderIdsJson, ?) > 0'); params.push(`"${folderId}"`); }
-    if (before) { where.push('t.lastDate < ?'); params.push(before); }
-    if (q) {
-      where.push(`EXISTS (SELECT 1 FROM mail_messages m WHERE m.accountId = t.accountId AND m.threadKey = t.threadKey
-        AND (lower(m.subject) LIKE ? OR lower(COALESCE(m.fromAddr, '')) LIKE ? OR lower(COALESCE(m.fromName, '')) LIKE ? OR lower(m.snippet) LIKE ? OR lower(m.toJson) LIKE ?))`);
-      params.push(...Array(5).fill(`%${q}%`));
+    if (keys.length) {
+      // Explicit result set (what /api/mail/search just filed). It deliberately
+      // bypasses BOTH the folder filter and the q LIKE: a provider match is
+      // usually on body text the local index never sees, and the hit is usually
+      // archived — either filter would hide the very mail the user searched for.
+      where.push(`t.threadKey IN (${keys.map(() => '?').join(',')})`);
+      params.push(...keys);
+    } else {
+      // Folder ids are uuids inside a JSON array, so matching the QUOTED id is exact.
+      if (folderId) { where.push('instr(t.folderIdsJson, ?) > 0'); params.push(`"${folderId}"`); }
+      if (q) {
+        where.push(`EXISTS (SELECT 1 FROM mail_messages m WHERE m.accountId = t.accountId AND m.threadKey = t.threadKey
+          AND (lower(m.subject) LIKE ? OR lower(COALESCE(m.fromAddr, '')) LIKE ? OR lower(COALESCE(m.fromName, '')) LIKE ? OR lower(m.snippet) LIKE ? OR lower(m.toJson) LIKE ?))`);
+        params.push(...Array(5).fill(`%${q}%`));
+      }
     }
+    if (before) { where.push('t.lastDate < ?'); params.push(before); }
     const rows = db.prepare(`SELECT * FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY t.lastDate DESC LIMIT ?`).all(...params, limit + 1) as any[];
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
@@ -742,8 +767,11 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       const hits = await providerFor(a.id).search(String(req.query.q || ''), {
         before: typeof req.query.before === 'string' ? new Date(req.query.before) : new Date(a.indexedSince), limit: 50,
       });
-      upsertEnvelopes(ctx, a, hits);
-      res.json({ count: hits.length });
+      // The keys are the point: a provider hit is usually body-text-only and
+      // usually archived, so neither the local LIKE re-query nor the active
+      // folder would show it. The client asks for these keys by name instead.
+      const { threadKeys } = upsertEnvelopes(ctx, a, hits);
+      res.json({ count: hits.length, threadKeys });
     } catch (e) { fail(res, e, 'Search failed'); }
   });
 

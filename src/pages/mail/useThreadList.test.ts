@@ -87,6 +87,73 @@ describe('useThreadList', () => {
     expect(lastCall()).toEqual({ accountId: 'a1', folderId: 'f-inbox', limit: PAGE_SIZE + 1 });
   });
 
+  // Server-search results cannot be shown by re-running the local query: the
+  // hits are usually archived (so the folder filter hides them) and usually
+  // matched on body text the local LIKE never sees. The list asks for them by
+  // key instead, with both filters bypassed server-side.
+  describe('server-results mode', () => {
+    it('asks for exactly the given keys, without the folder or the query', async () => {
+      const { result } = renderHook(() => useThreadList('a1', 'f-inbox', 'shingle'));
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => { result.current.showServerResults(['tk-9', 'tk-8']); });
+      await waitFor(() => expect(threads).toHaveBeenCalledTimes(2));
+      expect(lastCall()).toEqual({ accountId: 'a1', threadKeys: ['tk-9', 'tk-8'], limit: PAGE_SIZE });
+      expect(result.current.serverResultKeys).toEqual(['tk-9', 'tk-8']);
+    });
+
+    it('asks for every key even past a page', async () => {
+      const keys = Array.from({ length: PAGE_SIZE + 7 }, (_, i) => `k${i}`);
+      const { result } = renderHook(() => useThreadList('a1', 'f-inbox', 'shingle'));
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+      await act(async () => { result.current.showServerResults(keys); });
+      await waitFor(() => expect(lastCall().limit).toBe(keys.length));
+    });
+
+    it('goes back to the folder view on Clear', async () => {
+      const { result } = renderHook(() => useThreadList('a1', 'f-inbox', 'shingle'));
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+      await act(async () => { result.current.showServerResults(['tk-9']); });
+      await waitFor(() => expect(result.current.serverResultKeys).toEqual(['tk-9']));
+
+      await act(async () => { result.current.clearServerResults(); });
+      await waitFor(() => expect(result.current.serverResultKeys).toBeNull());
+      expect(lastCall()).toEqual({ accountId: 'a1', folderId: 'f-inbox', q: 'shingle', limit: PAGE_SIZE });
+    });
+
+    it('leaves the results behind when the folder or the query moves on', async () => {
+      const { result, rerender } = renderHook(({ f }: { f: string }) => useThreadList('a1', f, 'shingle'), {
+        initialProps: { f: 'f-inbox' },
+      });
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+      await act(async () => { result.current.showServerResults(['tk-9']); });
+      await waitFor(() => expect(result.current.serverResultKeys).toEqual(['tk-9']));
+
+      rerender({ f: 'f-sent' });
+      await waitFor(() => expect(result.current.serverResultKeys).toBeNull());
+      expect(lastCall()).toEqual({ accountId: 'a1', folderId: 'f-sent', q: 'shingle', limit: PAGE_SIZE });
+    });
+
+    it('does not page a fixed result set', async () => {
+      threads.mockResolvedValue({ threads: page(2), hasMore: true, indexedSince: 'x' });
+      const { result } = renderHook(() => useThreadList('a1', 'f-inbox', 'shingle'));
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+      await act(async () => { result.current.showServerResults(['tk-9']); });
+      await waitFor(() => expect(threads).toHaveBeenCalledTimes(2));
+
+      await act(async () => { result.current.loadMore(); });
+      expect(threads).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats an empty key list as "no server results"', async () => {
+      const { result } = renderHook(() => useThreadList('a1', 'f-inbox', 'shingle'));
+      await waitFor(() => expect(result.current.threads).toHaveLength(2));
+      await act(async () => { result.current.showServerResults([]); });
+      expect(result.current.serverResultKeys).toBeNull();
+    });
+  });
+
   it('surfaces a failed load as a toast and leaves the list empty', async () => {
     threads.mockRejectedValueOnce(new Error('boom'));
     const { result } = renderHook(() => useThreadList('a1', 'f-inbox', ''));

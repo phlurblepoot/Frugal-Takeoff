@@ -19,6 +19,11 @@ export interface ThreadListState {
   loadMore: () => void;
   indexedSince: string | null;
   reload: () => void;
+  /** Non-null while the list is showing an explicit set of conversations from
+   *  a whole-mailbox search rather than the current folder. */
+  serverResultKeys: string[] | null;
+  showServerResults: (threadKeys: string[]) => void;
+  clearServerResults: () => void;
 }
 
 export function useThreadList(accountId: string | null, folderId: string | null, q: string): ThreadListState {
@@ -40,6 +45,18 @@ export function useThreadList(accountId: string | null, folderId: string | null,
   const folderParam = folderId && folderId !== NO_FOLDER ? folderId : undefined;
   const query = q.trim() || undefined;
 
+  // "Server results" mode: /api/mail/search files its hits and hands back the
+  // conversations they landed in, and the list then asks for exactly those
+  // keys. It cannot just re-run the local query — a provider match is usually
+  // on body text the local index never sees, and the hit is usually archived,
+  // so both the q LIKE and the active folder filter would hide it. That is why
+  // "search the whole mailbox" used to find things and then show nothing.
+  const [serverKeys, setServerKeys] = useState<string[] | null>(null);
+  // Moving to another account, folder or query leaves those results behind.
+  useEffect(() => {
+    setServerKeys(null);
+  }, [accountId, folderParam, query]);
+
   const fetchFirst = useCallback(async () => {
     if (!accountId) {
       setThreads([]);
@@ -50,12 +67,11 @@ export function useThreadList(accountId: string | null, folderId: string | null,
     }
     setLoading(true);
     try {
-      const res = await mailApi.threads({
-        accountId,
-        folderId: folderParam,
-        q: query,
-        limit: Math.max(PAGE_SIZE, loadedRef.current),
-      });
+      const res = await mailApi.threads(
+        serverKeys
+          ? { accountId, threadKeys: serverKeys, limit: Math.max(PAGE_SIZE, serverKeys.length) }
+          : { accountId, folderId: folderParam, q: query, limit: Math.max(PAGE_SIZE, loadedRef.current) },
+      );
       setThreads(res.threads);
       setHasMore(res.hasMore);
       setIndexedSince(res.indexedSince ?? null);
@@ -64,7 +80,7 @@ export function useThreadList(accountId: string | null, folderId: string | null,
     } finally {
       setLoading(false);
     }
-  }, [accountId, folderParam, query, toast]);
+  }, [accountId, folderParam, query, serverKeys, toast]);
 
   // Live events only — the initial load belongs to the effect below, which is
   // the one that knows the account/folder/query changed. (useLiveQuery also
@@ -89,7 +105,9 @@ export function useThreadList(accountId: string | null, folderId: string | null,
 
   const loadMore = useCallback(() => {
     const last = threads[threads.length - 1];
-    if (!accountId || !last || busyRef.current) return;
+    // Server results are a fixed set, not a window onto one — there is no
+    // older page of them to ask for.
+    if (!accountId || !last || busyRef.current || serverKeys) return;
     busyRef.current = true;
     setLoading(true);
     mailApi
@@ -107,11 +125,21 @@ export function useThreadList(accountId: string | null, folderId: string | null,
         busyRef.current = false;
         setLoading(false);
       });
-  }, [accountId, folderParam, query, threads, toast]);
+  }, [accountId, folderParam, query, threads, serverKeys, toast]);
 
   const reload = useCallback(() => {
     void fetchFirst();
   }, [fetchFirst]);
 
-  return { threads, loading, hasMore, loadMore, indexedSince, reload };
+  // Both go through state, so the effect that owns fetching does the refetch —
+  // there is no second code path that loads the list.
+  const showServerResults = useCallback((threadKeys: string[]) => {
+    setServerKeys(threadKeys.length ? threadKeys : null);
+  }, []);
+  const clearServerResults = useCallback(() => setServerKeys(null), []);
+
+  return {
+    threads, loading, hasMore, loadMore, indexedSince, reload,
+    serverResultKeys: serverKeys, showServerResults, clearServerResults,
+  };
 }

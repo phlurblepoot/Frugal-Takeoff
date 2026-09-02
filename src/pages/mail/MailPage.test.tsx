@@ -8,7 +8,7 @@ import type { MailAccount, MailFolder, MessageRow, ThreadListRow } from './types
 const h = vi.hoisted(() => ({
   accounts: vi.fn(), folders: vi.fn(), threads: vi.fn(), thread: vi.fn(), body: vi.fn(),
   threadActions: vi.fn(), messageActions: vi.fn(), attachmentUrl: vi.fn(() => '/att'),
-  heartbeat: vi.fn(), loadOlder: vi.fn(), toast: vi.fn(),
+  heartbeat: vi.fn(), loadOlder: vi.fn(), toast: vi.fn(), searchServer: vi.fn(), refreshAccount: vi.fn(),
   send: vi.fn(), saveDraft: vi.fn(), deleteDraft: vi.fn(), stageUpload: vi.fn(), recipients: vi.fn(),
   getAlwaysCc: vi.fn(),
 }));
@@ -102,6 +102,8 @@ beforeEach(() => {
   h.deleteDraft.mockResolvedValue(undefined);
   h.stageUpload.mockResolvedValue({ uploadId: 'u1' });
   h.recipients.mockResolvedValue([]);
+  h.searchServer.mockResolvedValue({ count: 0, threadKeys: [] });
+  h.refreshAccount.mockResolvedValue(undefined);
   h.getAlwaysCc.mockResolvedValue('');
 });
 
@@ -312,6 +314,32 @@ describe('MailPage', () => {
       await waitFor(() => expect(screen.queryByTestId('mail-composer-inline')).toBeNull());
       await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
     });
+  });
+
+  // End-to-end for the whole-mailbox search: the button in the list, the keys
+  // the server hands back, the by-key re-query that bypasses the folder and q
+  // filters, and Clear putting the folder view back.
+  it('shows whole-mailbox search results by key, then clears back to the folder', async () => {
+    h.threads.mockResolvedValue({ threads: [], hasMore: false, indexedSince: '2026-02-01T00:00:00.000Z' });
+    h.searchServer.mockResolvedValue({ count: 2, threadKeys: ['tk-old', 'tk-older'] });
+    mount('/mail/a1/f-inbox?q=shingle');
+    await screen.findByText('No matching mail');
+
+    const found = { ...THREAD, threadKey: 'tk-old', subject: 'Ancient shingle CO' };
+    h.threads.mockResolvedValue({ threads: [found], hasMore: false, indexedSince: '2026-02-01T00:00:00.000Z' });
+    fireEvent.click(screen.getByRole('button', { name: /Search the whole mailbox/i }));
+
+    await screen.findByText('Ancient shingle CO');
+    expect(h.searchServer).toHaveBeenCalledWith('a1', 'shingle');
+    // By key, with neither the Inbox folder nor the q LIKE in the request —
+    // both would hide an archived, body-text-only hit.
+    expect(h.threads).toHaveBeenLastCalledWith({ accountId: 'a1', threadKeys: ['tk-old', 'tk-older'], limit: 50 });
+    expect(screen.getByTestId('mail-server-results-banner')).toHaveTextContent('Showing 2 results from the full mailbox');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() =>
+      expect(h.threads).toHaveBeenLastCalledWith({ accountId: 'a1', folderId: 'f-inbox', q: 'shingle', limit: 50 }));
+    expect(screen.queryByTestId('mail-server-results-banner')).toBeNull();
   });
 
   // The two widths ride into the grid as custom properties, not an inline
