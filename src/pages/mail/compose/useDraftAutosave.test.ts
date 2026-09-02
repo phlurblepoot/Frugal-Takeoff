@@ -140,6 +140,28 @@ describe('useDraftAutosave', () => {
     expect(h.saveDraft.mock.calls.at(-1)![1]).toBeUndefined();
   });
 
+  it('starts a fresh draft when the From account changes mid-compose', async () => {
+    const { result, rerender } = renderHook(
+      ({ s, accountId }: { s: DraftSnapshot; accountId: string }) =>
+        useDraftAutosave({ accountId, enabled: true, get: () => s }),
+      { initialProps: { s: snap(), accountId: 'a1' } }
+    );
+
+    rerender({ s: snap({ subject: 'First' }), accountId: 'a1' });
+    await tick();
+    expect(h.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'a1' }), undefined);
+    expect(result.current.draftId).toBe('d1');
+
+    h.saveDraft.mockResolvedValue({ draftId: 'd2' });
+    rerender({ s: snap({ subject: 'First' }), accountId: 'a2' });
+    expect(result.current.draftId).toBeNull();
+
+    rerender({ s: snap({ subject: 'Second' }), accountId: 'a2' });
+    await tick();
+    // A create against the new mailbox, not a PUT of the old account's draft id.
+    expect(h.saveDraft).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 'a2' }), undefined);
+  });
+
   it('discard is a no-op with nothing saved', async () => {
     const { result } = setup();
     await act(async () => { await result.current.discard(); });

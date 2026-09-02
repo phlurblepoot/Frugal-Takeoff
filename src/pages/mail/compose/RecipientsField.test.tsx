@@ -1,21 +1,28 @@
 // src/pages/mail/compose/RecipientsField.test.tsx
 import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { Addr } from '../types';
 
 const h = vi.hoisted(() => ({ recipients: vi.fn() }));
 vi.mock('../../../utils/mailApi', () => ({ mailApi: { recipients: h.recipients } }));
 
-import { RecipientsField } from './RecipientsField';
+import { RecipientsField, type RecipientsFieldHandle } from './RecipientsField';
 
-const Harness: React.FC<{ initial?: Addr[]; onChange?: (v: Addr[]) => void }> = ({ initial = [], onChange }) => {
+const Harness: React.FC<{
+  initial?: Addr[];
+  onChange?: (v: Addr[]) => void;
+  onPendingChange?: (t: string) => void;
+  fieldRef?: React.Ref<RecipientsFieldHandle>;
+}> = ({ initial = [], onChange, onPendingChange, fieldRef }) => {
   const [value, setValue] = useState<Addr[]>(initial);
   return (
     <RecipientsField
+      ref={fieldRef}
       label="To"
       value={value}
       onChange={v => { setValue(v); onChange?.(v); }}
+      onPendingChange={onPendingChange}
     />
   );
 };
@@ -111,5 +118,41 @@ describe('RecipientsField', () => {
     fireEvent.change(input(), { target: { value: '' } });
     await new Promise(r => setTimeout(r, 250));
     expect(h.recipients).not.toHaveBeenCalled();
+  });
+
+  it('reports uncommitted input text to the parent', () => {
+    const onPendingChange = vi.fn();
+    render(<Harness onPendingChange={onPendingChange} />);
+    fireEvent.change(input(), { target: { value: 'cli' } });
+    expect(onPendingChange).toHaveBeenLastCalledWith('cli');
+
+    fireEvent.change(input(), { target: { value: 'client@acme.com' } });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(onPendingChange).toHaveBeenLastCalledWith('');
+  });
+
+  it('commitPending flushes a parseable input and reports what it committed', () => {
+    const onChange = vi.fn();
+    const ref = React.createRef<RecipientsFieldHandle>();
+    render(<Harness onChange={onChange} fieldRef={ref} />);
+
+    expect(ref.current!.commitPending()).toEqual([]);   // nothing typed
+
+    fireEvent.change(input(), { target: { value: 'client@acme.com' } });
+    let committed: Addr[] = [];
+    act(() => { committed = ref.current!.commitPending(); });
+    expect(committed).toEqual([{ addr: 'client@acme.com' }]);
+    expect(onChange).toHaveBeenCalledWith([{ addr: 'client@acme.com' }]);
+    expect(input().value).toBe('');
+  });
+
+  it('commitPending leaves text that is not an address alone', () => {
+    const onChange = vi.fn();
+    const ref = React.createRef<RecipientsFieldHandle>();
+    render(<Harness onChange={onChange} fieldRef={ref} />);
+    fireEvent.change(input(), { target: { value: 'not an address' } });
+    expect(ref.current!.commitPending()).toEqual([]);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(input().value).toBe('not an address');
   });
 });

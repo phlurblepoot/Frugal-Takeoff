@@ -58,6 +58,12 @@ const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
   sizeBytes: 0, folderIds: [], sentFromApp: false, ...over,
 });
 
+// A provider body with the two things StarterKit would silently drop if the
+// quote were ever parsed into the editor document.
+const RICH_BODY =
+  '<p>Original text</p><img src="https://cdn.example.com/logo.png">' +
+  '<table><tr><td>Cell</td></tr></table>';
+
 const setup = (over: Partial<MailComposerProps> = {}) => {
   const onClose = vi.fn();
   const props: MailComposerProps = {
@@ -102,6 +108,7 @@ describe('itemTypeFromSource', () => {
     expect(itemTypeFromSource('payapp')).toBe('payApp');
     expect(itemTypeFromSource('aiaPayApp')).toBe('payApp');
     expect(itemTypeFromSource('punch')).toBe('punch');
+    expect(itemTypeFromSource('task')).toBe('task');
     expect(itemTypeFromSource('mystery')).toBeUndefined();
     expect(itemTypeFromSource(undefined)).toBeUndefined();
   });
@@ -198,12 +205,71 @@ describe('MailComposer', () => {
 
     expect(pills()).toContain('bob@acme.com');
     expect(subject().value).toBe('Re: Roof detail');
-    expect(body().value).toContain('wrote:');
-    expect(body().value).toContain('<p>Original text</p>');
+    // The quote is kept out of the editor document — it rides alongside it.
+    expect(body().value).not.toContain('wrote:');
+    expect(body().value).not.toContain('Original text');
+    expect(screen.getByTestId('composer-quote')).toBeInTheDocument();
 
     await act(async () => { fireEvent.click(sendBtn()); });
     const req = h.send.mock.calls[0][0] as SendRequest;
     expect(req.replyTo).toEqual({ accountId: 'a1', threadKey: 'tk-1' });
+    expect(req.html).toContain('wrote:');
+    expect(req.html).toContain('<p>Original text</p>');
+  });
+
+  it('transmits the quoted markup verbatim after the user edits the body', async () => {
+    setup({
+      mode: 'reply',
+      replyTo: { accountId: 'a1', threadKey: 'tk-1', message: msg(), bodyHtml: RICH_BODY },
+    });
+    await waitFor(() => expect(h.getAlwaysCc).toHaveBeenCalled());
+
+    fireEvent.change(body(), { target: { value: '<p>Sure thing</p>' } });
+    await act(async () => { fireEvent.click(sendBtn()); });
+
+    const { html } = h.send.mock.calls[0][0] as SendRequest;
+    expect(html).toContain('<p>Sure thing</p>');
+    expect(html).toContain('<img src="https://cdn.example.com/logo.png">');
+    expect(html).toContain('<table><tr><td>Cell</td></tr></table>');
+    // The reply reads above the thing it is replying to.
+    expect(html.indexOf('Sure thing')).toBeLessThan(html.indexOf('ft-quote'));
+  });
+
+  it('sends without the quote once it is removed', async () => {
+    setup({
+      mode: 'reply',
+      replyTo: { accountId: 'a1', threadKey: 'tk-1', message: msg(), bodyHtml: RICH_BODY },
+    });
+    await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Remove quoted message'));
+    expect(screen.queryByTestId('composer-quote')).toBeNull();
+
+    await act(async () => { fireEvent.click(sendBtn()); });
+    const { html } = h.send.mock.calls[0][0] as SendRequest;
+    expect(html).not.toContain('ft-quote');
+    expect(html).not.toContain('Original text');
+  });
+
+  it('shows the quoted message on demand in a sandboxed frame', async () => {
+    setup({
+      mode: 'reply',
+      replyTo: { accountId: 'a1', threadKey: 'tk-1', message: msg(), bodyHtml: RICH_BODY },
+    });
+    await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+
+    expect(screen.queryByTestId('quote-preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show quoted message' }));
+
+    const frame = screen.getByTestId('quote-preview') as HTMLIFrameElement;
+    expect(frame.getAttribute('srcdoc')).toContain('<img src="https://cdn.example.com/logo.png">');
+    // No allow-scripts and no allow-same-origin: the preview cannot run the
+    // sender's JS or reach the app's DOM.
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-scripts');
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide quoted message' }));
+    expect(screen.queryByTestId('quote-preview')).toBeNull();
   });
 
   it('prefills reply-all with everyone but our own mailboxes', async () => {
@@ -230,7 +296,8 @@ describe('MailComposer', () => {
     });
     await waitFor(() => expect(h.getAlwaysCc).toHaveBeenCalled());
     expect(subject().value).toBe('Fwd: Roof detail');
-    expect(body().value).toContain('---------- Forwarded message ----------');
+    expect(body().value).not.toContain('Forwarded message');
+    expect(screen.getByTestId('composer-quote')).toBeInTheDocument();
     expect(sendBtn()).toBeDisabled();
   });
 
@@ -388,6 +455,70 @@ describe('MailComposer', () => {
     }
   });
 
+  it('hands the draft id to the send so the server clears it atomically', async () => {
+    vi.useFakeTimers();
+    try {
+      setup();
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await Promise.resolve(); });
+
+      fireEvent.change(subject(), { target: { value: 'Roof detail' } });
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(h.saveDraft).toHaveBeenCalledTimes(1);
+
+      addTo('client@acme.com');
+      await act(async () => { fireEvent.click(sendBtn()); });
+
+      expect((h.send.mock.calls[0][0] as SendRequest).draftProviderId).toBe('d1');
+      // The send route drops the draft; a separate DELETE would be a second
+      // round trip that can fail on its own and strand a ghost draft.
+      expect(h.deleteDraft).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('parks autosave while sending so a pending timer cannot recreate the draft', async () => {
+    vi.useFakeTimers();
+    try {
+      setup();
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await Promise.resolve(); });
+
+      fireEvent.change(subject(), { target: { value: 'Roof detail' } });
+      await act(async () => { vi.advanceTimersByTime(2000); });   // debounce still pending
+      addTo('client@acme.com');
+      await act(async () => { fireEvent.click(sendBtn()); });
+
+      await act(async () => { vi.advanceTimersByTime(10000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(h.saveDraft).not.toHaveBeenCalled();
+      expect((h.send.mock.calls[0][0] as SendRequest).draftProviderId).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts and commits an address still sitting uncommitted in the To input', async () => {
+    setup();
+    await waitFor(() => expect(h.getAlwaysCc).toHaveBeenCalled());
+
+    // Typed, but never confirmed with Enter/comma — the user just hits Send.
+    fireEvent.change(to(), { target: { value: 'client@acme.com' } });
+    expect(sendBtn()).toBeEnabled();
+
+    await act(async () => { fireEvent.click(sendBtn()); });
+    expect((h.send.mock.calls[0][0] as SendRequest).to).toEqual([{ addr: 'client@acme.com' }]);
+  });
+
+  it('leaves Send disabled for To text that is not an address', async () => {
+    setup();
+    await waitFor(() => expect(h.getAlwaysCc).toHaveBeenCalled());
+    fireEvent.change(to(), { target: { value: 'not an address' } });
+    expect(sendBtn()).toBeDisabled();
+  });
+
   it('does not autosave drafts for item sends', async () => {
     vi.useFakeTimers();
     try {
@@ -416,5 +547,26 @@ describe('agoLabel', () => {
     expect(agoLabel(back(12), now)).toBe('12s ago');
     expect(agoLabel(back(180), now)).toBe('3m ago');
     expect(agoLabel(back(7200), now)).toBe('2h ago');
+  });
+});
+
+describe('MailComposer lifecycle', () => {
+  it('survives being closed after it was open (no conditional hooks)', async () => {
+    const onClose = vi.fn();
+    const base: MailComposerProps = {
+      open: true, onClose, variant: 'modal', accounts: ACCOUNTS, defaultAccountId: 'a1',
+      mode: 'reply',
+      replyTo: { accountId: 'a1', threadKey: 'tk-1', message: msg(), bodyHtml: '<p>Original text</p>' },
+    };
+    const { rerender } = render(<MailComposer {...base} />);
+    await waitFor(() => expect(screen.getByTestId('composer-quote')).toBeInTheDocument());
+
+    // Every hook must run on both renders; a hook after the `open` early
+    // return would blow up here rather than in production.
+    rerender(<MailComposer {...base} open={false} />);
+    expect(screen.queryByLabelText('To')).toBeNull();
+
+    rerender(<MailComposer {...base} open />);
+    await waitFor(() => expect(screen.getByLabelText('To')).toBeInTheDocument());
   });
 });

@@ -15,6 +15,7 @@
 // move is exactly the thing a user would otherwise never notice.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Maximize2, Minimize2, Paperclip, X } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
 import { Button, Input, Modal, Select } from '../../../components/ui';
 import { useToast } from '../../../components/Toast';
 import { FilePickerModal } from '../../../components/FilePickerModal';
@@ -22,8 +23,9 @@ import type { DocumentRow } from '../../../utils/store';
 import { getAlwaysCc } from '../../../utils/store';
 import { mailApi } from '../../../utils/mailApi';
 import { itemTypeLabel } from '../mailFormat';
+import { buildFrameDoc } from '../MessageBodyFrame';
 import type { Addr, ItemType, MailAccount, MessageRow, SendRequest, SendResult } from '../types';
-import { RecipientsField, mergeAddrs, parseAddr } from './RecipientsField';
+import { RecipientsField, mergeAddrs, parseAddr, type RecipientsFieldHandle } from './RecipientsField';
 import { RichTextEditor } from './RichTextEditor';
 import { useDraftAutosave, type DraftSnapshot } from './useDraftAutosave';
 import { forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject } from './quote';
@@ -75,6 +77,7 @@ export function itemTypeFromSource(sourceType?: string | null): ItemType | undef
     case 'payApp':
     case 'aiaPayApp': return 'payApp';
     case 'punch': return 'punch';
+    case 'task': return 'task';
     default: return undefined;
   }
 }
@@ -122,6 +125,15 @@ export const MailComposer: React.FC<MailComposerProps> = ({
   const [subject, setSubject] = useState('');
   const [html, setHtml] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  // The quote is deliberately NOT part of the editor document. TipTap's schema
+  // drops what it has no node for (images, tables, most inline styling) the
+  // moment the user types, so a quote parsed into the editor would be silently
+  // rewritten — and an untouched reply would transmit different markup from an
+  // edited one. It lives beside the editor as opaque html and is concatenated
+  // at send time, which is also how every real mail client behaves.
+  const [quoteHtml, setQuoteHtml] = useState('');
+  const [quoteRemoved, setQuoteRemoved] = useState(false);
+  const [quoteOpen, setQuoteOpen] = useState(false);
   const [useExistingThread, setUseExistingThread] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [uploading, setUploading] = useState(0);
@@ -131,6 +143,13 @@ export const MailComposer: React.FC<MailComposerProps> = ({
   // has finished, so simply opening a composer never creates a draft.
   const [seeded, setSeeded] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Text typed into a recipients row but never confirmed with Enter/comma.
+  // Send counts it and commits it rather than dropping the user's address.
+  const [toPending, setToPending] = useState('');
+  const toRef = useRef<RecipientsFieldHandle>(null);
+  const ccRef = useRef<RecipientsFieldHandle>(null);
+  const bccRef = useRef<RecipientsFieldHandle>(null);
 
   // Re-seed on every open so each open starts from the caller's defaults.
   useEffect(() => {
@@ -176,7 +195,10 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     setBcc(initial?.bcc ?? []);
     setShowCcBcc(seedCc.length > 0 || (initial?.bcc?.length ?? 0) > 0);
     setSubject(seedSubject);
-    setHtml(`${initial?.html ?? ''}${sig}${quote}`);
+    setHtml(`${initial?.html ?? ''}${sig}`);
+    setQuoteHtml(quote);
+    setQuoteRemoved(false);
+    setQuoteOpen(false);
     setAttachments(initial?.attachments ?? []);
     setUseExistingThread(true);
     setSending(false);
@@ -205,11 +227,31 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     setAccountId((accounts.find(isSendable) ?? accounts[0]).id);
   }, [open, accountId, accounts]);
 
-  const snapshot = useMemo<DraftSnapshot>(() => ({ to, cc, bcc, subject, html }), [to, cc, bcc, subject, html]);
+  /** What actually gets sent (and saved as a draft): the user's text, then the quote. */
+  const composedHtml = html + (quoteRemoved ? '' : quoteHtml);
+
+  // Reuses the thread view's frame document: an opaque-origin iframe whose CSP
+  // allows no remote images (no tracking pixel fires while composing) and no
+  // scripts — the sandbox here grants neither allow-scripts nor
+  // allow-same-origin, so the sender's markup is inert.
+  // Memoized on the quote itself: rebuilding the srcDoc string every render
+  // would reload the frame on every keystroke, and a nonce that repeats across
+  // documents would outlive the document it was minted for.
+  const quoteDoc = useMemo(
+    () => (quoteHtml ? buildFrameDoc(quoteHtml, uuidv4(), window.location.origin) : ''),
+    [quoteHtml],
+  );
+
+  const snapshot = useMemo<DraftSnapshot>(
+    () => ({ to, cc, bcc, subject, html: composedHtml }),
+    [to, cc, bcc, subject, composedHtml],
+  );
   const draft = useDraftAutosave({
     accountId: accountId || null,
     // Item sends go through the caller's route, so there is no draft to resume.
-    enabled: open && seeded && !onSend,
+    // Parked during a send too: the server deletes the draft as part of the
+    // send, so a debounce firing afterwards would recreate it as a ghost.
+    enabled: open && seeded && !onSend && !sending,
     get: () => snapshot,
   });
 
@@ -255,12 +297,12 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     }
   }, [addAttachments, toast]);
 
-  const buildRequest = useCallback((): SendRequest => {
+  const buildRequest = useCallback((final: { to: Addr[]; cc: Addr[]; bcc: Addr[] }): SendRequest => {
     const req: SendRequest = {
       accountId: accountId || undefined,
-      to,
+      to: final.to,
       subject,
-      html,
+      html: composedHtml,
       attachments: attachments.map(a => {
         if (a.kind === 'upload') return { uploadId: a.uploadId };
         const file: { fileId: string; name?: string; itemType?: ItemType; itemId?: string } =
@@ -270,23 +312,34 @@ export const MailComposer: React.FC<MailComposerProps> = ({
         return file;
       }),
     };
-    if (cc.length) req.cc = cc;
-    if (bcc.length) req.bcc = bcc;
+    if (final.cc.length) req.cc = final.cc;
+    if (final.bcc.length) req.bcc = final.bcc;
+    // Let the send route drop the draft in the same transaction — a separate
+    // DELETE afterwards is a round trip that can fail on its own.
+    if (draft.draftId) req.draftProviderId = draft.draftId;
 
     if (replyTo) req.replyTo = { accountId: replyTo.accountId, threadKey: replyTo.threadKey };
     else if (existingThread && useExistingThread) {
       req.replyTo = { accountId: existingThread.accountId, threadKey: existingThread.threadKey };
     }
     return req;
-  }, [accountId, to, cc, bcc, subject, html, attachments, replyTo, existingThread, useExistingThread]);
+  }, [accountId, subject, composedHtml, attachments, replyTo, existingThread, useExistingThread, draft.draftId]);
 
-  const canSend = to.length > 0 && !sending && uploading === 0;
+  const canSend = (to.length > 0 || parseAddr(toPending) !== null) && !sending && uploading === 0;
 
   const handleSend = async () => {
     if (!canSend) return;
+    // Sweep up anything typed but not yet confirmed in each row.
+    const final = {
+      to: mergeAddrs(to, toRef.current?.commitPending() ?? []),
+      cc: mergeAddrs(cc, ccRef.current?.commitPending() ?? []),
+      bcc: mergeAddrs(bcc, bccRef.current?.commitPending() ?? []),
+    };
+    if (final.to.length === 0) return;
+
     setSending(true);
     try {
-      const result = await (onSend ?? mailApi.send)(buildRequest());
+      const result = await (onSend ?? mailApi.send)(buildRequest(final));
       toast('Sent', { type: 'success' });
 
       const skipped = (result as SendResult | undefined)?.effectsSkipped ?? [];
@@ -294,7 +347,6 @@ export const MailComposer: React.FC<MailComposerProps> = ({
         toast(`Sent — status not updated for: ${skipped.map(itemTypeLabel).join(', ')}`, { type: 'warning' });
       }
 
-      await draft.discard();
       onSent?.(result);
       onClose();
     } catch (err) {
@@ -333,6 +385,37 @@ export const MailComposer: React.FC<MailComposerProps> = ({
       ))}
     </Select>
   );
+
+  const quoteBlock = quoteHtml && !quoteRemoved ? (
+    <div className="border-l-2 border-edge-strong pl-3" data-testid="composer-quote">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setQuoteOpen(v => !v)}
+          className="text-xs font-medium text-ink-faint hover:text-ink"
+        >
+          {quoteOpen ? 'Hide quoted message' : 'Show quoted message'}
+        </button>
+        <button
+          type="button"
+          aria-label="Remove quoted message"
+          onClick={() => { setQuoteRemoved(true); setQuoteOpen(false); }}
+          className="text-ink-faint hover:text-ink"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      {quoteOpen && (
+        <iframe
+          data-testid="quote-preview"
+          title="Quoted message"
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          srcDoc={quoteDoc}
+          className="mt-2 h-56 w-full rounded-lg border border-edge bg-white"
+        />
+      )}
+    </div>
+  ) : null;
 
   const attachmentRow = (
     <div className="flex flex-wrap items-center gap-2">
@@ -416,7 +499,14 @@ export const MailComposer: React.FC<MailComposerProps> = ({
       <div data-testid="composer-recipients">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <RecipientsField label="To" value={to} onChange={setTo} autoFocus={mode !== 'forward'} />
+            <RecipientsField
+              ref={toRef}
+              label="To"
+              value={to}
+              onChange={setTo}
+              onPendingChange={setToPending}
+              autoFocus={mode !== 'forward'}
+            />
           </div>
           {!showCcBcc && (
             <button
@@ -430,8 +520,8 @@ export const MailComposer: React.FC<MailComposerProps> = ({
         </div>
         {showCcBcc && (
           <>
-            <RecipientsField label="Cc" value={cc} onChange={setCc} />
-            <RecipientsField label="Bcc" value={bcc} onChange={setBcc} />
+            <RecipientsField ref={ccRef} label="Cc" value={cc} onChange={setCc} />
+            <RecipientsField ref={bccRef} label="Bcc" value={bcc} onChange={setBcc} />
           </>
         )}
       </div>
@@ -449,6 +539,8 @@ export const MailComposer: React.FC<MailComposerProps> = ({
         placeholder="Write your message…"
         minHeight={variant === 'inline' ? 140 : 220}
       />
+
+      {quoteBlock}
 
       {primaryAttachment?.stale && (
         <p className="text-xs text-amber-600 dark:text-amber-400">

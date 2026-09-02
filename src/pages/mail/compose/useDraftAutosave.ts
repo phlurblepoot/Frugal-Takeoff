@@ -61,16 +61,17 @@ export function useDraftAutosave({ accountId, enabled, get }: DraftAutosaveOptio
   if (!active) baseline.current = null;
   else if (baseline.current === null) baseline.current = serialized;
 
-  // Each composer session gets its own draft row. Without this, closing a
-  // composer without sending and opening a new one would autosave the new
-  // message on top of the old draft.
+  // Each composer session — and each mailbox within one — gets its own draft
+  // row. Without this, closing a composer without sending and opening a new one
+  // would autosave the new message on top of the old draft, and switching the
+  // From account would PUT the previous account's draft id against the new one.
   useEffect(() => {
     if (!active) return;
     draftIdRef.current = null;
     setDraftId(null);
     setStatus('idle');
     setSavedAt(null);
-  }, [active]);
+  }, [active, accountId]);
 
   useEffect(() => {
     if (!active || !accountId) return;

@@ -10,7 +10,7 @@
 //  - The suggestion list never commits on its own. Enter sends the typed text
 //    unless the user has explicitly arrowed onto a suggestion, so a fast typist
 //    is never redirected to whoever the server happened to rank first.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { mailApi } from '../../../utils/mailApi';
 import type { Addr, Recipient } from '../types';
@@ -55,15 +55,30 @@ export interface RecipientsFieldProps {
   value: Addr[];
   onChange: (v: Addr[]) => void;
   autoFocus?: boolean;
+  /** Fires with the uncommitted input text so a parent can react to it —
+   *  the composer uses it to enable Send for a typed-but-unconfirmed address. */
+  onPendingChange?: (text: string) => void;
 }
 
-export const RecipientsField: React.FC<RecipientsFieldProps> = ({ label, value, onChange, autoFocus }) => {
+export interface RecipientsFieldHandle {
+  /** Commits parseable leftover input text and returns what it committed.
+   *  Called on Send so a typed address is never silently dropped. */
+  commitPending: () => Addr[];
+}
+
+export const RecipientsField = React.forwardRef<RecipientsFieldHandle, RecipientsFieldProps>((
+  { label, value, onChange, autoFocus, onPendingChange },
+  ref,
+) => {
   const [text, setText] = useState('');
   const [invalid, setInvalid] = useState(false);
   const [suggestions, setSuggestions] = useState<Recipient[]>([]);
   const [highlight, setHighlight] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
   const listId = React.useId();
+
+  const pendingCb = useRef(onPendingChange);
+  pendingCb.current = onPendingChange;
+  useEffect(() => { pendingCb.current?.(text); }, [text]);
 
   // Sources of the addresses the user picked from the index, so a customer
   // contact keeps its tint after it becomes a pill (Addr itself has no source).
@@ -75,21 +90,40 @@ export const RecipientsField: React.FC<RecipientsFieldProps> = ({ label, value, 
     return true;
   }, [value, onChange]);
 
+  /** Parses the input text into addresses, or null if any part doesn't parse. */
+  const parseText = (raw: string): Addr[] | null => {
+    const parts = raw.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return [];
+    const parsed = parts.map(parseAddr);
+    return parsed.some(a => a === null) ? null : (parsed as Addr[]);
+  };
+
   /** Commits the input text; returns false (leaving the text alone) if it doesn't parse. */
   const commitText = useCallback((raw: string): boolean => {
-    const parts = raw.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-    if (parts.length === 0) { setText(''); setInvalid(false); return true; }
+    const parsed = parseText(raw);
+    if (parsed === null) { setInvalid(true); return false; }
+    if (parsed.length === 0) { setText(''); setInvalid(false); return true; }
 
-    const parsed = parts.map(parseAddr);
-    if (parsed.some(a => a === null)) { setInvalid(true); return false; }
-
-    commit(parsed as Addr[]);
+    commit(parsed);
     setText('');
     setInvalid(false);
     setSuggestions([]);
     setHighlight(-1);
     return true;
   }, [commit]);
+
+  useImperativeHandle(ref, () => ({
+    commitPending: () => {
+      const parsed = parseText(text);
+      if (!parsed || parsed.length === 0) return [];
+      commit(parsed);
+      setText('');
+      setInvalid(false);
+      setSuggestions([]);
+      setHighlight(-1);
+      return parsed;
+    },
+  }), [text, commit]);
 
   const pick = useCallback((r: Recipient) => {
     setSources(prev => ({ ...prev, [key(r)]: r.source }));
@@ -226,7 +260,6 @@ export const RecipientsField: React.FC<RecipientsFieldProps> = ({ label, value, 
           ))}
 
           <input
-            ref={inputRef}
             aria-label={label}
             aria-invalid={invalid || undefined}
             aria-autocomplete="list"
@@ -272,4 +305,5 @@ export const RecipientsField: React.FC<RecipientsFieldProps> = ({ label, value, 
       </div>
     </div>
   );
-};
+});
+RecipientsField.displayName = 'RecipientsField';
