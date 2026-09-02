@@ -8,7 +8,9 @@ import { ArrowLeft, Mail, MailOpen } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
+import { MailComposer } from './compose/MailComposer';
 import { FolderRail, orderFolders } from './FolderRail';
+import type { ReplyMode } from './MessageCard';
 import { SaveAttachmentsModal } from './SaveAttachmentsModal';
 import { ThreadList } from './ThreadList';
 import { useMailAccounts } from './useMailAccounts';
@@ -17,6 +19,15 @@ import { useMailHeartbeat } from './useMailHeartbeat';
 import { ThreadView } from './ThreadView';
 import { NO_FOLDER, useThreadList } from './useThreadList';
 import type { MessageRow, ThreadListRow } from './types';
+
+/** The data a reply/forward composer needs — everything but where it renders
+ *  (modal vs. inline), which is tracked separately so promoting one to the
+ *  other never re-seeds it (see `replyVariant` below). */
+interface ReplyComposerState {
+  mode: ReplyMode;
+  message: MessageRow;
+  bodyHtml: string;
+}
 
 export const MailPage: React.FC = () => {
   const { accountId = null, folderId = null, threadKey = null } = useParams();
@@ -57,11 +68,22 @@ export const MailPage: React.FC = () => {
   // ThreadView's onSaveAttachments, read by SaveAttachmentsModal below.
   const [saveAttachmentsMessage, setSaveAttachmentsMessage] = useState<MessageRow | null>(null);
 
+  // Task 7: the reply/forward composer ThreadView renders inline under the
+  // thread. `replyVariant` is separate from `replyComposer` itself so
+  // "Open in composer" only swaps which surface the SAME MailComposer
+  // instance renders as (Modal vs. the inline block) — switching a prop, not
+  // remounting, is what keeps whatever the user has already typed.
+  const [replyComposer, setReplyComposer] = useState<ReplyComposerState | null>(null);
+  const [replyVariant, setReplyVariant] = useState<'modal' | 'inline'>('inline');
+
   // Defensive reset: navigating to a different account/thread (back/forward,
   // another thread click) must not leave the modal open against a message
-  // from whatever thread was previously showing.
+  // from whatever thread was previously showing, nor a reply composer open
+  // against a thread that is no longer on screen.
   useEffect(() => {
     setSaveAttachmentsMessage(null);
+    setReplyComposer(null);
+    setReplyVariant('inline');
   }, [accountId, threadKey]);
 
   const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
@@ -105,28 +127,51 @@ export const MailPage: React.FC = () => {
     [searchParams, setSearchParams],
   );
 
-  // Task 7 owns the composer itself; the flag it opens on lives in the URL so
-  // the command palette can deep-link to it.
+  // A blank composer's openness lives in the URL (not local state) so the
+  // command palette — and the two Compose buttons below — can deep-link to
+  // it. It's read directly off `searchParams` each render rather than mirrored
+  // into state, so there is nothing to keep in sync.
+  const composeOpen = searchParams.get('compose') === '1';
   const openCompose = useCallback(() => {
     const params = new URLSearchParams(searchParams);
     params.set('compose', '1');
     setSearchParams(params);
   }, [searchParams, setSearchParams]);
+  const closeCompose = useCallback(() => {
+    const params = new URLSearchParams(searchParams);
+    params.delete('compose');
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const backToList = useCallback(() => navigate(`${listPath}${search}`), [navigate, listPath, search]);
 
-  // Until Task 6/7 mount the composer, a reply/forward is recorded in the URL
-  // the same way Compose is — the composer reads `reply` + `messageId`.
-  const openReply = useCallback(
-    (mode: 'reply' | 'replyAll' | 'forward', message: MessageRow) => {
-      const params = new URLSearchParams(searchParams);
-      params.set('compose', '1');
-      params.set('reply', mode);
-      params.set('messageId', message.id);
-      setSearchParams(params);
+  // ThreadView's reply/reply-all/forward — from the toolbar (newest message)
+  // or a specific message's own buttons — fetches that message's rendered
+  // body, then opens the inline composer under the thread with it quoted.
+  // A message whose provider copy is still being filed answers `{pending}`;
+  // there is nothing to quote yet, so this stays put rather than opening a
+  // composer with an empty quote.
+  const onReply = useCallback(
+    async (mode: ReplyMode, message: MessageRow) => {
+      try {
+        const res = await mailApi.body(message.id);
+        if ('pending' in res) {
+          toast('Message still syncing — try again shortly.');
+          return;
+        }
+        setReplyComposer({ mode, message, bodyHtml: res.html });
+        setReplyVariant('inline');
+      } catch {
+        toast('Could not load this message.', { type: 'error' });
+      }
     },
-    [searchParams, setSearchParams],
+    [toast],
   );
+  const closeReplyComposer = useCallback(() => {
+    setReplyComposer(null);
+    setReplyVariant('inline');
+  }, []);
+  const promoteReplyComposer = useCallback(() => setReplyVariant('modal'), []);
 
   if (accountsLoading) {
     return (
@@ -223,10 +268,15 @@ export const MailPage: React.FC = () => {
                     accountId={accountId}
                     threadKey={threadKey}
                     ownAddresses={ownAddresses}
+                    accounts={accounts}
                     onBack={backToList}
-                    onReply={openReply}
+                    onReply={onReply}
                     onOpenInComposer={openCompose}
                     onSaveAttachments={message => setSaveAttachmentsMessage(message)}
+                    replyComposer={replyComposer}
+                    replyVariant={replyVariant}
+                    onReplyClose={closeReplyComposer}
+                    onReplyPromote={promoteReplyComposer}
                   />
                 )}
               </div>
@@ -249,6 +299,18 @@ export const MailPage: React.FC = () => {
           onClose={() => setSaveAttachmentsMessage(null)}
           messageId={saveAttachmentsMessage.id}
           attachments={saveAttachmentsMessage.attachments}
+        />
+      )}
+
+      {composeOpen && (
+        <MailComposer
+          key="new"
+          open
+          variant="modal"
+          onClose={closeCompose}
+          accounts={accounts}
+          defaultAccountId={accountId ?? undefined}
+          mode="new"
         />
       )}
     </div>

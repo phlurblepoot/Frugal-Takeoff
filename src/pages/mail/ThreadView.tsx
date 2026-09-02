@@ -9,12 +9,13 @@ import {
 import { Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
+import { MailComposer } from './compose/MailComposer';
 import { orderFolders } from './FolderRail';
 import { MessageCard, type ReplyMode } from './MessageCard';
 import { itemTypeLabel } from './mailFormat';
 import { useMailFolders } from './useMailFolders';
 import { useThread } from './useThread';
-import type { MailAction, MessageRow } from './types';
+import type { MailAccount, MailAction, MessageRow } from './types';
 
 /** How long a message stays open before it counts as read (spec: 1 s). */
 const MARK_READ_DELAY = 1000;
@@ -42,14 +43,28 @@ export const ThreadView: React.FC<{
   accountId: string;
   threadKey: string;
   ownAddresses: string[];
+  accounts: MailAccount[];
   onBack?: () => void;
   onReply: (mode: ReplyMode, message: MessageRow) => void;
   onOpenInComposer: () => void;
   /** Task 5 mounts the Save-to-Documents modal on this. */
   onSaveAttachments?: (message: MessageRow) => void;
-}> = ({ accountId, threadKey, ownAddresses, onBack, onReply, onOpenInComposer, onSaveAttachments }) => {
+  /** Task 7: the reply/forward composer MailPage owns, rendered below the
+   *  messages so it reads as part of the conversation. `null` when no
+   *  reply is in progress for this thread. */
+  replyComposer: { mode: ReplyMode; message: MessageRow; bodyHtml: string } | null;
+  replyVariant: 'modal' | 'inline';
+  onReplyClose: () => void;
+  /** "Open in composer" on the inline composer itself — promotes it to the
+   *  modal without losing anything typed (MailPage only flips `replyVariant`,
+   *  it does not remount the composer). */
+  onReplyPromote: () => void;
+}> = ({
+  accountId, threadKey, ownAddresses, accounts, onBack, onReply, onOpenInComposer, onSaveAttachments,
+  replyComposer, replyVariant, onReplyClose, onReplyPromote,
+}) => {
   const { toast } = useToast();
-  const { thread, messages, links, loading, error } = useThread(accountId, threadKey);
+  const { thread, messages, links, loading, error, reload } = useThread(accountId, threadKey);
   const { folders } = useMailFolders(accountId);
 
   const [busy, setBusy] = useState(false);
@@ -362,6 +377,23 @@ export const ThreadView: React.FC<{
             />
           ))}
         </div>
+
+        {replyComposer && (
+          <div className="mt-3">
+            <MailComposer
+              key={`${replyComposer.mode}:${replyComposer.message.id}`}
+              open
+              variant={replyVariant}
+              onClose={onReplyClose}
+              accounts={accounts}
+              defaultAccountId={accountId}
+              mode={replyComposer.mode}
+              replyTo={{ accountId, threadKey, message: replyComposer.message, bodyHtml: replyComposer.bodyHtml }}
+              onSent={() => reload()}
+              onOpenInModal={replyVariant === 'inline' ? onReplyPromote : undefined}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

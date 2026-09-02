@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import type { MailFolder, MessageRow, ThreadLink, ThreadListRow } from './types';
+import type { MailAccount, MailFolder, MessageRow, ThreadLink, ThreadListRow } from './types';
 
 const h = vi.hoisted(() => ({
   threadActions: vi.fn(),
@@ -22,6 +22,20 @@ vi.mock('./MessageBodyFrame', () => ({
 vi.mock('../../components/Toast', async orig => ({
   ...(await orig<typeof import('../../components/Toast')>()),
   useToast: () => ({ toast: h.toast }),
+}));
+// The composer itself is covered by MailComposer.test.tsx; here it's a stub
+// that surfaces exactly the props ThreadView is responsible for wiring
+// (variant/mode, onClose, onSent, onOpenInModal) as clickable buttons.
+vi.mock('./compose/MailComposer', () => ({
+  MailComposer: ({ variant, mode, onClose, onSent, onOpenInModal }: {
+    variant: string; mode: string; onClose: () => void; onSent?: () => void; onOpenInModal?: () => void;
+  }) => (
+    <div data-testid="mail-composer" data-variant={variant} data-mode={mode}>
+      <button onClick={onClose}>composer-close</button>
+      <button onClick={() => onSent?.()}>composer-sent</button>
+      {onOpenInModal && <button onClick={onOpenInModal}>composer-promote</button>}
+    </div>
+  ),
 }));
 
 import { ThreadView } from './ThreadView';
@@ -62,13 +76,24 @@ const baseState = () => ({
   reload: vi.fn(),
 });
 
+const ACCOUNTS: MailAccount[] = [{
+  id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
+  signatureHtml: null, isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null,
+  indexedSince: '2026-01-01T00:00:00.000Z', unreadCount: 0,
+}];
+
 const props = {
   accountId: 'a1',
   threadKey: 'tk-1',
   ownAddresses: ['nathan@bigbearplaster.com'],
+  accounts: ACCOUNTS,
   onBack: vi.fn(),
   onReply: vi.fn(),
   onOpenInComposer: vi.fn(),
+  replyComposer: null as { mode: 'reply' | 'replyAll' | 'forward'; message: MessageRow; bodyHtml: string } | null,
+  replyVariant: 'inline' as 'modal' | 'inline',
+  onReplyClose: vi.fn(),
+  onReplyPromote: vi.fn(),
 };
 
 const cards = () => screen.getAllByTestId('mail-message-card');
@@ -233,5 +258,47 @@ describe('ThreadView', () => {
     h.useThread.mockReturnValue(state({ links: [LINK, { ...LINK, id: 'l2', itemId: 'r2' }, { ...LINK, id: 'l3', itemType: 'invoice', itemId: 'i1' }] }));
     rerender(<ThreadView {...props} />);
     expect(screen.getAllByTestId('mail-thread-link-chip').map(c => c.textContent)).toEqual(['RFI', 'RFI', 'Invoice']);
+  });
+
+  it('renders no composer under the thread when no reply is in progress', () => {
+    render(<ThreadView {...props} />);
+    expect(screen.queryByTestId('mail-composer')).toBeNull();
+  });
+
+  it('renders the reply composer under the thread with the variant MailPage passed', () => {
+    render(<ThreadView {...props} replyComposer={{ mode: 'reply', message: msg({ id: 'm2' }), bodyHtml: '<p>hi</p>' }} replyVariant="inline" />);
+    const composer = screen.getByTestId('mail-composer');
+    expect(composer).toHaveAttribute('data-variant', 'inline');
+    expect(composer).toHaveAttribute('data-mode', 'reply');
+    // Inline offers the promote-to-modal button; modal (below) does not.
+    expect(screen.getByRole('button', { name: 'composer-promote' })).toBeInTheDocument();
+  });
+
+  it('does not offer "open in modal" once the composer is already the modal', () => {
+    render(<ThreadView {...props} replyComposer={{ mode: 'forward', message: msg(), bodyHtml: '<p>hi</p>' }} replyVariant="modal" />);
+    expect(screen.getByTestId('mail-composer')).toHaveAttribute('data-variant', 'modal');
+    expect(screen.queryByRole('button', { name: 'composer-promote' })).toBeNull();
+  });
+
+  it('promotes the inline composer via onReplyPromote', () => {
+    const onReplyPromote = vi.fn();
+    render(<ThreadView {...props} replyComposer={{ mode: 'reply', message: msg(), bodyHtml: '<p>hi</p>' }} onReplyPromote={onReplyPromote} />);
+    fireEvent.click(screen.getByRole('button', { name: 'composer-promote' }));
+    expect(onReplyPromote).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the reply composer via onReplyClose', () => {
+    const onReplyClose = vi.fn();
+    render(<ThreadView {...props} replyComposer={{ mode: 'reply', message: msg(), bodyHtml: '<p>hi</p>' }} onReplyClose={onReplyClose} />);
+    fireEvent.click(screen.getByRole('button', { name: 'composer-close' }));
+    expect(onReplyClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads the thread when the composer reports a successful send', () => {
+    const st = state();
+    h.useThread.mockReturnValue(st);
+    render(<ThreadView {...props} replyComposer={{ mode: 'reply', message: msg(), bodyHtml: '<p>hi</p>' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'composer-sent' }));
+    expect(st.reload).toHaveBeenCalledTimes(1);
   });
 });
