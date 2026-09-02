@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import type { ThreadListRow } from './types';
 
-const h = vi.hoisted(() => ({ searchServer: vi.fn(), toast: vi.fn() }));
-vi.mock('../../utils/mailApi', () => ({ mailApi: { searchServer: h.searchServer } }));
+const h = vi.hoisted(() => ({ searchServer: vi.fn(), refreshAccount: vi.fn(), toast: vi.fn() }));
+vi.mock('../../utils/mailApi', () => ({ mailApi: { searchServer: h.searchServer, refreshAccount: h.refreshAccount } }));
 vi.mock('../../components/Toast', async orig => ({
   ...(await orig<typeof import('../../components/Toast')>()),
   useToast: () => ({ toast: h.toast }),
@@ -48,6 +48,7 @@ const searchBox = () => screen.getByPlaceholderText('Search mail…');
 beforeEach(() => {
   vi.clearAllMocks();
   h.searchServer.mockResolvedValue({ count: 0 });
+  h.refreshAccount.mockResolvedValue(undefined);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -104,6 +105,35 @@ describe('ThreadList', () => {
     rerender(<ThreadList {...props({ threads: [], q: 'shingle' })} />);
     expect(screen.getByText('No matching mail')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Search the whole mailbox/i })).toBeInTheDocument();
+  });
+
+  // Manual "check for mail now": the route only nudges the sync worker, so the
+  // list is re-queried after a settle delay rather than off the 202 itself.
+  it('asks the server to sync and reloads the list once it has had a moment', async () => {
+    vi.useFakeTimers();
+    const onReload = vi.fn();
+    render(<ThreadList {...props({ onReload })} />);
+
+    fireEvent.click(screen.getByTestId('mail-refresh'));
+    await act(async () => {});
+    expect(h.refreshAccount).toHaveBeenCalledWith('a1');
+    // Still spinning, and still not reloaded, until the settle delay is up.
+    expect(screen.getByTestId('mail-refresh')).toBeDisabled();
+    expect(onReload).not.toHaveBeenCalled();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('mail-refresh')).not.toBeDisabled();
+  });
+
+  it('reports a failed refresh instead of reloading', async () => {
+    const onReload = vi.fn();
+    h.refreshAccount.mockRejectedValue(new Error('nope'));
+    render(<ThreadList {...props({ onReload })} />);
+
+    fireEvent.click(screen.getByTestId('mail-refresh'));
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Could not check for new mail.', { type: 'error' }));
+    expect(onReload).not.toHaveBeenCalled();
   });
 
   // The local index only reaches back to `indexedSince`; the fallback asks the

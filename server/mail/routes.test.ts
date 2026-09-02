@@ -530,6 +530,23 @@ describe('mail routes', () => {
     expect(accounts.getAccountAny(db, acct.id)).toBeNull();
   });
 
+  it('POST /api/mail/accounts/:id/refresh pokes the scheduler and answers 202', async () => {
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount');
+    const r = await request(app).post(`/api/mail/accounts/${acct.id}/refresh`);
+    expect(r.status).toBe(202);
+    expect(r.body).toEqual({ ok: true });
+    expect(poke).toHaveBeenCalledWith(acct.id);
+    poke.mockRestore();
+  });
+
+  it('POST /api/mail/accounts/:id/refresh rejects another user\'s account without poking', async () => {
+    currentUser = { id: 'u2', role: 'user' };
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount');
+    expect((await request(app).post(`/api/mail/accounts/${acct.id}/refresh`)).status).toBe(404);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
   it('DELETE /api/mail/accounts/:id stops the worker and drops the cached provider first', async () => {
     const created = (await request(app).post('/api/mail/accounts/imap').send({ emailAddress: 'n@x.com', imapHost: 'imap.x', smtpHost: 'smtp.x', username: 'n', password: 'p' })).body;
     await request(app).post(`/api/mail/accounts/${created.id}/test`);

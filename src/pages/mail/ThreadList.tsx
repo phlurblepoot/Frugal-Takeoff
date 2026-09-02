@@ -2,7 +2,7 @@
 // footer that either pages further back through what is indexed or offers to
 // backfill older mail from the provider.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Inbox, Search } from 'lucide-react';
+import { Inbox, RefreshCw, Search } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
@@ -10,6 +10,11 @@ import { ThreadRow } from './ThreadRow';
 import type { ThreadListRow } from './types';
 
 const SEARCH_DEBOUNCE_MS = 300;
+/** The refresh route answers 202 as soon as the sync worker has been nudged —
+ *  the sync itself is still running. Give it a moment before re-querying so the
+ *  first reload has something new in it; the live `mailThread` broadcasts the
+ *  sync fires cover anything that lands after. */
+const REFRESH_SETTLE_MS = 1500;
 
 const sinceLabel = (iso: string | null): string => {
   if (!iso) return '';
@@ -82,6 +87,32 @@ export const ThreadList: React.FC<{
     }
   }, [accountId, q, searchingServer, toast, onReload]);
 
+  // "Check for mail now". The server only pokes the scheduler, so the spinner
+  // has to outlast the request itself — hence the settle delay before the
+  // reload. Live `mailThread` events keep the list honest either way.
+  const [refreshing, setRefreshing] = useState(false);
+  const aliveRef = useRef(true);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    aliveRef.current = false;
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  }, []);
+
+  const runRefresh = useCallback(async () => {
+    if (!accountId || refreshing) return;
+    setRefreshing(true);
+    try {
+      await mailApi.refreshAccount(accountId);
+      await new Promise<void>(resolve => { refreshTimer.current = setTimeout(resolve, REFRESH_SETTLE_MS); });
+      if (!aliveRef.current) return;
+      onReload();
+    } catch {
+      if (aliveRef.current) toast('Could not check for new mail.', { type: 'error' });
+    } finally {
+      if (aliveRef.current) setRefreshing(false);
+    }
+  }, [accountId, refreshing, onReload, toast]);
+
   // Auto-page when the sentinel scrolls into view; the button below it stays
   // as the keyboard/no-IntersectionObserver path.
   const sentinel = useRef<HTMLDivElement | null>(null);
@@ -100,8 +131,8 @@ export const ThreadList: React.FC<{
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
-      <div className="border-b border-edge p-3">
-        <div className="relative">
+      <div className="flex items-center gap-2 border-b border-edge p-3">
+        <div className="relative min-w-0 flex-1">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint" />
           <input
             type="search"
@@ -111,6 +142,17 @@ export const ThreadList: React.FC<{
             className="w-full rounded-lg border border-edge bg-raised py-1.5 pl-8 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent-400 focus:ring-2 focus:ring-accent-500/25 focus-visible:outline-none"
           />
         </div>
+        <button
+          type="button"
+          data-testid="mail-refresh"
+          aria-label="Check for new mail"
+          title="Check for new mail"
+          onClick={runRefresh}
+          disabled={refreshing || !accountId}
+          className="shrink-0 rounded-lg border border-edge p-1.5 text-ink-faint transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : undefined} />
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

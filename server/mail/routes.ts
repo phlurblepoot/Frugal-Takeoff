@@ -213,6 +213,17 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     res.json({ ok: true });
   });
 
+  // Manual "check for mail now". The scheduler owns every provider call, so
+  // this only nudges the account's worker — 202, not 200: the sync runs after
+  // the response, and the client learns about new mail through the same
+  // `mailThread` broadcasts a timed sync produces.
+  app.post('/api/mail/accounts/:id/refresh', authenticateToken, (req, res) => {
+    const a = owned(req, req.params.id);
+    if (!a) return res.status(404).json({ error: 'Account not found' });
+    ctx.scheduler?.pokeAccount(a.id);
+    res.status(202).json({ ok: true });
+  });
+
   app.post('/api/mail/accounts/:id/load-older', authenticateToken, (req, res) => {
     const a = owned(req, req.params.id);
     if (!a) return res.status(404).json({ error: 'Account not found' });

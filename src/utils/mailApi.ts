@@ -112,6 +112,13 @@ export const mailApi = {
   loadOlder: (id: string, months: number): Promise<{ indexedSince: string }> =>
     post(`/api/mail/accounts/${encodeURIComponent(id)}/load-older`, { months }),
 
+  // "Check for mail now": the server answers 202 the moment it has nudged the
+  // account's sync worker, so a caller that wants to SEE the new mail has to
+  // wait for the sync itself (the `mailThread` broadcasts, or a short delay
+  // then a reload) rather than treating this promise as the result.
+  refreshAccount: (id: string): Promise<void> =>
+    postVoid(`/api/mail/accounts/${encodeURIComponent(id)}/refresh`),
+
   // The browser NAVIGATES here (a redirect to the provider's consent screen),
   // so it can't carry an Authorization header — the token rides in the query
   // string instead, read from localStorage the same way getAuthHeaders() does.
