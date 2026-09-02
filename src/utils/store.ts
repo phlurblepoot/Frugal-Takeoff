@@ -66,7 +66,7 @@ const fetchWithRetry = async (
   throw lastErr instanceof Error ? lastErr : new Error('Network error');
 };
 
-const handleResponse = async (res: Response) => {
+export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
