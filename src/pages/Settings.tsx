@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
+import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
+import { MailAccountsTab } from './settings/MailAccountsTab';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
@@ -934,78 +936,10 @@ const PreferencesTab: React.FC = () => {
   );
 };
 
-// ── Email tab ─────────────────────────────────────────────────────────────────
+// ── Shared form chrome ────────────────────────────────────────
 
 const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
 const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
-
-const EmailTab: React.FC = () => {
-  const { toast } = useToast();
-  const [alwaysCc, setAlwaysCc] = useState('');
-  const [alwaysCcSaving, setAlwaysCcSaving] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  const fetchAll = useCallback(async () => {
-    try {
-      const prefs = await getUserPreferences();
-      setAlwaysCc(prefs['emailAlwaysCc'] ?? '');
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const handleAlwaysCcSave = async () => {
-    setAlwaysCcSaving(true);
-    try {
-      await saveUserPreferences({ emailAlwaysCc: alwaysCc });
-      toast('Always CC saved.', { type: 'success' });
-    } catch { toast('Failed to save Always CC.', { type: 'error' }); }
-    finally { setAlwaysCcSaving(false); }
-  };
-
-  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
-
-  return (
-    <div className="space-y-6">
-      {/* Always CC */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Always CC</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These addresses are added to CC on every template you send.</p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div>
-            <label className={labelCls}>Always CC addresses</label>
-            <input
-              className={inputCls}
-              value={alwaysCc}
-              onChange={e => setAlwaysCc(e.target.value)}
-              placeholder="e.g. boss@company.com, records@company.com"
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">Separate multiple addresses with a comma or semicolon.</p>
-          </div>
-          <div className="flex items-center gap-3 pt-2">
-            <button onClick={handleAlwaysCcSave} disabled={alwaysCcSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
-              <Save size={16} /> {alwaysCcSaving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Outbound email moved to the mail account */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Outbound email now uses your connected mail account (Settings &rarr; Mail, coming in the next update).
-          </p>
-        </div>
-      </div>
-
-    </div>
-  );
-};
 
 // ── Changelog tab ─────────────────────────────────────────────────────────────
 
@@ -1648,7 +1582,13 @@ const DocumentTypesCard: React.FC = () => {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'takeoff-templates' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
+// Kept as a value so a ?tab= param can be validated against it before it is
+// trusted to select a tab.
+const TAB_IDS = [
+  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'users', 'aia-template', 'changelog',
+] as const;
+type TabId = (typeof TAB_IDS)[number];
+const isTabId = (v: string | null): v is TabId => !!v && (TAB_IDS as readonly string[]).includes(v);
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1667,6 +1607,29 @@ export const Settings: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('preferences');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // The mail OAuth callback lands here as `/settings?tab=mail&connected=<id>`
+  // or `&error=<message>` (server/mail/routes.ts). Read once on mount: the
+  // result is a toast, so re-running it on every param change would repeat it,
+  // and `connected`/`error` are cleared straight afterwards so a reload — or a
+  // shared URL — never replays a stale outcome.
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (isTabId(tab)) setActiveTab(tab);
+
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    if (connected) toast('Mail account connected', { type: 'success' });
+    if (error) toast(error, { type: 'error' });
+    if (connected || error) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('connected');
+      next.delete('error');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     try {
@@ -1717,7 +1680,7 @@ export const Settings: React.FC = () => {
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'takeoff-templates', label: 'Takeoff Templates', icon: <Layout size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
-    { id: 'email',       label: 'Email',             icon: <Mail size={18} /> },
+    { id: 'mail',        label: 'Mail',              icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
@@ -1933,7 +1896,7 @@ export const Settings: React.FC = () => {
               </div>
             )}
 
-            {activeTab === 'email' && <EmailTab />}
+            {activeTab === 'mail' && <MailAccountsTab isAdmin={isAdmin} />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 
