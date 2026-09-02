@@ -120,7 +120,9 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
     if (!pending || attempt >= PENDING_RETRIES) return;
     const t = setTimeout(() => setAttempt(a => a + 1), PENDING_RETRY_MS);
     return () => clearTimeout(t);
-  }, [pending, attempt]);
+    // messageId is a dependency so switching messages restarts the countdown
+    // rather than inheriting the previous message's place in it.
+  }, [pending, attempt, messageId]);
 
   // A fresh nonce per document: a nonce that repeats across renders would let
   // any inline script that ever slipped past the sanitizer keep running.

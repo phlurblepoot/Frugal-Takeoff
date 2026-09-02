@@ -105,7 +105,10 @@ export const ThreadView: React.FC<{
     });
     timersRef.current.push(
       setTimeout(() => {
-        mailApi.messageActions(ids, 'read').catch(() => {});
+        // The optimistic flip already happened, so a failure here only means
+        // the server still thinks these are unread — worth a line in the
+        // console, not a toast over a message the reader is busy reading.
+        mailApi.messageActions(ids, 'read').catch(e => console.warn('[mail] mark-read failed', e));
       }, MARK_READ_DELAY),
     );
   }, [messages, expanded]);
