@@ -41,6 +41,31 @@ export function formatAddr(a: Addr | null | undefined): string {
 const formatList = (list: Addr[]): string => list.map(formatAddr).filter(Boolean).join(', ');
 
 /**
+ * Undo the reading pane's quoted-history fold before the body is quoted into a
+ * new message.
+ *
+ * server/mail/sanitize.ts collapses a reply chain behind a `⋯` toggle so the
+ * READER is not shown a copy of what they already have — but the same HTML is
+ * what seeds a reply or forward, and pasting the fold into an outgoing message
+ * would send a dead button to the recipient AND hide the whole prior thread
+ * from them (`hidden` on the holder). Both markers are dropped here so what
+ * goes out is the full quote, as every other client sends it.
+ *
+ * Parsed through an inert `<template>` rather than regexed: the holder's
+ * content is arbitrary sender HTML, so its closing tag cannot be matched by
+ * pattern. Bodies that carry no fold skip the round trip entirely and are
+ * passed through byte for byte.
+ */
+export function expandQuotedHistory(html: string): string {
+  if (!html.includes('data-mail-quote') || typeof document === 'undefined') return html;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  t.content.querySelectorAll('[data-mail-quote-toggle]').forEach(el => el.remove());
+  t.content.querySelectorAll('[data-mail-quote]').forEach(el => el.removeAttribute('hidden'));
+  return t.innerHTML;
+}
+
+/**
  * Gmail-style attribution block appended below the reply body.
  * Leading `<br><br>` keeps a blank line between what the user types and the quote.
  */
@@ -48,7 +73,7 @@ export function quoteForReply(message: MessageRow, bodyHtml: string): string {
   const when = quoteDateLabel(message.date);
   const who = escapeHtml(formatAddr(message.from)) || 'someone';
   const attribution = when ? `On ${escapeHtml(when)}, ${who} wrote:` : `${who} wrote:`;
-  return `<br><br><div class="ft-quote" style="${QUOTE_STYLE}">${attribution}<br>${bodyHtml}</div>`;
+  return `<br><br><div class="ft-quote" style="${QUOTE_STYLE}">${attribution}<br>${expandQuotedHistory(bodyHtml)}</div>`;
 }
 
 /** The `---------- Forwarded message ----------` header block plus the body. */
@@ -61,7 +86,7 @@ export function quoteForForward(message: MessageRow, bodyHtml: string): string {
     `To: ${escapeHtml(formatList(message.to ?? []))}`,
   ];
   if (message.cc?.length) lines.push(`Cc: ${escapeHtml(formatList(message.cc))}`);
-  return `<br><br><div class="ft-quote" style="${QUOTE_STYLE}">${lines.join('<br>')}<br><br>${bodyHtml}</div>`;
+  return `<br><br><div class="ft-quote" style="${QUOTE_STYLE}">${lines.join('<br>')}<br><br>${expandQuotedHistory(bodyHtml)}</div>`;
 }
 
 const key = (a: Addr): string => (a.addr ?? '').trim().toLowerCase();

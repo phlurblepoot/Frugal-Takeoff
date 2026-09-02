@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageRow } from '../types';
 import {
-  forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject,
+  expandQuotedHistory, forwardSubject, quoteForForward, quoteForReply, replyAllRecipients, replySubject,
 } from './quote';
 
 const msg = (over: Partial<MessageRow> = {}): MessageRow => ({
@@ -89,5 +89,38 @@ describe('subjects', () => {
     expect(forwardSubject('Roof detail')).toBe('Fwd: Roof detail');
     expect(forwardSubject('Fwd: Roof detail')).toBe('Fwd: Roof detail');
     expect(forwardSubject('FW: Roof detail')).toBe('FW: Roof detail');
+  });
+});
+
+// The reading pane folds a message's quoted history away (server-side, in
+// sanitize.ts) so the reader is not shown a copy of what they already have.
+// The SAME html seeds a reply, and the fold must not go out with it: the
+// toggle would reach the recipient as a dead button, and `hidden` on the
+// holder would strip the whole prior thread from their copy.
+describe('expandQuotedHistory', () => {
+  const folded = '<p>My answer</p>'
+    + '<button type="button" data-mail-quote-toggle="" aria-label="Show trimmed content" style="cursor:pointer">\u22ef</button>'
+    + '<div data-mail-quote="" hidden=""><blockquote type="cite">the older thread</blockquote></div>';
+
+  it('drops the toggle and un-hides the history', () => {
+    const out = expandQuotedHistory(folded);
+    expect(out).not.toContain('data-mail-quote-toggle');
+    expect(out).not.toContain('<button');
+    expect(out).not.toContain('hidden');
+    expect(out).toContain('the older thread');
+    expect(out).toContain('<p>My answer</p>');
+  });
+
+  it('passes a body with no fold through untouched', () => {
+    const plain = '<p>Hello there</p><blockquote>quoted</blockquote>';
+    expect(expandQuotedHistory(plain)).toBe(plain);
+  });
+
+  it('is applied by both quote builders', () => {
+    for (const html of [quoteForReply(msg(), folded), quoteForForward(msg(), folded)]) {
+      expect(html).not.toContain('data-mail-quote-toggle');
+      expect(html).not.toContain('hidden=""');
+      expect(html).toContain('the older thread');
+    }
   });
 });
