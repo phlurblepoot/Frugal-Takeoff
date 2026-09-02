@@ -70,7 +70,70 @@ export function sanitizeEmailHtml(
     a.setAttribute('target', '_blank');
     a.setAttribute('rel', 'noopener noreferrer');
   });
+  collapseQuotedHistory(clean, doc);
   const wrapper = doc.createElement('div');
   wrapper.append(...Array.from(clean.childNodes));
   return { html: wrapper.innerHTML, blockedRemoteImages: blocked };
+}
+
+// ── quoted history ─────────────────────────────────────────────────────────
+// A long reply chain is mostly a copy of what the reader already has. Every
+// mail client hides it behind a "…" and so do we — but the hiding has to
+// happen HERE rather than in the client, because the body is rendered inside a
+// sandboxed, opaque-origin iframe that the app cannot reach into. The markers
+// this leaves (a plain <button data-mail-quote-toggle> next to a
+// <div data-mail-quote hidden>) are what MessageBodyFrame's nonce'd script
+// toggles. They are added AFTER sanitizing on purpose: `button` is on
+// FORBID_TAGS and `data-*` is off, so a sender cannot forge either one.
+
+/** The containers the big three actually emit for a quoted reply. */
+const QUOTE_SELECTOR = 'div.gmail_quote, div.gmail_quote_container, blockquote[type=cite]';
+/** "On Fri, Aug 29, 2026 at 9:14 AM Bob <bob@x.com> wrote:" — the attribution
+ *  line clients without a marker class write above the quote. Bounded so a body
+ *  that merely opens with the word "On" cannot scan the whole message. */
+const WROTE_RE = /^\s*on\b[\s\S]{0,300}?\bwrote\s*:/i;
+
+/** Minimal, self-contained styling: the frame's stylesheet is ours, but the
+ *  sender's CSS is not, so the toggle carries its own look inline. */
+const TOGGLE_STYLE = 'display:inline-block;margin:6px 0;padding:0 8px;border:1px solid #ccc;'
+  + 'border-radius:8px;background:#f1f3f4;color:#444;font:inherit;line-height:1.6;cursor:pointer';
+
+function collapseQuotedHistory(root: HTMLElement, doc: Document): void {
+  const wrap = (nodes: ChildNode[]): void => {
+    const first = nodes[0];
+    const parent = first.parentNode;
+    if (!parent) return;
+    const holder = doc.createElement('div');
+    holder.setAttribute('data-mail-quote', '');
+    holder.setAttribute('hidden', '');
+    const toggle = doc.createElement('button');
+    toggle.setAttribute('type', 'button');
+    toggle.setAttribute('data-mail-quote-toggle', '');
+    toggle.setAttribute('aria-label', 'Show trimmed content');
+    toggle.setAttribute('style', TOGGLE_STYLE);
+    toggle.textContent = '\u22ef';
+    parent.insertBefore(toggle, first);
+    parent.insertBefore(holder, first);
+    for (const n of nodes) holder.appendChild(n);
+  };
+
+  // The attribution line and the quote it introduces are usually siblings, so
+  // matching on it collapses BOTH — a plain `blockquote` match would leave the
+  // "On … wrote:" line stranded above the toggle.
+  const top = Array.from(root.children);
+  const startedAt = top.findIndex(el => WROTE_RE.test(el.textContent || ''));
+  // A match on the FIRST element would collapse the entire message behind a
+  // "⋯", so it only counts when that element is a marked quote container
+  // (a reply with nothing new to say). Otherwise it is a body that merely
+  // opens with the word "On", and the message stays as the sender wrote it.
+  if (startedAt > 0 || (startedAt === 0 && top[0].matches(QUOTE_SELECTOR))) {
+    wrap(top.slice(startedAt));
+    return;
+  }
+
+  // Otherwise wrap each marked container — outermost only, so a five-deep
+  // reply chain gets one toggle rather than five nested ones.
+  const marked = Array.from(root.querySelectorAll<HTMLElement>(QUOTE_SELECTOR));
+  const outermost = marked.filter(el => !marked.some(other => other !== el && other.contains(el)));
+  for (const el of outermost) wrap([el]);
 }

@@ -48,6 +48,66 @@ describe('sanitizeEmailHtml', () => {
     const r = sanitizeEmailHtml('<a href="https://x.y" target="_self">l</a><a href="javascript:alert(1)">j</a>', opts);
     expect(r.html).toContain('target="_blank"'); expect(r.html).toContain('rel="noopener noreferrer"'); expect(r.html).not.toContain('javascript:');
   });
+  // Quoted history: the toggle + hidden holder the frame script drives. The
+  // markers are added after sanitizing, so `button` staying on FORBID_TAGS and
+  // data-attributes staying off means a sender cannot forge either one.
+  describe('quoted history', () => {
+    const quote = (html: string) => sanitizeEmailHtml(html, opts).html;
+
+    it('folds a gmail_quote away behind a toggle', () => {
+      const r = quote('<div>My answer</div><div class="gmail_quote">On Fri Bob wrote:<blockquote>old</blockquote></div>');
+      expect(r).toContain('<button type="button" data-mail-quote-toggle="" aria-label="Show trimmed content"');
+      expect(r).toMatch(/<div data-mail-quote="" hidden="">.*gmail_quote/);
+      // The reply itself stays outside the fold.
+      expect(r.indexOf('My answer')).toBeLessThan(r.indexOf('data-mail-quote-toggle'));
+    });
+
+    it('folds a blockquote[type=cite] away behind a toggle', () => {
+      const r = quote('<p>Answer</p><blockquote type="cite">old thread</blockquote>');
+      expect(r).toContain('data-mail-quote-toggle');
+      expect(r).toMatch(/<div data-mail-quote="" hidden=""><blockquote type="cite">old thread<\/blockquote><\/div>/);
+    });
+
+    it('folds an unmarked "On … wrote:" attribution AND everything after it', () => {
+      const r = quote('<div>Sure thing</div><div>On Fri, Aug 29, 2026 at 9:14 AM Bob &lt;b@x.com&gt; wrote:</div><blockquote>old</blockquote>');
+      expect(r).toContain('data-mail-quote-toggle');
+      // Attribution line and the quote it introduces are folded together.
+      const holder = r.slice(r.indexOf('data-mail-quote=""'));
+      expect(holder).toContain('wrote:');
+      expect(holder).toContain('old');
+      expect(r.indexOf('Sure thing')).toBeLessThan(r.indexOf('data-mail-quote-toggle'));
+    });
+
+    it('leaves a body with no quoted history alone', () => {
+      const r = quote('<p>Just a note</p><div>Nothing quoted here</div>');
+      expect(r).toBe('<p>Just a note</p><div>Nothing quoted here</div>');
+    });
+
+    it('does not fold a whole message that merely opens with the word "On"', () => {
+      const r = quote('<div>On site tomorrow — the crew wrote: bring the mixer</div>');
+      expect(r).not.toContain('data-mail-quote');
+    });
+
+    it('folds nested quotes once, at the outermost level', () => {
+      const r = quote('<p>Latest</p><blockquote type="cite">a<blockquote type="cite">b</blockquote></blockquote>');
+      expect(r.match(/data-mail-quote-toggle/g)).toHaveLength(1);
+      expect(r.match(/data-mail-quote=""/g)).toHaveLength(1);
+    });
+
+    it('folds two sibling quote containers separately', () => {
+      const r = quote('<p>hi</p><blockquote type="cite">a</blockquote><p>and</p><blockquote type="cite">b</blockquote>');
+      expect(r.match(/data-mail-quote-toggle/g)).toHaveLength(2);
+    });
+
+    it('still refuses a sender\'s own forged toggle markup', () => {
+      const r = quote('<button data-mail-quote-toggle>tap me</button><div data-mail-quote>secret</div>');
+      // `button` is on FORBID_TAGS and data-attributes are off, so the only
+      // markers in the output are ones this module put there.
+      expect(r).not.toContain('<button');
+      expect(r).not.toContain('data-mail-quote=""');
+    });
+  });
+
   it('drops unknown cid: images', () => {
     expect(sanitizeEmailHtml('<img src="cid:nope">', opts).html).not.toContain('<img');
   });

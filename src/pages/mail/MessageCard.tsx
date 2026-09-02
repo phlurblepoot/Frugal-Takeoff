@@ -2,7 +2,7 @@
 // it is a single line (from · snippet · date); expanded it shows the full
 // header, the sandboxed body and the attachment chips.
 import React from 'react';
-import { ChevronUp, CornerUpLeft, CornerUpRight, Forward } from 'lucide-react';
+import { ChevronUp, Forward, Reply, ReplyAll } from 'lucide-react';
 import { AttachmentChips } from './AttachmentChips';
 import { MessageBodyFrame } from './MessageBodyFrame';
 import { formatMailDate } from './mailFormat';
@@ -131,8 +131,8 @@ export const MessageCard: React.FC<{
           <span className="text-xs text-ink-faint" title={fullDate}>{date}</span>
           {/* Distinct from the toolbar's thread-level Reply/Reply all/Forward:
               these act on THIS message, and the names must not collide. */}
-          <ReplyButton label="Reply to this message" Icon={CornerUpLeft} onClick={() => onReply('reply')} />
-          <ReplyButton label="Reply all to this message" Icon={CornerUpRight} onClick={() => onReply('replyAll')} />
+          <ReplyButton label="Reply to this message" Icon={Reply} onClick={() => onReply('reply')} />
+          <ReplyButton label="Reply all to this message" Icon={ReplyAll} onClick={() => onReply('replyAll')} />
           <ReplyButton label="Forward this message" Icon={Forward} onClick={() => onReply('forward')} />
           <ChevronUp size={15} className="text-ink-faint" />
         </div>

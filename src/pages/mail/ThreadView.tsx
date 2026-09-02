@@ -3,8 +3,8 @@
 // (everything collapsed except the newest message and anything still unread).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Archive, CornerUpLeft, CornerUpRight, FolderInput, Forward, Mail, MoreHorizontal,
-  PenSquare, Star, Trash2,
+  Archive, FolderInput, Forward, Mail, MoreHorizontal,
+  PenSquare, Reply, ReplyAll, Star, Trash2,
 } from 'lucide-react';
 import { Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -201,14 +201,14 @@ export const ThreadView: React.FC<{
     <div className="flex h-full min-h-0 flex-col">
       <div className="relative flex flex-wrap items-center gap-1 border-b border-edge px-2 py-1.5">
         <button type="button" className={TOOL} disabled={!last} onClick={() => reply('reply')} aria-label="Reply">
-          <CornerUpLeft size={15} />
+          <Reply size={15} />
           <span>Reply</span>
         </button>
 
         {/* Everything below the fold on a phone lives in the ⋯ menu instead. */}
         <div className="hidden items-center gap-1 sm:flex">
           <button type="button" className={TOOL} disabled={!last} onClick={() => reply('replyAll')} aria-label="Reply all">
-            <CornerUpRight size={15} />
+            <ReplyAll size={15} />
             <span>Reply all</span>
           </button>
           <button type="button" className={TOOL} disabled={!last} onClick={() => reply('forward')} aria-label="Forward">
@@ -295,7 +295,7 @@ export const ThreadView: React.FC<{
                 className="absolute right-0 z-20 mt-1 w-56 rounded-xl border border-edge bg-raised p-1 shadow-lg"
               >
                 <button type="button" className={`${MENU_ITEM} sm:hidden`} disabled={!last} onClick={() => { setMenuOpen(false); reply('replyAll'); }}>
-                  <CornerUpRight size={15} /> Reply all
+                  <ReplyAll size={15} /> Reply all
                 </button>
                 <button type="button" className={`${MENU_ITEM} sm:hidden`} disabled={!last} onClick={() => { setMenuOpen(false); reply('forward'); }}>
                   <Forward size={15} /> Forward

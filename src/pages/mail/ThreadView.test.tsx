@@ -235,6 +235,14 @@ describe('ThreadView', () => {
     ]);
   });
 
+  it('gives the toolbar reply and reply-all their own icons', () => {
+    render(<ThreadView {...props} />);
+    const iconOf = (name: RegExp) => screen.getByRole('button', { name }).querySelector('svg')!;
+    expect(iconOf(/^Reply$/).classList.contains('lucide-reply')).toBe(true);
+    expect(iconOf(/^Reply all$/).classList.contains('lucide-reply-all')).toBe(true);
+    expect(iconOf(/^Reply all$/).classList.contains('lucide-reply')).toBe(false);
+  });
+
   it('opens a blank composer from the overflow menu', () => {
     const onOpenInComposer = vi.fn();
     render(<ThreadView {...props} onOpenInComposer={onOpenInComposer} />);

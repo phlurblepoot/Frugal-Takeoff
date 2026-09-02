@@ -7,7 +7,7 @@ import type { BodyPayload } from './types';
 const h = vi.hoisted(() => ({ body: vi.fn(), getMailToken: vi.fn(() => 'tok en/123') }));
 vi.mock('../../utils/mailApi', () => ({ mailApi: h, getMailToken: h.getMailToken }));
 
-import { MessageBodyFrame } from './MessageBodyFrame';
+import { MessageBodyFrame, buildFrameDoc } from './MessageBodyFrame';
 
 const payload = (over: Partial<BodyPayload> = {}): BodyPayload => ({
   html: '<p>Hello from the roof</p>',
@@ -56,6 +56,23 @@ describe('MessageBodyFrame', () => {
     expect(doc).toMatch(/script-src 'nonce-[0-9a-f-]{36}'/);
     expect(doc).not.toContain("script-src 'unsafe-inline'");
     expect(doc).toContain(`img-src ${window.location.origin} data:`);
+  });
+
+  // The quote toggle has to live inside the frame: the app cannot reach into a
+  // sandboxed, opaque-origin document, so the only handler that can unfold the
+  // server-collapsed history is the one nonce'd script. jsdom does not run an
+  // iframe srcdoc, so this asserts the wiring is in the document it builds.
+  it('ships the quoted-history toggle inside the same nonce\'d script', () => {
+    const doc = buildFrameDoc('<p>hi</p>', 'nonce-1', 'https://app.test');
+    expect(doc).toContain('[data-mail-quote-toggle]');
+    expect(doc).toContain("q.hasAttribute('data-mail-quote')");
+    expect(doc).toContain("q.removeAttribute('hidden')");
+    expect(doc).toContain("q.setAttribute('hidden', '')");
+    // Re-measured after the fold opens, or the frame keeps its old height.
+    expect(doc).toMatch(/aria-label[\s\S]*?report\(\);/);
+    // Still exactly one script, still nonce'd.
+    expect(doc.match(/<script/g)).toHaveLength(1);
+    expect(doc).toContain('<script nonce="nonce-1">');
   });
 
   it('shows a skeleton while the body is loading', async () => {

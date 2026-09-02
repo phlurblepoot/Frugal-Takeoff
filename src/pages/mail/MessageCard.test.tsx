@@ -93,6 +93,18 @@ describe('MessageCard', () => {
     expect(onReply.mock.calls.map(c => c[0])).toEqual(['reply', 'replyAll', 'forward']);
   });
 
+  // Reply and reply-all were both corner-arrows and read as the same button at
+  // a glance; the distinct lucide Reply/ReplyAll glyphs are the whole point.
+  it('gives reply and reply-all their own icons', () => {
+    render(<MessageCard {...props} message={message()} expanded />);
+    const iconOf = (name: string) =>
+      screen.getByRole('button', { name }).querySelector('svg')!;
+    expect(iconOf('Reply to this message').classList.contains('lucide-reply')).toBe(true);
+    expect(iconOf('Reply all to this message').classList.contains('lucide-reply-all')).toBe(true);
+    expect(iconOf('Reply all to this message').classList.contains('lucide-reply')).toBe(false);
+    expect(iconOf('Forward this message').classList.contains('lucide-forward')).toBe(true);
+  });
+
   it('renders attachment chips for an expanded message that has attachments', () => {
     render(
       <MessageCard

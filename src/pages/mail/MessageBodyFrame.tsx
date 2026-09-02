@@ -28,8 +28,17 @@ const MIN_HEIGHT = 80;
 const PENDING_RETRY_MS = 15000;
 const PENDING_RETRIES = 8;
 
-/** Runs inside the opaque-origin frame — its only job is to report height. */
-const heightScript = `
+/**
+ * Runs inside the opaque-origin frame. Two jobs, and they have to share one
+ * script because the CSP admits exactly one nonce'd block: report the body's
+ * height to the parent, and expand/collapse the quoted reply history the
+ * server folded away (server/mail/sanitize.ts leaves a
+ * `[data-mail-quote-toggle]` button in front of each `[data-mail-quote]`).
+ * The toggle has to live in here rather than in React because the app cannot
+ * reach into a sandboxed frame's DOM — and a re-report follows every toggle,
+ * or the frame keeps the height it had before the quote unfolded.
+ */
+const frameScript = `
 (function () {
   var last = 0;
   function report() {
@@ -41,6 +50,17 @@ const heightScript = `
     last = h;
     parent.postMessage({ type: 'mail-frame-height', height: h }, '*');
   }
+  document.addEventListener('click', function (e) {
+    var t = e.target && e.target.closest ? e.target.closest('[data-mail-quote-toggle]') : null;
+    if (!t) return;
+    e.preventDefault();
+    var q = t.nextElementSibling;
+    if (!q || !q.hasAttribute('data-mail-quote')) return;
+    var hidden = q.hasAttribute('hidden');
+    if (hidden) q.removeAttribute('hidden'); else q.setAttribute('hidden', '');
+    t.setAttribute('aria-label', hidden ? 'Hide trimmed content' : 'Show trimmed content');
+    report();
+  });
   window.addEventListener('load', report);
   window.addEventListener('resize', report);
   document.addEventListener('load', report, true);
@@ -86,7 +106,7 @@ export function buildFrameDoc(html: string, nonce: string, origin: string): stri
     'a{color:#0b57d0}',
     '</style></head><body>',
     html,
-    `<script nonce="${nonce}">${heightScript}</` + 'script>',
+    `<script nonce="${nonce}">${frameScript}</` + 'script>',
     '</body></html>',
   ].join('');
 }
