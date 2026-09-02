@@ -5,7 +5,7 @@ import {
   Search, FolderOpen, FileText, Ruler, Plus, Home, Settings as SettingsIcon,
   FileSpreadsheet, ListTodo, Clock, CornerDownLeft, X, Keyboard,
   AlertCircle, ClipboardCheck, StickyNote, DollarSign, SlidersHorizontal, LayoutGrid,
-  MessageCircleQuestion, CalendarDays,
+  MessageCircleQuestion, CalendarDays, Mail,
 } from 'lucide-react';
 import { searchAll, SearchResult, getMyTimeEntries, clockIn, clockOut } from '../utils/store';
 import { useToast } from './Toast';
@@ -78,6 +78,8 @@ export const CommandPalette: React.FC = () => {
     { id: 'a:sheet', type: 'action', title: 'Spreadsheet editor', icon: <FileSpreadsheet size={16} />, run: () => navigate('/tools/sheets') },
     { id: 'a:tasks', type: 'action', title: 'Tasks', icon: <ListTodo size={16} />, run: () => navigate('/tasks') },
     { id: 'a:documents', type: 'action', title: 'Documents', icon: <FolderOpen size={16} />, run: () => navigate('/documents') },
+    { id: 'a:mail', type: 'action', title: 'Mail', icon: <Mail size={16} />, run: () => navigate('/mail') },
+    { id: 'a:mail-compose', type: 'action', title: 'New email', icon: <Plus size={16} />, run: () => navigate('/mail?compose=1') },
     { id: 'a:time', type: 'action', title: 'Time tracking', icon: <Clock size={16} />, run: () => navigate('/time') },
     {
       id: 'a:clock', type: 'action', title: 'Clock in / out', icon: <Clock size={16} />,

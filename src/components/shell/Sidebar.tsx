@@ -5,10 +5,11 @@ import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
   ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
-  ClipboardCheck, FileText, SlidersHorizontal, Users, MessageCircleQuestion, CalendarDays,
+  ClipboardCheck, FileText, SlidersHorizontal, Users, MessageCircleQuestion, CalendarDays, Mail,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useProjectShell } from '../../context/ProjectShellContext';
+import { useMailUnread } from '../../pages/mail/useMailUnread';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -26,6 +27,7 @@ const WORKSPACE_NAV: NavEntry[] = [
   { id: 'customers', label: 'Customers', Icon: Users, path: '/customers', match: p => p.startsWith('/customers') },
   { id: 'tasks', label: 'Tasks', Icon: ListTodo, path: '/tasks', match: p => p.startsWith('/tasks') },
   { id: 'documents', label: 'Documents', Icon: FolderOpen, path: '/documents', match: p => p.startsWith('/documents') },
+  { id: 'mail', label: 'Mail', Icon: Mail, path: '/mail', match: p => p.startsWith('/mail') },
   { id: 'time', label: 'Time', Icon: Clock, path: '/time', match: p => p.startsWith('/time') },
 ];
 
@@ -68,7 +70,10 @@ const NavRow: React.FC<{
   expanded: boolean;
   onClick: () => void;
   trailing?: React.ReactNode;
-}> = ({ label, Icon, active = false, expanded, onClick, trailing }) => (
+  // Unread-style count badge (currently just Mail). >0 shows a pill with the
+  // count when expanded, or a plain dot on the icon when collapsed.
+  badge?: number;
+}> = ({ label, Icon, active = false, expanded, onClick, trailing, badge }) => (
   <button
     onClick={onClick}
     title={!expanded ? label : undefined}
@@ -76,8 +81,24 @@ const NavRow: React.FC<{
       active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink active:bg-hover'
     }`}
   >
-    <Icon size={18} className="shrink-0" />
+    <span className="relative shrink-0">
+      <Icon size={18} className="shrink-0" />
+      {!expanded && !!badge && badge > 0 && (
+        <span
+          aria-label={`${badge} unread`}
+          className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent-500"
+        />
+      )}
+    </span>
     {expanded && <span className="flex-1 truncate text-left">{label}</span>}
+    {expanded && !!badge && badge > 0 && (
+      <span
+        aria-label={`${badge} unread`}
+        className="bg-accent-500 text-white text-[10px] font-semibold rounded-full px-1.5 leading-normal"
+      >
+        {badge}
+      </span>
+    )}
     {expanded && trailing}
   </button>
 );
@@ -105,6 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   const go = (path: string) => { navigate(path); onNavigate?.(); };
   const { mode, toggleMode } = useTheme();
   const { project } = useProjectShell();
+  const mailUnread = useMailUnread();
   const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
   const projectId = projectMatch?.params.projectId;
 
@@ -219,6 +241,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                   expanded={expanded}
                   active={item.match(location.pathname)}
                   onClick={() => go(item.path)}
+                  badge={item.id === 'mail' ? mailUnread : undefined}
                 />
               ))}
             </div>

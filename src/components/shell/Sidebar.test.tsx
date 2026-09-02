@@ -1,12 +1,22 @@
 // src/components/shell/Sidebar.test.tsx
 import React from 'react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../context/ThemeContext';
-import { Sidebar } from './Sidebar';
 import { NotesProvider } from '../../context/NotesContext';
 import { ProjectShellProvider, useRegisterProjectShell } from '../../context/ProjectShellContext';
+
+// useMailUnread ultimately depends on useLiveQuery, which needs a
+// CollaborationProvider (socket context) this test harness doesn't set up —
+// mock it at the module level, same pattern used across the app's other
+// live-query-backed hooks.
+const useMailUnread = vi.fn(() => 0);
+vi.mock('../../pages/mail/useMailUnread', () => ({
+  useMailUnread: () => useMailUnread(),
+}));
+
+const { Sidebar } = await import('./Sidebar');
 
 const RegisterProject: React.FC<{ id: string; name: string }> = ({ id, name }) => {
   useRegisterProjectShell(id, name);
@@ -28,14 +38,41 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('token', 'test-token');
   localStorage.setItem('user', JSON.stringify({ username: 'nathan' }));
+  useMailUnread.mockReset();
+  useMailUnread.mockReturnValue(0);
 });
 
 describe('Sidebar — company mode', () => {
   it('shows workspace and tools nav groups', () => {
     renderAt('/');
-    for (const label of ['Dashboard', 'Projects', 'Tasks', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
+    for (const label of ['Dashboard', 'Projects', 'Tasks', 'Documents', 'Mail', 'Time', 'PDF Editor', 'Spreadsheet', 'Settings']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
+  });
+
+  it('lists Mail right after Documents', () => {
+    renderAt('/');
+    const labels = screen.getAllByRole('button')
+      .map(btn => btn.textContent?.trim())
+      .filter((t): t is string => !!t && ['Dashboard', 'Projects', 'Customers', 'Tasks', 'Documents', 'Mail', 'Time'].some(l => t.startsWith(l)));
+    const docIdx = labels.findIndex(t => t.startsWith('Documents'));
+    const mailIdx = labels.findIndex(t => t.startsWith('Mail'));
+    expect(docIdx).toBeGreaterThanOrEqual(0);
+    expect(mailIdx).toBe(docIdx + 1);
+  });
+
+  it('shows an unread badge on Mail when useMailUnread reports a count', () => {
+    useMailUnread.mockReturnValue(7);
+    renderAt('/');
+    const mailButton = screen.getByRole('button', { name: /Mail/ });
+    expect(mailButton).toHaveTextContent('7');
+    expect(screen.getByLabelText('7 unread')).toBeInTheDocument();
+  });
+
+  it('hides the badge when there are no unread messages', () => {
+    useMailUnread.mockReturnValue(0);
+    renderAt('/');
+    expect(screen.queryByLabelText(/unread/)).not.toBeInTheDocument();
   });
 
   it('gives only the active item the glow treatment', () => {

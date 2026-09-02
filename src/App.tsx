@@ -9,6 +9,7 @@ import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
 import { DocumentsPage, ProjectDocumentsRedirect } from './pages/documents/DocumentsPage';
+import { MailPage } from './pages/mail/MailPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
@@ -168,6 +169,22 @@ export default function App() {
         {
           path: 'documents',
           element: <DocumentsPage />,
+        },
+        {
+          path: 'mail',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId/:folderId',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId/:folderId/:threadKey',
+          element: <MailPage />,
         },
         {
           path: 'time',
