@@ -13,8 +13,9 @@ import { ThreadList } from './ThreadList';
 import { useMailAccounts } from './useMailAccounts';
 import { useMailFolders } from './useMailFolders';
 import { useMailHeartbeat } from './useMailHeartbeat';
+import { ThreadView } from './ThreadView';
 import { NO_FOLDER, useThreadList } from './useThreadList';
-import type { ThreadListRow } from './types';
+import type { MessageRow, ThreadListRow } from './types';
 
 export const MailPage: React.FC = () => {
   const { accountId = null, folderId = null, threadKey = null } = useParams();
@@ -100,6 +101,21 @@ export const MailPage: React.FC = () => {
     setSearchParams(params);
   }, [searchParams, setSearchParams]);
 
+  const backToList = useCallback(() => navigate(`${listPath}${search}`), [navigate, listPath, search]);
+
+  // Until Task 6/7 mount the composer, a reply/forward is recorded in the URL
+  // the same way Compose is — the composer reads `reply` + `messageId`.
+  const openReply = useCallback(
+    (mode: 'reply' | 'replyAll' | 'forward', message: MessageRow) => {
+      const params = new URLSearchParams(searchParams);
+      params.set('compose', '1');
+      params.set('reply', mode);
+      params.set('messageId', message.id);
+      setSearchParams(params);
+    },
+    [searchParams, setSearchParams],
+  );
+
   if (accountsLoading) {
     return (
       <div className="space-y-2 p-6">
@@ -178,19 +194,28 @@ export const MailPage: React.FC = () => {
           {threadKey ? (
             <>
               <div className="flex items-center gap-2 border-b border-edge px-3 py-2 lg:hidden">
-                <Button variant="ghost" size="sm" onClick={() => navigate(`${listPath}${search}`)}>
+                <Button variant="ghost" size="sm" onClick={backToList}>
                   <ArrowLeft size={14} />
                   <span>Back</span>
                 </Button>
               </div>
-              {/* Task 4 replaces this slot with <ThreadView />. */}
               <div
                 data-testid="mail-thread-slot"
                 data-account-id={accountId ?? ''}
                 data-thread-key={threadKey}
-                className="min-h-0 flex-1 overflow-y-auto p-6 text-sm text-ink-faint"
+                className="min-h-0 flex-1"
               >
-                Opening this conversation…
+                {accountId && (
+                  <ThreadView
+                    key={`${accountId} ${threadKey}`}
+                    accountId={accountId}
+                    threadKey={threadKey}
+                    ownAddresses={ownAddresses}
+                    onBack={backToList}
+                    onReply={openReply}
+                    onOpenInComposer={openCompose}
+                  />
+                )}
               </div>
             </>
           ) : (

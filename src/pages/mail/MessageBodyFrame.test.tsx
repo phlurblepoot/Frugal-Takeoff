@@ -1,0 +1,153 @@
+// src/pages/mail/MessageBodyFrame.test.tsx
+import React from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import type { BodyPayload } from './types';
+
+const h = vi.hoisted(() => ({ body: vi.fn() }));
+vi.mock('../../utils/mailApi', () => ({ mailApi: h }));
+
+import { MessageBodyFrame } from './MessageBodyFrame';
+
+const payload = (over: Partial<BodyPayload> = {}): BodyPayload => ({
+  html: '<p>Hello from the roof</p>',
+  text: 'Hello from the roof',
+  blockedRemoteImages: 0,
+  attachments: [],
+  ...over,
+});
+
+const frame = () => screen.getByTestId('mail-body-frame') as HTMLIFrameElement;
+
+const post = (data: unknown, source: MessageEventSource | null) =>
+  fireEvent(window, new MessageEvent('message', { data, source }));
+
+// jsdom replaces an iframe's contentWindow when its srcdoc finishes loading,
+// so a single dispatch races that swap and the (correct, strict) source check
+// in the component drops it. Retrying with a freshly read contentWindow is
+// what makes the assertion deterministic.
+const postHeight = (height: number, expected: string) =>
+  waitFor(() => {
+    post({ type: 'mail-frame-height', height }, frame().contentWindow);
+    expect(frame().style.height).toBe(expected);
+  });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.body.mockResolvedValue(payload());
+});
+
+describe('MessageBodyFrame', () => {
+  it('renders the sanitized html inside a sandboxed iframe with a locked-down CSP', async () => {
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    const el = frame();
+    expect(el).toHaveAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+    expect(el).toHaveAttribute('title', 'Message');
+
+    const doc = el.getAttribute('srcdoc') ?? '';
+    expect(doc).toContain('<p>Hello from the roof</p>');
+    expect(doc).toContain('http-equiv="Content-Security-Policy"');
+    expect(doc).toContain("default-src 'none'");
+    expect(doc).toContain("style-src 'unsafe-inline'");
+    expect(doc).toContain('<base target="_blank">');
+    // Only our own height-reporting script may run: a nonce, never 'unsafe-inline'.
+    expect(doc).toMatch(/script-src 'nonce-[0-9a-f-]{36}'/);
+    expect(doc).not.toContain("script-src 'unsafe-inline'");
+    expect(doc).toContain(`img-src ${window.location.origin} data:`);
+  });
+
+  it('shows a skeleton while the body is loading', async () => {
+    let resolve: (p: BodyPayload) => void = () => {};
+    h.body.mockReturnValue(new Promise<BodyPayload>(r => { resolve = r; }));
+    render(<MessageBodyFrame messageId="m1" />);
+
+    expect(screen.getByTestId('mail-body-loading')).toBeInTheDocument();
+    resolve(payload());
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+  });
+
+  it('offers to load blocked remote images and refetches with images enabled', async () => {
+    h.body.mockResolvedValueOnce(payload({ blockedRemoteImages: 3 }));
+    h.body.mockResolvedValueOnce(payload({ html: '<img src="https://x.test/a.png">', blockedRemoteImages: 0 }));
+    render(<MessageBodyFrame messageId="m1" />);
+
+    await waitFor(() => expect(screen.getByText(/Remote images blocked/i)).toBeInTheDocument());
+    expect(h.body).toHaveBeenCalledWith('m1', { images: false });
+
+    fireEvent.click(screen.getByRole('button', { name: /Load images/i }));
+    await waitFor(() => expect(h.body).toHaveBeenCalledWith('m1', { images: true }));
+    await waitFor(() => expect(screen.queryByText(/Remote images blocked/i)).toBeNull());
+  });
+
+  it('hides the blocked-images bar when nothing was blocked', async () => {
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    expect(screen.queryByText(/Remote images blocked/i)).toBeNull();
+  });
+
+  it('grows the frame when it reports its height, and caps runaway values', async () => {
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+
+    await postHeight(500, '500px');
+    await postHeight(99999, '20000px');
+  });
+
+  it('ignores height messages from any other window and any other payload', async () => {
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    // Establish the real channel first, so the rejections below are proof the
+    // guard rejected them rather than proof the message never landed.
+    await postHeight(500, '500px');
+    const source = frame().contentWindow;
+
+    post({ type: 'mail-frame-height', height: 700 }, window as unknown as MessageEventSource);
+    post({ type: 'something-else', height: 700 }, source);
+    post('mail-frame-height', source);
+    post({ type: 'mail-frame-height', height: -5 }, source);
+
+    expect(frame().style.height).toBe('500px');
+  });
+
+  it('renders a "still being filed" placeholder for a just-sent message (202 pending)', async () => {
+    h.body.mockResolvedValue({ pending: true });
+    render(<MessageBodyFrame messageId="m1" />);
+
+    await waitFor(() => expect(screen.getByTestId('mail-body-pending')).toBeInTheDocument());
+    expect(screen.getByText(/still being filed by the mail server/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('mail-body-frame')).toBeNull();
+  });
+
+  it('asks again while the message is still being filed', async () => {
+    vi.useFakeTimers();
+    try {
+      h.body.mockResolvedValue({ pending: true });
+      render(<MessageBodyFrame messageId="m1" />);
+      await act(async () => {});
+      expect(screen.getByTestId('mail-body-pending')).toBeInTheDocument();
+      expect(h.body).toHaveBeenCalledTimes(1);
+
+      h.body.mockResolvedValue(payload());
+      await act(async () => { vi.advanceTimersByTime(15000); });
+      expect(h.body).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('mail-body-pending')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a body that could not be loaded', async () => {
+    h.body.mockRejectedValue(new Error('Failed to load message'));
+    render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(screen.getByText(/Failed to load message/i)).toBeInTheDocument());
+  });
+
+  it('refetches when the message changes', async () => {
+    const { rerender } = render(<MessageBodyFrame messageId="m1" />);
+    await waitFor(() => expect(frame()).toBeInTheDocument());
+    rerender(<MessageBodyFrame messageId="m2" />);
+    await waitFor(() => expect(h.body).toHaveBeenCalledWith('m2', { images: false }));
+  });
+});
