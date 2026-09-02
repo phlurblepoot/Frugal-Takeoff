@@ -114,10 +114,17 @@ export const UploadDocumentsModal: React.FC<{
   // chip list re-seeds to match, but Type/Project/Customer are left alone
   // since this isn't a fresh open. Guarded so it never fires for the initial
   // seed the effect above already handled, nor for reference-stable re-renders.
+  // Each surviving id carries its OWN kind forward (a per-file override
+  // included) rather than being recomputed from the guess — only a
+  // genuinely new id (not in the prior batch) falls back to that guess.
   const remoteItemsRef = useRef(remoteItems);
   useEffect(() => {
     if (open && remoteItems && remoteItemsRef.current !== remoteItems) {
-      setEntries(remoteItems.map(r => toRemoteEntry(r, perFileType ? kindFromMime(r.mime) : sharedKind)));
+      setEntries(prev => remoteItems.map(r => {
+        const existing = prev.find(e => isRemoteEntry(e) && e.remote.id === r.id);
+        const kind = existing ? existing.kind : (perFileType ? kindFromMime(r.mime) : sharedKind);
+        return toRemoteEntry(r, kind);
+      }));
     }
     remoteItemsRef.current = remoteItems;
     // eslint-disable-next-line react-hooks/exhaustive-deps

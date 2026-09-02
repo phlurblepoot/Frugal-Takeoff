@@ -251,4 +251,41 @@ describe('UploadDocumentsModal — remote items (mail attachments)', () => {
     // The Type selection made before the retry-narrowing is preserved.
     expect((screen.getByLabelText('Type') as HTMLSelectElement).value).toBe('photo');
   });
+
+  it('preserves a manually-overridden per-file kind through a partial-failure retry-narrowing re-seed', async () => {
+    // invoice.pdf's MIME-based guess is 'document' (kindFromMime), so
+    // overriding it to 'other' differs from what a fresh guess would produce —
+    // if the re-seed recomputed the guess instead of carrying the pick
+    // forward, this would revert to 'document'.
+    const Wrapper: React.FC = () => {
+      const [items, setItems] = React.useState(remoteItems);
+      const onUploadRemote = vi.fn().mockImplementation(async () => {
+        setItems([remoteItems[0]]); // only invoice.pdf survives, as if site.jpg succeeded
+        return { ok: 1, total: 2 };
+      });
+      return (
+        <ToastProvider>
+          <UploadDocumentsModal
+            open
+            onClose={() => {}}
+            onUploaded={() => {}}
+            projects={[project]}
+            customers={[customer]}
+            customTypes={[]}
+            remoteItems={items}
+            onUploadRemote={onUploadRemote}
+          />
+        </ToastProvider>
+      );
+    };
+    render(<Wrapper />);
+    fireEvent.click(screen.getByLabelText('Set type per file'));
+    fireEvent.change(screen.getByLabelText('Type for invoice.pdf'), { target: { value: 'other' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 files' }));
+
+    await waitFor(() => expect(screen.queryByText('site.jpg')).not.toBeInTheDocument());
+    expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+    expect((screen.getByLabelText('Type for invoice.pdf') as HTMLSelectElement).value).toBe('other');
+  });
 });

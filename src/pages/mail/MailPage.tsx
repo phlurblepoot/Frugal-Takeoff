@@ -57,6 +57,13 @@ export const MailPage: React.FC = () => {
   // ThreadView's onSaveAttachments, read by SaveAttachmentsModal below.
   const [saveAttachmentsMessage, setSaveAttachmentsMessage] = useState<MessageRow | null>(null);
 
+  // Defensive reset: navigating to a different account/thread (back/forward,
+  // another thread click) must not leave the modal open against a message
+  // from whatever thread was previously showing.
+  useEffect(() => {
+    setSaveAttachmentsMessage(null);
+  }, [accountId, threadKey]);
+
   const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
 
   const openThread = useCallback(
