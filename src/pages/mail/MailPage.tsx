@@ -1,6 +1,209 @@
-// src/pages/mail/MailPage.tsx — placeholder so the /mail routes compile.
-// Task 3 replaces this with the real mail client UI (account/folder list,
-// thread list, reading pane).
-import React from 'react';
+// src/pages/mail/MailPage.tsx — the mail client shell: folder rail, thread
+// list, and the reading pane. All of the page's state lives in the URL
+// (`/mail/:accountId/:folderId/:threadKey` + `?q=` + `?compose=1`) so a thread
+// can be linked to from anywhere in the app.
+import React, { useCallback, useEffect, useMemo } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Mail, MailOpen } from 'lucide-react';
+import { Button, EmptyState, Skeleton } from '../../components/ui';
+import { useToast } from '../../components/Toast';
+import { mailApi } from '../../utils/mailApi';
+import { FolderRail, orderFolders } from './FolderRail';
+import { ThreadList } from './ThreadList';
+import { useMailAccounts } from './useMailAccounts';
+import { useMailFolders } from './useMailFolders';
+import { useMailHeartbeat } from './useMailHeartbeat';
+import { NO_FOLDER, useThreadList } from './useThreadList';
+import type { ThreadListRow } from './types';
 
-export const MailPage: React.FC = () => <h1>Mail</h1>;
+export const MailPage: React.FC = () => {
+  const { accountId = null, folderId = null, threadKey = null } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  const q = searchParams.get('q') ?? '';
+  const { accounts, loading: accountsLoading } = useMailAccounts();
+  const { folders, loading: foldersLoading } = useMailFolders(accountId);
+  const list = useThreadList(accountId, folderId, q);
+  const { reload: reloadList } = list;
+  useMailHeartbeat(accountId);
+
+  const ownAddresses = useMemo(() => accounts.map(a => a.emailAddress), [accounts]);
+  const railFolders = useMemo(() => {
+    const { roleFolders, labelFolders } = orderFolders(folders);
+    return [...roleFolders, ...labelFolders];
+  }, [folders]);
+  // Search survives folder/thread navigation; ?compose=1 does not.
+  const search = q ? `?q=${encodeURIComponent(q)}` : '';
+
+  // Land on the default mailbox…
+  useEffect(() => {
+    if (accountsLoading || accountId || accounts.length === 0) return;
+    const target = accounts.find(a => a.isDefault) ?? accounts[0];
+    navigate(`/mail/${target.id}${search}`, { replace: true });
+  }, [accountsLoading, accountId, accounts, navigate, search]);
+
+  // …then on its inbox, or on the unfiltered view when it has no inbox folder.
+  useEffect(() => {
+    if (!accountId || folderId || foldersLoading) return;
+    const inbox = folders.find(f => f.role === 'inbox');
+    navigate(`/mail/${accountId}/${inbox?.id ?? NO_FOLDER}${search}`, { replace: true });
+  }, [accountId, folderId, folders, foldersLoading, navigate, search]);
+
+  const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
+
+  const openThread = useCallback(
+    (row: ThreadListRow) => navigate(`${listPath}/${encodeURIComponent(row.threadKey)}${search}`),
+    [navigate, listPath, search],
+  );
+
+  const toggleStar = useCallback(
+    async (row: ThreadListRow) => {
+      if (!accountId) return;
+      try {
+        await mailApi.threadActions(accountId, [row.threadKey], row.isStarred > 0 ? 'unstar' : 'star');
+        reloadList();
+      } catch {
+        toast('Could not update the star.', { type: 'error' });
+      }
+    },
+    [accountId, reloadList, toast],
+  );
+
+  const loadOlder = useCallback(async () => {
+    if (!accountId) return;
+    toast('Loading older mail…');
+    try {
+      await mailApi.loadOlder(accountId, 6);
+      reloadList();
+    } catch {
+      toast('Could not load older mail.', { type: 'error' });
+    }
+  }, [accountId, reloadList, toast]);
+
+  const setQuery = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams);
+      if (next) params.set('q', next);
+      else params.delete('q');
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  // Task 7 owns the composer itself; the flag it opens on lives in the URL so
+  // the command palette can deep-link to it.
+  const openCompose = useCallback(() => {
+    const params = new URLSearchParams(searchParams);
+    params.set('compose', '1');
+    setSearchParams(params);
+  }, [searchParams, setSearchParams]);
+
+  if (accountsLoading) {
+    return (
+      <div className="space-y-2 p-6">
+        {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-10" />)}
+      </div>
+    );
+  }
+
+  if (accounts.length === 0) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <EmptyState
+          icon={<Mail size={22} />}
+          title="Connect a mail account"
+          description="Link Google, Microsoft, or any IMAP mailbox to read and send mail from inside Takeoff Pro."
+          action={<Button onClick={() => navigate('/settings?tab=mail')}>Open mail settings</Button>}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-[calc(100dvh-3.5rem)] flex-col bg-surface md:h-dvh">
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[13rem_minmax(0,1fr)] lg:grid-cols-[13rem_20rem_minmax(0,1fr)]">
+        <aside className="hidden min-h-0 border-r border-edge md:block">
+          <FolderRail
+            accounts={accounts}
+            accountId={accountId}
+            folders={folders}
+            folderId={folderId}
+            onSelectAccount={id => navigate(`/mail/${id}`)}
+            onSelectFolder={id => navigate(`/mail/${accountId}/${id}${search}`)}
+            onCompose={openCompose}
+          />
+        </aside>
+
+        {/* List: the only pane on a phone until a thread is opened, and one of
+            two on a tablet; at lg it sits permanently beside the reading pane. */}
+        <section className={`min-h-0 flex-col border-edge lg:border-r ${threadKey ? 'hidden lg:flex' : 'flex'}`}>
+          <div className="flex items-center gap-2 border-b border-edge px-3 py-2 md:hidden">
+            <select
+              aria-label="Folder"
+              value={folderId ?? NO_FOLDER}
+              onChange={e => navigate(`/mail/${accountId}/${e.target.value}${search}`)}
+              className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm text-ink focus-visible:outline-none"
+            >
+              {railFolders.map(({ folder, label }) => (
+                <option key={folder.id} value={folder.id}>
+                  {label}
+                  {folder.unreadCount > 0 ? ` (${folder.unreadCount})` : ''}
+                </option>
+              ))}
+            </select>
+            <Button size="sm" onClick={openCompose}>Compose</Button>
+          </div>
+
+          <div className="min-h-0 flex-1">
+            <ThreadList
+              threads={list.threads}
+              loading={list.loading}
+              hasMore={list.hasMore}
+              onLoadMore={list.loadMore}
+              indexedSince={list.indexedSince}
+              onLoadOlder={loadOlder}
+              q={q}
+              onQueryChange={setQuery}
+              selectedKey={threadKey}
+              ownAddresses={ownAddresses}
+              onOpen={openThread}
+              onToggleStar={toggleStar}
+            />
+          </div>
+        </section>
+
+        <section className={`min-h-0 flex-col ${threadKey ? 'flex' : 'hidden lg:flex'}`}>
+          {threadKey ? (
+            <>
+              <div className="flex items-center gap-2 border-b border-edge px-3 py-2 lg:hidden">
+                <Button variant="ghost" size="sm" onClick={() => navigate(`${listPath}${search}`)}>
+                  <ArrowLeft size={14} />
+                  <span>Back</span>
+                </Button>
+              </div>
+              {/* Task 4 replaces this slot with <ThreadView />. */}
+              <div
+                data-testid="mail-thread-slot"
+                data-account-id={accountId ?? ''}
+                data-thread-key={threadKey}
+                className="min-h-0 flex-1 overflow-y-auto p-6 text-sm text-ink-faint"
+              >
+                Opening this conversation…
+              </div>
+            </>
+          ) : (
+            <div className="flex h-full items-center justify-center p-8">
+              <EmptyState
+                icon={<MailOpen size={22} />}
+                title="Select a conversation"
+                description="Pick a thread from the list to read it here."
+              />
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+};
