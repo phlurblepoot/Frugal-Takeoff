@@ -132,6 +132,11 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       : e instanceof AuthExpiredError ? 'Mail account needs to be reconnected'
         : 'Could not save this attachment';
 
+  /** One request's memo of a message's re-read part list. Shared across a
+   *  multi-attachment save so the recovery costs ONE getBody, not one per
+   *  item, and so only the first recovery writes and broadcasts. */
+  interface FreshParts { list: AttachmentMeta[] | null }
+
   /**
    * getAttachment, but tolerant of an attachment id that has gone stale.
    *
@@ -143,38 +148,55 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
    *
    * On a 404 (and only a 404), re-read the message for a fresh part list, find
    * the same file in it — by name AND size, or failing that by the position the
-   * stale entry held, still requiring the name to agree — and retry. The fresh
-   * list is written back to the row, so the next click hits first time and a
-   * multi-attachment save does not pay for this once per file.
+   * stale entry held, still requiring the name to agree — and retry.
+   *
+   * `wanted` is resolved by the CALLER from a snapshot of the indexed list
+   * taken before the batch began, and deliberately not re-read from the row
+   * here: the first recovery rewrites that row with the fresh ids, so a second
+   * item looking itself up afterwards would no longer find its own stale id and
+   * would fail with the very 404 this exists to absorb.
    */
-  const getAttachmentFresh = async (m: MessageRowRaw, attId: string): Promise<{
-    att: Awaited<ReturnType<MailProvider['getAttachment']>>; attId: string;
-  }> => {
+  const getAttachmentFresh = async (
+    m: MessageRowRaw,
+    wanted: { attId: string; meta: AttachmentMeta | null; index: number },
+    cache: FreshParts = { list: null },
+  ): Promise<{ att: Awaited<ReturnType<MailProvider['getAttachment']>>; attId: string }> => {
     const provider = providerFor(m.accountId);
+    const { attId, meta: want, index: at } = wanted;
     try {
       return { att: await provider.getAttachment(m.providerMessageId, attId), attId };
     } catch (e) {
       if (!(e instanceof ProviderNotFoundError)) throw e;
-      const stale: AttachmentMeta[] = JSON.parse(m.attachmentsJson || '[]');
-      const at = stale.findIndex(x => x.attId === attId);
-      const want = at >= 0 ? stale[at] : null;
-      const fresh = (await provider.getBody(m.providerMessageId)).attachments;
-      // Persist whatever the provider says now, even if the match below fails:
-      // reaching this branch already proves the indexed list is out of date.
-      if (fresh.length) {
-        const json = JSON.stringify(fresh);
-        db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(json, m.id);
-        m.attachmentsJson = json;
+      let fresh = cache.list;
+      if (!fresh) {
+        fresh = (await provider.getBody(m.providerMessageId)).attachments;
+        cache.list = fresh;
+        // Re-index whatever the provider says now, even if the match below
+        // fails: reaching this branch already proves the row is out of date.
+        // The broadcast is what makes an OPEN client drop the dead ids it is
+        // still rendering chips for.
+        if (fresh.length) {
+          db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(JSON.stringify(fresh), m.id);
+          const owner = accounts.getAccountAny(db, m.accountId);
+          if (owner) ctx.broadcastChange({ type: 'mailThread', id: m.threadKey, action: 'updated', byUserId: owner.userId });
+        }
       }
       const match = want
         && (fresh.find(f => f.name === want.name && f.size === want.size)
-          ?? (at < fresh.length && fresh[at]?.name === want.name ? fresh[at] : undefined));
+          ?? (at >= 0 && at < fresh.length && fresh[at]?.name === want.name ? fresh[at] : undefined));
       // No confident match (or the provider handed back the same dead id):
       // the original 404 is the honest answer.
       if (!match || match.attId === attId) throw e;
       console.warn(`[mail] attachment id went stale on message=${m.id} account=${m.accountId}; retrying ${attId} as ${match.attId}`);
       return { att: await provider.getAttachment(m.providerMessageId, match.attId), attId: match.attId };
     }
+  };
+
+  /** The wanted-attachment descriptor `getAttachmentFresh` takes, resolved
+   *  against a caller-owned snapshot of the indexed list. */
+  const wantedAttachment = (metas: AttachmentMeta[], attId: string) => {
+    const index = metas.findIndex(x => x.attId === attId);
+    return { attId, meta: index >= 0 ? metas[index] : null, index };
   };
 
   // ── accounts ──
@@ -265,7 +287,10 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   app.post('/api/mail/accounts/:id/refresh', authenticateToken, (req, res) => {
     const a = owned(req, req.params.id);
     if (!a) return res.status(404).json({ error: 'Account not found' });
-    ctx.scheduler?.pokeAccount(a.id);
+    // Without a scheduler nothing would ever run the sync, and a 202 would be
+    // a lie the client shows as a settled spinner and no new mail.
+    if (!ctx.scheduler) return res.status(503).json({ error: 'Sync unavailable' });
+    ctx.scheduler.pokeAccount(a.id);
     res.status(202).json({ ok: true });
   });
 
@@ -536,7 +561,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     if (!m) return res.status(404).json({ error: 'Message not found' });
     if (isPending(m)) return res.status(404).json({ error: 'This message is still being filed by the mail server — its attachments will be available in a minute' });
     try {
-      const { att } = await getAttachmentFresh(m, req.params.attId);
+      const metas: AttachmentMeta[] = JSON.parse(m.attachmentsJson || '[]');
+      const { att } = await getAttachmentFresh(m, wantedAttachment(metas, req.params.attId));
       res.setHeader('Content-Type', att.mime || 'application/octet-stream');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       if (att.size) res.setHeader('Content-Length', String(att.size));
@@ -562,11 +588,15 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const fileIds: string[] = [];
     const saved: Array<{ attId: string; fileId: string }> = [];
     const failed: Array<{ attId: string; error: string }> = [];
+    // One memo for the whole batch: the first stale id pays for the re-read,
+    // every later one is matched against the list it already fetched.
+    const freshParts: FreshParts = { list: null };
     for (const it of items) {
-      const meta = metas.find(x => x.attId === it.attId);
+      const wanted = wantedAttachment(metas, String(it?.attId ?? ''));
+      const meta = wanted.meta;
       if (!meta) { failed.push({ attId: String(it?.attId ?? ''), error: 'That attachment is not on this message' }); continue; }
       try {
-        const { att } = await getAttachmentFresh(m, it.attId);
+        const { att, attId: usedAttId } = await getAttachmentFresh(m, wanted, freshParts);
         const chunks: Buffer[] = [];
         let total = 0;
         try {
@@ -584,7 +614,10 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
           name: it.name || meta.name, sourceType: 'mailMessage', sourceId: m.id,
         });
         fileIds.push(r.id);
-        saved.push({ attId: meta.attId, fileId: r.id });
+        // The id the provider actually served — which is NOT the one the client
+        // sent when the recovery above re-keyed it. A client that wants to act
+        // on the saved item again needs the live id, not the dead one.
+        saved.push({ attId: usedAttId, fileId: r.id });
         ctx.broadcastChange({ type: 'file', id: r.id, projectId: it.projectId || undefined, action: 'created', byUserId: userOf(req).id });
       } catch (e) {
         // The client only ever sees itemError()'s fixed string, so this line is

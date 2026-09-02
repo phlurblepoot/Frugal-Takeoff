@@ -56,7 +56,7 @@ describe('sanitizeEmailHtml', () => {
 
     it('folds a gmail_quote away behind a toggle', () => {
       const r = quote('<div>My answer</div><div class="gmail_quote">On Fri Bob wrote:<blockquote>old</blockquote></div>');
-      expect(r).toContain('<button type="button" data-mail-quote-toggle="" aria-label="Show trimmed content"');
+      expect(r).toContain('<button type="button" data-mail-quote-toggle="" aria-expanded="false" aria-label="Show trimmed content"');
       expect(r).toMatch(/<div data-mail-quote="" hidden="">.*gmail_quote/);
       // The reply itself stays outside the fold.
       expect(r.indexOf('My answer')).toBeLessThan(r.indexOf('data-mail-quote-toggle'));
@@ -86,6 +86,46 @@ describe('sanitizeEmailHtml', () => {
     it('does not fold a whole message that merely opens with the word "On"', () => {
       const r = quote('<div>On site tomorrow — the crew wrote: bring the mixer</div>');
       expect(r).not.toContain('data-mail-quote');
+    });
+
+    // The fold swallows the matching element AND everything after it, so a
+    // sentence that merely opens with the pattern would take the sender's own
+    // following paragraphs down with it.
+    it('does not fold a sentence that opens with the pattern but carries on', () => {
+      const r = quote('<p>Hi Bob</p><p>On Monday the crew wrote: bring the mixer</p><p>Thanks</p>');
+      expect(r).not.toContain('data-mail-quote');
+      expect(r).toContain('Thanks');
+      expect(r).toContain('bring the mixer');
+    });
+
+    it('still folds an attribution line that is followed by its quote, even when long', () => {
+      const longLine = `On ${'a very long friday '.repeat(12)}Bob wrote: and then some`;
+      const r = quote(`<p>Answer</p><div>${longLine}</div><blockquote>old</blockquote>`);
+      // Too long to be attribution-only, but the blockquote right after settles it.
+      expect(r).toContain('data-mail-quote-toggle');
+      expect(r.slice(r.indexOf('data-mail-quote=""'))).toContain('old');
+    });
+
+    it('does not open a fold that would hide nothing but the attribution itself', () => {
+      const r = quote('<div>On Fri, Bob wrote:</div>');
+      expect(r).not.toContain('data-mail-quote');
+    });
+
+    // `children` skips text nodes; left behind they re-emerge BELOW the toggle
+    // as loose fragments of the quote the fold was supposed to hide.
+    it('takes the loose text between folded elements into the fold', () => {
+      const r = quote('<p>Answer</p><div>On Fri, Bob wrote:</div>stray quote text<blockquote>old</blockquote>trailing');
+      const holder = r.slice(r.indexOf('data-mail-quote=""'));
+      expect(holder).toContain('stray quote text');
+      expect(holder).toContain('trailing');
+      // Only the reply itself is left outside the fold.
+      expect(r.slice(0, r.indexOf('data-mail-quote-toggle'))).toContain('Answer');
+      expect(r.slice(0, r.indexOf('data-mail-quote-toggle'))).not.toContain('stray');
+    });
+
+    it('marks the toggle collapsed for assistive tech', () => {
+      const r = quote('<p>Answer</p><blockquote type="cite">old</blockquote>');
+      expect(r).toContain('aria-expanded="false"');
     });
 
     it('folds nested quotes once, at the outermost level', () => {

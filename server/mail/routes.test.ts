@@ -342,9 +342,45 @@ describe('mail routes', () => {
       const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', name: 'COR-4.pdf', kind: 'document', projectId: 'p1' }] });
       expect(s.status).toBe(200);
       expect(s.body.failed).toEqual([]);
-      expect(s.body.saved).toEqual([{ attId: 'a1', fileId: s.body.fileIds[0] }]);
+      // The FRESH id: the client sent 'a1', but that is not what served the bytes.
+      expect(s.body.saved).toEqual([{ attId: 'a1-rotated', fileId: s.body.fileIds[0] }]);
       expect((db.prepare('SELECT name FROM files WHERE id = ?').get(s.body.fileIds[0]) as { name: string }).name).toBe('COR-4.pdf');
       expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4 }]);
+    });
+
+    // The bug this pins: the first recovery rewrites attachmentsJson, so a
+    // helper that re-read the row per item could no longer find item 2's stale
+    // id and rethrew its 404. Both items must land.
+    it('recovers EVERY item of a multi-attachment save, not just the first', async () => {
+      const atts = [
+        { attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 },
+        { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 },
+      ];
+      provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
+      upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+      const id = firstMessageId();
+      provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+      const body = vi.spyOn(provider, 'getBody');
+
+      const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1' }, { attId: 'a2' }] });
+      expect(s.status).toBe(200);
+      expect(s.body.failed).toEqual([]);
+      expect(s.body.fileIds.length).toBe(2);
+      // saved[] names the id the provider actually served, not the dead one.
+      expect(s.body.saved.map((x: { attId: string }) => x.attId)).toEqual(['a1-rotated', 'a2-rotated']);
+      expect((db.prepare('SELECT name FROM files ORDER BY name').all() as { name: string }[]).map(r => r.name)).toEqual(['one.pdf', 'two.pdf']);
+      // One re-read for the batch, not one per item.
+      expect(body).toHaveBeenCalledTimes(1);
+      body.mockRestore();
+    });
+
+    it('broadcasts the thread so open clients drop the dead ids they are showing', async () => {
+      const seen: unknown[] = [];
+      ctx.broadcastChange = ev => { seen.push(ev); };
+      const id = firstMessageId();
+      provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+      await request(app).get(`/api/mail/messages/${id}/attachments/a1`).query({ token: 'tok' });
+      expect(seen).toContainEqual({ type: 'mailThread', id: 'm1@teg.com', action: 'updated', byUserId: 'u1' });
     });
 
     it('matches by position + name when two attachments share a name but not a size', async () => {
@@ -644,6 +680,13 @@ describe('mail routes', () => {
     expect(r.body).toEqual({ ok: true });
     expect(poke).toHaveBeenCalledWith(acct.id);
     poke.mockRestore();
+  });
+
+  it('POST /api/mail/accounts/:id/refresh answers 503 when there is no scheduler to poke', async () => {
+    const noSync = { ...ctx, scheduler: undefined };
+    const r = await request(altApp({ ctx: noSync })).post(`/api/mail/accounts/${acct.id}/refresh`);
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ error: 'Sync unavailable' });
   });
 
   it('POST /api/mail/accounts/:id/refresh rejects another user\'s account without poking', async () => {

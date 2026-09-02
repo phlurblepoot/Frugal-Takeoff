@@ -58,6 +58,7 @@ const frameScript = `
     if (!q || !q.hasAttribute('data-mail-quote')) return;
     var hidden = q.hasAttribute('hidden');
     if (hidden) q.removeAttribute('hidden'); else q.setAttribute('hidden', '');
+    t.setAttribute('aria-expanded', hidden ? 'true' : 'false');
     t.setAttribute('aria-label', hidden ? 'Hide trimmed content' : 'Show trimmed content');
     report();
   });

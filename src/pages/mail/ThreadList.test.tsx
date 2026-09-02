@@ -129,6 +129,21 @@ describe('ThreadList', () => {
     expect(screen.getByTestId('mail-refresh')).not.toBeDisabled();
   });
 
+  // src/main.tsx wraps the app in StrictMode, so in dev every component mounts,
+  // unmounts and remounts. A cleanup-only alive ref would be left false from
+  // that first teardown and the spinner would never settle again.
+  it('still settles the refresh under StrictMode\'s mount/unmount/remount', async () => {
+    vi.useFakeTimers();
+    const onReload = vi.fn();
+    render(<React.StrictMode><ThreadList {...props({ onReload })} /></React.StrictMode>);
+
+    fireEvent.click(screen.getByTestId('mail-refresh'));
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('mail-refresh')).not.toBeDisabled();
+  });
+
   it('reports a failed refresh instead of reloading', async () => {
     const onReload = vi.fn();
     h.refreshAccount.mockRejectedValue(new Error('nope'));

@@ -114,9 +114,16 @@ export const ThreadList: React.FC<{
   const [refreshing, setRefreshing] = useState(false);
   const aliveRef = useRef(true);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    aliveRef.current = false;
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  // Set on the way IN as well as cleared on the way out: StrictMode (which
+  // src/main.tsx wraps the app in) mounts, unmounts and remounts in dev, so a
+  // cleanup-only ref would be left false for the component's whole life and
+  // the refresh spinner would never settle.
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
   }, []);
 
   const runRefresh = useCallback(async () => {

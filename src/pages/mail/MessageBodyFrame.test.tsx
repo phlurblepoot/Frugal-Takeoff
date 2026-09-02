@@ -68,6 +68,8 @@ describe('MessageBodyFrame', () => {
     expect(doc).toContain("q.hasAttribute('data-mail-quote')");
     expect(doc).toContain("q.removeAttribute('hidden')");
     expect(doc).toContain("q.setAttribute('hidden', '')");
+    // The toggle reports its own state, not just a swapped label.
+    expect(doc).toContain("t.setAttribute('aria-expanded'");
     // Re-measured after the fold opens, or the frame keeps its old height.
     expect(doc).toMatch(/aria-label[\s\S]*?report\(\);/);
     // Still exactly one script, still nonce'd.

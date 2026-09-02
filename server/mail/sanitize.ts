@@ -98,6 +98,24 @@ const WROTE_RE = /^\s*on\b[\s\S]{0,300}?\bwrote\s*:/i;
 const TOGGLE_STYLE = 'display:inline-block;margin:6px 0;padding:0 8px;border:1px solid #ccc;'
   + 'border-radius:8px;background:#f1f3f4;color:#444;font:inherit;line-height:1.6;cursor:pointer';
 
+/** How long the attribution line may be before it stops looking like one and
+ *  starts looking like a sentence the sender wrote. */
+const ATTRIBUTION_MAX = 120;
+
+/** Text that is JUST an attribution: it opens with "On … wrote:" (the caller
+ *  has already checked that) and ends there, rather than carrying on into the
+ *  sender's own prose. */
+const isAttributionOnly = (el: Element): boolean => {
+  const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+  return text.length <= ATTRIBUTION_MAX && text.endsWith(':');
+};
+
+/** …or it is followed by the quote it introduces, which settles it either way. */
+const introducesQuote = (el: Element): boolean => {
+  const next = el.nextElementSibling;
+  return !!next && (next.matches(QUOTE_SELECTOR) || next.tagName.toLowerCase() === 'blockquote');
+};
+
 function collapseQuotedHistory(root: HTMLElement, doc: Document): void {
   const wrap = (nodes: ChildNode[]): void => {
     const first = nodes[0];
@@ -109,6 +127,7 @@ function collapseQuotedHistory(root: HTMLElement, doc: Document): void {
     const toggle = doc.createElement('button');
     toggle.setAttribute('type', 'button');
     toggle.setAttribute('data-mail-quote-toggle', '');
+    toggle.setAttribute('aria-expanded', 'false');
     toggle.setAttribute('aria-label', 'Show trimmed content');
     toggle.setAttribute('style', TOGGLE_STYLE);
     toggle.textContent = '\u22ef';
@@ -120,15 +139,29 @@ function collapseQuotedHistory(root: HTMLElement, doc: Document): void {
   // The attribution line and the quote it introduces are usually siblings, so
   // matching on it collapses BOTH — a plain `blockquote` match would leave the
   // "On … wrote:" line stranded above the toggle.
+  //
+  // The fold swallows everything after the line it starts on, so the line has
+  // to REALLY be an attribution before that is safe: "On Monday the crew wrote:
+  // bring the mixer" opens with the pattern but is the sender's own text, and
+  // folding from there would hide it and every paragraph after it (a trailing
+  // "Thanks" included). So the match only counts when the element is a marked
+  // quote container, or its text is nothing but the attribution, or the quote
+  // it introduces follows it directly.
+  const kids = Array.from(root.childNodes);
   const top = Array.from(root.children);
   const startedAt = top.findIndex(el => WROTE_RE.test(el.textContent || ''));
-  // A match on the FIRST element would collapse the entire message behind a
-  // "⋯", so it only counts when that element is a marked quote container
-  // (a reply with nothing new to say). Otherwise it is a body that merely
-  // opens with the word "On", and the message stays as the sender wrote it.
-  if (startedAt > 0 || (startedAt === 0 && top[0].matches(QUOTE_SELECTOR))) {
-    wrap(top.slice(startedAt));
-    return;
+  if (startedAt >= 0) {
+    const el = top[startedAt];
+    const isContainer = el.matches(QUOTE_SELECTOR);
+    // `nextSibling`, not `nextElementSibling`: a fold that covers only the
+    // attribution line itself hides nothing and is not worth a toggle.
+    if (isContainer || ((isAttributionOnly(el) || introducesQuote(el)) && el.nextSibling)) {
+      // Sliced from childNodes rather than children so the TEXT between those
+      // elements travels into the fold too — left behind, it re-emerges below
+      // the toggle as loose fragments of the quote.
+      wrap(kids.slice(kids.indexOf(el)));
+      return;
+    }
   }
 
   // Otherwise wrap each marked container — outermost only, so a five-deep
