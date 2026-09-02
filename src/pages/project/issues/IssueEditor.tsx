@@ -1,8 +1,6 @@
 // src/pages/project/issues/IssueEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Issue, saveIssue, getIssue, setIssueStatus, addIssuePhoto, removeIssuePhoto, getSettings, fetchFileBlob, sendIssue } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
     reload: vi.fn(),
   },
   accounts: [] as unknown[],
+  accountsLoading: false,
   // Whatever the composer's onSend rejected with — how a test observes that an
   // awaited version choice actually settled.
   sendErrors: [] as unknown[],
@@ -59,7 +60,7 @@ vi.mock('../../pages/documents/DocumentViewerModal', () => ({
 }));
 
 vi.mock('../../pages/mail/useMailAccounts', () => ({
-  useMailAccounts: () => ({ accounts: h.accounts, loading: false, reload: vi.fn() }),
+  useMailAccounts: () => ({ accounts: h.accounts, loading: h.accountsLoading, reload: vi.fn() }),
 }));
 
 vi.mock('../../hooks/useItemThreadLinks', () => ({
@@ -155,6 +156,7 @@ beforeEach(() => {
   h.sendReq = SEND_REQUEST;
   h.composerProps.last = null;
   h.accounts = [];
+  h.accountsLoading = false;
   h.threads.newest = null;
   h.threads.myThread = null;
   h.threads.links = [];
@@ -566,13 +568,25 @@ describe('DocumentActionsBar — composer wiring', () => {
 
   // Until the mailbox list has landed there is no basis for saying the thread
   // belongs to someone else — the earlier version of this flashed that claim.
-  it('makes no ownership claim before the accounts have loaded', () => {
-    h.accounts = [];
+  it('makes no ownership claim while the mailbox list is still loading', () => {
+    h.accountsLoading = true;
     h.threads.links = [LINK];
     h.threads.newest = LINK;
     h.threads.myThread = null;
     renderBar({ send: sendProp() });
     expect(screen.getByTestId('doc-sent-thread')).not.toHaveTextContent('by another user');
+  });
+
+  // …but a user with no mailbox at all has a final answer, and must not be
+  // parked on "Looking for the conversation…" forever.
+  it('makes the claim once the list has landed empty', () => {
+    h.accountsLoading = false;
+    h.accounts = [];
+    h.threads.links = [LINK];
+    h.threads.newest = LINK;
+    h.threads.myThread = null;
+    renderBar({ send: sendProp() });
+    expect(screen.getByTestId('doc-sent-thread')).toHaveTextContent('by another user');
   });
 });
 

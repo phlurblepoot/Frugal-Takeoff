@@ -1,9 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, sendInvoice } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';

@@ -340,12 +340,14 @@ describe('MailComposer', () => {
     expect(h.send).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a locked primary attachment with its item label and a stale hint', async () => {
-    setup({ primaryAttachment: { name: 'Invoice 12.pdf', itemType: 'invoice', itemId: 'i12', stale: true } });
+  it('shows a locked primary attachment with its item label', async () => {
+    setup({ primaryAttachment: { name: 'Invoice 12.pdf', itemType: 'invoice', itemId: 'i12' } });
     await waitFor(() => expect(screen.getByText('Invoice 12.pdf')).toBeInTheDocument());
     expect(screen.getByText('Invoice')).toBeInTheDocument();
     expect(screen.queryByLabelText('Remove Invoice 12.pdf')).toBeNull();
-    expect(screen.getByText(/out of date/i)).toBeInTheDocument();
+    // No freshness claim: the sender's document is regenerated during the send
+    // whenever it is behind the record, so there is nothing to warn about.
+    expect(screen.queryByText(/out of date/i)).toBeNull();
   });
 
   it('adds a tagged chip for a document picked from Documents', async () => {

@@ -68,6 +68,16 @@ const fetchWithRetry = async (
   throw lastErr instanceof Error ? lastErr : new Error('Network error');
 };
 
+/** What handleResponse throws for a non-OK response. Carries the status so a
+ *  caller can tell a definitive answer (404: no such thing) from a transient
+ *  one (502, offline) — the message alone cannot. */
+export class HttpError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
 export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
@@ -77,7 +87,7 @@ export const handleResponse = async (res: Response) => {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Request failed');
+    throw new HttpError(err.error || 'Request failed', res.status);
   }
   return res;
 };

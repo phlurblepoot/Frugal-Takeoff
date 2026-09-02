@@ -129,7 +129,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   // the thread. A bar with neither a Send button nor a mail thread — an AIA pay
   // app, say — needs none of it and asks for nothing.
   const [linked, setLinked] = useState(false);
-  const { accounts } = useMailAccounts({ enabled: !!send || linked });
+  const { accounts, loading: accountsLoading } = useMailAccounts({ enabled: !!send || linked });
   const threads = useItemThreadLinks(itemType, source.sourceId, accounts);
   useEffect(() => { if (threads.links.length > 0) setLinked(true); }, [threads.links.length]);
 
@@ -362,9 +362,10 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         <SentThreadChip
           link={threads.newest}
           myThread={threads.myThread}
-          // Accounts arrive from their own request, so "not mine" is only
-          // trustworthy once the lookup has actually run.
-          resolving={threads.resolving || (!!threads.newest && accounts.length === 0)}
+          // "Not one of yours" is only trustworthy once the mailbox list has
+          // arrived AND the probe has run. Keyed off `loading`, not off an
+          // empty list — a user with no mailbox at all has a final answer.
+          resolving={threads.resolving || accountsLoading}
           data-testid={`${p}-sent-thread`}
         />
 

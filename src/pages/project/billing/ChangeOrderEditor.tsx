@@ -1,5 +1,5 @@
 // src/pages/project/billing/ChangeOrderEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderLine,

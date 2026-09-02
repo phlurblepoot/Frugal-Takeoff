@@ -48,8 +48,12 @@ export interface MailComposerProps {
   /** Called with the resolved SendRequest; the caller performs the send. Default: mailApi.send. */
   onSend?: (req: SendRequest) => Promise<SendResult | void>;
   onSent?: (r: SendResult | void) => void;
-  /** Fixed, non-removable primary attachment (the item's document). Display only. */
-  primaryAttachment?: { name: string; itemType?: ItemType; itemId?: string; stale?: boolean };
+  /** Fixed, non-removable primary attachment (the item's document). Display
+   *  only, and never stale: the one caller that sets it (DocumentActionsBar)
+   *  regenerates the document during the send whenever the stored copy is
+   *  behind the record, so a "this is out of date" warning here could only
+   *  ever be wrong. */
+  primaryAttachment?: { name: string; itemType?: ItemType; itemId?: string };
   /** Offers "Reply in existing thread" / "New thread" for item sends. */
   existingThread?: { accountId: string; threadKey: string; subject: string };
   title?: string;
@@ -547,12 +551,6 @@ export const MailComposer: React.FC<MailComposerProps> = ({
       />
 
       {quoteBlock}
-
-      {primaryAttachment?.stale && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">
-          The attached document is out of date — regenerate it before sending.
-        </p>
-      )}
 
       {attachmentRow}
 

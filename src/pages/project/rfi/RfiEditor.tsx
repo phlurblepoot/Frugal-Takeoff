@@ -1,8 +1,6 @@
 // src/pages/project/rfi/RfiEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';

@@ -6,7 +6,11 @@ import type { ThreadLink } from '../pages/mail/types';
 const h = vi.hoisted(() => ({ links: vi.fn(), thread: vi.fn() }));
 vi.mock('../utils/mailApi', () => ({ mailApi: { links: h.links, thread: h.thread } }));
 
+import { HttpError } from '../utils/store';
 import { useItemThreadLinks, __resetThreadProbeCache } from './useItemThreadLinks';
+
+/** What the server actually answers for a thread this user does not own. */
+const notFound = () => new HttpError('Request failed', 404);
 
 const link = (over: Partial<ThreadLink> = {}): ThreadLink => ({
   id: 'l1', threadKey: 'tk-1', subjectSnapshot: 'RFI RFI-004', firstDate: '2026-08-27T12:00:00.000Z',
@@ -21,7 +25,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetThreadProbeCache();
   h.links.mockResolvedValue([]);
-  h.thread.mockRejectedValue(new Error('Request failed'));
+  h.thread.mockRejectedValue(notFound());
 });
 
 describe('useItemThreadLinks', () => {
@@ -49,7 +53,7 @@ describe('useItemThreadLinks', () => {
   it('resolves myThread against the account that holds the thread', async () => {
     h.links.mockResolvedValue([link()]);
     h.thread.mockImplementation(async (accountId: string) => {
-      if (accountId !== 'a2') throw new Error('Request failed');
+      if (accountId !== 'a2') throw notFound();
       return { thread: {}, messages: [], links: [] };
     });
 
@@ -68,9 +72,9 @@ describe('useItemThreadLinks', () => {
     expect(result.current.myThread).toBeNull();
   });
 
-  // A miss is a stable fact for the session: re-probing it on every mount would
-  // put two 404s on the wire behind every editor open.
-  it('caches probe results across mounts', async () => {
+  // A 404 is a stable fact for the session: re-probing it on every mount would
+  // put two of them on the wire behind every editor open.
+  it('caches definitive 404s across mounts', async () => {
     h.links.mockResolvedValue([link()]);
     const first = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
     await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
@@ -83,6 +87,20 @@ describe('useItemThreadLinks', () => {
     expect(second.result.current.myThread).toBeNull();
   });
 
+  // A network blip says nothing about who owns the thread. Remembering it as
+  // "not yours" would hide the Open-thread link for the rest of the session.
+  it('does not cache a transient failure', async () => {
+    h.links.mockResolvedValue([link()]);
+    h.thread.mockRejectedValue(new HttpError('Mail provider request failed', 502));
+    const first = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
+    first.unmount();
+
+    h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
+    const second = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    await waitFor(() => expect(second.result.current.myThread?.accountId).toBe('a1'));
+  });
+
   it('stops probing at the first account that owns the thread', async () => {
     h.links.mockResolvedValue([link()]);
     h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
@@ -90,6 +108,24 @@ describe('useItemThreadLinks', () => {
     await waitFor(() => expect(result.current.myThread).not.toBeNull());
     expect(h.thread).toHaveBeenCalledTimes(1);
     expect(result.current.myThread?.accountId).toBe('a1');
+  });
+
+  // The chip reads `resolving` to decide whether it may say "by another user".
+  // It has to be true from the moment a link exists until a probe pass has
+  // finished — a flag an effect sets is one frame too late.
+  it('reports resolving from the moment a link is known until the probe answers', async () => {
+    let release: (v: unknown) => void = () => {};
+    h.links.mockResolvedValue([link()]);
+    h.thread.mockImplementation(() => new Promise((_, reject) => { release = () => reject(notFound()); }));
+
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', [{ id: 'a1' }]));
+    await waitFor(() => expect(result.current.newest).not.toBeNull());
+    expect(result.current.resolving).toBe(true);
+    expect(result.current.myThread).toBeNull();
+
+    await act(async () => { release(null); });
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+    expect(result.current.myThread).toBeNull();
   });
 
   // reload() runs after a send, when the link the chip should show has just
