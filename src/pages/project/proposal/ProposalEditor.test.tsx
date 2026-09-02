@@ -43,7 +43,7 @@ const getProject = vi.fn(async (_id: string) => ({
 }));
 const persistGeneratedDocument = vi.fn(async (_blob: Blob, _opts: FileUploadOpts & { kind: string; name: string }) => ({ fileId: 'f-generated', versioned: false }));
 const setProposalFile = vi.fn(async (_id: string, _fileId: string) => {});
-const sendProposal = vi.fn(async (_id: string, _payload: { to: string; fileId: string; attachmentFileIds?: string[] }) => ({ version: 5 }));
+const sendProposal = vi.fn(async (_id: string, _payload: { to: string; fileId: string; html?: string; attachmentFileIds?: string[] }) => ({ version: 5 }));
 const getDocumentBySource = vi.fn(async (_q: { sourceType: string; sourceId: string; kind: string }): Promise<GeneratedDoc | null> => null);
 
 vi.mock('../../../utils/store', async () => {
@@ -74,6 +74,22 @@ vi.mock('../../../utils/store', async () => {
 // outside a provider (unlike useCollabEditing, which degrades on its own).
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
+}));
+
+// The real mail composer renders here (this is the one send site tested
+// end-to-end), so its API surface has to answer: no other mailbox holds this
+// proposal's thread, and the recipient index is empty.
+vi.mock('../../../utils/mailApi', () => ({
+  mailApi: {
+    accounts: vi.fn(async () => [
+      { id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, signatureHtml: null,
+        isDefault: 1, status: 'ok', lastSyncAt: null, lastError: null, indexedSince: '', unreadCount: 0 },
+    ]),
+    links: vi.fn(async () => []),
+    thread: vi.fn(async () => { throw new Error('not found'); }),
+    recipients: vi.fn(async () => []),
+    stageUpload: vi.fn(async () => ({ uploadId: 'u1' })),
+  },
 }));
 
 // Opening a document is the viewer's business, exercised by its own tests.
@@ -271,7 +287,7 @@ describe('ProposalEditor smoke', () => {
 
     fireEvent.click(screen.getByTestId('proposal-send'));
     const dialog = await screen.findByRole('dialog');
-    await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+    await waitFor(() => expect(within(dialog).getByTestId('recipient-pill')).toHaveTextContent('client@example.com'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
     fireEvent.click(await screen.findByTestId('proposal-version-new'));
 
@@ -356,7 +372,9 @@ describe('ProposalEditor smoke', () => {
     await screen.findByText('#2');
     fireEvent.click(await screen.findByTestId('proposal-send'));
     const dialog = await screen.findByRole('dialog');
-    await waitFor(() => expect(within(dialog).getByLabelText('To')).toHaveValue('client@example.com'));
+    // The composer holds recipients as pills, seeded from the project's
+    // estimating contact — proof the prefill survived the conversion.
+    await waitFor(() => expect(within(dialog).getByTestId('recipient-pill')).toHaveTextContent('client@example.com'));
     return dialog;
   };
 
@@ -374,6 +392,9 @@ describe('ProposalEditor smoke', () => {
     expect(sendProposal.mock.calls[0]).toMatchObject(['p1', {
       to: 'client@example.com', fileId: 'f-existing', attachmentFileIds: [],
     }]);
+    // The prefilled plain-text body reached the route as the composer's html —
+    // the whole point of routing item sends through the mail composer.
+    expect(sendProposal.mock.calls[0][1].html).toContain('Please find our proposal attached');
     expect(await screen.findByText('Sent')).toBeInTheDocument();
   });
 
@@ -422,7 +443,7 @@ describe('ProposalEditor smoke', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
       fireEvent.click(await screen.findByTestId('proposal-version-new'));
 
-      expect(await screen.findByText('Failed to send')).toBeInTheDocument();
+      expect(await screen.findByText('Failed to generate the PDF — nothing sent')).toBeInTheDocument();
       expect(sendProposal).not.toHaveBeenCalled();
       // The composer stays open so the send can be retried.
       expect(screen.getByRole('dialog')).toBeInTheDocument();

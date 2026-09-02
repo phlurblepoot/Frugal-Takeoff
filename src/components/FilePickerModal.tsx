@@ -8,7 +8,7 @@
 //    because only the caller knows where a new file belongs (kind + project /
 //    customer + source triple). No config, no tabs at all.
 //  - `returnBlobs` exists for the callers that need bytes rather than rows
-//    (EmailComposer attachments, the SOV importer, plan-set upload). Picking
+//    (mail composer attachments, the SOV importer, plan-set upload). Picking
 //    from the Existing tab then fetches each file's content first; an upload
 //    hands back the File the user just chose, which is the same bytes without
 //    the round trip.

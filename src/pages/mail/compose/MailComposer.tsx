@@ -19,6 +19,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Button, Input, Modal, Select } from '../../../components/ui';
 import { useToast } from '../../../components/Toast';
 import { FilePickerModal } from '../../../components/FilePickerModal';
+import { DocumentGenerationCancelled } from '../../../components/documents/errors';
 import type { DocumentRow } from '../../../utils/store';
 import { getAlwaysCc } from '../../../utils/store';
 import { mailApi } from '../../../utils/mailApi';
@@ -352,7 +353,12 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     } catch (err) {
       // Stay open: the body is the user's work, and a transport failure is
       // usually something they can retry or fix (a bad address, SMTP asleep).
-      toast(err instanceof Error ? err.message : 'Could not send the message', { type: 'error' });
+      // An item send that was cancelled on the way (the document's
+      // version/overwrite prompt dismissed, or a failed pre-send save that has
+      // already said so) is not a failure and gets no second message.
+      if (!(err instanceof DocumentGenerationCancelled)) {
+        toast(err instanceof Error ? err.message : 'Could not send the message', { type: 'error' });
+      }
       setSending(false);
     }
   };

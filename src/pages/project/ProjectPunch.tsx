@@ -3,11 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, ImageIcon } from 'lucide-react';
 import {
-  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, sendPunchReport,
+  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings, sendPunchReport,
 } from '../../utils/store';
-import { Customer } from '../../types';
-import { resolveRecipient } from '../../utils/recipients';
 import { useToast } from '../../components/Toast';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, ProgressBar, Skeleton,
@@ -19,6 +16,8 @@ import { buildPunchPdf } from './punch/punchPdf';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useProjectOutlet } from './ProjectLayout';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
+import { useItemEmailDefaults } from '../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../utils/itemSend';
 
 const UNASSIGNED = 'Unassigned';
 
@@ -34,47 +33,7 @@ export const ProjectPunch: React.FC = () => {
   const [newDesc, setNewDesc] = useState('');
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-    /** Set once we know the user has no mail account to send from. */
-    sendBlockedReason?: string;
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getMailAccounts().catch(() => []),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('punch', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('punch', projectId);
 
   const reload = () => {
     if (!projectId) return;
@@ -210,12 +169,9 @@ export const ProjectPunch: React.FC = () => {
               headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
               defaultHeaderEmail: emailDefaults.companyEmail || undefined,
             },
-            sendFn: async (fileId, m) => {
+            sendFn: async (fileId, req) => {
               if (!projectId) return;
-              await sendPunchReport(projectId, {
-                to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                fileId, attachmentFileIds: m.attachmentFileIds,
-              });
+              return await sendPunchReport(projectId, { ...itemSendPayload(req), fileId });
             },
           }}
         />

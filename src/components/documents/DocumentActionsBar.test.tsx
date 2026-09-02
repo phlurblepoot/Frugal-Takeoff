@@ -12,12 +12,18 @@ const h = vi.hoisted(() => ({
     loading: false,
     refresh: vi.fn(async () => {}),
   },
-  sendMsg: {
-    to: 'client@example.com',
-    subject: 'Invoice 12',
-    body: 'Attached',
-    attachmentFileIds: [] as string[],
-  } as Record<string, unknown>,
+  // What the (stubbed) composer resolves and hands to onSend.
+  sendReq: null as unknown,
+  composerProps: { last: null as any },
+  threads: {
+    links: [] as unknown[],
+    newest: null as unknown,
+    myThread: null as unknown,
+    loading: false,
+    resolving: false,
+    reload: vi.fn(),
+  },
+  accounts: [] as unknown[],
   // Whatever the composer's onSend rejected with — how a test observes that an
   // awaited version choice actually settled.
   sendErrors: [] as unknown[],
@@ -52,11 +58,23 @@ vi.mock('../../pages/documents/DocumentViewerModal', () => ({
   ),
 }));
 
-vi.mock('../EmailComposer', () => ({
+vi.mock('../../pages/mail/useMailAccounts', () => ({
+  useMailAccounts: () => ({ accounts: h.accounts, loading: false, reload: vi.fn() }),
+}));
+
+vi.mock('../../hooks/useItemThreadLinks', () => ({
+  useItemThreadLinks: () => h.threads,
+}));
+
+vi.mock('../../pages/mail/compose/MailComposer', async (orig) => ({
+  // itemTypeFromSource is a pure mapping the bar depends on — keep the real one.
+  ...(await orig<typeof import('../../pages/mail/compose/MailComposer')>()),
   // Mirrors the real composer closely enough for the flows under test: it
   // closes only when onSend resolves, and (like every Modal) closes on a
   // window-level Escape — which is exactly the collision the bar has to guard.
-  EmailComposer: ({ open, onSend, onClose, primaryAttachmentName }: any) => {
+  MailComposer: (props: any) => {
+    const { open, onSend, onClose, primaryAttachment, extraHeader } = props;
+    h.composerProps.last = props;
     React.useEffect(() => {
       if (!open) return;
       const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -65,12 +83,13 @@ vi.mock('../EmailComposer', () => ({
     }, [open, onClose]);
     return open ? (
       <div data-testid="composer">
-        <span data-testid="composer-attachment">{primaryAttachmentName}</span>
+        <span data-testid="composer-attachment">{primaryAttachment?.name}</span>
+        {extraHeader}
         {/* Mirrors the real composer: it closes only when onSend resolves,
             and stays open (message intact) when onSend rejects. */}
         <button
           data-testid="composer-send"
-          onClick={() => { void onSend(h.sendMsg).then(() => onClose()).catch((e: unknown) => { h.sendErrors.push(e); }); }}
+          onClick={() => { void onSend(h.sendReq).then(() => onClose()).catch((e: unknown) => { h.sendErrors.push(e); }); }}
         >
           send
         </button>
@@ -80,14 +99,28 @@ vi.mock('../EmailComposer', () => ({
 }));
 
 import { persistGeneratedDocument, fetchFileBlob, getFileMeta } from '../../utils/store';
+import type { SendRequest, ThreadLink } from '../../pages/mail/types';
 import { downloadBlob } from '../../utils/download';
 import { DocumentGenerationCancelled } from './errors';
 
 const FILE = { id: 'f1', name: 'Invoice-12.pdf', mime: 'application/pdf', size: 10, createdAt: 5, versionNumber: 2 };
 
+const SEND_REQUEST: SendRequest = {
+  to: [{ addr: 'client@example.com' }],
+  subject: 'Invoice 12',
+  html: '<p>Attached</p>',
+  attachments: [],
+};
+
+const LINK: ThreadLink = {
+  id: 'l1', threadKey: 'tk-1', subjectSnapshot: 'Invoice 12', firstDate: '2026-08-27T12:00:00.000Z',
+  participantsJson: null, itemType: 'invoice', itemId: 'inv-1', projectId: 'p1', customerId: null,
+  linkedByUserId: 'u1', createdAt: '2026-08-27T12:00:00.000Z',
+};
+
 const build = vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' }));
 const save = vi.fn(async () => true);
-const sendFn = vi.fn(async (_fileId: string, _m: Record<string, unknown>) => {});
+const sendFn = vi.fn(async (_fileId: string, _req: SendRequest) => undefined);
 const onGenerated = vi.fn();
 
 const sendProp = (over: Partial<NonNullable<DocumentActionsBarProps['send']>> = {}) => ({
@@ -119,7 +152,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.state.file = null;
   h.state.upToDate = null;
-  h.sendMsg = { to: 'client@example.com', subject: 'Invoice 12', body: 'Attached', attachmentFileIds: [] };
+  h.sendReq = SEND_REQUEST;
+  h.composerProps.last = null;
+  h.accounts = [];
+  h.threads.newest = null;
+  h.threads.myThread = null;
+  h.threads.links = [];
   h.sendErrors.length = 0;
   save.mockResolvedValue(true);
   (persistGeneratedDocument as any).mockResolvedValue({ fileId: 'new-file', versioned: true });
@@ -222,7 +260,6 @@ describe('DocumentActionsBar — send', () => {
   it('rebuilds an up-to-date file when the header email is overridden', async () => {
     h.state.file = FILE;
     h.state.upToDate = true;
-    h.sendMsg = { ...h.sendMsg, headerEmail: 'other@example.com' };
     renderBar({
       send: sendProp({
         composer: {
@@ -235,6 +272,10 @@ describe('DocumentActionsBar — send', () => {
     });
 
     fireEvent.click(screen.getByTestId('doc-send'));
+    // The select is the bar's own, rendered into the composer's extraHeader slot.
+    fireEvent.change(screen.getByTestId('doc-header-email').querySelector('select')!, {
+      target: { value: 'other@example.com' },
+    });
     fireEvent.click(screen.getByTestId('composer-send'));
 
     await screen.findByText('Replace the existing PDF?');
@@ -411,6 +452,129 @@ describe('DocumentActionsBar — staleness unknown', () => {
     expect(sendFn).not.toHaveBeenCalled();
     expect(h.toast).not.toHaveBeenCalledWith('Failed to send', expect.anything());
   });
+
+// The editors still build their prefill the way they always have (comma
+// separated strings, a plain-text body). The bar is what turns that into what
+// the mail composer speaks, so nobody had to teach seven editors about Addr[].
+describe('DocumentActionsBar — composer wiring', () => {
+  it('converts the editor prefill into the composer\u2019s structured initial', () => {
+    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    renderBar({
+      send: sendProp({
+        composer: {
+          title: 'Send invoice',
+          defaultTo: 'client@example.com, "Ann" <ann@example.com>',
+          defaultCc: 'cc@example.com',
+          defaultBcc: 'bcc@example.com',
+          defaultSubject: 'Invoice 12',
+          defaultBody: 'Hello,\n\nAttached & signed.',
+        },
+      }),
+    });
+    fireEvent.click(screen.getByTestId('doc-send'));
+
+    const props = h.composerProps.last;
+    expect(props.variant).toBe('modal');
+    expect(props.title).toBe('Send invoice');
+    expect(props.accounts).toEqual(h.accounts);
+    expect(props.initial.to).toEqual([{ addr: 'client@example.com' }, { addr: 'ann@example.com', name: 'Ann' }]);
+    expect(props.initial.cc).toEqual([{ addr: 'cc@example.com' }]);
+    expect(props.initial.bcc).toEqual([{ addr: 'bcc@example.com' }]);
+    expect(props.initial.subject).toBe('Invoice 12');
+    // Escaped and line-broken, matching the server's own textToHtml.
+    expect(props.initial.html).toBe('<p>Hello,<br><br>Attached &amp; signed.</p>');
+  });
+
+  it('describes the generated document as the primary attachment', () => {
+    renderBar({ send: sendProp() });
+    fireEvent.click(screen.getByTestId('doc-send'));
+    expect(h.composerProps.last.primaryAttachment).toEqual({
+      name: 'Invoice-12.pdf', itemType: 'invoice', itemId: 'inv-1',
+    });
+  });
+
+  // Replying into a thread the user's own mailbox does not hold would 404 at
+  // the server, so the option is offered only when it can actually be taken.
+  it('offers the existing thread only when this user owns it', () => {
+    const { unmount } = renderBar({ send: sendProp() });
+    fireEvent.click(screen.getByTestId('doc-send'));
+    expect(h.composerProps.last.existingThread).toBeUndefined();
+    unmount();
+
+    h.threads.newest = LINK;
+    h.threads.myThread = { accountId: 'a1', threadKey: 'tk-1', subject: 'Invoice 12' };
+    renderBar({ send: sendProp() });
+    fireEvent.click(screen.getByTestId('doc-send'));
+    expect(h.composerProps.last.existingThread).toEqual({ accountId: 'a1', threadKey: 'tk-1', subject: 'Invoice 12' });
+  });
+
+  it('hands the composer\u2019s request to sendFn and returns its result', async () => {
+    const req = { ...SEND_REQUEST, to: [{ addr: 'someone@else.com' }], replyTo: { accountId: 'a1', threadKey: 'tk-1' } };
+    h.sendReq = req;
+    const result = { success: true, messageId: 'm1', threadKey: 'tk-1', accountId: 'a1', effectsSkipped: [] };
+    sendFn.mockResolvedValueOnce(result as any);
+    h.state.file = FILE;
+    h.state.upToDate = true;
+    renderBar({ send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    await waitFor(() => expect(sendFn).toHaveBeenCalledWith('f1', req));
+    // The composer needs the result back: it is what carries `effectsSkipped`.
+    await expect(sendFn.mock.results[0].value).resolves.toBe(result);
+    // A send creates the thread link the chip reads, so it has to be re-read.
+    expect(h.threads.reload).toHaveBeenCalled();
+  });
+
+  it('does not reload the thread links when the send failed', async () => {
+    sendFn.mockRejectedValueOnce(new Error('SMTP asleep'));
+    h.state.file = FILE;
+    h.state.upToDate = true;
+    renderBar({ send: sendProp() });
+
+    fireEvent.click(screen.getByTestId('doc-send'));
+    fireEvent.click(screen.getByTestId('composer-send'));
+
+    await waitFor(() => expect(h.sendErrors).toHaveLength(1));
+    expect(h.threads.reload).not.toHaveBeenCalled();
+  });
+
+  it('shows the sent-thread chip once the item has been emailed', () => {
+    const { unmount } = renderBar({ send: sendProp() });
+    expect(screen.queryByTestId('doc-sent-thread')).toBeNull();
+    unmount();
+
+    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    h.threads.links = [LINK];
+    h.threads.newest = LINK;
+    h.threads.myThread = { accountId: 'a1', threadKey: 'tk-1', subject: 'Invoice 12' };
+    renderBar({ send: sendProp() });
+    expect(screen.getByTestId('doc-sent-thread')).toHaveAttribute('href', '/mail/a1/_/tk-1');
+  });
+
+  // The chip is about the record, not about the Send button: a read-only or
+  // unsendable editor still has to show that the thing went out.
+  it('shows the chip even when the bar has no send configured', () => {
+    h.accounts = [{ id: 'a1', emailAddress: 'me@bigbear.test' }];
+    h.threads.links = [LINK];
+    h.threads.newest = LINK;
+    h.threads.myThread = null;
+    renderBar({ readOnly: true });
+    expect(screen.getByTestId('doc-sent-thread')).toHaveTextContent('by another user');
+  });
+
+  // Until the mailbox list has landed there is no basis for saying the thread
+  // belongs to someone else — the earlier version of this flashed that claim.
+  it('makes no ownership claim before the accounts have loaded', () => {
+    h.accounts = [];
+    h.threads.links = [LINK];
+    h.threads.newest = LINK;
+    h.threads.myThread = null;
+    renderBar({ send: sendProp() });
+    expect(screen.getByTestId('doc-sent-thread')).not.toHaveTextContent('by another user');
+  });
+});
 
 describe('DocumentActionsBar — open / download / formats', () => {
   it('downloads the stored file', async () => {

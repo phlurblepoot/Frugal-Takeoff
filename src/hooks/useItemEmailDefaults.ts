@@ -1,13 +1,17 @@
-// src/pages/project/proposal/useProposalEmailDefaults.ts
-// Who a proposal goes to, before the estimator types anything: the estimating
-// recipient resolved from the project/customer role emails, the user's
-// always-CC list, and the from-addresses the letterhead can advertise.
+// src/hooks/useItemEmailDefaults.ts
+// Who an item's email goes to before anyone types anything: the recipient
+// resolved from the project/customer role addresses, the sender's always-CC
+// list, and the addresses the letterhead can advertise.
+//
+// This was seven near-identical copies (invoice, change order, issue, RFI,
+// daily report, punch, proposal) — one of them already reading the wrong
+// template role — so it lives here once and each editor names its template.
 import { useEffect, useState } from 'react';
-import { getAlwaysCc, getCustomer, getProject, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason } from '../../../utils/store';
-import { resolveRecipient } from '../../../utils/recipients';
-import type { Customer } from '../../../types';
+import { getAlwaysCc, getCustomer, getMailAccounts, getProject, getSettings, mailSendBlockedReason, pickSendableAccount } from '../utils/store';
+import { resolveRecipient, type TemplateType } from '../utils/recipients';
+import type { Customer } from '../types';
 
-export interface ProposalEmailDefaults {
+export interface ItemEmailDefaults {
   defaultTo: string;
   defaultCc: string;
   defaultBcc: string;
@@ -18,22 +22,22 @@ export interface ProposalEmailDefaults {
   sendBlockedReason?: string;
 }
 
-const EMPTY: ProposalEmailDefaults = {
+const EMPTY: ItemEmailDefaults = {
   defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [],
 };
 
-const mergeCsv = (...lists: string[]) =>
+const mergeCsv = (...lists: string[]): string =>
   Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
 
-export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefaults {
-  const [defaults, setDefaults] = useState<ProposalEmailDefaults>(EMPTY);
+export function useItemEmailDefaults(templateType: TemplateType, projectId?: string): ItemEmailDefaults {
+  const [defaults, setDefaults] = useState<ItemEmailDefaults>(EMPTY);
 
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
     (async () => {
       try {
-        const [settings, mailAccounts, alwaysCc, proj] = await Promise.all([
+        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
           getSettings(),
           getMailAccounts().catch(() => []),
           getAlwaysCc(),
@@ -41,9 +45,10 @@ export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefau
         ]);
         if (cancelled) return;
         let customer: Customer | undefined;
-        if (proj?.customerId) customer = await getCustomer(proj.customerId).catch(() => undefined);
+        if (project?.customerId) customer = await getCustomer(project.customerId).catch(() => undefined);
         if (cancelled) return;
-        const resolved = resolveRecipient('proposal', proj?.contactEmails, customer?.emails);
+
+        const resolved = resolveRecipient(templateType, project?.contactEmails, customer?.emails);
         const companyEmail = settings.companyEmail ?? '';
         const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
         setDefaults({
@@ -60,7 +65,7 @@ export function useProposalEmailDefaults(projectId?: string): ProposalEmailDefau
       } catch { /* non-fatal — the composer just opens with empty fields */ }
     })();
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [templateType, projectId]);
 
   return defaults;
 }

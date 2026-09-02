@@ -21,25 +21,37 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, ExternalLink, FileText, Mail } from 'lucide-react';
 import { GeneratedDoc, fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
 import { useGeneratedDocument } from '../../hooks/useGeneratedDocument';
+import { useItemThreadLinks } from '../../hooks/useItemThreadLinks';
 import { downloadBlob } from '../../utils/download';
-import { EmailComposer, EmailComposerProps } from '../EmailComposer';
+import { parseAddresses, textToHtml } from '../../utils/email';
+import { MailComposer, itemTypeFromSource } from '../../pages/mail/compose/MailComposer';
+import { useMailAccounts } from '../../pages/mail/useMailAccounts';
+import type { SendRequest, SendResult } from '../../pages/mail/types';
 import { useToast } from '../Toast';
-import { Button } from '../ui';
+import { Button, Select } from '../ui';
 import { DocFormat, DocumentStatusChip, FORMAT_WORD } from './DocumentStatusChip';
 import { DocumentGenerationCancelled } from './errors';
+import { SentThreadChip } from './SentThreadChip';
 import { VersionOrOverwriteDialog } from './VersionOrOverwriteDialog';
 import { useDocumentViewer } from './useDocumentViewer';
 
 export type { DocFormat };
 
-type SendMessage = {
-  to: string;
-  cc?: string;
-  bcc?: string;
-  subject: string;
-  body: string;
-  attachmentFileIds: string[];
-};
+/** The editors' prefilled email, still expressed the way they have always built
+ *  it: comma-separated recipients and a plain-text body. The bar converts it
+ *  into the composer's structured `initial` so seven editors don't each have to
+ *  learn about `Addr[]` and html. */
+export interface MailComposerPrefill {
+  title?: string;
+  defaultTo?: string;
+  defaultCc?: string;
+  defaultBcc?: string;
+  defaultSubject: string;
+  defaultBody: string;
+  /** Renders the "Document shows email" select above the recipients. */
+  headerEmailOptions?: { label: string; value: string }[];
+  defaultHeaderEmail?: string;
+}
 
 export interface DocumentActionsBarProps {
   /** sourceId may be absent while the record is still unsaved — the bar then
@@ -68,8 +80,11 @@ export interface DocumentActionsBarProps {
   send?: {
     /** Non-empty disables Send and explains why. */
     blockedReason?: string;
-    composer: Omit<EmailComposerProps, 'open' | 'onClose' | 'onSend' | 'projectId' | 'primaryAttachmentName'>;
-    sendFn: (fileId: string, m: SendMessage) => Promise<void>;
+    composer: MailComposerPrefill;
+    /** Runs the item's own send route with the document just settled on.
+     *  Returning the route's result lets the composer report side effects the
+     *  server skipped (a status that did not move). */
+    sendFn: (fileId: string, req: SendRequest) => Promise<SendResult | void>;
   };
   size?: 'sm';
   testIdPrefix?: string;
@@ -100,10 +115,27 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingChoice | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
+  // Which address the LETTERHEAD shows — not who the mail is from. It lived in
+  // the old composer; the shared mail composer has no idea about documents, so
+  // the bar owns it and renders it through `extraHeader`.
+  const [headerEmail, setHeaderEmail] = useState('');
+
+  // "Has this been emailed before?" — the chip beside the freshness pill, and
+  // the thread the composer offers to reply into.
+  const itemType = itemTypeFromSource(source.sourceType);
+
+  // The composer needs the user's mailboxes for its From select (and its
+  // signature), and the chip needs them to work out whether this user can open
+  // the thread. A bar with neither a Send button nor a mail thread — an AIA pay
+  // app, say — needs none of it and asks for nothing.
+  const [linked, setLinked] = useState(false);
+  const { accounts } = useMailAccounts({ enabled: !!send || linked });
+  const threads = useItemThreadLinks(itemType, source.sourceId, accounts);
+  useEffect(() => { if (threads.links.length > 0) setLinked(true); }, [threads.links.length]);
 
   // The awaited version/overwrite choice, mirrored in a ref so unmounting can
   // settle it — a dangling promise would strand the generate/send flow that is
-  // waiting on it (and, for send, EmailComposer's `sending` state with it).
+  // waiting on it (and, for send, the composer's `sending` state with it).
   const pendingRef = useRef<PendingChoice | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -226,7 +258,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     viewer.open(file, kind, projectId);
   };
 
-  const handleSend = async (m: SendMessage & { headerEmail?: string }) => {
+  const handleSend = async (req: SendRequest): Promise<SendResult | void> => {
     if (!send) return;
     // Read BEFORE the save: `upToDate` below is this render's value, captured
     // when the composer's onSend fired. saveFirst() moves the record past the
@@ -236,7 +268,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     const wasDirty = dirty;
     // Emailing from a dirty editor would attach bytes that disagree with the
     // record, so Send commits first exactly like Generate. A failed save throws
-    // the same sentinel a cancelled dialog does, so EmailComposer keeps the
+    // the same sentinel a cancelled dialog does, so the composer keeps the
     // typed message on screen instead of reporting a send failure.
     if (!(await saveFirst())) {
       toast('Save failed — nothing sent', { type: 'error' });
@@ -245,7 +277,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
     // Picking a different "document shows email" in the composer changes the
     // document itself, so a stored copy can't be reused even if it's current.
     const headerOverride =
-      m.headerEmail && m.headerEmail !== send.composer.defaultHeaderEmail ? m.headerEmail : undefined;
+      headerEmail && headerEmail !== send.composer.defaultHeaderEmail ? headerEmail : undefined;
 
     const reusable = !!file && upToDate && !wasDirty && staleness !== 'unknown' && !headerOverride;
 
@@ -256,27 +288,61 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
       let mode: 'version' | 'overwrite' | undefined;
       if (file) {
         const choice = await askMode(file);
-        // Rethrown, not swallowed: EmailComposer keeps the dialog (and the
-        // typed message) open when onSend rejects, and skips its error toast
-        // for this sentinel — a cancel isn't a failed send.
+        // Rethrown, not swallowed: the composer keeps its window (and the typed
+        // message) open when onSend rejects — a cancel isn't a failed send.
         if (!choice) throw new DocumentGenerationCancelled();
         mode = choice;
       }
       set(setBusy, `Generating ${word}…`);
       try {
         fileId = await buildAndPersist(mode, headerOverride);
+      } catch (e) {
+        // The composer shows whatever this rejects with, so it has to be a
+        // sentence a sender can act on — a renderer's internal message
+        // ("Cannot read properties of undefined") is not one.
+        console.error(`Failed to build the ${kind} document for a send`, e);
+        throw new Error(`Failed to generate the ${word} — nothing sent`);
       } finally {
         set(setBusy, null);
       }
     }
 
     set(setBusy, 'Sending…');
+    let result: SendResult | void;
     try {
-      await send.sendFn(fileId, m);
+      result = await send.sendFn(fileId, req);
     } finally {
       set(setBusy, null);
     }
-    toast('Sent', { type: 'success' });
+    // The send just created (or extended) a thread link — reload so the chip
+    // appears without a page refresh, and so a second send is offered the
+    // thread this one started.
+    threads.reload();
+    // The composer raises its own "Sent" toast (and warns about any item status
+    // the server could not move), so the bar stays quiet here.
+    return result;
+  };
+
+  // The letterhead's "from" address. The shared composer knows nothing about
+  // documents, so the bar renders this select into its `extraHeader` slot and
+  // keeps reading the choice from its own state.
+  const headerOptions = send?.composer.headerEmailOptions ?? [];
+  const headerSelect = headerOptions.length > 0 ? (
+    <label className="flex flex-wrap items-center gap-2 text-xs text-ink-faint" data-testid={`${p}-header-email`}>
+      <span>Document shows email:</span>
+      <Select
+        value={headerEmail}
+        onChange={e => setHeaderEmail(e.target.value)}
+        className="h-8 max-w-[18rem] text-xs"
+      >
+        {headerOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </Select>
+    </label>
+  ) : undefined;
+
+  const openComposer = () => {
+    setHeaderEmail(send?.composer.defaultHeaderEmail ?? '');
+    setComposerOpen(true);
   };
 
   // Dirty is no longer a blocker — Send saves first. Only a caller-supplied
@@ -292,6 +358,15 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         <span data-testid={`${p}-status`}>
           <DocumentStatusChip file={file} upToDate={upToDate} format={format} size={size} staleness={staleness} />
         </span>
+
+        <SentThreadChip
+          link={threads.newest}
+          myThread={threads.myThread}
+          // Accounts arrive from their own request, so "not mine" is only
+          // trustworthy once the lookup has actually run.
+          resolving={threads.resolving || (!!threads.newest && accounts.length === 0)}
+          data-testid={`${p}-sent-thread`}
+        />
 
         {!readOnly && (
           <Button
@@ -336,7 +411,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
             data-testid={`${p}-send`}
             disabled={!!busy || !!sendBlocked}
             title={sendBlocked}
-            onClick={() => setComposerOpen(true)}
+            onClick={openComposer}
           >
             <Mail size={15} />Email
           </Button>
@@ -357,16 +432,33 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         />
       )}
 
-      {send && (
-        <EmailComposer
-          {...send.composer}
-          open={composerOpen}
+      {send && composerOpen && (
+        // Mounted only while open, so every Email click starts from the
+        // editor's current defaults rather than whatever was typed and
+        // abandoned last time.
+        <MailComposer
+          open
+          variant="modal"
+          accounts={accounts}
+          title={send.composer.title ?? 'Send email'}
+          initial={{
+            to: parseAddresses(send.composer.defaultTo ?? ''),
+            cc: parseAddresses(send.composer.defaultCc ?? ''),
+            bcc: parseAddresses(send.composer.defaultBcc ?? ''),
+            subject: send.composer.defaultSubject,
+            html: textToHtml(send.composer.defaultBody),
+          }}
+          // Display only: the document may not exist yet, and the bar attaches
+          // the real bytes itself once it has settled which file to send.
+          primaryAttachment={{ name: fileName, itemType, itemId: source.sourceId }}
+          // Offered only when one of this user's own mailboxes holds the
+          // thread — replying into someone else's would 404 at the server.
+          existingThread={threads.myThread ? { ...threads.myThread, subject: threads.myThread.subject || fileName } : undefined}
+          extraHeader={headerSelect}
           // Both Modals listen for Escape on window, so an Escape aimed at the
           // version dialog would otherwise also close the composer and lose the
           // typed message. While a choice is pending, only the dialog closes.
           onClose={() => { if (!pending) setComposerOpen(false); }}
-          projectId={projectId}
-          primaryAttachmentName={fileName}
           onSend={handleSend}
         />
       )}

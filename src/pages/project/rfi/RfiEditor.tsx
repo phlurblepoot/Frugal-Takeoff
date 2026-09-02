@@ -1,6 +1,6 @@
 // src/pages/project/rfi/RfiEditor.tsx
 import React, { useEffect, useState } from 'react';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
@@ -9,6 +9,8 @@ import { DocumentActionsBar } from '../../../components/documents/DocumentAction
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { RfiStatusPill, RFI_STATUS_META } from '../../../components/ui/RfiStatusPill';
 import { buildRfiPdf } from './rfiPdf';
@@ -65,46 +67,7 @@ export const RfiEditor: React.FC<{
   });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-    /** Set once we know the user has no mail account to send from. */
-    sendBlockedReason?: string;
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getMailAccounts().catch(() => []),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('rfi', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('rfi', projectId);
 
   const dropPhoto = async (fileId: string) => {
     try { await removeRfiPhoto(rfi.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
@@ -250,13 +213,11 @@ export const RfiEditor: React.FC<{
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },
-              sendFn: async (fileId, m) => {
-                await sendRfi(rfi.id, {
-                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                  fileId, attachmentFileIds: m.attachmentFileIds,
-                });
+              sendFn: async (fileId, req) => {
+                const result = await sendRfi(rfi.id, { ...itemSendPayload(req), fileId });
                 // The send stamps the RFI 'sent' server-side.
                 onSaved({ keepMounted: true });
+                return result;
               },
             }}
           />

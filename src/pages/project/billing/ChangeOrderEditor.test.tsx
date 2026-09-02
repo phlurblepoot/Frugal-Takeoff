@@ -63,14 +63,17 @@ vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
   DocumentViewerModal: () => <div data-testid="viewer" />,
 }));
 
-vi.mock('../../../components/EmailComposer', () => ({
-  EmailComposer: ({ open, onSend, onClose }: any) =>
+// The bar's own composer is the shared mail composer now; the stub resolves a
+// SendRequest exactly as the real one does once the user hits Send.
+vi.mock('../../../pages/mail/compose/MailComposer', async (orig) => ({
+  ...(await orig<typeof import('../../../pages/mail/compose/MailComposer')>()),
+  MailComposer: ({ open, onSend, onClose }: any) =>
     open ? (
       <div data-testid="composer">
         <button
           data-testid="composer-send"
           onClick={() => {
-            void onSend({ to: 'gc@example.com', subject: 's', body: 'b', attachmentFileIds: [] })
+            void onSend({ to: [{ addr: 'gc@example.com' }], subject: 's', html: '<p>b</p>', attachments: [] })
               .then(() => onClose())
               .catch(() => {});
           }}
@@ -79,6 +82,17 @@ vi.mock('../../../components/EmailComposer', () => ({
         </button>
       </div>
     ) : null,
+}));
+
+// The document bar loads the user's mailboxes (for the composer's From select)
+// and the item's mail thread links (for the Sent chip). Neither is under test
+// here; an empty mailbox list is the honest default.
+vi.mock('../../../utils/mailApi', () => ({
+  mailApi: {
+    accounts: vi.fn(async () => []),
+    links: vi.fn(async () => []),
+    thread: vi.fn(async () => { throw new Error('not found'); }),
+  },
 }));
 
 import { ToastProvider } from '../../../components/Toast';

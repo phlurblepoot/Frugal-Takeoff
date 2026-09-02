@@ -1,7 +1,7 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, getMailAccounts, pickSendableAccount, mailSendBlockedReason, getAlwaysCc, getCustomer, getProject, sendInvoice } from '../../../utils/store';
+import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, sendInvoice } from '../../../utils/store';
 import { Customer } from '../../../types';
 import { resolveRecipient } from '../../../utils/recipients';
 import { formatMoney } from '../../../utils/money';
@@ -9,6 +9,8 @@ import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -66,46 +68,7 @@ export const InvoiceEditor: React.FC<{
   });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-    /** Set once we know the user has no mail account to send from. */
-    sendBlockedReason?: string;
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, mailAccounts, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getMailAccounts().catch(() => []),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('invoice', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = pickSendableAccount(mailAccounts)?.emailAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts, sendBlockedReason: mailSendBlockedReason(mailAccounts) });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('invoice', projectId);
 
   // One name for the stored document and the email attachment — they upsert
   // onto the same document row, so a differing name would flip the stored name
@@ -229,13 +192,11 @@ export const InvoiceEditor: React.FC<{
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },
-              sendFn: async (fileId, m) => {
-                await sendInvoice(invoice.id, {
-                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                  fileId, attachmentFileIds: m.attachmentFileIds,
-                });
+              sendFn: async (fileId, req) => {
+                const result = await sendInvoice(invoice.id, { ...itemSendPayload(req), fileId });
                 // The send stamps the invoice 'sent' server-side.
                 onSaved({ keepMounted: true });
+                return result;
               },
             }}
           />

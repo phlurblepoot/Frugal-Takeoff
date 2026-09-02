@@ -13,7 +13,7 @@ describe('kindLabel', () => {
     expect(kindLabel('plan')).toBe('plan');
   });
 
-  it('resolves the email-attachment kind (EmailComposer writes it; it is not hidden)', () => {
+  it('resolves the email-attachment kind (email attachments write it; it is not hidden)', () => {
     expect(kindLabel('email-attachment')).toBe('Email Attachment');
   });
 
