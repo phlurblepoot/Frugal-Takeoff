@@ -65,7 +65,11 @@ const FolderButton: React.FC<{ item: RailFolder; selected: boolean; onSelect: (i
         {label}
       </span>
       {folder.unreadCount > 0 && (
-        <span className="shrink-0 rounded-full bg-accent-500/15 px-1.5 text-[11px] font-medium leading-5 text-accent-700 dark:text-accent-300">
+        <span
+          role="img"
+          aria-label={`${folder.unreadCount} unread`}
+          className="shrink-0 rounded-full bg-accent-500/15 px-1.5 text-[11px] font-medium leading-5 text-accent-700 dark:text-accent-300"
+        >
           {folder.unreadCount}
         </span>
       )}

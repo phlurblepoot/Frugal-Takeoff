@@ -39,8 +39,8 @@ export const ThreadRow: React.FC<{
         selected ? 'bg-hover' : unread ? 'bg-raised' : ''
       }`}
     >
-      <span className="mt-1.5 flex w-2 shrink-0 justify-center" aria-hidden="true">
-        {unread && <span className="size-2 rounded-full bg-accent-500" />}
+      <span className="mt-1.5 flex w-2 shrink-0 justify-center">
+        {unread && <span role="img" aria-label="Unread" className="size-2 rounded-full bg-accent-500" />}
       </span>
 
       <div className="min-w-0 flex-1">
@@ -49,7 +49,13 @@ export const ThreadRow: React.FC<{
             {participantsLabel(row.participants, ownAddresses)}
           </span>
           {row.messageCount > 1 && (
-            <span className="shrink-0 rounded bg-sunken px-1 text-[11px] leading-4 text-ink-faint">{row.messageCount}</span>
+            <span
+              role="img"
+              aria-label={`${row.messageCount} messages`}
+              className="shrink-0 rounded bg-sunken px-1 text-[11px] leading-4 text-ink-faint"
+            >
+              {row.messageCount}
+            </span>
           )}
           <span className="shrink-0 text-xs text-ink-faint">{formatMailDate(row.lastDate)}</span>
         </div>

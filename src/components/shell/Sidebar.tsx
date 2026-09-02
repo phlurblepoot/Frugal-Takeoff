@@ -85,6 +85,7 @@ const NavRow: React.FC<{
       <Icon size={18} className="shrink-0" />
       {!expanded && !!badge && badge > 0 && (
         <span
+          role="img"
           aria-label={`${badge} unread`}
           className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent-500"
         />
@@ -93,6 +94,7 @@ const NavRow: React.FC<{
     {expanded && <span className="flex-1 truncate text-left">{label}</span>}
     {expanded && !!badge && badge > 0 && (
       <span
+        role="img"
         aria-label={`${badge} unread`}
         className="bg-accent-500 text-white text-[10px] font-semibold rounded-full px-1.5 leading-normal"
       >

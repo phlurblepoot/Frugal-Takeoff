@@ -66,6 +66,7 @@ describe('FolderRail', () => {
   it('shows an unread count only for folders that have one', () => {
     render(<FolderRail {...props} />);
     expect(within(row('f-inbox')).getByText('4')).toBeInTheDocument();
+    expect(within(row('f-inbox')).getByLabelText('4 unread')).toBeInTheDocument();
     expect(within(row('f-alpha')).getByText('2')).toBeInTheDocument();
     expect(within(row('f-trash')).queryByText('0')).toBeNull();
   });

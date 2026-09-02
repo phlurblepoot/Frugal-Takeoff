@@ -42,6 +42,10 @@ describe('ThreadRow', () => {
     expect(screen.getByText('Roof detail').className).toMatch(/font-semibold/);
     // message count rides next to the participants when the thread has replies
     expect(screen.getByText('3')).toBeInTheDocument();
+    // ...and both the dot and the count carry a label, so "unread" and "how
+    // many messages" aren't colour/position-only cues (a11y pass).
+    expect(screen.getByLabelText('Unread')).toBeInTheDocument();
+    expect(screen.getByLabelText('3 messages')).toBeInTheDocument();
   });
 
   it('leaves a read thread unbolded and without a message count on a single message', () => {
