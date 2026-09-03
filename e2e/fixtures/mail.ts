@@ -12,19 +12,44 @@ export interface FakeThreadMessage { text: string; html?: string; date?: string;
 export interface FakeThreadSpec { subject: string; from: FakeAddr; messages: FakeThreadMessage[] }
 
 /**
- * Delete every mail account this token owns (cascading its folders, threads
- * and messages). Specs call this BEFORE `connectFakeAccount` so each one owns
- * the only mailbox on the shared server/DB: `/mail` then redirects to a known
- * account, the sidebar's unread badge counts only this test's mail, and the
- * fresh account id gets a fresh `FakeMailProvider` (whose `seed()` clears its
- * whole in-memory map, so one account per scenario is the rule).
+ * Delete every FAKE-provider mail account this token owns (cascading its
+ * folders, threads and messages). Specs call this BEFORE `connectFakeAccount`
+ * so each one owns the only mailbox on the shared server/DB: `/mail` then
+ * redirects to a known account, the sidebar's unread badge counts only this
+ * test's mail, and the fresh account id gets a fresh `FakeMailProvider` (whose
+ * `seed()` clears its whole in-memory map, so one account per scenario is the
+ * rule).
+ *
+ * DATA SAFETY — this is the destructive step in the mail suite, and
+ * `reuseExistingServer: !CI` means a bare `npm run test:e2e` on a dev box
+ * points it at whatever server is already on the port. That can be a REAL
+ * dev/LAN instance holding a real connected Gmail/IMAP mailbox. Two guards,
+ * both no-ops inside the e2e webServer (which only ever has `fake` accounts):
+ *
+ *   1. If ANY non-fake account exists we throw before deleting ANYTHING, so
+ *      the whole suite aborts instead of cascading away a live mailbox.
+ *   2. The delete loop itself is filtered to `provider === 'fake'`, so even a
+ *      future caller that skips guard 1 cannot touch a real account.
+ *
  * Throws if any request fails.
  */
 export async function resetMailAccounts(request: APIRequestContext, token: string): Promise<void> {
   const headers = { Authorization: `Bearer ${token}` };
   const res = await request.get('/api/mail/accounts', { headers });
   if (!res.ok()) throw new Error(`resetMailAccounts list failed: ${res.status()} ${await res.text()}`);
-  for (const a of (await res.json()) as Array<{ id: string }>) {
+  const accounts = (await res.json()) as Array<{ id: string; provider?: string }>;
+
+  const real = accounts.filter(a => a.provider !== 'fake');
+  if (real.length) {
+    throw new Error(
+      'Refusing to run mail e2e against a server with real mail accounts ' +
+      `(found ${real.length}: ${real.map(a => a.provider ?? 'unknown').join(', ')}). ` +
+      'The mail specs delete mail accounts — point them at a throwaway server ' +
+      '(stop the dev server so playwright starts its own with MAIL_FAKE_PROVIDER=1).'
+    );
+  }
+
+  for (const a of accounts.filter(a => a.provider === 'fake')) {
     const del = await request.delete(`/api/mail/accounts/${encodeURIComponent(a.id)}`, { headers });
     if (!del.ok()) throw new Error(`resetMailAccounts delete failed: ${del.status()} ${await del.text()}`);
   }
