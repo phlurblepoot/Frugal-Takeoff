@@ -1,6 +1,14 @@
 export type MailProviderKind = 'google' | 'microsoft' | 'imap' | 'fake';
 export interface Addr { addr: string; name?: string }
-export interface AttachmentMeta { attId: string; name: string; mime: string; size: number; contentId?: string }
+export interface AttachmentMeta {
+  attId: string; name: string; mime: string; size: number; contentId?: string;
+  // Ids this same part answered to in EARLIER generations of the indexed list.
+  // Gmail re-mints attachment ids per fetch, so re-indexing a message (see
+  // getAttachmentFresh in ../routes.ts) would otherwise strand every id an
+  // already-open client is still holding. Only written by that re-index, only
+  // read by wantedAttachment, and never sent to a provider.
+  priorIds?: string[];
+}
 export interface Envelope {
   providerMessageId: string; providerThreadId?: string;
   messageIdHeader?: string; inReplyTo?: string; references: string[];

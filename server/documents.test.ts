@@ -361,6 +361,25 @@ describe('GET /api/documents — source label resolution', () => {
     });
   });
 
+  // Several attachments off ONE email are now several live rows sharing the
+  // same (mailMessage, id) source — the resolver labels each row on its own,
+  // so every one of them lists with its own name and the same deep link.
+  it('lists every attachment saved from one message as its own row', async () => {
+    const mid = seedMailMessage({ id: 'mm-multi', subject: 'Signed COR-4 + site photos' });
+    const src = { projectId: 'p1', kind: 'document', sourceType: 'mailMessage', sourceId: mid };
+    const a = await upload('mm-a', { ...src, name: 'COR-4 signed.pdf' });
+    const b = await upload('mm-b', { ...src, name: 'site-1.jpg' });
+    const c = await upload('mm-c', { ...src, name: 'site-2.jpg' });
+
+    const res = await request(app).get('/api/documents');
+    const rows = [a, b, c].map(id => res.body.rows.find((r: any) => r.id === id));
+    expect(rows.map((r: any) => r.name)).toEqual(['COR-4 signed.pdf', 'site-1.jpg', 'site-2.jpg']);
+    for (const r of rows) {
+      expect(r.source).toEqual({ type: 'mailMessage', id: mid, label: 'Signed COR-4 + site photos', href: '/mail/acct-1/_/thr-9' });
+      expect(r.versionNumber).toBe(1); // its own document, not a version of a sibling
+    }
+  });
+
   it('a subject-less mail message falls back to a generic label, still linked', async () => {
     const mid = seedMailMessage({ id: 'mm-2', subject: '   ' });
     const fid = await upload('mail-att2', { projectId: 'p1', kind: 'email-attachment', sourceType: 'mailMessage', sourceId: mid, name: 'x.pdf' });

@@ -181,7 +181,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         // The broadcast is what makes an OPEN client drop the dead ids it is
         // still rendering chips for.
         if (fresh.length) {
-          db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(JSON.stringify(fresh), m.id);
+          db.prepare('UPDATE mail_messages SET attachmentsJson = ? WHERE id = ?').run(JSON.stringify(withPriorIds(m, fresh)), m.id);
           const owner = accounts.getAccountAny(db, m.accountId);
           if (owner) ctx.broadcastChange({ type: 'mailThread', id: m.threadKey, action: 'updated', byUserId: owner.userId });
         }
@@ -197,11 +197,52 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     }
   };
 
+  /**
+   * Carries each stale attachment id forward onto the fresh part that replaced
+   * it, so a request still holding a previous generation's id can be re-keyed
+   * without another round trip (see wantedAttachment).
+   *
+   * The bug this closes: re-indexing REPLACES the ids in the row. A second
+   * save request for the same message — the way saving attachments one at a
+   * time actually goes — arrived with the id the client had rendered before
+   * the first save's recovery rewrote the list, found nothing under it, and
+   * was rejected with "That attachment is not on this message" before the
+   * provider was ever asked. The stale-id recovery below could not help,
+   * because that rejection happens while resolving the item, not while
+   * fetching it.
+   *
+   * Matched the same way the recovery matches: name+size, else the position
+   * the old entry held with the name still agreeing. Capped at 3 generations
+   * so a long-lived message's row cannot grow without bound.
+   */
+  const withPriorIds = (m: MessageRowRaw, fresh: AttachmentMeta[]): AttachmentMeta[] => {
+    let prev: AttachmentMeta[] = [];
+    try { prev = JSON.parse(m.attachmentsJson || '[]') as AttachmentMeta[]; } catch { prev = []; }
+    if (!prev.length) return fresh;
+    const taken = new Set<number>();
+    return fresh.map((f, i) => {
+      let at = prev.findIndex((p, j) => !taken.has(j) && p.name === f.name && p.size === f.size);
+      if (at < 0 && prev[i] && !taken.has(i) && prev[i].name === f.name) at = i;
+      if (at < 0) return f;
+      taken.add(at);
+      const old = prev[at];
+      if (old.attId === f.attId) return { ...f, ...(old.priorIds?.length ? { priorIds: old.priorIds } : {}) };
+      return { ...f, priorIds: [old.attId, ...(old.priorIds ?? [])].slice(0, 3) };
+    });
+  };
+
   /** The wanted-attachment descriptor `getAttachmentFresh` takes, resolved
-   *  against a caller-owned snapshot of the indexed list. */
+   *  against a caller-owned snapshot of the indexed list. An id the list no
+   *  longer carries is looked up in the parts' `priorIds` before it is called
+   *  a miss — it is far more likely a client holding a re-keyed id than an
+   *  attachment that is really not on this message. The returned attId is the
+   *  one the provider knows TODAY, so the fetch goes straight to the live
+   *  part instead of taking the 404-and-recover detour. */
   const wantedAttachment = (metas: AttachmentMeta[], attId: string) => {
-    const index = metas.findIndex(x => x.attId === attId);
-    return { attId, meta: index >= 0 ? metas[index] : null, index };
+    let index = metas.findIndex(x => x.attId === attId);
+    if (index < 0) index = metas.findIndex(x => (x.priorIds ?? []).includes(attId));
+    if (index < 0) return { attId, meta: null, index };
+    return { attId: metas[index].attId, meta: metas[index], index };
   };
 
   // ── accounts ──
@@ -641,9 +682,14 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     // every later one is matched against the list it already fetched.
     const freshParts: FreshParts = { list: null };
     for (const it of items) {
-      const wanted = wantedAttachment(metas, String(it?.attId ?? ''));
+      // The id the CLIENT sent. Every failed[] entry is reported under it —
+      // even when wantedAttachment re-keyed a stale id — because the client
+      // narrows its retry list by matching failed[].attId against the chips it
+      // is showing, which still carry the ids it was given.
+      const askedId = String(it?.attId ?? '');
+      const wanted = wantedAttachment(metas, askedId);
       const meta = wanted.meta;
-      if (!meta) { failed.push({ attId: String(it?.attId ?? ''), error: 'That attachment is not on this message' }); continue; }
+      if (!meta) { failed.push({ attId: askedId, error: 'That attachment is not on this message' }); continue; }
       try {
         const { att, attId: usedAttId } = await getAttachmentFresh(m, wanted, freshParts);
         const chunks: Buffer[] = [];
@@ -673,8 +719,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         // the ONLY record of why a save failed — it has to name the account,
         // its provider, the message and the attachment, or the next report of
         // "attachment save fails" is undiagnosable all over again.
-        console.error(`[mail] could not save attachment attId=${meta.attId} name=${meta.name} message=${m.id} account=${m.accountId} provider=${providerKind}`, e);
-        failed.push({ attId: meta.attId, error: itemError(e) });
+        console.error(`[mail] could not save attachment attId=${meta.attId} asked=${askedId} name=${meta.name} message=${m.id} account=${m.accountId} provider=${providerKind}`, e);
+        failed.push({ attId: askedId, error: itemError(e) });
       }
     }
     res.json({ fileIds, saved, failed });

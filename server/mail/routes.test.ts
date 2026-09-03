@@ -293,6 +293,98 @@ describe('mail routes', () => {
     expect(rows).toEqual([{ name: 'one.pdf', kind: 'email-attachment' }, { name: 'two.pdf', kind: 'email-attachment' }]);
   });
 
+  // Nathan's real Gmail flow: pick several attachments, choose a type for them
+  // (the modal ALWAYS sends a kind), Save. Each attachment is its own document.
+  it('saves several attachments under one picked kind as SEPARATE documents, not versions', async () => {
+    const atts = [
+      { attId: 'a1', name: 'plan.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'site-1.jpg', mime: 'image/jpeg', size: 3 },
+      { attId: 'a3', name: 'site-2.png', mime: 'image/png', size: 3 },
+    ];
+    const bytes = { a1: Buffer.from('%PDF'), a2: Buffer.from('JPG'), a3: Buffer.from('PNG') };
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: bytes })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    const s = await request(app).post(`/api/mail/messages/${id}/attachments/save`)
+      .send({ items: atts.map(a => ({ attId: a.attId, kind: 'document', projectId: 'p1' })) });
+    expect(s.status).toBe(200);
+    expect(s.body.failed).toEqual([]);
+    expect(s.body.saved.length).toBe(3);
+    expect(new Set(s.body.fileIds).size).toBe(3);
+    // Three live rows, zero version history.
+    const live = db.prepare('SELECT name, kind, mime, versionNumber FROM files WHERE parentFileId IS NULL ORDER BY name').all();
+    expect(live).toEqual([
+      { name: 'plan.pdf', kind: 'document', mime: 'application/pdf', versionNumber: 1 },
+      { name: 'site-1.jpg', kind: 'document', mime: 'image/jpeg', versionNumber: 1 },
+      { name: 'site-2.png', kind: 'document', mime: 'image/png', versionNumber: 1 },
+    ]);
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId IS NOT NULL').get()).toEqual({ c: 0 });
+  });
+
+  it('saves attachments picked one at a time in SEPARATE requests as separate documents', async () => {
+    const atts = [
+      { attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 },
+    ];
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    const one = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', kind: 'document' }] });
+    const two = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a2', kind: 'document' }] });
+    expect(one.body.failed).toEqual([]);
+    expect(two.body.failed).toEqual([]);
+    expect(one.body.fileIds[0]).not.toBe(two.body.fileIds[0]);
+    expect((db.prepare('SELECT name FROM files WHERE parentFileId IS NULL ORDER BY name').all() as { name: string }[]).map(r => r.name))
+      .toEqual(['one.pdf', 'two.pdf']);
+  });
+
+  // BUG (real Gmail, reported 2026-09-02): saving attachments one at a time
+  // failed on every one after the first. The first save's stale-id recovery
+  // rewrites attachmentsJson with the provider's fresh ids, and the next
+  // request still carries the id the client rendered before that — which the
+  // rewritten list no longer holds.
+  it('saves a second attachment whose id the FIRST save re-keyed out of the indexed list', async () => {
+    const atts = [
+      { attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 },
+    ];
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+    const one = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', kind: 'document' }] });
+    expect(one.body.failed).toEqual([]);
+    // The client still holds the pre-rotation id for a2: it rendered its chips
+    // before the save above re-indexed the row.
+    const two = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a2', kind: 'document' }] });
+    expect(two.body.failed).toEqual([]);
+    // Resolved through priorIds, so saved[] names the id the provider knows now.
+    expect(two.body.saved).toEqual([{ attId: 'a2-rotated', fileId: two.body.fileIds[0] }]);
+    expect((db.prepare('SELECT name FROM files WHERE parentFileId IS NULL ORDER BY name').all() as { name: string }[]).map(r => r.name))
+      .toEqual(['one.pdf', 'two.pdf']);
+    // An id that was never on this message is still an honest miss.
+    const bad = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'never' }] });
+    expect(bad.body.failed).toEqual([{ attId: 'never', error: 'That attachment is not on this message' }]);
+  });
+
+  // The client narrows its retry list by matching failed[].attId against the
+  // chips it is showing, so a failure has to come back under the id it SENT —
+  // not the fresher one the priorIds lookup resolved it to.
+  it('reports a failure under the id the client sent, even after a re-key', async () => {
+    const atts = [
+      { attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 },
+      { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 },
+    ];
+    provider.seed([env('m1', { attachments: atts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
+    upsertEnvelopes(ctx, acct, [env('m1', { attachments: atts })]);
+    const id = firstMessageId();
+    provider.rotateAttachmentIds('m1', a => `${a}-rotated`);
+    await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a1', kind: 'document' }] });
+    provider.failNextWith(new Error('provider blew up'));
+    const two = await request(app).post(`/api/mail/messages/${id}/attachments/save`).send({ items: [{ attId: 'a2', kind: 'document' }] });
+    expect(two.body.failed).toEqual([{ attId: 'a2', error: 'Could not save this attachment' }]);
+  });
+
   it('attachment save is per item: one failure does not discard the others', async () => {
     const twoAtts = [{ attId: 'a1', name: 'one.pdf', mime: 'application/pdf', size: 4 }, { attId: 'a2', name: 'two.pdf', mime: 'application/pdf', size: 4 }];
     provider.seed([env('m1', { attachments: twoAtts, attachmentBytes: { a1: Buffer.from('%PDF'), a2: Buffer.from('%PDF') } })]);
@@ -331,7 +423,8 @@ describe('mail routes', () => {
       expect(r.headers['content-disposition']).toContain('cor.pdf');
       expect(r.body.toString()).toBe('%PDF');
       // Re-indexed, so the NEXT click resolves without the extra round trip.
-      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4 }]);
+      // priorIds keeps the id the client is still holding resolvable — see wantedAttachment.
+      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4, priorIds: ['a1'] }]);
       const again = await request(app).get(`/api/mail/messages/${id}/attachments/a1-rotated`).query({ token: 'tok' });
       expect(again.status).toBe(200);
     });
@@ -345,7 +438,7 @@ describe('mail routes', () => {
       // The FRESH id: the client sent 'a1', but that is not what served the bytes.
       expect(s.body.saved).toEqual([{ attId: 'a1-rotated', fileId: s.body.fileIds[0] }]);
       expect((db.prepare('SELECT name FROM files WHERE id = ?').get(s.body.fileIds[0]) as { name: string }).name).toBe('COR-4.pdf');
-      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4 }]);
+      expect(attsOf(id)).toEqual([{ attId: 'a1-rotated', name: 'cor.pdf', mime: 'application/pdf', size: 4, priorIds: ['a1'] }]);
     });
 
     // The bug this pins: the first recovery rewrites attachmentsJson, so a
