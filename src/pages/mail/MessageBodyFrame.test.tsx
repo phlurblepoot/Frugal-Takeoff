@@ -88,6 +88,10 @@ describe('MessageBodyFrame', () => {
     // html/body must not be stretched to fill the (possibly tall) iframe
     // viewport, or the wrapper's rect would be inflated by it too.
     expect(doc).toContain('html,body{margin:0;height:auto!important}');
+    // ...and the wrapper contains its floats: a float-only body (newsletters,
+    // some signatures) has no in-flow content, so without a block formatting
+    // context the wrapper's rect is 0 and the message renders as a sliver.
+    expect(doc).toContain('#__mail_root{display:flow-root}');
     // Body content is wrapped so it can be measured independent of body/html.
     expect(doc).toContain('<div id="__mail_root"><p>hi</p></div>');
     // The report() function reads the wrapper's own bounding rect...

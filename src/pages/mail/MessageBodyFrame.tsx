@@ -117,6 +117,12 @@ export function buildFrameDoc(html: string, nonce: string, origin: string): stri
     // #__mail_root's rect would itself be measured inside an inflated
     // viewport and the shrink-on-collapse fix below would not hold.
     'html,body{margin:0;height:auto!important}',
+    // A body that is nothing but floats (a common newsletter/signature shape)
+    // has zero in-flow content, so #__mail_root's rect measures 0 and the
+    // message renders as a sliver. flow-root makes the wrapper establish a
+    // block formatting context, so it contains its floats and reports their
+    // real height.
+    '#__mail_root{display:flow-root}',
     'body{font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#111;background:#fff;',
     'word-break:break-word;overflow-wrap:anywhere;padding:12px}',
     'img{max-width:100%;height:auto}',
