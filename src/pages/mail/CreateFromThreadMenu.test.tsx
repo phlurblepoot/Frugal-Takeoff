@@ -94,6 +94,36 @@ describe('CreateFromThreadMenu', () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/tasks?open=task-1'));
   });
 
+  it('still navigates to the created item and shows a distinct warning when createLink fails after a successful create', async () => {
+    h.createLink.mockRejectedValue(new Error('link failed'));
+    const { navigate } = setup({ links: [PROJECT_LINK] });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Task' }));
+
+    // The item WAS created — creation itself is not reported as a failure.
+    await waitFor(() => expect(h.createTask).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/tasks?open=task-1'));
+    expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/linking.*failed/i), expect.objectContaining({ type: 'warning' }));
+    // No "could not create" wording anywhere — that would be false.
+    expect(h.toast).not.toHaveBeenCalledWith(expect.stringMatching(/could not create/i), expect.anything());
+    // The popover resets rather than staying open on a stale state.
+    expect(screen.queryByTestId('create-from-thread-menu')).toBeNull();
+    // A second click on the (now-closed, reopened) menu must not re-create —
+    // guards against the partial-failure path inviting a duplicate.
+    expect(h.createTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a plain creation failure (before any link attempt) and resets the menu', async () => {
+    h.createTask.mockRejectedValue(new Error('create failed'));
+    setup({ links: [PROJECT_LINK] });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Task' }));
+
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Could not create that task.', expect.objectContaining({ type: 'error' })));
+    expect(h.createLink).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('create-from-thread-menu')).toBeNull();
+  });
+
   it('creates a Task with no project/customer when the thread has no project link', async () => {
     setup({ links: [] });
     openMenu();

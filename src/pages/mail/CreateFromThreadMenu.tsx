@@ -114,58 +114,77 @@ export const CreateFromThreadMenu: React.FC<{
 
   const title = (subject || '').trim() || '(no subject)';
 
-  const finishTask = async (projectId: string | null, customerId: string | null) => {
+  /** What a create-item step hands back to `runCreate`: enough to link the
+   *  thread and navigate, without runCreate needing to know per-type shape. */
+  type CreatedItem = { itemType: CreateType; id: string; path: string };
+
+  const createTaskItem = async (projectId: string | null, customerId: string | null): Promise<CreatedItem> => {
     const description = await buildDescription(messages, ownAddresses, snippet);
     const { id } = await createTask({ title, notes: description, projectId, customerId });
-    await mailApi.createLink({ threadKey, itemType: 'task', itemId: id });
-    navigate(`/tasks?open=${id}`);
+    return { itemType: 'task', id, path: `/tasks?open=${id}` };
   };
 
-  const finishRfi = async (projectId: string) => {
+  const createRfiItem = async (projectId: string): Promise<CreatedItem> => {
     const description = await buildDescription(messages, ownAddresses, snippet);
     const { id } = await createRfi(projectId, { title, question: description });
-    await mailApi.createLink({ threadKey, itemType: 'rfi', itemId: id });
-    navigate(`/project/${projectId}/rfis?open=${id}`);
+    return { itemType: 'rfi', id, path: `/project/${projectId}/rfis?open=${id}` };
   };
 
-  const finishIssue = async (projectId: string) => {
+  const createIssueItem = async (projectId: string): Promise<CreatedItem> => {
     const description = await buildDescription(messages, ownAddresses, snippet);
     const { id } = await createIssue(projectId, { title, description });
-    await mailApi.createLink({ threadKey, itemType: 'issue', itemId: id });
-    navigate(`/project/${projectId}/issues?open=${id}`);
+    return { itemType: 'issue', id, path: `/project/${projectId}/issues?open=${id}` };
   };
 
-  const chooseType = async (type: CreateType) => {
+  /** Runs one create step, then links the thread to what it made, and
+   *  navigates — the two failure points are handled differently on purpose:
+   *  if `create` itself throws, nothing was made, so the item never existed
+   *  and the user is told creation failed. If `create` SUCCEEDS but the
+   *  follow-up createLink call throws, the item DOES exist — telling the
+   *  user "could not create" here would be false and risks them retrying
+   *  into a duplicate, so that case still navigates to the real new item and
+   *  shows a distinct toast instead. Either way the popover resets, so a
+   *  retry (on true creation failure) starts from a clean menu rather than a
+   *  stale project-select step. */
+  const runCreate = async (create: () => Promise<CreatedItem>, failureLabel: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const created = await create();
+      try {
+        await mailApi.createLink({ threadKey, itemType: created.itemType, itemId: created.id });
+      } catch {
+        toast(`Created that ${failureLabel}, but linking this email thread to it failed — link it from the thread later.`, { type: 'warning' });
+      }
+      navigate(created.path);
+    } catch {
+      toast(`Could not create that ${failureLabel}.`, { type: 'error' });
+    } finally {
+      reset();
+      setBusy(false);
+    }
+  };
+
+  const chooseType = (type: CreateType) => {
     if (busy) return;
     if (type === 'task') {
-      setBusy(true);
-      try {
-        // A task without a project carries the project link's customer
-        // instead — a task WITH a project derives its customer server-side,
-        // same convention TasksPage's own create form follows.
-        await finishTask(projectLink?.projectId ?? null, projectLink?.projectId ? null : (projectLink?.customerId ?? null));
-        reset();
-      } catch {
-        toast('Could not create that task.', { type: 'error' });
-      } finally {
-        setBusy(false);
-      }
+      // A task without a project carries the project link's customer
+      // instead — a task WITH a project derives its customer server-side,
+      // same convention TasksPage's own create form follows.
+      const projectId = projectLink?.projectId ?? null;
+      const customerId = projectId ? null : (projectLink?.customerId ?? null);
+      void runCreate(() => createTaskItem(projectId, customerId), 'task');
       return;
     }
 
     // RFI/Issue require a project — the thread's own link if it has one,
     // else a project must be picked before anything is created.
-    if (projectLink?.projectId) {
-      setBusy(true);
-      try {
-        if (type === 'rfi') await finishRfi(projectLink.projectId);
-        else await finishIssue(projectLink.projectId);
-        reset();
-      } catch {
-        toast(type === 'rfi' ? 'Could not create that RFI.' : 'Could not create that issue.', { type: 'error' });
-      } finally {
-        setBusy(false);
-      }
+    const linkedProjectId = projectLink?.projectId;
+    if (linkedProjectId) {
+      void runCreate(
+        () => (type === 'rfi' ? createRfiItem(linkedProjectId) : createIssueItem(linkedProjectId)),
+        type === 'rfi' ? 'RFI' : 'issue',
+      );
       return;
     }
 
@@ -175,18 +194,14 @@ export const CreateFromThreadMenu: React.FC<{
     }
   };
 
-  const confirmProjectPick = async () => {
+  const confirmProjectPick = () => {
     if (!pendingType || !selectedProjectId || busy) return;
-    setBusy(true);
-    try {
-      if (pendingType === 'rfi') await finishRfi(selectedProjectId);
-      else await finishIssue(selectedProjectId);
-      reset();
-    } catch {
-      toast(pendingType === 'rfi' ? 'Could not create that RFI.' : 'Could not create that issue.', { type: 'error' });
-    } finally {
-      setBusy(false);
-    }
+    const type = pendingType;
+    const projectId = selectedProjectId;
+    void runCreate(
+      () => (type === 'rfi' ? createRfiItem(projectId) : createIssueItem(projectId)),
+      type === 'rfi' ? 'RFI' : 'issue',
+    );
   };
 
   return (
