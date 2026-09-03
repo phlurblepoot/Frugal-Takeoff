@@ -14,6 +14,7 @@ import type {
   MailAction,
   MailFolder,
   MessageRow,
+  ProjectThreadRow,
   Recipient,
   SendRequest,
   SendResult,
@@ -200,6 +201,22 @@ export const mailApi = {
   deleteLink: (id: string): Promise<void> => del(`/api/mail/links/${encodeURIComponent(id)}`),
 
   setupInfo: (): Promise<SetupInfo> => get('/api/mail/setup-info'),
+
+  // Cross-user thread opening (spec Goal 3): does one of the CURRENT user's
+  // own mailboxes hold this thread — exact threadKey, else a normalized
+  // subject + ±3d date window + shared participant. See openThreadLink.ts,
+  // the one place that turns this into a navigation or a reference card.
+  resolveThread: (q: { threadKey: string; subject: string; firstDate: string; participants: string }):
+    Promise<{ match: { accountId: string; threadKey: string } | null }> => get(`/api/mail/resolve-thread${qs(q)}`),
+
+  // Every mail thread linked to a project or one of its items (spec Goal 5),
+  // one row per distinct threadKey. Viewer-independent, like links()/threads().
+  projectThreads: (projectId: string): Promise<ProjectThreadRow[]> => get(`/api/mail/project-threads${qs({ projectId })}`),
+
+  // Batch "they replied and we haven't yet" flags (spec Goal 4) — the ids out
+  // of `itemIds` whose newest thread link satisfies the indicator rule.
+  replyFlags: (itemType: string, itemIds: string[]): Promise<{ flagged: string[] }> =>
+    get(`/api/mail/reply-flags${qs({ itemType, itemIds: itemIds.join(',') })}`),
 };
 
 // Re-exported so callers of mailApi can import the shape of an attachment

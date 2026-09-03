@@ -4,14 +4,14 @@
 // "Reply in existing thread" option.
 //
 // A mail_thread_links row is shared by everyone who can see the item, but the
-// THREAD itself lives in one person's mailbox. So a link alone cannot be turned
-// into a deep link: the client has to find out whether any mailbox this user
-// owns actually holds that thread, which is one GET per account until one says
-// yes. Phase 1 matches on the exact threadKey only — the subject+date fallback
-// is Phase 2.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// THREAD itself lives in one person's mailbox. So a link alone cannot be
+// turned into a deep link: `myThread` asks GET /api/mail/resolve-thread
+// (exact threadKey, else a subject+date+participant fallback) which one
+// server-side call the server itself answers against every mailbox this user
+// owns — see openThreadLink.ts, the single place that query is made from.
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { mailApi } from '../utils/mailApi';
-import { HttpError } from '../utils/store';
+import { resolveThreadMatch } from '../pages/mail/openThreadLink';
 import type { ThreadLink } from '../pages/mail/types';
 
 export interface ItemThread {
@@ -31,65 +31,22 @@ export interface ItemThreadLinksState {
   reload: () => void;
 }
 
-// "Does account A hold thread K" is a stable fact for the life of the page, and
-// the answer is usually no (the thread belongs to whoever sent the item). Both
-// outcomes are cached so opening an editor twice doesn't re-run the probe, and
-// reload() drops the entries it is about to re-ask so a link created by a send
-// that just happened isn't answered from a pre-send miss.
-const probes = new Map<string, Promise<boolean>>();
-const probeKey = (accountId: string, threadKey: string) => `${accountId}::${threadKey}`;
-
-const ownsThread = (accountId: string, threadKey: string): Promise<boolean> => {
-  const key = probeKey(accountId, threadKey);
-  const hit = probes.get(key);
-  if (hit) return hit;
-  const p = mailApi.thread(accountId, threadKey).then(
-    () => true,
-    (err: unknown) => {
-      // 404 is the server's definitive "this user does not own that thread" and
-      // is worth remembering. Anything else (offline, 502, a restarting server)
-      // says nothing about ownership, so drop it and let a reload ask again.
-      if (!(err instanceof HttpError) || err.status !== 404) probes.delete(key);
-      return false;
-    },
-  );
-  probes.set(key, p);
-  return p;
-};
-
-/** Test seam — the cache is module state that would otherwise leak between tests. */
-export const __resetThreadProbeCache = (): void => { probes.clear(); };
-
 const stamp = (l: ThreadLink): number => Date.parse(l.firstDate ?? l.createdAt) || 0;
 
 export function useItemThreadLinks(
   itemType: string | undefined,
   itemId: string | undefined,
-  /** The user's mailboxes; may be empty while they load. */
-  accounts: Array<{ id: string }>,
 ): ItemThreadLinksState {
   const [links, setLinks] = useState<ThreadLink[]>([]);
   const [loading, setLoading] = useState(false);
   // The finished answer, stamped with the question it answers. Deriving
   // `resolving` from "is there an answer for the CURRENT question" — rather
   // than from a flag an effect sets — is what keeps the chip from showing one
-  // frame of "by another user" before the first probe has even started.
+  // frame of "not mine" before the resolve request has even started.
   const [resolved, setResolved] = useState<{ key: string; thread: ItemThread | null } | null>(null);
   const [nonce, setNonce] = useState(0);
 
-  // Identity-stable key: `accounts` is a fresh array on every render of the
-  // live account hook, so depending on the array itself would re-probe forever.
-  const accountIds = accounts.map(a => a.id).join(',');
-
-  const linksRef = useRef(links);
-  linksRef.current = links;
-
-  const reload = useCallback(() => {
-    for (const l of linksRef.current) {
-      for (const id of accountIds ? accountIds.split(',') : []) probes.delete(probeKey(id, l.threadKey));
-    }
-    setNonce(n => n + 1);
-  }, [accountIds]);
+  const reload = useCallback(() => setNonce(n => n + 1), []);
 
   useEffect(() => {
     if (!itemType || !itemId) {
@@ -117,33 +74,30 @@ export function useItemThreadLinks(
   }, [itemType, itemId, nonce]);
 
   const newest = links[0] ?? null;
-  const newestKey = newest?.threadKey ?? null;
-  const newestSubject = newest?.subjectSnapshot ?? '';
 
-  // The question being asked right now: which thread, against which mailboxes.
-  const resolveKey = newestKey ? `${nonce}::${accountIds}::${newestKey}` : null;
+  // The question being asked right now: which thread, as of which reload.
+  const resolveKey = newest ? `${nonce}::${newest.id}` : null;
   const answered = resolved !== null && resolved.key === resolveKey;
   const myThread = answered ? resolved.thread : null;
   const resolving = resolveKey !== null && !answered;
 
   useEffect(() => {
-    if (!resolveKey || !newestKey) return;
+    if (!resolveKey || !newest) return;
     let cancelled = false;
     void (async () => {
       let thread: ItemThread | null = null;
-      for (const accountId of accountIds ? accountIds.split(',') : []) {
-        // Sequential on purpose: the common case is one mailbox, and the first
-        // hit ends the search — firing every probe at once would put N requests
-        // on the wire to answer a question one usually settles.
-        if (await ownsThread(accountId, newestKey)) {
-          thread = { accountId, threadKey: newestKey, subject: newestSubject };
-          break;
-        }
+      try {
+        const match = await resolveThreadMatch(newest);
+        if (match) thread = { accountId: match.accountId, threadKey: match.threadKey, subject: newest.subjectSnapshot ?? '' };
+      } catch {
+        // A network/server blip says nothing about ownership — leave `thread`
+        // null for now rather than risk a stale positive; a fresh mount or an
+        // explicit reload() asks again.
       }
       if (!cancelled) setResolved({ key: resolveKey, thread });
     })();
     return () => { cancelled = true; };
-  }, [resolveKey, newestKey, newestSubject, accountIds]);
+  }, [resolveKey, newest]);
 
   return useMemo(
     () => ({ links, newest, myThread, loading, resolving, reload }),

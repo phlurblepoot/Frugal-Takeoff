@@ -3,14 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import type { ThreadLink } from '../pages/mail/types';
 
-const h = vi.hoisted(() => ({ links: vi.fn(), thread: vi.fn() }));
-vi.mock('../utils/mailApi', () => ({ mailApi: { links: h.links, thread: h.thread } }));
+const h = vi.hoisted(() => ({ links: vi.fn(), resolveThread: vi.fn() }));
+vi.mock('../utils/mailApi', () => ({ mailApi: { links: h.links, resolveThread: h.resolveThread } }));
 
-import { HttpError } from '../utils/store';
-import { useItemThreadLinks, __resetThreadProbeCache } from './useItemThreadLinks';
-
-/** What the server actually answers for a thread this user does not own. */
-const notFound = () => new HttpError('Request failed', 404);
+import { useItemThreadLinks } from './useItemThreadLinks';
 
 const link = (over: Partial<ThreadLink> = {}): ThreadLink => ({
   id: 'l1', threadKey: 'tk-1', subjectSnapshot: 'RFI RFI-004', firstDate: '2026-08-27T12:00:00.000Z',
@@ -19,18 +15,15 @@ const link = (over: Partial<ThreadLink> = {}): ThreadLink => ({
   ...over,
 });
 
-const accounts = [{ id: 'a1' }, { id: 'a2' }];
-
 beforeEach(() => {
   vi.clearAllMocks();
-  __resetThreadProbeCache();
   h.links.mockResolvedValue([]);
-  h.thread.mockRejectedValue(notFound());
+  h.resolveThread.mockResolvedValue({ match: null });
 });
 
 describe('useItemThreadLinks', () => {
   it('asks for nothing without an item id', async () => {
-    const { result } = renderHook(() => useItemThreadLinks('rfi', undefined, accounts));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', undefined));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(h.links).not.toHaveBeenCalled();
     expect(result.current.links).toEqual([]);
@@ -42,101 +35,80 @@ describe('useItemThreadLinks', () => {
       link({ id: 'old', threadKey: 'tk-old', firstDate: '2026-08-01T00:00:00.000Z' }),
       link({ id: 'new', threadKey: 'tk-new', firstDate: '2026-08-27T00:00:00.000Z' }),
     ]);
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(result.current.links).toHaveLength(2));
     expect(h.links).toHaveBeenCalledWith('rfi', 'r1');
     expect(result.current.newest?.id).toBe('new');
   });
 
-  // The thread belongs to whichever of the user's mailboxes actually holds it;
-  // "not found" is the server saying this user does not own that thread.
-  it('resolves myThread against the account that holds the thread', async () => {
+  // myThread now comes from ONE resolve-thread call — the server itself
+  // decides which (if any) of this user's mailboxes the thread is in,
+  // exact-match or via its subject+date+participant fallback.
+  it('resolves myThread from the server match', async () => {
     h.links.mockResolvedValue([link()]);
-    h.thread.mockImplementation(async (accountId: string) => {
-      if (accountId !== 'a2') throw notFound();
-      return { thread: {}, messages: [], links: [] };
-    });
+    h.resolveThread.mockResolvedValue({ match: { accountId: 'a2', threadKey: 'tk-1' } });
 
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(result.current.myThread).not.toBeNull());
     expect(result.current.myThread).toEqual({ accountId: 'a2', threadKey: 'tk-1', subject: 'RFI RFI-004' });
+    expect(h.resolveThread).toHaveBeenCalledWith({
+      threadKey: 'tk-1', subject: 'RFI RFI-004', firstDate: '2026-08-27T12:00:00.000Z', participants: '',
+    });
   });
 
-  it('leaves myThread null when no account of this user holds the thread', async () => {
+  it('leaves myThread null when the server finds no match', async () => {
     h.links.mockResolvedValue([link()]);
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
-    // Every mailbox is asked before giving up — `resolving` alone would be a
-    // race, since it is false until the links themselves have landed.
-    await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
+    // `resolving` alone would be a race, since it is false until the links
+    // themselves have landed.
+    await waitFor(() => expect(h.resolveThread).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(result.current.resolving).toBe(false));
     expect(result.current.myThread).toBeNull();
   });
 
-  // A 404 is a stable fact for the session: re-probing it on every mount would
-  // put two of them on the wire behind every editor open.
-  it('caches definitive 404s across mounts', async () => {
+  // A network blip must not get remembered as "not yours" forever — a fresh
+  // mount (or reload()) always asks again, since there is no longer a
+  // module-level cache to poison.
+  it('does not permanently hide a thread after a failed resolve', async () => {
     h.links.mockResolvedValue([link()]);
-    const first = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
-    await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
+    h.resolveThread.mockRejectedValue(new Error('offline'));
+    const first = renderHook(() => useItemThreadLinks('rfi', 'r1'));
+    await waitFor(() => expect(h.resolveThread).toHaveBeenCalledTimes(1));
+    expect(first.result.current.myThread).toBeNull();
     first.unmount();
 
-    const second = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
-    await waitFor(() => expect(second.result.current.links).toHaveLength(1));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(h.thread).toHaveBeenCalledTimes(2);
-    expect(second.result.current.myThread).toBeNull();
-  });
-
-  // A network blip says nothing about who owns the thread. Remembering it as
-  // "not yours" would hide the Open-thread link for the rest of the session.
-  it('does not cache a transient failure', async () => {
-    h.links.mockResolvedValue([link()]);
-    h.thread.mockRejectedValue(new HttpError('Mail provider request failed', 502));
-    const first = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
-    await waitFor(() => expect(h.thread).toHaveBeenCalledTimes(2));
-    first.unmount();
-
-    h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
-    const second = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    h.resolveThread.mockResolvedValue({ match: { accountId: 'a1', threadKey: 'tk-1' } });
+    const second = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(second.result.current.myThread?.accountId).toBe('a1'));
   });
 
-  it('stops probing at the first account that owns the thread', async () => {
-    h.links.mockResolvedValue([link()]);
-    h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
-    await waitFor(() => expect(result.current.myThread).not.toBeNull());
-    expect(h.thread).toHaveBeenCalledTimes(1);
-    expect(result.current.myThread?.accountId).toBe('a1');
-  });
-
-  // The chip reads `resolving` to decide whether it may say "by another user".
-  // It has to be true from the moment a link exists until a probe pass has
-  // finished — a flag an effect sets is one frame too late.
-  it('reports resolving from the moment a link is known until the probe answers', async () => {
+  // The chip reads `resolving` to decide whether it may say anything final.
+  // It has to be true from the moment a link exists until the resolve call
+  // answers — a flag an effect sets is one frame too late.
+  it('reports resolving from the moment a link is known until resolve-thread answers', async () => {
     let release: (v: unknown) => void = () => {};
     h.links.mockResolvedValue([link()]);
-    h.thread.mockImplementation(() => new Promise((_, reject) => { release = () => reject(notFound()); }));
+    h.resolveThread.mockImplementation(() => new Promise(resolve => { release = resolve; }));
 
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', [{ id: 'a1' }]));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(result.current.newest).not.toBeNull());
     expect(result.current.resolving).toBe(true);
     expect(result.current.myThread).toBeNull();
 
-    await act(async () => { release(null); });
+    await act(async () => { release({ match: null }); });
     await waitFor(() => expect(result.current.resolving).toBe(false));
     expect(result.current.myThread).toBeNull();
   });
 
   // reload() runs after a send, when the link the chip should show has just
-  // been created — a cached "no such thread" from before the send would hide it.
-  it('reload re-reads the links and re-probes', async () => {
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+  // been created — a stale "no match" from before the send must not stick.
+  it('reload re-reads the links and re-resolves', async () => {
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.links).toEqual([]);
 
     h.links.mockResolvedValue([link()]);
-    h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
+    h.resolveThread.mockResolvedValue({ match: { accountId: 'a1', threadKey: 'tk-1' } });
     act(() => { result.current.reload(); });
 
     await waitFor(() => expect(result.current.myThread?.threadKey).toBe('tk-1'));
@@ -145,25 +117,17 @@ describe('useItemThreadLinks', () => {
 
   it('survives a links request that fails', async () => {
     h.links.mockRejectedValue(new Error('offline'));
-    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1', accounts));
+    const { result } = renderHook(() => useItemThreadLinks('rfi', 'r1'));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.links).toEqual([]);
     expect(result.current.myThread).toBeNull();
   });
 
-  // Accounts arrive from their own request, so they are usually empty on the
-  // first render — the probe has to run again once they land.
-  it('probes once the account list arrives', async () => {
-    h.links.mockResolvedValue([link()]);
-    h.thread.mockResolvedValue({ thread: {}, messages: [], links: [] });
-    const { result, rerender } = renderHook(
-      ({ accts }: { accts: { id: string }[] }) => useItemThreadLinks('rfi', 'r1', accts),
-      { initialProps: { accts: [] as { id: string }[] } },
-    );
-    await waitFor(() => expect(result.current.links).toHaveLength(1));
-    expect(result.current.myThread).toBeNull();
-
-    rerender({ accts: accounts });
-    await waitFor(() => expect(result.current.myThread?.accountId).toBe('a1'));
+  it('joins the participant snapshot into the resolve-thread query', async () => {
+    h.links.mockResolvedValue([link({ participantsJson: JSON.stringify([{ addr: 'gc@teg.com' }, { addr: 'me@bb.com' }]) })]);
+    renderHook(() => useItemThreadLinks('rfi', 'r1'));
+    await waitFor(() => expect(h.resolveThread).toHaveBeenCalledWith(
+      expect.objectContaining({ participants: 'gc@teg.com,me@bb.com' }),
+    ));
   });
 });

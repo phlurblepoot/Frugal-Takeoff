@@ -126,7 +126,6 @@ vi.mock('./PendingReplyBanner', () => ({
 
 import { ToastProvider } from '../../../components/Toast';
 import { RfiEditor } from './RfiEditor';
-import { __resetThreadProbeCache } from '../../../hooks/useItemThreadLinks';
 
 const rfi = (over: Partial<Rfi> = {}): Rfi => ({
   id: 'rfi-1', projectId: 'p1', number: 4, title: 'Header detail',
@@ -360,8 +359,6 @@ const sentWithReply = (over: Partial<Rfi> = {}) =>
   rfi({ status: 'sent', sentAt: 5, pendingReply: PENDING, ...over });
 
 describe('RfiEditor — pending email reply', () => {
-  beforeEach(() => { __resetThreadProbeCache(); });
-
   it('shows the banner for a sent RFI that has a pending reply', async () => {
     mount(sentWithReply());
     expect(await screen.findByTestId('pending-banner')).toBeInTheDocument();

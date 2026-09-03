@@ -50,10 +50,11 @@ export const RfiEditor: React.FC<{
 
   // Can THIS user open the conversation? pendingReply.accountId is the
   // receiving user's mailbox, and the mail routes 403/404 for anyone else. The
-  // cheap exact answer is "do I own that mailbox"; the thread-link probe is the
-  // fallback for a thread that also sits in another of my mailboxes.
+  // cheap exact answer is "do I own that mailbox"; useItemThreadLinks.myThread
+  // (GET /api/mail/resolve-thread) is the fallback for a thread that also sits
+  // in another of my mailboxes, or under a different threadKey there.
   const { accounts } = useMailAccounts({ enabled: !!pending });
-  const threads = useItemThreadLinks(pending ? 'rfi' : undefined, pending ? rfi.id : undefined, accounts);
+  const threads = useItemThreadLinks(pending ? 'rfi' : undefined, pending ? rfi.id : undefined);
   const ownedAccountId = pending && accounts.some(a => a.id === pending.accountId) ? pending.accountId : null;
   const threadAccountId = ownedAccountId
     ?? (pending && threads.myThread?.threadKey === pending.threadKey ? threads.myThread.accountId : null);

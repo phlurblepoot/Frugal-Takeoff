@@ -125,13 +125,12 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   const itemType = itemTypeFromSource(source.sourceType);
 
   // The composer needs the user's mailboxes for its From select (and its
-  // signature), and the chip needs them to work out whether this user can open
-  // the thread. A bar with neither a Send button nor a mail thread — an AIA pay
-  // app, say — needs none of it and asks for nothing.
-  const [linked, setLinked] = useState(false);
-  const { accounts, loading: accountsLoading } = useMailAccounts({ enabled: !!send || linked });
-  const threads = useItemThreadLinks(itemType, source.sourceId, accounts);
-  useEffect(() => { if (threads.links.length > 0) setLinked(true); }, [threads.links.length]);
+  // signature) — the chip and its "Reply in existing thread" option resolve
+  // through GET /api/mail/resolve-thread instead, which the server answers
+  // against this user's accounts itself, so a bar with no Send button asks for
+  // no account list at all.
+  const { accounts } = useMailAccounts({ enabled: !!send });
+  const threads = useItemThreadLinks(itemType, source.sourceId);
 
   // The awaited version/overwrite choice, mirrored in a ref so unmounting can
   // settle it — a dangling promise would strand the generate/send flow that is
@@ -362,10 +361,7 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
         <SentThreadChip
           link={threads.newest}
           myThread={threads.myThread}
-          // "Not one of yours" is only trustworthy once the mailbox list has
-          // arrived AND the probe has run. Keyed off `loading`, not off an
-          // empty list — a user with no mailbox at all has a final answer.
-          resolving={threads.resolving || accountsLoading}
+          resolving={threads.resolving}
           data-testid={`${p}-sent-thread`}
         />
 

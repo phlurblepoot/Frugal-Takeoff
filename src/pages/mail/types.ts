@@ -43,8 +43,9 @@ export interface MailFolder {
   sortOrder: number;
 }
 
-/** A mail_thread_links row. subjectSnapshot/participantsJson are nulled by the
- *  server for a thread the requesting user does not own a mailbox for. */
+/** A mail_thread_links row. subjectSnapshot/participantsJson/firstDate are
+ *  app-written snapshots taken at link time, visible to any viewer — not a
+ *  live read of anyone's mailbox — same trust model as project-threads. */
 export interface ThreadLink {
   id: string;
   threadKey: string;
@@ -57,6 +58,12 @@ export interface ThreadLink {
   customerId: string | null;
   linkedByUserId: string;
   createdAt: string;
+  /** Resolved item label (number/title for the item, or the project/customer
+   *  name for those link kinds); a generic fallback if the target row is gone.
+   *  Optional in the type since not every route that returns a ThreadLink adds
+   *  it (e.g. the raw POST /api/mail/links response) — present wherever the
+   *  server calls resolveLinkLabel (GET /links, thread/threads, project-threads). */
+  label?: string;
 }
 
 // Booleans that come out of SQLite as 0/1 travel over JSON as plain numbers —
@@ -74,6 +81,22 @@ export interface ThreadListRow {
   folderIds: string[];
   snippet: string;
   links: ThreadLink[];
+}
+
+export interface ProjectThreadLinkRef { itemType: ItemType; itemId: string; label: string }
+
+/** One row per distinct thread linked to a project or one of its items — GET
+ *  /api/mail/project-threads. Viewer-independent: same trust model as the
+ *  ThreadLink snapshot fields (app-written at link time, not a mailbox read). */
+export interface ProjectThreadRow {
+  threadKey: string;
+  subjectSnapshot: string | null;
+  participants: Addr[];
+  firstDate: string | null;
+  links: ProjectThreadLinkRef[];
+  lastInboundDate: string | null;
+  lastOutboundDate: string | null;
+  lastActivity: string;
 }
 
 export interface AttachmentMeta {

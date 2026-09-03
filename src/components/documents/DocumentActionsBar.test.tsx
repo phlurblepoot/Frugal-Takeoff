@@ -160,6 +160,7 @@ beforeEach(() => {
   h.threads.newest = null;
   h.threads.myThread = null;
   h.threads.links = [];
+  h.threads.resolving = false;
   h.sendErrors.length = 0;
   save.mockResolvedValue(true);
   (persistGeneratedDocument as any).mockResolvedValue({ fileId: 'new-file', versioned: true });
@@ -563,30 +564,25 @@ describe('DocumentActionsBar — composer wiring', () => {
     h.threads.newest = LINK;
     h.threads.myThread = null;
     renderBar({ readOnly: true });
-    expect(screen.getByTestId('doc-sent-thread')).toHaveTextContent('by another user');
+    // No known myThread: the chip is a clickable button (a click still gets a
+    // shot at resolving via openThreadLink/the reference card — see
+    // SentThreadChip's own tests), not an inert claim about who owns it.
+    const chip = screen.getByTestId('doc-sent-thread');
+    expect(chip.tagName).toBe('BUTTON');
+    expect(chip).toHaveTextContent('Sent');
   });
 
-  // Until the mailbox list has landed there is no basis for saying the thread
-  // belongs to someone else — the earlier version of this flashed that claim.
-  it('makes no ownership claim while the mailbox list is still loading', () => {
-    h.accountsLoading = true;
+  // Deciding whether myThread is known at all is entirely useItemThreadLinks'
+  // job now (GET /api/mail/resolve-thread, not a client-side mailbox list),
+  // so the bar only has to forward `resolving` — it no longer gates on the
+  // separate account-list fetch the composer's From select uses.
+  it('forwards the hook’s resolving state to the chip while myThread is still unknown', () => {
+    h.threads.resolving = true;
     h.threads.links = [LINK];
     h.threads.newest = LINK;
     h.threads.myThread = null;
     renderBar({ send: sendProp() });
-    expect(screen.getByTestId('doc-sent-thread')).not.toHaveTextContent('by another user');
-  });
-
-  // …but a user with no mailbox at all has a final answer, and must not be
-  // parked on "Looking for the conversation…" forever.
-  it('makes the claim once the list has landed empty', () => {
-    h.accountsLoading = false;
-    h.accounts = [];
-    h.threads.links = [LINK];
-    h.threads.newest = LINK;
-    h.threads.myThread = null;
-    renderBar({ send: sendProp() });
-    expect(screen.getByTestId('doc-sent-thread')).toHaveTextContent('by another user');
+    expect(screen.getByTestId('doc-sent-thread')).toHaveAttribute('title', 'Looking for the conversation…');
   });
 });
 

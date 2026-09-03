@@ -6,11 +6,18 @@
 // Presentational on purpose: DocumentActionsBar already runs
 // useItemThreadLinks (it needs the same thread for the composer's "Reply in
 // existing thread" option), so the chip takes the resolved values instead of
-// loading them a second time.
-import React from 'react';
-import { Link } from 'react-router-dom';
+// loading them a second time — except when that pre-resolution came back
+// empty, in which case a click still gets one more shot via `openThreadLink`
+// (spec Goal 3 / "#5"): a mailbox added after the hook last resolved, or the
+// subject+date fallback finding a match the exact-only prior check couldn't.
+// No match either way and the chip shows the read-only ThreadReferenceCard
+// instead of pretending the item was never sent.
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { MailCheck } from 'lucide-react';
 import { formatMailDate } from '../../pages/mail/mailFormat';
+import { openThreadLink } from '../../pages/mail/openThreadLink';
+import { ThreadReferenceCard } from '../../pages/mail/ThreadReferenceCard';
 import type { ItemThread } from '../../hooks/useItemThreadLinks';
 import type { ThreadLink } from '../../pages/mail/types';
 
@@ -22,45 +29,65 @@ const ANY_FOLDER = '_';
 export const SentThreadChip: React.FC<{
   /** The newest thread link for this item, or null when it has never been sent. */
   link: ThreadLink | null;
-  /** Set when one of the current user's mailboxes actually holds that thread. */
+  /** Set when one of the current user's mailboxes already resolves to that thread. */
   myThread: ItemThread | null;
   /** True while we are still asking which mailbox holds it. */
   resolving?: boolean;
   'data-testid'?: string;
 }> = ({ link, myThread, resolving = false, 'data-testid': testId = 'sent-thread-chip' }) => {
+  const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
+  const [showCard, setShowCard] = useState(false);
+
   if (!link) return null;
 
   const date = formatMailDate(link.firstDate ?? link.createdAt);
   const base = 'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap';
 
-  // Someone else's mailbox holds it: say so plainly instead of offering a link
-  // that would 404, and don't pretend the item was never sent. While the lookup
-  // is still running the chip states the fact it already knows — that this went
-  // out — and makes no claim about whose mailbox holds it.
-  if (!myThread) {
+  // Already known to be one of this user's own threads: a real link, no round
+  // trip needed.
+  if (myThread) {
     return (
-      <span
-        className={`${base} border-edge bg-sunken text-ink-faint`}
+      <Link
+        to={`/mail/${encodeURIComponent(myThread.accountId)}/${ANY_FOLDER}/${encodeURIComponent(myThread.threadKey)}`}
+        className={`${base} border-edge bg-raised text-ink hover:bg-hover`}
         data-testid={testId}
-        title={resolving
-          ? 'Looking for the conversation…'
-          : "Sent from another user's mailbox — only they can open the conversation"}
+        title={link.subjectSnapshot ?? 'Open the email thread'}
       >
         <MailCheck size={12} />
-        Sent{date ? ` · ${date}` : ''}{resolving ? '' : ' · by another user'}
-      </span>
+        Sent{date ? ` · ${date}` : ''} · Open thread
+      </Link>
     );
   }
 
+  const handleClick = async () => {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const result = await openThreadLink(link, (path) => navigate(path));
+      if (result === 'card') setShowCard(true);
+    } catch {
+      // A network/server blip — say nothing new, the chip is still accurate
+      // ("it was sent"); the user can just click again.
+    } finally {
+      setOpening(false);
+    }
+  };
+
   return (
-    <Link
-      to={`/mail/${encodeURIComponent(myThread.accountId)}/${ANY_FOLDER}/${encodeURIComponent(myThread.threadKey)}`}
-      className={`${base} border-edge bg-raised text-ink hover:bg-hover`}
-      data-testid={testId}
-      title={link.subjectSnapshot ?? 'Open the email thread'}
-    >
-      <MailCheck size={12} />
-      Sent{date ? ` · ${date}` : ''} · Open thread
-    </Link>
+    <>
+      <button
+        type="button"
+        className={`${base} border-edge bg-sunken text-ink-faint hover:bg-hover`}
+        data-testid={testId}
+        onClick={() => { void handleClick(); }}
+        disabled={opening}
+        title={resolving ? 'Looking for the conversation…' : 'View this conversation'}
+      >
+        <MailCheck size={12} />
+        Sent{date ? ` · ${date}` : ''}
+      </button>
+      {showCard && <ThreadReferenceCard links={[link]} onClose={() => setShowCard(false)} />}
+    </>
   );
 };
