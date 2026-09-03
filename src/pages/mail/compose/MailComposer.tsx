@@ -570,7 +570,7 @@ export const MailComposer: React.FC<MailComposerProps> = ({
 
   const footer = (
     <div className="flex w-full flex-wrap items-center gap-3">
-      <Button onClick={handleSend} disabled={!canSend}>
+      <Button data-testid="mail-composer-send" onClick={handleSend} disabled={!canSend}>
         {sending && <Loader2 size={14} className="mr-1.5 animate-spin" />}
         Send
       </Button>
@@ -619,7 +619,7 @@ export const MailComposer: React.FC<MailComposerProps> = ({
       }
       footer={footer}
     >
-      {form}
+      <div data-testid="mail-composer">{form}</div>
     </Modal>
   );
 };

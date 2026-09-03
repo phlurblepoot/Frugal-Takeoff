@@ -245,7 +245,10 @@ export const MessageBodyFrame: React.FC<{ messageId: string }> = ({ messageId })
   return (
     <div className="space-y-2">
       {!!payload && payload.blockedRemoteImages > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+        <div
+          data-testid="mail-images-bar"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+        >
           <ImageOff size={14} className="shrink-0" />
           <span>Remote images blocked</span>
           <button

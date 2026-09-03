@@ -92,7 +92,7 @@ export const FolderRail: React.FC<{
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="space-y-2 border-b border-edge p-3">
-        <Button size="sm" className="w-full" onClick={onCompose}>
+        <Button size="sm" className="w-full" data-testid="mail-compose-open" onClick={onCompose}>
           <PenSquare size={14} />
           <span>Compose</span>
         </Button>

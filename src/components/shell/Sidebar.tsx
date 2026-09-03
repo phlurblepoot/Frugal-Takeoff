@@ -73,7 +73,10 @@ const NavRow: React.FC<{
   // Unread-style count badge (currently just Mail). >0 shows a pill with the
   // count when expanded, or a plain dot on the icon when collapsed.
   badge?: number;
-}> = ({ label, Icon, active = false, expanded, onClick, trailing, badge }) => (
+  // Names the badge for e2e (the dot and the pill are the same badge in two
+  // widths, so both carry it — only one is ever rendered).
+  badgeTestId?: string;
+}> = ({ label, Icon, active = false, expanded, onClick, trailing, badge, badgeTestId }) => (
   <button
     onClick={onClick}
     title={!expanded ? label : undefined}
@@ -87,6 +90,7 @@ const NavRow: React.FC<{
         <span
           role="img"
           aria-label={`${badge} unread`}
+          data-testid={badgeTestId}
           className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent-500"
         />
       )}
@@ -96,6 +100,7 @@ const NavRow: React.FC<{
       <span
         role="img"
         aria-label={`${badge} unread`}
+        data-testid={badgeTestId}
         className="bg-accent-500 text-white text-[10px] font-semibold rounded-full px-1.5 leading-normal"
       >
         {badge}
@@ -244,6 +249,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
                   active={item.match(location.pathname)}
                   onClick={() => go(item.path)}
                   badge={item.id === 'mail' ? mailUnread : undefined}
+                  badgeTestId={item.id === 'mail' ? 'sidebar-mail-badge' : undefined}
                 />
               ))}
             </div>

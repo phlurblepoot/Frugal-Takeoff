@@ -11,6 +11,25 @@ export interface FakeAttachment { name: string; mime: string; bytesBase64: strin
 export interface FakeThreadMessage { text: string; html?: string; date?: string; attachments?: FakeAttachment[] }
 export interface FakeThreadSpec { subject: string; from: FakeAddr; messages: FakeThreadMessage[] }
 
+/**
+ * Delete every mail account this token owns (cascading its folders, threads
+ * and messages). Specs call this BEFORE `connectFakeAccount` so each one owns
+ * the only mailbox on the shared server/DB: `/mail` then redirects to a known
+ * account, the sidebar's unread badge counts only this test's mail, and the
+ * fresh account id gets a fresh `FakeMailProvider` (whose `seed()` clears its
+ * whole in-memory map, so one account per scenario is the rule).
+ * Throws if any request fails.
+ */
+export async function resetMailAccounts(request: APIRequestContext, token: string): Promise<void> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const res = await request.get('/api/mail/accounts', { headers });
+  if (!res.ok()) throw new Error(`resetMailAccounts list failed: ${res.status()} ${await res.text()}`);
+  for (const a of (await res.json()) as Array<{ id: string }>) {
+    const del = await request.delete(`/api/mail/accounts/${encodeURIComponent(a.id)}`, { headers });
+    if (!del.ok()) throw new Error(`resetMailAccounts delete failed: ${del.status()} ${await del.text()}`);
+  }
+}
+
 export interface ConnectFakeAccountResult {
   accountId: string;
   /** One threadKey per seeded thread, in the same order as `opts.threads`. */

@@ -43,6 +43,26 @@ Both scripts `rm -rf .e2e-data` first, so every run starts from a clean DB.
   depending on magic pixel offsets.
 - **Serial, single worker.** `fullyParallel: false`, `workers: 1` — the suite
   shares one server/DB, so tests run one at a time.
+- **Mail runs on a fake provider.** `playwright.config.ts`'s `webServer` sets
+  `MAIL_FAKE_PROVIDER=1` (and `APP_PUBLIC_URL`). That flag does two things in
+  `server/mail/`: every mail account is routed through the in-memory
+  `FakeMailProvider` instead of a real IMAP/OAuth mailbox, and the test-only
+  `POST /api/mail/_test/seed` + `/inject` routes are mounted. `e2e/fixtures/mail.ts`
+  wraps those three moving parts:
+  - `resetMailAccounts(request, token)` — delete every mailbox this user owns
+    (cascading its folders/threads/messages). **Call it first in every mail
+    test**: the DB is shared across spec files, so a leftover mailbox would
+    decide where `/mail` redirects and would be counted by the sidebar's
+    unread badge.
+  - `connectFakeAccount(request, token, { emailAddress, threads })` — create
+    the account and seed it with proper References/In-Reply-To chains; returns
+    `{ accountId, threadKeys }`.
+  - `injectReply(request, token, { accountId, threadKey, from, text })` — an
+    inbound message on an existing thread. Fire-and-forget server-side (it
+    nudges the sync worker), so assert through the UI, not on the promise.
+
+  `FakeMailProvider.seed()` clears that account's whole in-memory map, so it is
+  **one fake account per test** — never re-seed an account a test already used.
 
 ## One-time system requirement (Chromium)
 
@@ -70,6 +90,22 @@ npx playwright install chromium
   on the Proposal section's per-printout Download button). The specs assert the
   resulting Excel/PDF printout appears in the Proposal "Printout history"; they
   do **not** assert on workbook/PDF binary content.
+- **Mail — inbox** (`mail.spec.ts`) — seeded threads and the sidebar unread
+  badge, opening a thread (subject, sandboxed body iframe, the "Remote images
+  blocked" bar and Load images), Save-to-Documents on an attachment, the inline
+  reply composer, archiving, composing a new message with recipient
+  autocomplete, and the phone-width stacked layout.
+- **Mail — item send** (`mail-item-send.spec.ts`) — the RFI editor's document
+  bar → Email → the shared composer (prefilled recipient + primary attachment)
+  → send: the RFI is stamped Sent, a thread link is created, the SentThreadChip
+  deep-links into the conversation, a second send is offered "Reply in existing
+  thread" (and still yields one link row), and Send is blocked with a reason
+  once the last mail account is removed.
+- **Mail — RFI email reply** (`mail-rfi-reply.spec.ts`) — an injected inbound
+  reply is captured as a *pending* reply (never an automatic answer): the RFI
+  row gets a Reply chip, the editor's banner shows the quote-stripped text, and
+  Use-as-response records it (`status: answered`, `responseSource: 'email'`)
+  while Dismiss drops it and leaves the RFI Sent.
 
 ## What's intentionally NOT covered
 
