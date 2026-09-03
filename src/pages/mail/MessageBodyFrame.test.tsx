@@ -77,6 +77,26 @@ describe('MessageBodyFrame', () => {
     expect(doc).toContain('<script nonce="nonce-1">');
   });
 
+  // Regression: collapsing the quote used to leave the frame tall, because
+  // document.documentElement/body.scrollHeight can never report less than
+  // the frame's current viewport (which the parent had already grown to fit
+  // the expanded quote). Measuring a wrapper's own rect fixes that — the
+  // wrapper shrinks when the quoted block goes `hidden`, independent of
+  // whatever height the iframe element currently has.
+  it('measures a viewport-independent wrapper instead of document scrollHeight', () => {
+    const doc = buildFrameDoc('<p>hi</p>', 'nonce-1', 'https://app.test');
+    // html/body must not be stretched to fill the (possibly tall) iframe
+    // viewport, or the wrapper's rect would be inflated by it too.
+    expect(doc).toContain('html,body{margin:0;height:auto!important}');
+    // Body content is wrapped so it can be measured independent of body/html.
+    expect(doc).toContain('<div id="__mail_root"><p>hi</p></div>');
+    // The report() function reads the wrapper's own bounding rect...
+    expect(doc).toContain("document.getElementById('__mail_root')");
+    expect(doc).toContain('root.getBoundingClientRect().height');
+    // ...and no longer falls back to scrollHeight in the normal (root found) path.
+    expect(doc).toMatch(/var h = root\s*\?\s*Math\.ceil\(root\.getBoundingClientRect\(\)\.height\)/);
+  });
+
   it('shows a skeleton while the body is loading', async () => {
     let resolve: (p: BodyPayload) => void = () => {};
     h.body.mockReturnValue(new Promise<BodyPayload>(r => { resolve = r; }));

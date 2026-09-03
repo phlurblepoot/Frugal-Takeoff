@@ -37,15 +37,29 @@ const PENDING_RETRIES = 8;
  * The toggle has to live in here rather than in React because the app cannot
  * reach into a sandboxed frame's DOM — and a re-report follows every toggle,
  * or the frame keeps the height it had before the quote unfolded.
+ *
+ * Height is measured from the #__mail_root wrapper's bounding rect, not
+ * document.documentElement/body.scrollHeight. Once the parent grows the
+ * iframe tall, the frame's own viewport is that tall, and scrollHeight of
+ * html/body can never report LESS than the viewport it is laid out in — so a
+ * scrollHeight-based report only ever grows, and collapsing the quoted
+ * history (which shrinks the content) never shrinks the reported height. The
+ * wrapper's rect reflects its actual content height regardless of viewport
+ * size, so it correctly reports smaller once the quote is re-hidden.
  */
 const frameScript = `
 (function () {
   var last = 0;
   function report() {
-    var h = Math.max(
-      document.documentElement.scrollHeight,
-      document.body ? document.body.scrollHeight : 0
-    );
+    var root = document.getElementById('__mail_root');
+    // +24 restores the body's own 12px top/bottom padding, which sits outside
+    // the wrapper's own rect (the wrapper is measured, not the body).
+    var h = root
+      ? Math.ceil(root.getBoundingClientRect().height) + 24
+      : Math.max(
+          document.documentElement.scrollHeight,
+          document.body ? document.body.scrollHeight : 0
+        );
     if (h === last) return;
     last = h;
     parent.postMessage({ type: 'mail-frame-height', height: h }, '*');
@@ -98,7 +112,11 @@ export function buildFrameDoc(html: string, nonce: string, origin: string): stri
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<base target="_blank">',
     '<style>',
-    'html,body{margin:0}',
+    // height:auto (not just margin reset) keeps html/body from being stretched
+    // to fill whatever height the parent last set on the iframe — otherwise
+    // #__mail_root's rect would itself be measured inside an inflated
+    // viewport and the shrink-on-collapse fix below would not hold.
+    'html,body{margin:0;height:auto!important}',
     'body{font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#111;background:#fff;',
     'word-break:break-word;overflow-wrap:anywhere;padding:12px}',
     'img{max-width:100%;height:auto}',
@@ -106,7 +124,9 @@ export function buildFrameDoc(html: string, nonce: string, origin: string): stri
     'blockquote{margin:0 0 0 .75rem;padding-left:.75rem;border-left:2px solid #ddd;color:#555}',
     'a{color:#0b57d0}',
     '</style></head><body>',
+    '<div id="__mail_root">',
     html,
+    '</div>',
     `<script nonce="${nonce}">${frameScript}</` + 'script>',
     '</body></html>',
   ].join('');
