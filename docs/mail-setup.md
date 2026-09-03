@@ -164,3 +164,51 @@ other data is lost).
 - No message bodies, no attachment bytes — fetched from the provider on open.
   An attachment is stored only when a user explicitly saves it to Documents.
 - Credentials sealed with the key above; never returned by any API.
+
+---
+
+## 8. Development & tests
+
+Set `MAIL_FAKE_PROVIDER=1` to run the app against an in-memory fake mail
+provider instead of real IMAP/OAuth — no external accounts, tokens, or
+network calls needed. Every account created while the flag is set uses it
+(there is no per-account choice), which is why it is a dev/E2E-only switch
+and must **never** be set in production (see the warning in
+`docs/MIGRATION-CUTOVER.md`).
+
+With the flag on, two extra routes exist purely to drive the fake provider
+from tests:
+
+- `POST /api/mail/_test/seed` — create or reuse the caller's fake mail
+  account and seed it with threads (proper References/In-Reply-To chains, so
+  they thread the same way real mail does).
+- `POST /api/mail/_test/inject` — inject an inbound message onto an existing
+  thread (or chain it off a specific message), broadcast the same way a real
+  inbound message would be.
+
+Both are registered only when `MAIL_FAKE_PROVIDER=1` at server start (a 404
+otherwise) and require auth like any other mail route. The Playwright suite
+(`e2e/mail.spec.ts`, `e2e/mail-item-send.spec.ts`,
+`e2e/mail-rfi-reply.spec.ts`, helpers in `e2e/fixtures/mail.ts`) runs the dev
+server with the flag set (`playwright.config.ts`'s `webServer`) and uses
+these routes to seed an inbox, exercise reply/forward/attachment-save, send
+from a project item into a thread, and drive the RFI pending-reply banner
+through inject → accept.
+
+---
+
+## 9. What's next (Phase 2)
+
+The mail client's first phase (accounts, sync, send/receive UI, RFI
+email-reply capture) is complete. Deliberately out of scope for now, per the
+original spec's non-goals:
+
+- **Link UI** — no in-app affordance yet to link a mail thread to a project
+  item beyond what sending from that item already creates automatically.
+- **Thread → task conversion** — turning a mail thread into a task (or an
+  RFI, or an issue) is not implemented; RFI reply capture today only works
+  in the other direction (an RFI that was already sent).
+- **Reply indicators on other item types** — the pending-reply banner/chip
+  exists for RFIs only; invoices, change orders, issues, proposals, daily
+  reports, and pay applications do not yet surface an inbound reply the same
+  way.

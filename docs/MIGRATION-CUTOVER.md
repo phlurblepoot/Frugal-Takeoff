@@ -353,6 +353,22 @@ Treat this pull as **supervised** — migration 31 transforms data.
       `${APP_PUBLIC_URL}/api/mail/oauth/<google|microsoft>/callback` character
       for character. Full walkthrough: **`docs/mail-setup.md`**.
 
+**RFI email-reply capture** (added after migrations 31–32, no new migration
+needed — it uses the three `rfis` columns migration 31 already added). When a
+reply arrives on the mail thread linked to a *sent* RFI, the server files it
+as a **pending reply** on that RFI — a banner on the RFI editor and a chip on
+the RFI list. Nothing is auto-answered: a "thanks, got it" is a reply too, so
+a person always presses **Use as response** (which can also pull in an
+attachment) or **Dismiss**. Recording the answer always goes through the
+accept endpoint, which sets the RFI response and clears the pending row in
+one step. This only reads mail already synced into the app; it needs no
+extra setup beyond an active mail account.
+
+- [ ] **Never set `MAIL_FAKE_PROVIDER` in production.** It swaps every mail
+      account for an in-memory fake provider (no real IMAP/OAuth calls) and
+      exists only for local dev and the Playwright E2E suite — see
+      "Development & tests" in `docs/mail-setup.md`.
+
 **New container environment** (none are required for the app to start; without
 them mail simply stays IMAP-only and poll-only):
 
