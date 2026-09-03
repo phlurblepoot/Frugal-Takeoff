@@ -20,7 +20,18 @@ const BODY_TIMEOUT_MS = 20_000;
  *  of that RFI. */
 const MAX_TEXT_CHARS = 4_000;
 const MAX_ATTACHMENTS = 20;
-const clampText = (s: string): string => (s.length > MAX_TEXT_CHARS ? s.slice(0, MAX_TEXT_CHARS) + '…' : s);
+/** Truncation counts UTF-16 code units, so the cut can land BETWEEN the two
+ *  halves of an astral character (an emoji at position 3999) and leave a lone
+ *  high surrogate — an ill-formed string that survives JSON.stringify as a
+ *  broken escape and renders as a replacement char. Dropping the orphan half is
+ *  one charCodeAt, where spreading a 50 kB string into code points is not. */
+const clampText = (s: string): string => {
+  if (s.length <= MAX_TEXT_CHARS) return s;
+  const cut = s.slice(0, MAX_TEXT_CHARS);
+  const last = cut.charCodeAt(cut.length - 1);
+  const whole = last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+  return whole + '…';
+};
 
 interface MessageRow {
   providerMessageId: string; snippet: string; fromAddr: string | null; fromName: string | null;

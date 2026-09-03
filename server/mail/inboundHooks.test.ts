@@ -215,6 +215,26 @@ describe('rfi pending-reply inbound hook', () => {
     expect(pendingReply.attachments[0].attId).toBe('a0');
   });
 
+  it('truncates between characters, never inside one', async () => {
+    // The 4000-code-unit boundary lands in the middle of the emoji.
+    const rfiId = makeSentRfi();
+    deliver(env('m1', { text: 'a'.repeat(3999) + '\u{1F600}' + 'b'.repeat(50) }));
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
+    const { text } = getRfi(db, rfiId).pendingReply;
+    expect(text).toBe('a'.repeat(3999) + '…');            // the split emoji is dropped whole
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)).toBe(false);
+    expect((text as string & { isWellFormed?: () => boolean }).isWellFormed?.() ?? true).toBe(true);
+    expect(JSON.parse(JSON.stringify(text))).toBe(text);  // survives the JSON column round-trip
+  });
+
+  it('keeps a whole character that ends exactly on the boundary', async () => {
+    // Same emoji one position earlier: both halves fit, so both are kept.
+    const rfiId = makeSentRfi();
+    deliver(env('m1', { text: 'a'.repeat(3998) + '\u{1F600}' + 'b'.repeat(50) }));
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
+    expect(getRfi(db, rfiId).pendingReply.text).toBe('a'.repeat(3998) + '\u{1F600}' + '…');
+  });
+
   it('falls back to the snippet when the provider itself cannot be built', async () => {
     useProvider(null);
     ctx.providerFactory = () => { throw new Error('undecryptable auth blob'); };
