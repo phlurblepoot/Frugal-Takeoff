@@ -197,18 +197,24 @@ through inject → accept.
 
 ---
 
-## 9. What's next (Phase 2)
+## 9. What's next
 
-The mail client's first phase (accounts, sync, send/receive UI, RFI
-email-reply capture) is complete. Deliberately out of scope for now, per the
-original spec's non-goals:
+Phase 1 (accounts, sync, send/receive UI, RFI email-reply capture) and Phase 2
+(linking a thread to a project/customer/item, converting a thread into a
+Task/RFI/Issue, opening a linked thread from any user, a "Reply" indicator on
+every sent-document type, and the per-project Mail tab) are both complete.
+Deliberately out of scope, per the Phase 2 spec's own non-goals:
 
-- **Link UI** — no in-app affordance yet to link a mail thread to a project
-  item beyond what sending from that item already creates automatically.
-- **Thread → task conversion** — turning a mail thread into a task (or an
-  RFI, or an issue) is not implemented; RFI reply capture today only works
-  in the other direction (an RFI that was already sent).
-- **Reply indicators on other item types** — the pending-reply banner/chip
-  exists for RFIs only; invoices, change orders, issues, proposals, daily
-  reports, and pay applications do not yet surface an inbound reply the same
-  way.
+- **Auto-linking by sender address** — a thread only gets linked to an item
+  when someone does it explicitly (the "+ Link" picker, sending from that
+  item, or Create-from-thread), never inferred from who it's with.
+- **Reply capture on non-RFI items** — invoices, change orders, issues,
+  proposals, daily reports, and pay applications only ever get the
+  display-only "Reply" chip; the accept/dismiss-into-the-record flow (an
+  inbound reply becoming the item's actual answer) stays RFI-only.
+- **Attachment auto-copy on conversion** — creating a Task/RFI/Issue from a
+  thread does not carry that thread's attachments onto the new item.
+- **Repairing attachments stacked before the save/overwrite fix** — copies
+  that piled up as extra document versions before that bug was fixed are not
+  retroactively cleaned up; the bytes stay as version rows, and removing them
+  is a manual job if wanted.
