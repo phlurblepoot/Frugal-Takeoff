@@ -316,6 +316,95 @@ describe('MailPage', () => {
     });
   });
 
+  // Piece 1 (reply-discard confirm): a typed-but-unsent inline reply is
+  // trivial to lose by clicking somewhere else in the mailbox — thread
+  // switch, folder switch, account switch all unmount ThreadView (and the
+  // composer with it). window.confirm is the guard; both the accept and
+  // cancel path are exercised, and a composer with nothing typed never asks.
+  describe('reply-discard confirm', () => {
+    const THREAD2: ThreadListRow = {
+      ...THREAD, threadKey: 'tk-2', subject: 'Stucco mock-up',
+      snippet: 'Approved, please proceed', participants: [{ addr: 'dana@teg.test', name: 'Dana Lee' }],
+    };
+    const MESSAGES2: MessageRow[] = [msg({ id: 'm3', threadKey: 'tk-2', subject: 'Stucco mock-up', from: { addr: 'dana@teg.test', name: 'Dana Lee' } })];
+
+    const startTyping = async (text = 'Sounds good, thanks!') => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+      await screen.findByTestId('mail-composer-inline');
+      await waitFor(() => expect(screen.getAllByTestId('recipient-pill')).not.toHaveLength(0));
+      fireEvent.change(screen.getByTestId('composer-body'), { target: { value: text } });
+    };
+
+    beforeEach(() => {
+      h.threads.mockResolvedValue({ threads: [THREAD, THREAD2], hasMore: false, indexedSince: '2026-02-01T00:00:00.000Z' });
+      h.thread.mockImplementation(async (_accountId: string, key: string) =>
+        key === 'tk-2' ? { thread: THREAD2, messages: MESSAGES2, links: [] } : { thread: THREAD, messages: MESSAGES, links: [] });
+    });
+
+    it('blocks a thread switch on Cancel and leaves the reply and the URL alone', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      await startTyping();
+
+      fireEvent.click(screen.getAllByTestId('mail-thread-row')[1]);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(loc()).toBe('/mail/a1/f-inbox/tk-1');
+      expect(screen.getByTestId('composer-body')).toHaveValue('Sounds good, thanks!');
+      confirmSpy.mockRestore();
+    });
+
+    it('proceeds with a thread switch on OK and discards the reply', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      await startTyping();
+
+      fireEvent.click(screen.getAllByTestId('mail-thread-row')[1]);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(loc()).toBe('/mail/a1/f-inbox/tk-2'));
+      expect(screen.queryByTestId('mail-composer-inline')).toBeNull();
+      confirmSpy.mockRestore();
+    });
+
+    it('never asks when the reply composer has nothing typed', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm');
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+      await screen.findByTestId('mail-composer-inline');
+      await waitFor(() => expect(screen.getAllByTestId('recipient-pill')).not.toHaveLength(0));
+
+      fireEvent.click(screen.getAllByTestId('mail-thread-row')[1]);
+      expect(confirmSpy).not.toHaveBeenCalled();
+      await waitFor(() => expect(loc()).toBe('/mail/a1/f-inbox/tk-2'));
+      confirmSpy.mockRestore();
+    });
+
+    it('guards a folder switch from the rail the same way', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      await startTyping();
+
+      fireEvent.click(folderRow('f-sent'));
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(loc()).toBe('/mail/a1/f-inbox/tk-1');
+      confirmSpy.mockRestore();
+    });
+
+    it('lets a confirmed folder switch through and clears the reply', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      await startTyping();
+
+      fireEvent.click(folderRow('f-sent'));
+      await waitFor(() => expect(loc()).toBe('/mail/a1/f-sent'));
+      confirmSpy.mockRestore();
+    });
+  });
+
   // End-to-end for the whole-mailbox search: the button in the list, the keys
   // the server hands back, the by-key re-query that bypasses the folder and q
   // filters, and Clear putting the folder view back.

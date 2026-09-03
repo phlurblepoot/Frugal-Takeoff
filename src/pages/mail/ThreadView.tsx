@@ -64,6 +64,10 @@ export const ThreadView: React.FC<{
   replyComposer: { mode: ReplyMode; message: MessageRow; bodyHtml: string } | null;
   replyVariant: 'modal' | 'inline';
   onReplyClose: () => void;
+  /** Piece 1 (reply-discard confirm): mirrors the reply composer's own
+   *  "has anything been typed since it opened" state up to MailPage, which
+   *  checks it before navigating away from this thread. */
+  onReplyDirtyChange?: (dirty: boolean) => void;
   /** "Open in composer" on the inline composer itself — promotes it to the
    *  modal without losing anything typed (MailPage only flips `replyVariant`,
    *  it does not remount the composer). */
@@ -75,7 +79,7 @@ export const ThreadView: React.FC<{
   navigate: (path: string) => void;
 }> = ({
   accountId, threadKey, ownAddresses, accounts, onBack, onReply, onOpenInComposer, onSaveAttachments,
-  replyComposer, replyVariant, onReplyClose, onReplyPromote, navigate,
+  replyComposer, replyVariant, onReplyClose, onReplyDirtyChange, onReplyPromote, navigate,
 }) => {
   const { toast } = useToast();
   const { thread, messages, links, loading, error, reload } = useThread(accountId, threadKey);
@@ -465,6 +469,7 @@ export const ThreadView: React.FC<{
               replyTo={{ accountId, threadKey, message: replyComposer.message, bodyHtml: replyComposer.bodyHtml }}
               onSent={() => reload()}
               onOpenInModal={replyVariant === 'inline' ? onReplyPromote : undefined}
+              onDirtyChange={onReplyDirtyChange}
             />
           </div>
         )}

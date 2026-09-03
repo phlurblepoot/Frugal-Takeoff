@@ -60,6 +60,12 @@ export interface MailComposerProps {
   /** Rendered above the recipients — e.g. the "Document shows email" select. */
   extraHeader?: React.ReactNode;
   onOpenInModal?: () => void;
+  /** Piece 1 (reply-discard confirm): fires whenever "has the user typed
+   *  something since this composer opened" changes — reuses draft
+   *  autosave's own baseline (see useDraftAutosave's `dirty`), so this stays
+   *  false through the initial seed (including the async always-Cc merge)
+   *  and only flips once something the user actually did would be lost. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
@@ -118,7 +124,7 @@ const CHIP = 'inline-flex max-w-full items-center gap-1.5 rounded-lg border bord
 
 export const MailComposer: React.FC<MailComposerProps> = ({
   open, onClose, variant, accounts, defaultAccountId, mode = 'new', replyTo, initial,
-  onSend, onSent, primaryAttachment, existingThread, title, extraHeader, onOpenInModal,
+  onSend, onSent, primaryAttachment, existingThread, title, extraHeader, onOpenInModal, onDirtyChange,
 }) => {
   const { toast } = useToast();
 
@@ -267,6 +273,14 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     const i = setInterval(() => forceTick(n => n + 1), 5000);
     return () => clearInterval(i);
   }, [draft.savedAt]);
+
+  useEffect(() => {
+    onDirtyChange?.(draft.dirty);
+  }, [draft.dirty, onDirtyChange]);
+  // A composer that unmounts mid-edit (thread switch, tab close) never runs
+  // its own close handler, so the caller would otherwise be stuck believing a
+  // reply is still in progress.
+  useEffect(() => () => onDirtyChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addAttachments = useCallback((next: ComposerAttachment[]) => {
     setAttachments(prev => {

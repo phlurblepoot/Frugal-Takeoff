@@ -35,6 +35,11 @@ export interface DraftAutosaveState {
   draftId: string | null;
   status: DraftStatus;
   savedAt: Date | null;
+  /** The snapshot has changed since the composer opened (and seeded) — i.e.
+   *  there is something a navigation-away would discard. Reuses the same
+   *  baseline autosave itself compares against, so "dirty" and "worth
+   *  autosaving" never disagree. */
+  dirty: boolean;
   discard: () => Promise<void>;
 }
 
@@ -113,5 +118,5 @@ export function useDraftAutosave({ accountId, enabled, get }: DraftAutosaveOptio
     }
   }, [accountId]);
 
-  return { draftId, status, savedAt, discard };
+  return { draftId, status, savedAt, dirty: active && serialized !== baseline.current, discard };
 }

@@ -104,6 +104,12 @@ export const MailPage: React.FC = () => {
   // remounting, is what keeps whatever the user has already typed.
   const [replyComposer, setReplyComposer] = useState<ReplyComposerState | null>(null);
   const [replyVariant, setReplyVariant] = useState<'modal' | 'inline'>('inline');
+  // Piece 1 (reply-discard confirm): mirrors the reply composer's own dirty
+  // state (see MailComposer's onDirtyChange / useDraftAutosave's `dirty`).
+  // Kept separate from `replyComposer` itself so a re-render of the composer
+  // (which happens on every keystroke) doesn't have to round-trip through
+  // this component's state for anything but the flag actually being checked.
+  const [replyDirty, setReplyDirty] = useState(false);
 
   // Defensive reset: navigating to a different account/thread (back/forward,
   // another thread click) must not leave the modal open against a message
@@ -113,13 +119,35 @@ export const MailPage: React.FC = () => {
     setSaveAttachmentsMessage(null);
     setReplyComposer(null);
     setReplyVariant('inline');
+    setReplyDirty(false);
   }, [accountId, threadKey]);
+
+  // Piece 1: the one gate every intentional navigation-away call below runs
+  // through first. `true` means "go ahead" — either there is nothing to lose,
+  // or the user confirmed losing it. A plain window.confirm is what the spec
+  // asks for; it also blocks synchronously, which a real "are you sure" needs
+  // to before the caller's navigate() runs.
+  const confirmDiscardReply = useCallback((): boolean => {
+    if (!replyComposer || !replyDirty) return true;
+    return window.confirm('Discard your unsent reply?');
+  }, [replyComposer, replyDirty]);
+
+  // Every navigate() below that leaves the current thread — a different
+  // thread, a different folder, a different account — funnels through this
+  // instead of calling navigate directly.
+  const guardedNavigate = useCallback(
+    (path: string) => {
+      if (!confirmDiscardReply()) return;
+      navigate(path);
+    },
+    [navigate, confirmDiscardReply],
+  );
 
   const listPath = accountId ? `/mail/${accountId}/${folderId ?? NO_FOLDER}` : '/mail';
 
   const openThread = useCallback(
-    (row: ThreadListRow) => navigate(`${listPath}/${encodeURIComponent(row.threadKey)}${search}`),
-    [navigate, listPath, search],
+    (row: ThreadListRow) => guardedNavigate(`${listPath}/${encodeURIComponent(row.threadKey)}${search}`),
+    [guardedNavigate, listPath, search],
   );
 
   const toggleStar = useCallback(
@@ -172,7 +200,7 @@ export const MailPage: React.FC = () => {
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const backToList = useCallback(() => navigate(`${listPath}${search}`), [navigate, listPath, search]);
+  const backToList = useCallback(() => guardedNavigate(`${listPath}${search}`), [guardedNavigate, listPath, search]);
 
   // Drag-to-resize for the two divider handles. Pointer events on `window`
   // rather than the handle itself so a fast drag that outruns the 4px strip
@@ -272,6 +300,7 @@ export const MailPage: React.FC = () => {
   const closeReplyComposer = useCallback(() => {
     setReplyComposer(null);
     setReplyVariant('inline');
+    setReplyDirty(false);
   }, []);
   const promoteReplyComposer = useCallback(() => setReplyVariant('modal'), []);
 
@@ -311,8 +340,8 @@ export const MailPage: React.FC = () => {
             accountId={accountId}
             folders={folders}
             folderId={folderId}
-            onSelectAccount={id => navigate(`/mail/${id}`)}
-            onSelectFolder={id => navigate(`/mail/${accountId}/${id}${search}`)}
+            onSelectAccount={id => guardedNavigate(`/mail/${id}`)}
+            onSelectFolder={id => guardedNavigate(`/mail/${accountId}/${id}${search}`)}
             onCompose={openCompose}
           />
           {handle('rail', 'Resize the folder rail', railW, RAIL)}
@@ -325,7 +354,7 @@ export const MailPage: React.FC = () => {
             <select
               aria-label="Folder"
               value={folderId ?? NO_FOLDER}
-              onChange={e => navigate(`/mail/${accountId}/${e.target.value}${search}`)}
+              onChange={e => guardedNavigate(`/mail/${accountId}/${e.target.value}${search}`)}
               className="min-w-0 flex-1 rounded-lg border border-edge bg-raised px-2 py-1.5 text-sm text-ink focus-visible:outline-none"
             >
               {railFolders.map(({ folder, label }) => (
@@ -391,6 +420,7 @@ export const MailPage: React.FC = () => {
                     replyComposer={replyComposer}
                     replyVariant={replyVariant}
                     onReplyClose={closeReplyComposer}
+                    onReplyDirtyChange={setReplyDirty}
                     onReplyPromote={promoteReplyComposer}
                     navigate={navigate}
                   />

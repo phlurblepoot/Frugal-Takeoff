@@ -43,6 +43,50 @@ describe('useDraftAutosave', () => {
     expect(h.saveDraft).not.toHaveBeenCalled();
   });
 
+  // Piece 1 (reply-discard confirm): `dirty` is what a nav guard checks
+  // before firing window.confirm, so it has to flip in step with autosave's
+  // own "changed since open" judgement — same baseline, same comparison.
+  describe('dirty', () => {
+    it('is false for the snapshot the hook opened with', async () => {
+      const { result } = setup(snap({ subject: 'Seeded' }));
+      await tick(0);
+      expect(result.current.dirty).toBe(false);
+    });
+
+    it('flips true the moment the snapshot changes, before the debounce fires', () => {
+      const { result, rerender } = setup();
+      expect(result.current.dirty).toBe(false);
+      rerender({ s: snap({ subject: 'Typed something' }) });
+      expect(result.current.dirty).toBe(true);
+      // Still true even though nothing has been saved to the server yet.
+      expect(h.saveDraft).not.toHaveBeenCalled();
+    });
+
+    it('is false while disabled, regardless of the snapshot', () => {
+      const { result } = setup(snap({ subject: 'Typed' }), { enabled: false });
+      expect(result.current.dirty).toBe(false);
+    });
+
+    it('resets to false when the composer closes (disabled) and re-baselines on the next open', () => {
+      const { result, rerender } = renderHook(
+        ({ s, enabled }: { s: DraftSnapshot; enabled: boolean }) =>
+          useDraftAutosave({ accountId: 'a1', enabled, get: () => s }),
+        { initialProps: { s: snap(), enabled: true } },
+      );
+
+      rerender({ s: snap({ subject: 'Draft one' }), enabled: true });
+      expect(result.current.dirty).toBe(true);
+
+      // Closed: no longer tracked as dirty.
+      rerender({ s: snap({ subject: 'Draft one' }), enabled: false });
+      expect(result.current.dirty).toBe(false);
+
+      // Reopened — the current snapshot is the new baseline, so it starts clean.
+      rerender({ s: snap({ subject: 'Draft one' }), enabled: true });
+      expect(result.current.dirty).toBe(false);
+    });
+  });
+
   it('creates a draft 3s after the first change, then updates it in place', async () => {
     const { result, rerender } = setup();
 
