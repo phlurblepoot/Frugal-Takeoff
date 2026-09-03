@@ -263,6 +263,12 @@ export const MailComposer: React.FC<MailComposerProps> = ({
     // Parked during a send too: the server deletes the draft as part of the
     // send, so a debounce firing afterwards would recreate it as a ghost.
     enabled: open && seeded && !onSend && !sending,
+    // `dirty` must NOT reset just because a send attempt is in flight — a
+    // failed send (composer stays open, `sending` goes back to false) would
+    // otherwise re-baseline to the still-unsent text and silently defeat the
+    // discard-confirm on the next navigation. Deliberately excludes
+    // `!sending` that `enabled` above includes.
+    dirtyEnabled: open && seeded && !onSend,
     get: () => snapshot,
   });
 

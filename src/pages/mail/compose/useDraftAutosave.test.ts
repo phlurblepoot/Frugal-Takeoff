@@ -85,6 +85,45 @@ describe('useDraftAutosave', () => {
       rerender({ s: snap({ subject: 'Draft one' }), enabled: true });
       expect(result.current.dirty).toBe(false);
     });
+
+    // Review finding 1 (fix round 1): a FAILED send toggles MailComposer's
+    // `sending` state true→false, which is folded into `enabled` (pausing
+    // autosave mid-send) but must NOT be folded into whatever gates `dirty`
+    // — otherwise `enabled` briefly going false→true re-baselines `dirty` to
+    // the still-unsent text and the discard-confirm goes silent on the next
+    // nav. `dirtyEnabled` is the caller's escape hatch from that coupling.
+    it('stays true across an enabled false->true toggle when dirtyEnabled never dropped (failed-send simulation)', () => {
+      const { result, rerender } = renderHook(
+        ({ s, enabled }: { s: DraftSnapshot; enabled: boolean }) =>
+          useDraftAutosave({ accountId: 'a1', enabled, dirtyEnabled: true, get: () => s }),
+        { initialProps: { s: snap(), enabled: true } },
+      );
+
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: true });
+      expect(result.current.dirty).toBe(true);
+
+      // The send attempt starts: MailComposer's `enabled` drops (sending=true)…
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: false });
+      // …and fails: `enabled` comes back (sending=false), composer stays open
+      // with the SAME unsent text. dirtyEnabled never moved, so no re-baseline.
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: true });
+      expect(result.current.dirty).toBe(true);
+    });
+
+    it('without dirtyEnabled (falls back to enabled), the same toggle DOES lose dirty — documents the bug dirtyEnabled exists to avoid', () => {
+      const { result, rerender } = renderHook(
+        ({ s, enabled }: { s: DraftSnapshot; enabled: boolean }) =>
+          useDraftAutosave({ accountId: 'a1', enabled, get: () => s }),
+        { initialProps: { s: snap(), enabled: true } },
+      );
+
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: true });
+      expect(result.current.dirty).toBe(true);
+
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: false });
+      rerender({ s: snap({ subject: 'Half-typed reply' }), enabled: true });
+      expect(result.current.dirty).toBe(false);
+    });
   });
 
   it('creates a draft 3s after the first change, then updates it in place', async () => {

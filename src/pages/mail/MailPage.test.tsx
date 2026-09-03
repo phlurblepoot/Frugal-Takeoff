@@ -381,6 +381,28 @@ describe('MailPage', () => {
       confirmSpy.mockRestore();
     });
 
+    // Review finding 1 (fix round 1): a failed send must not silently
+    // disarm the guard — the composer stays open with the same unsent text,
+    // so the next nav still has something real to lose.
+    it('still asks after a failed send leaves the composer open with the typed text intact', async () => {
+      h.send.mockRejectedValueOnce(new Error('SMTP refused the message'));
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      mount('/mail/a1/f-inbox/tk-1');
+      await screen.findByText('Roof detail');
+      await startTyping();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(h.toast).toHaveBeenCalledWith('SMTP refused the message', { type: 'error' }));
+      expect(screen.getByTestId('mail-composer-inline')).toBeInTheDocument();
+      expect(screen.getByTestId('composer-body')).toHaveValue('Sounds good, thanks!');
+
+      fireEvent.click(screen.getAllByTestId('mail-thread-row')[1]);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(loc()).toBe('/mail/a1/f-inbox/tk-1');
+      expect(screen.getByTestId('composer-body')).toHaveValue('Sounds good, thanks!');
+      confirmSpy.mockRestore();
+    });
+
     it('guards a folder switch from the rail the same way', async () => {
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
       mount('/mail/a1/f-inbox/tk-1');

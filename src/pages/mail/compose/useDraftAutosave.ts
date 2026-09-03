@@ -28,6 +28,18 @@ export type DraftStatus = 'idle' | 'saving' | 'saved' | 'error';
 export interface DraftAutosaveOptions {
   accountId: string | null;
   enabled: boolean;
+  /** Gates the `dirty` baseline ONLY — separate from `enabled`, which also
+   *  pauses the autosave write mid-send (the server deletes the draft as
+   *  part of a successful send, so a debounce firing during/after one would
+   *  recreate it as a ghost). A composer session must stay "open" for dirty
+   *  purposes across a send ATTEMPT, successful or not: a failed send keeps
+   *  the composer open with the typed text intact, and `enabled` briefly
+   *  goes false→true around it — without a separate gate here, that flip
+   *  would re-baseline `dirty` to the still-unsent text and silently skip
+   *  the discard-confirm on the next navigation. Defaults to `enabled` when
+   *  omitted (callers that don't autosave — item sends — don't need dirty
+   *  tracked separately either). */
+  dirtyEnabled?: boolean;
   get: () => DraftSnapshot;
 }
 
@@ -36,14 +48,15 @@ export interface DraftAutosaveState {
   status: DraftStatus;
   savedAt: Date | null;
   /** The snapshot has changed since the composer opened (and seeded) — i.e.
-   *  there is something a navigation-away would discard. Reuses the same
-   *  baseline autosave itself compares against, so "dirty" and "worth
-   *  autosaving" never disagree. */
+   *  there is something a navigation-away would discard. Gated on
+   *  `dirtyEnabled` (defaulting to `enabled`) rather than `enabled` itself,
+   *  so a failed send — which briefly disables autosave via `enabled` but
+   *  must NOT look "clean" — does not clear it. */
   dirty: boolean;
   discard: () => Promise<void>;
 }
 
-export function useDraftAutosave({ accountId, enabled, get }: DraftAutosaveOptions): DraftAutosaveState {
+export function useDraftAutosave({ accountId, enabled, dirtyEnabled, get }: DraftAutosaveOptions): DraftAutosaveState {
   const [draftId, setDraftId] = useState<string | null>(null);
   const [status, setStatus] = useState<DraftStatus>('idle');
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -65,6 +78,15 @@ export function useDraftAutosave({ accountId, enabled, get }: DraftAutosaveOptio
   const active = enabled && !!accountId;
   if (!active) baseline.current = null;
   else if (baseline.current === null) baseline.current = serialized;
+
+  // `dirty` gets its OWN baseline, gated on `dirtyEnabled` rather than
+  // `active` — see the option's doc comment. Kept as a separate ref so a
+  // send attempt pausing the autosave-gate (`active` going false) never
+  // touches this one.
+  const dirtyBaseline = useRef<string | null>(null);
+  const dirtyActive = (dirtyEnabled ?? enabled) && !!accountId;
+  if (!dirtyActive) dirtyBaseline.current = null;
+  else if (dirtyBaseline.current === null) dirtyBaseline.current = serialized;
 
   // Each composer session — and each mailbox within one — gets its own draft
   // row. Without this, closing a composer without sending and opening a new one
@@ -118,5 +140,5 @@ export function useDraftAutosave({ accountId, enabled, get }: DraftAutosaveOptio
     }
   }, [accountId]);
 
-  return { draftId, status, savedAt, dirty: active && serialized !== baseline.current, discard };
+  return { draftId, status, savedAt, dirty: dirtyActive && serialized !== dirtyBaseline.current, discard };
 }
