@@ -13,6 +13,7 @@ import { migrations } from '../migrationList';
 import { createProject } from '../projectStore';
 import { saveCustomer } from '../customerStore';
 import { MailCrypto } from './crypto';
+import { createLink } from './links';
 import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
@@ -849,6 +850,86 @@ describe('mail routes', () => {
       .query({ ...base, participants: Array.from({ length: 21 }, (_, i) => `a${i}@x.com`).join(',') });
     expect(manyParticipants.status).toBe(400);
     expect((await request(app).get('/api/mail/resolve-thread').query({ ...base, subject: 'x'.repeat(500) })).status).toBe(200);
+  });
+
+  // ── reply-flags (spec Goal 4) ──
+
+  /** Links an item to a thread (no real mail_threads row required — same as an
+   *  ITEM-view link in the project-threads tests) and pins createdAt so ordering
+   *  is a fact, not a race. */
+  const link = (threadKey: string, itemType: string, itemId: string, createdAt: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    createLink(db, { threadKey, itemType: itemType as any, itemId, linkedByUserId: 'u1' });
+    db.prepare('UPDATE mail_thread_links SET createdAt = ? WHERE threadKey = ? AND itemType = ? AND itemId = ?').run(createdAt, threadKey, itemType, itemId);
+  };
+  const replyState = (threadKey: string, inbound: string | null, outbound: string | null) => {
+    db.prepare('INSERT INTO mail_thread_reply_state (threadKey, lastInboundDate, lastOutboundDate, updatedAt) VALUES (?,?,?,?)').run(threadKey, inbound, outbound, new Date().toISOString());
+  };
+
+  it('GET /api/mail/reply-flags flags an item whose last inbound reply is newer than the last outbound and the link itself', async () => {
+    link('t-true@x', 'invoice', 'i-true', '2026-08-01T00:00:00.000Z');
+    replyState('t-true@x', '2026-08-10T00:00:00.000Z', '2026-08-05T00:00:00.000Z');
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-true' });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ flagged: ['i-true'] });
+  });
+
+  it('GET /api/mail/reply-flags does not flag when the last outbound is newer than the last inbound', async () => {
+    link('t-outbound@x', 'invoice', 'i-outbound', '2026-08-01T00:00:00.000Z');
+    replyState('t-outbound@x', '2026-08-05T00:00:00.000Z', '2026-08-10T00:00:00.000Z');
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-outbound' });
+    expect(r.body).toEqual({ flagged: [] });
+  });
+
+  it('GET /api/mail/reply-flags does not flag when the item was linked to the thread after the last inbound reply', async () => {
+    // No outbound at all — but the link itself postdates the inbound message, i.e.
+    // someone linked this thread to the item only after the customer's reply.
+    link('t-linkedlate@x', 'invoice', 'i-linkedlate', '2026-08-10T00:00:00.000Z');
+    replyState('t-linkedlate@x', '2026-08-05T00:00:00.000Z', null);
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-linkedlate' });
+    expect(r.body).toEqual({ flagged: [] });
+  });
+
+  it('GET /api/mail/reply-flags does not flag an item whose thread has no reply-state row', async () => {
+    link('t-nostate@x', 'invoice', 'i-nostate', '2026-08-01T00:00:00.000Z');
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-nostate' });
+    expect(r.body).toEqual({ flagged: [] });
+  });
+
+  it('GET /api/mail/reply-flags does not flag an item with no link at all', async () => {
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-nolink' });
+    expect(r.body).toEqual({ flagged: [] });
+  });
+
+  it('GET /api/mail/reply-flags evaluates the rule against the NEWEST link, not any link', async () => {
+    // The older link's thread would flag on its own (inbound after that link's
+    // createdAt, no outbound) — but a newer link on a different thread exists for
+    // the same item, and that thread's reply state does not satisfy the rule.
+    link('t-old@x', 'invoice', 'i-newest', '2026-08-01T00:00:00.000Z');
+    replyState('t-old@x', '2026-08-10T00:00:00.000Z', null);
+    link('t-new@x', 'invoice', 'i-newest', '2026-08-15T00:00:00.000Z');
+    replyState('t-new@x', '2026-08-16T00:00:00.000Z', '2026-08-20T00:00:00.000Z');
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-newest' });
+    expect(r.body).toEqual({ flagged: [] });
+  });
+
+  it('GET /api/mail/reply-flags validates itemType and rejects more than 100 itemIds', async () => {
+    expect((await request(app).get('/api/mail/reply-flags').query({ itemType: 'nope', itemIds: 'a' })).status).toBe(400);
+    expect((await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice' })).status).toBe(400);
+    const manyIds = Array.from({ length: 101 }, (_, i) => `i${i}`).join(',');
+    expect((await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: manyIds })).status).toBe(400);
+    const cappedIds = Array.from({ length: 100 }, (_, i) => `i${i}`).join(',');
+    expect((await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: cappedIds })).status).toBe(200);
+  });
+
+  it('GET /api/mail/reply-flags evaluates multiple ids in one call, mixing flagged and unflagged', async () => {
+    link('t-mix-a@x', 'invoice', 'i-mix-a', '2026-08-01T00:00:00.000Z');
+    replyState('t-mix-a@x', '2026-08-10T00:00:00.000Z', null);   // flagged
+    link('t-mix-b@x', 'invoice', 'i-mix-b', '2026-08-01T00:00:00.000Z');
+    replyState('t-mix-b@x', '2026-08-05T00:00:00.000Z', '2026-08-10T00:00:00.000Z');  // not flagged
+    const r = await request(app).get('/api/mail/reply-flags').query({ itemType: 'invoice', itemIds: 'i-mix-a,i-mix-b,i-mix-none' });
+    expect(r.status).toBe(200);
+    expect(r.body.flagged.sort()).toEqual(['i-mix-a']);
   });
 
   it('GET /api/mail/providers reports which OAuth providers the env configures', async () => {

@@ -1012,6 +1012,43 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     res.json({ ok: true });
   });
 
+  const MAX_REPLY_FLAG_IDS = 100;
+
+  /**
+   * Batch "did they reply and we haven't yet" indicator for a list of items
+   * (spec Goal 4). Viewer-independent — same trust model as GET /api/mail/links:
+   * it reads only the link/reply-state rows, never a mailbox, so it works the
+   * same for a user with no mail account of their own.
+   *
+   * Per item, only its NEWEST link (by createdAt, rowid as a tiebreak for two
+   * links landed in the same instant) governs — an older, already-superseded
+   * link's reply state must not flag an item the newest link doesn't.
+   */
+  app.get('/api/mail/reply-flags', authenticateToken, (req, res) => {
+    const { itemType, itemIds: rawIds } = req.query;
+    if (!isItemType(itemType)) return res.status(400).json({ error: 'Unknown itemType' });
+    if (typeof rawIds !== 'string' || !rawIds) return res.status(400).json({ error: 'itemIds is required' });
+    const itemIds = rawIds.split(',').map(s => s.trim()).filter(Boolean);
+    if (!itemIds.length) return res.status(400).json({ error: 'itemIds is required' });
+    if (itemIds.length > MAX_REPLY_FLAG_IDS) return res.status(400).json({ error: `Too many itemIds (max ${MAX_REPLY_FLAG_IDS})` });
+    const rows = db.prepare(`SELECT l.itemId, l.createdAt, r.lastInboundDate, r.lastOutboundDate
+        FROM mail_thread_links l LEFT JOIN mail_thread_reply_state r ON r.threadKey = l.threadKey
+        WHERE l.itemType = ? AND l.itemId IN (${itemIds.map(() => '?').join(',')})
+        ORDER BY l.itemId, l.createdAt DESC, l.rowid DESC`).all(itemType, ...itemIds) as
+      { itemId: string; createdAt: string; lastInboundDate: string | null; lastOutboundDate: string | null }[];
+    const seen = new Set<string>();
+    const flagged: string[] = [];
+    for (const r of rows) {
+      // Rows arrive newest-first per item — the first one seen for an itemId IS its newest link.
+      if (seen.has(r.itemId)) continue;
+      seen.add(r.itemId);
+      if (!r.lastInboundDate) continue;
+      const floor = r.lastOutboundDate && r.lastOutboundDate > r.createdAt ? r.lastOutboundDate : r.createdAt;
+      if (r.lastInboundDate > floor) flagged.push(r.itemId);
+    }
+    res.json({ flagged });
+  });
+
   /** A link row's participant snapshot, defensively parsed — the column is app-written
    *  JSON, but a hand-edited or pre-Phase-1 row must not throw a 500 on a listing. */
   const parseAddrs = (json: string | null | undefined): Addr[] => {
