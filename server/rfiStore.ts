@@ -175,12 +175,18 @@ export function setRfiResponse(db: Database.Database, id: string, input: { fileI
 // auto-answering the RFI. Only accepted while the RFI is 'sent' — once it's
 // answered/closed a later reply shouldn't silently overwrite the recorded
 // response. Each call replaces any prior pending reply (last inbound wins).
+//
+// version bumps (so live listeners refresh) but updatedAt does NOT — an email
+// merely arriving must not flip the generated-PDF "up to date" freshness chip
+// the way an actual edit to the RFI would (Nathan's ruling). Only accepting
+// the reply into the recorded response (acceptPendingReply → setRfiResponse)
+// is a real content change and bumps updatedAt.
 export function setPendingReply(db: Database.Database, id: string, reply: RfiPendingReply): boolean {
   const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
   if (!row) throw new NotFoundError('RFI not found');
   if (row.status !== 'sent') return false;
-  db.prepare('UPDATE rfis SET pendingReplyJson = ?, version = version + 1, updatedAt = ? WHERE id = ?')
-    .run(JSON.stringify(reply), Date.now(), id);
+  db.prepare('UPDATE rfis SET pendingReplyJson = ?, version = version + 1 WHERE id = ?')
+    .run(JSON.stringify(reply), id);
   return true;
 }
 
@@ -205,8 +211,10 @@ export function acceptPendingReply(db: Database.Database, id: string, input: { t
   return result;
 }
 
+// Same freshness reasoning as setPendingReply: dismissing an unwanted email
+// is not a content edit, so version bumps but updatedAt is left alone.
 export function dismissPendingReply(db: Database.Database, id: string): void {
   const row = db.prepare('SELECT id FROM rfis WHERE id = ?').get(id);
   if (!row) throw new NotFoundError('RFI not found');
-  db.prepare('UPDATE rfis SET pendingReplyJson = NULL, version = version + 1, updatedAt = ? WHERE id = ?').run(Date.now(), id);
+  db.prepare('UPDATE rfis SET pendingReplyJson = NULL, version = version + 1 WHERE id = ?').run(id);
 }

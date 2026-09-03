@@ -290,6 +290,21 @@ describe('rfiStore', () => {
       setPendingReply(db, id, reply); setPendingReply(db, id, { ...reply, text: 'Updated', mailMessageId: 'm2' });
       expect(getRfi(db, id).pendingReply.text).toBe('Updated');
     });
+    // Nathan's freshness ruling: an email reply arriving or being dismissed
+    // must not flip the generated-PDF "up to date" chip — that chip compares
+    // updatedAt, so capture/dismiss may only bump version.
+    it('capture and dismiss bump version but leave updatedAt untouched', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id);
+      const before = getRfi(db, id)!;
+      setPendingReply(db, id, reply);
+      const afterCapture = getRfi(db, id)!;
+      expect(afterCapture.version).toBe(before.version + 1);
+      expect(afterCapture.updatedAt).toBe(before.updatedAt);
+      dismissPendingReply(db, id);
+      const afterDismiss = getRfi(db, id)!;
+      expect(afterDismiss.version).toBe(afterCapture.version + 1);
+      expect(afterDismiss.updatedAt).toBe(before.updatedAt);
+    });
     it('accept sets the response, answered, source fields, clears pending; dismiss only clears', () => {
       const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id); setPendingReply(db, id, reply);
       expect(acceptPendingReply(db, id, { text: 'Corridor 9ft (edited)' })).toEqual({ status: 'answered' });
