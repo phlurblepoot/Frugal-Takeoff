@@ -98,6 +98,24 @@ describe('invoices', () => {
     expect(getInvoice(db, id)).toBeNull();
     expect((db.prepare('SELECT COUNT(*) c FROM invoice_lines').get() as any).c).toBe(0);
   });
+
+  it('notes defaults to null and round-trips through create + save', () => {
+    const created = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    expect(getInvoice(db, created.id)!.notes).toBeNull();
+
+    const withNotes = createInvoice(db, 'p1', { number: 'INV-2', lines: [], notes: 'Called re: revised scope' });
+    expect(getInvoice(db, withNotes.id)!.notes).toBe('Called re: revised scope');
+
+    const inv = getInvoice(db, withNotes.id)!;
+    const saved = saveInvoice(db, withNotes.id, { ...inv, notes: 'Updated after the walkthrough' });
+    expect(saved.version).toBe(2);
+    expect(getInvoice(db, withNotes.id)!.notes).toBe('Updated after the walkthrough');
+
+    // Blank/whitespace-only notes normalize to null, same as change-order title.
+    const cleared = saveInvoice(db, withNotes.id, { ...getInvoice(db, withNotes.id)!, notes: '   ' });
+    expect(cleared.version).toBe(3);
+    expect(getInvoice(db, withNotes.id)!.notes).toBeNull();
+  });
 });
 
 describe('payments + status', () => {
@@ -510,6 +528,28 @@ describe('updatedAt stamping', () => {
     await new Promise(r => setTimeout(r, 2));
     setInvoiceStatus(db, id, 'sent');
     expect((getInvoice(db, id) as any).updatedAt).toBeGreaterThan(afterSave);
+  });
+
+  // Internal notes never print on the invoice PDF or go into invoice emails
+  // (Nathan's ruling), so a notes-only save must not flip the "up to date"
+  // freshness chip — same reasoning as the RFI pendingReply exemption
+  // (commit 5907997). version still bumps so live listeners refresh.
+  it('a notes-only saveInvoice does not bump updatedAt, but bumps version', async () => {
+    const { id } = createInvoice(db, 'p1', { number: '1', terms: 'net 30', lines: [{ description: 'A', qty: 1, unitPrice: 10 }] });
+    const before = getInvoice(db, id) as any;
+    await new Promise(r => setTimeout(r, 2));
+
+    const afterNotes = saveInvoice(db, id, { ...before, notes: 'Left VM for the customer' });
+    expect(afterNotes.version).toBe(before.version + 1);
+    const reloaded = getInvoice(db, id) as any;
+    expect(reloaded.notes).toBe('Left VM for the customer');
+    expect(reloaded.updatedAt).toBe(before.updatedAt);
+
+    // A real content change alongside a notes edit still bumps updatedAt.
+    await new Promise(r => setTimeout(r, 2));
+    const afterTerms = saveInvoice(db, id, { ...reloaded, terms: 'net 15', notes: 'and again' });
+    expect(afterTerms.version).toBe(reloaded.version + 1);
+    expect((getInvoice(db, id) as any).updatedAt).toBeGreaterThan(before.updatedAt);
   });
 
   it('saveChangeOrder and addChangeOrderPhoto bump updatedAt', async () => {

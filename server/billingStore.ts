@@ -29,7 +29,32 @@ function requireProject(db: Database.Database, projectId: string): void {
 }
 
 interface LineInput { description?: string; qty?: number; unitPrice?: number; }
-interface InvoiceInput { number?: string; date?: number | null; terms?: string; status?: string; lines?: LineInput[]; }
+interface InvoiceInput {
+  number?: string; date?: number | null; terms?: string; status?: string; lines?: LineInput[];
+  /** Internal-only — never printed on the invoice PDF or included in invoice
+   *  emails (Nathan's ruling). See saveInvoice's freshness handling below. */
+  notes?: string | null;
+}
+
+// notes is free text; blank/whitespace-only is stored as NULL, same
+// normalization as change_orders.title (normalizeTitle) so display/editor code
+// can treat "no notes" one way regardless of how it got there.
+function normalizeNotes(notes: unknown): string | null {
+  if (typeof notes !== 'string') return null;
+  const trimmed = notes.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+// Content-equality for the line-item set, ignoring row identity (ids are
+// re-minted on every save by writeLines). Used by saveInvoice to tell whether
+// a save actually changed anything the generated PDF would show.
+function lineContentKey(lines: { description?: string; qty?: number | string; unitPrice?: number | string }[]): string {
+  return JSON.stringify(lines.map(l => ({
+    description: l.description ?? '',
+    qty: Number(l.qty) || 0,
+    unitPrice: Number(l.unitPrice) || 0,
+  })));
+}
 
 function validateLines(lines: any): LineInput[] {
   if (lines === undefined) return [];
@@ -89,8 +114,8 @@ export function createInvoice(db: Database.Database, projectId: string, input: I
   const id = crypto.randomUUID();
   const tx = db.transaction(() => {
     const now = Date.now();
-    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)')
-      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, now, now);
+    db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, notes, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
+      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, normalizeNotes(input.notes), now, now);
     writeLines(db, id, lines);
   });
   tx();
@@ -105,14 +130,37 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
   if (input.status !== undefined && !(INVOICE_STATUSES as readonly string[]).includes(input.status)) {
     throw new ValidationError(`Invalid invoice status: ${input.status}`);
   }
+  const notes = normalizeNotes(input.notes);
   let newVersion = 0;
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version FROM invoices WHERE id = ?').get(id) as { version: number } | undefined;
+    const row = db.prepare('SELECT version, number, date, status, terms FROM invoices WHERE id = ?').get(id) as
+      { version: number; number: string | null; date: number | null; status: string; terms: string | null } | undefined;
     if (!row) throw new NotFoundError('Invoice not found');
     if (row.version !== input.version) throw new ConflictError(`Invoice changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
-    db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, version = ?, updatedAt = ? WHERE id = ?')
-      .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, newVersion, Date.now(), id);
+
+    // notes is internal-only — never printed on the invoice PDF or included in
+    // invoice emails (Nathan's ruling) — so a save that only touches notes must
+    // not flip the generated-PDF "up to date" freshness chip the way an edit to
+    // number/date/status/terms/lines would (same reasoning as the RFI
+    // pendingReply exemption, commit 5907997). Everything else in this UPDATE
+    // shares one call, so detect "nothing PDF-relevant changed" by comparing
+    // against the row (and its lines) as loaded.
+    const oldLines = db.prepare('SELECT description, qty, unitPrice FROM invoice_lines WHERE invoiceId = ? ORDER BY sortOrder').all(id) as any[];
+    const contentChanged =
+      (input.number ?? null) !== row.number ||
+      (input.date ?? null) !== row.date ||
+      (input.status ?? 'draft') !== row.status ||
+      (input.terms ?? null) !== row.terms ||
+      lineContentKey(lines) !== lineContentKey(oldLines);
+
+    if (contentChanged) {
+      db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, notes = ?, version = ?, updatedAt = ? WHERE id = ?')
+        .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, notes, newVersion, Date.now(), id);
+    } else {
+      db.prepare('UPDATE invoices SET number = ?, date = ?, status = ?, terms = ?, notes = ?, version = ? WHERE id = ?')
+        .run(input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, notes, newVersion, id);
+    }
     writeLines(db, id, lines);
   });
   tx();

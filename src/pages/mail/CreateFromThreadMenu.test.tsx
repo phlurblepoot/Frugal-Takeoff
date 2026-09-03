@@ -282,14 +282,18 @@ describe('CreateFromThreadMenu', () => {
     expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/linking.*failed/i), expect.objectContaining({ type: 'warning' }));
   });
 
-  it('creates an Invoice directly when the thread already has a project link', async () => {
+  it('creates an Invoice directly when the thread already has a project link, prefilling notes from subject + inbound text', async () => {
     const { navigate } = setup({ links: [PROJECT_LINK] });
     openMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Invoice' }));
 
-    // Invoice has no long-text field to prefill (no notes/description) — a
-    // bare draft, same shape as InvoicesSection's own "New invoice" button.
-    await waitFor(() => expect(h.createInvoice).toHaveBeenCalledWith('p1', { lines: [] }));
+    // Invoice's only free-text field is `notes` (internal-only) — it carries
+    // both the subject and inbound-text prefill the CO path splits across
+    // title/description.
+    await waitFor(() => expect(h.createInvoice).toHaveBeenCalledWith('p1', {
+      lines: [],
+      notes: 'Roof detail\n\nBody text from the latest inbound message.',
+    }));
     await waitFor(() => expect(h.createLink).toHaveBeenCalledWith({ threadKey: 'tk-1', itemType: 'invoice', itemId: 'inv-1' }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/project/p1/billing?tab=invoices&open=inv-1'));
   });
@@ -305,7 +309,10 @@ describe('CreateFromThreadMenu', () => {
     fireEvent.change(select, { target: { value: 'p2' } });
     fireEvent.click(screen.getByRole('button', { name: /create invoice/i }));
 
-    await waitFor(() => expect(h.createInvoice).toHaveBeenCalledWith('p2', { lines: [] }));
+    await waitFor(() => expect(h.createInvoice).toHaveBeenCalledWith('p2', {
+      lines: [],
+      notes: 'Roof detail\n\nBody text from the latest inbound message.',
+    }));
     await waitFor(() => expect(h.createLink).toHaveBeenCalledWith({ threadKey: 'tk-1', itemType: 'invoice', itemId: 'inv-1' }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/project/p2/billing?tab=invoices&open=inv-1'));
   });

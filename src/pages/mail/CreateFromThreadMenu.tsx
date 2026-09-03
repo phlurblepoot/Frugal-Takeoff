@@ -9,10 +9,11 @@
 // navigates to the new item's editor.
 //
 // TRUST BOUNDARY: the email-derived text below only ever lands in create
-// payload VALUES (createTask/createRfi/createIssue/createChangeOrder string
-// fields) — it is never rendered as HTML anywhere in this component. Invoice
-// has no free-text field to prefill (see createInvoiceItem below), so no
-// email-derived text reaches it at all.
+// payload VALUES (createTask/createRfi/createIssue/createChangeOrder/
+// createInvoice string fields) — it is never rendered as HTML anywhere in
+// this component. Invoice's only free-text field is `notes` (internal-only —
+// see createInvoiceItem below), which the editor renders through a plain
+// <textarea>, so it is never parsed as markup there either.
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ListPlus } from 'lucide-react';
 import { useToast } from '../../components/Toast';
@@ -169,12 +170,14 @@ export const CreateFromThreadMenu: React.FC<{
   };
 
   const createInvoiceItem = async (projectId: string): Promise<CreatedItem> => {
-    // Invoice (see InvoiceInput/Invoice in utils/store) has no free-text
-    // notes/description field to prefill — only `terms` (a short "Net 30"
-    // style field, wrong semantics for email-derived text) and `number`. So
-    // this is a bare draft, the same call InvoicesSection's own "New
-    // invoice" button makes; the admin fills it in from the editor.
-    const { id } = await createInvoice(projectId, { lines: [] });
+    // Invoice (see InvoiceInput/Invoice in utils/store) has no separate
+    // title/description pair like Change Order — `notes` (internal-only, never
+    // printed on the PDF or emailed) is its one free-text field, so it carries
+    // both the same subject line and inbound-text prefill the CO path splits
+    // across two fields.
+    const description = await buildDescription(messages, ownAddresses, snippet);
+    const notes = description ? `${title}\n\n${description}` : title;
+    const { id } = await createInvoice(projectId, { lines: [], notes });
     return { itemType: 'invoice', id, path: `/project/${projectId}/billing?tab=invoices&open=${id}` };
   };
 

@@ -1000,3 +1000,30 @@ describe('migration 31 mail-client', () => {
     db.close();
   });
 });
+
+describe('migration 33: invoice-notes', () => {
+  it('adds notes (nullable) to invoices, and re-runs as a no-op', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 32));
+    expect(columnNames(db, 'invoices')).not.toContain('notes');
+
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
+    db.prepare('INSERT INTO invoices (id, projectId, number, status, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run('i1', 'p1', '1', 'draft', 1);
+
+    runMigrations(db, tmpDir(), migrations);
+
+    expect(columnNames(db, 'invoices')).toContain('notes');
+    const row = db.prepare('SELECT notes FROM invoices WHERE id = ?').get('i1') as any;
+    expect(row.notes).toBeNull();
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE invoices SET notes = ? WHERE id = ?').run('Called re: change in scope', 'i1');
+    const mig33 = migrations.find(m => m.version === 33)!;
+    expect(() => mig33.up({ db, dataDir: tmpDir() })).not.toThrow();
+    const after = db.prepare('SELECT notes FROM invoices WHERE id = ?').get('i1') as any;
+    expect(after.notes).toBe('Called re: change in scope');
+
+    db.close();
+  });
+});

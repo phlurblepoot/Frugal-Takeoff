@@ -66,7 +66,7 @@ import { InvoicesSection } from './InvoicesSection';
 
 const row = (over: Partial<InvoiceListItem> = {}): InvoiceListItem => ({
   id: 'inv-1', projectId: 'p1', number: 'INV-1', date: null, status: 'draft',
-  terms: null, version: 1, createdAt: 1, updatedAt: 10,
+  terms: null, notes: null, version: 1, createdAt: 1, updatedAt: 10,
   totalCents: 10000, paidCents: 0, balanceCents: 10000,
   ...over,
 });

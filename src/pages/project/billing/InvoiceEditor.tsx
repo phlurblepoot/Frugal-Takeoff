@@ -4,7 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, sendInvoice } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
@@ -47,6 +47,7 @@ export const InvoiceEditor: React.FC<{
   const { toast } = useToast();
   const [number, setNumber] = useState(invoice.number ?? '');
   const [terms, setTerms] = useState(invoice.terms ?? '');
+  const [notes, setNotes] = useState(invoice.notes ?? '');
   const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
@@ -55,6 +56,7 @@ export const InvoiceEditor: React.FC<{
   const dirty =
     number !== (invoice.number ?? '') ||
     terms !== (invoice.terms ?? '') ||
+    notes !== (invoice.notes ?? '') ||
     date !== initialDate ||
     lineContentKey(lines) !== lineContentKey(invoice.lines);
 
@@ -93,6 +95,7 @@ export const InvoiceEditor: React.FC<{
         ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
         number: number || null,
         terms: terms || null,
+        notes: notes || null,
         date: date ? new Date(date).getTime() : null,
         lines: lines.map(l => ({ description: l.description, qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0 })),
       });
@@ -208,6 +211,18 @@ export const InvoiceEditor: React.FC<{
         <Field label="Number" htmlFor="inv-num"><Input id="inv-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="inv-date"><Input id="inv-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Terms" htmlFor="inv-terms"><Input id="inv-terms" value={terms} onChange={e => setTerms(e.target.value)} placeholder="Net 30" /></Field>
+      </div>
+
+      <div className="mt-4">
+        <Field label="Notes (internal)" htmlFor="inv-notes">
+          <Textarea
+            id="inv-notes"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            placeholder="Internal notes — not shown on the invoice PDF"
+          />
+        </Field>
       </div>
 
       <div className="mt-4">

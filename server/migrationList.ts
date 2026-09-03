@@ -1575,4 +1575,18 @@ export const migrations: Migration[] = [
       db.exec('CREATE INDEX IF NOT EXISTS idx_mail_messages_acct_pthread ON mail_messages(accountId, providerThreadId);');
     },
   },
+  {
+    version: 33,
+    name: 'invoice-notes',
+    // ADDITIVE, IDEMPOTENT: one nullable column, same pattern as migration 24
+    // (change_orders.title). Internal-only notes (Nathan's ruling) — never
+    // printed on the invoice PDF or included in invoice emails, so existing
+    // rows getting NULL changes nothing about how they render or send.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(invoices)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('notes')) {
+        db.exec(`ALTER TABLE invoices ADD COLUMN notes TEXT;`);
+      }
+    },
+  },
 ];

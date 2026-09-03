@@ -899,10 +899,15 @@ export interface Invoice {
   date: number | null;
   status: string; // draft | sent | paid
   terms: string | null;
+  // Internal-only — never printed on the invoice PDF or included in invoice
+  // emails (migration 33). A notes-only save does not bump `updatedAt` (see
+  // below), so it can't affect the freshness chip.
+  notes: string | null;
   version: number;
   createdAt: number;
   // Stamped server-side on every write (migration 30) — the "is the generated
-  // PDF still current?" comparison in DocumentActionsBar reads it.
+  // PDF still current?" comparison in DocumentActionsBar reads it. notes-only
+  // edits are exempt (server/billingStore.ts saveInvoice).
   updatedAt: number;
   lines: InvoiceLine[];
   payments: Payment[];
@@ -912,7 +917,7 @@ export interface Invoice {
 }
 export interface InvoiceListItem {
   id: string; projectId: string; number: string | null; date: number | null;
-  status: string; terms: string | null; version: number; createdAt: number;
+  status: string; terms: string | null; notes: string | null; version: number; createdAt: number;
   updatedAt: number;
   totalCents: number; paidCents: number; balanceCents: number;
 }
@@ -994,7 +999,7 @@ export interface BillingSummary {
   invoiceOutstandingBilledCents: number;
 }
 export interface InvoiceInput {
-  number?: string; date?: number | null; terms?: string; status?: string;
+  number?: string; date?: number | null; terms?: string; status?: string; notes?: string | null;
   lines: { description: string; qty: number; unitPrice: number }[];
 }
 
