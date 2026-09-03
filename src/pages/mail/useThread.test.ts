@@ -5,8 +5,20 @@ import type { MessageRow, ThreadLink, ThreadListRow } from './types';
 
 const { thread } = vi.hoisted(() => ({ thread: vi.fn() }));
 vi.mock('../../utils/mailApi', () => ({ mailApi: { thread } }));
-// useLiveQuery only needs a socket-shaped context; null means "no live events".
-vi.mock('../../context/CollaborationContext', () => ({ useCollaboration: () => ({ socket: null }) }));
+
+// A fake socket (on/off/fire), same pattern as TaskEditor.test.tsx /
+// useLiveQuery.test.tsx, so live 'mailThread' events can be simulated.
+const { fakeSocket } = vi.hoisted(() => {
+  const handlers: Record<string, ((...a: any[]) => void)[]> = {};
+  const fakeSocket = {
+    handlers,
+    on: vi.fn((e: string, cb: any) => { (handlers[e] ??= []).push(cb); return fakeSocket; }),
+    off: vi.fn((e: string, cb: any) => { handlers[e] = (handlers[e] ?? []).filter(h => h !== cb); return fakeSocket; }),
+    fire: (e: string, ...a: any[]) => (handlers[e] ?? []).forEach(cb => cb(...a)),
+  };
+  return { fakeSocket };
+});
+vi.mock('../../context/CollaborationContext', () => ({ useCollaboration: () => ({ socket: fakeSocket }) }));
 
 import { useThread } from './useThread';
 
@@ -34,6 +46,7 @@ const payload = (key: string) => ({ thread: threadRow(key), messages: [message(`
 beforeEach(() => {
   vi.clearAllMocks();
   thread.mockImplementation((_a: string, key: string) => Promise.resolve(payload(key)));
+  for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
 });
 
 describe('useThread', () => {
@@ -100,5 +113,30 @@ describe('useThread', () => {
     await waitFor(() => expect(result.current.thread).not.toBeNull());
     result.current.reload();
     await waitFor(() => expect(thread).toHaveBeenCalledTimes(2));
+  });
+
+  // Regression: useLiveQuery's own "reload when the filter identity changes"
+  // effect and useThread's "load when accountId/threadKey changes" effect
+  // used to both fire on a thread switch — one API call became two.
+  it('fetches exactly once per thread switch, not twice', async () => {
+    const { result, rerender } = renderHook(({ k }: { k: string }) => useThread('a1', k), {
+      initialProps: { k: 'tk-1' },
+    });
+    await waitFor(() => expect(result.current.thread?.threadKey).toBe('tk-1'));
+    expect(thread).toHaveBeenCalledTimes(1);
+
+    rerender({ k: 'tk-2' });
+    await waitFor(() => expect(result.current.thread?.threadKey).toBe('tk-2'));
+    expect(thread).toHaveBeenCalledTimes(2);
+  });
+
+  it('still reloads on a live mailThread event for the open thread', async () => {
+    const { result } = renderHook(() => useThread('a1', 'tk-1'));
+    await waitFor(() => expect(result.current.thread).not.toBeNull());
+    expect(thread).toHaveBeenCalledTimes(1);
+
+    fakeSocket.fire('entity-changed', { type: 'mailThread', id: 'tk-1', action: 'updated' });
+    // useLiveQuery debounces live reloads by 500ms (useThread's debounceMs).
+    await waitFor(() => expect(thread).toHaveBeenCalledTimes(2), { timeout: 2000 });
   });
 });

@@ -37,7 +37,12 @@ export function useThread(accountId: string | null, threadKey: string | null): T
   // messages under the new subject.
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const readyRef = useRef(false);
+  // The key the explicit effect below has (started) loading. Used to tell a
+  // genuine live event on the already-open thread apart from useLiveQuery's
+  // own "reload when the filter identity changes" effect firing merely
+  // because the thread switched — that reload is redundant, since the
+  // explicit effect below already owns loading the new key.
+  const loadedKeyRef = useRef<string | null>(null);
 
   const key = accountId && threadKey ? cacheKey(accountId, threadKey) : null;
 
@@ -62,23 +67,30 @@ export function useThread(accountId: string | null, threadKey: string | null): T
     }
   }, [accountId, threadKey]);
 
-  // Live events only; the effect below owns the load on an account/thread
-  // change (see the same note in useThreadList).
+  // Live events only. useLiveQuery also fires this callback on mount and
+  // whenever its filter identity (built from threadKey) changes — the same
+  // moments the effect below already handles via its own [load] dependency —
+  // so it's gated to loadedKeyRef: only a call for the key already owned by
+  // that effect (i.e. a real socket event on the thread that's open, not the
+  // switch itself) goes through. On the switch, this callback runs BEFORE the
+  // effect below updates the ref (effects run in declaration order), so the
+  // stale mismatch correctly skips it there and leaves the single load to the
+  // effect below (same idea as the readyRef gate in useThreadList).
   useLiveQuery(
     () => {
-      if (readyRef.current) void load();
+      if (loadedKeyRef.current === key) void load();
     },
     { types: ['mailThread'], id: threadKey ?? undefined },
     { debounceMs: 500 },
   );
 
   useEffect(() => {
-    readyRef.current = true;
+    loadedKeyRef.current = key;
     // The previous thread's failure must not be shown over the new one while
     // its fetch is in flight.
     setError(null);
     void load();
-  }, [load]);
+  }, [load, key]);
 
   const fresh = !!key && loaded?.key === key;
 
