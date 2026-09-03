@@ -71,6 +71,16 @@ export const ProjectRfis: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Open a specific RFI's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3) — same one-shot query-param convention as ?new=1 above.
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openRfi(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const openRfi = async (id: string) => {
     try { setEditing(await getRfi(id)); } catch { toast('Failed to open RFI', { type: 'error' }); }
   };

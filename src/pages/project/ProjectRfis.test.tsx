@@ -86,9 +86,9 @@ const listRow = (over: Record<string, any> = {}) => ({
 
 const FILE = { id: 'f1', name: 'RFI-001.pdf', mime: 'application/pdf', size: 12, createdAt: 50, versionNumber: 1 };
 
-const mount = () =>
+const mount = (initialEntry = '/project/p1/rfis') =>
   render(
-    <MemoryRouter initialEntries={['/project/p1/rfis']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes><Route path="/project/:projectId/rfis" element={<ProjectRfis />} /></Routes>
     </MemoryRouter>
   );
@@ -112,6 +112,13 @@ describe('ProjectRfis — PDF status on rows', () => {
     await waitFor(() => expect(screen.getByText('PDF up to date')).toBeInTheDocument());
     expect(screen.queryByText('No PDF yet')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Open PDF' })).toHaveLength(1);
+  });
+
+  it('?open= opens that RFI\'s editor (CreateFromThreadMenu convention) and strips the param', async () => {
+    h.getRfi.mockResolvedValue({ ...listRow(), photos: [] });
+    mount('/project/p1/rfis?open=r1');
+    await screen.findByTestId('editor');
+    expect(h.getRfi).toHaveBeenCalledWith('r1');
   });
 
   it('marks the chip out of date when the RFI changed after the PDF was made', async () => {

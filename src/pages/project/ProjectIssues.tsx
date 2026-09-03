@@ -63,6 +63,16 @@ export const ProjectIssues: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Open a specific issue's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3) — same one-shot query-param convention as ?new=1 above.
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openIssue(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const openIssue = async (id: string) => {
     try { setEditing(await getIssue(id)); } catch { toast('Failed to open issue', { type: 'error' }); }
   };

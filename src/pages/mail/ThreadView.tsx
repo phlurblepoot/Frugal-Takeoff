@@ -10,6 +10,7 @@ import { Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
 import { MailComposer } from './compose/MailComposer';
+import { CreateFromThreadMenu } from './CreateFromThreadMenu';
 import { orderFolders } from './FolderRail';
 import { LinkPickerModal } from './LinkPickerModal';
 import { MessageCard, type ReplyMode } from './MessageCard';
@@ -67,9 +68,14 @@ export const ThreadView: React.FC<{
    *  modal without losing anything typed (MailPage only flips `replyVariant`,
    *  it does not remount the composer). */
   onReplyPromote: () => void;
+  /** Task 3: CreateFromThreadMenu's "Create ▾" navigates through this after
+   *  converting the thread — MailPage owns the router (see useNavigate there)
+   *  so ThreadView takes it as a prop rather than calling useNavigate itself,
+   *  keeping this component testable without a Router wrapper. */
+  navigate: (path: string) => void;
 }> = ({
   accountId, threadKey, ownAddresses, accounts, onBack, onReply, onOpenInComposer, onSaveAttachments,
-  replyComposer, replyVariant, onReplyClose, onReplyPromote,
+  replyComposer, replyVariant, onReplyClose, onReplyPromote, navigate,
 }) => {
   const { toast } = useToast();
   const { thread, messages, links, loading, error, reload } = useThread(accountId, threadKey);
@@ -233,6 +239,16 @@ export const ThreadView: React.FC<{
           <Reply size={15} />
           <span>Reply</span>
         </button>
+
+        <CreateFromThreadMenu
+          threadKey={threadKey}
+          subject={thread.subject}
+          snippet={thread.snippet}
+          messages={messages}
+          ownAddresses={ownAddresses}
+          links={links}
+          navigate={navigate}
+        />
 
         {/* Everything below the fold on a phone lives in the ⋯ menu instead. */}
         <div className="hidden items-center gap-1 sm:flex">

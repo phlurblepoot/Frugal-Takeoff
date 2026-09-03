@@ -51,6 +51,13 @@ vi.mock('./LinkPickerModal', () => ({
       </div>
     ) : null,
 }));
+// CreateFromThreadMenu is covered by CreateFromThreadMenu.test.tsx; here it's
+// a stub that surfaces exactly the props ThreadView wires.
+vi.mock('./CreateFromThreadMenu', () => ({
+  CreateFromThreadMenu: ({ threadKey, subject }: { threadKey: string; subject: string }) => (
+    <div data-testid="create-from-thread-menu-stub" data-thread-key={threadKey} data-subject={subject} />
+  ),
+}));
 
 import { ThreadView } from './ThreadView';
 
@@ -108,6 +115,7 @@ const props = {
   replyVariant: 'inline' as 'modal' | 'inline',
   onReplyClose: vi.fn(),
   onReplyPromote: vi.fn(),
+  navigate: vi.fn(),
 };
 
 const cards = () => screen.getAllByTestId('mail-message-card');

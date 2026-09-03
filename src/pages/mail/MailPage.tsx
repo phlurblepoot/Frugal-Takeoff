@@ -392,6 +392,7 @@ export const MailPage: React.FC = () => {
                     replyVariant={replyVariant}
                     onReplyClose={closeReplyComposer}
                     onReplyPromote={promoteReplyComposer}
+                    navigate={navigate}
                   />
                 )}
               </div>
