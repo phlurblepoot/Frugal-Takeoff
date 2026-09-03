@@ -220,8 +220,9 @@ export async function ensureGmailWatch(
 
 // One line a minute per account. The backoff above already spaces the attempts
 // out, but a mailbox that fails, gets poked, and fails again should still not be
-// able to fill the log. Keyed by account id, which is bounded by the number of
-// connected mailboxes.
+// able to fill the log. Keyed by account id, so it holds one timestamp per
+// account that has ever failed in this process — and releaseGmailWatch drops an
+// account's entry when it is deleted or disabled.
 const lastWatchWarnAt = new Map<string, number>();
 function warnWatchFailed(accountId: string, e: Error): void {
   const now = Date.now();
@@ -247,8 +248,17 @@ export function releaseGmailWatch(
   ctx: MailContext, account: MailAccountRow, resolveProvider: () => unknown, opts: { clearState?: boolean } = {},
 ): void {
   if (account.provider !== 'google') return;
-  if (parseState(account.syncState).watchExpiration === undefined) return;
-  if (opts.clearState) clearPushState(ctx.db, account.id, ['watchExpiration']);
+  lastWatchWarnAt.delete(account.id);   // whatever it was failing at, it stops mattering now
+
+  // Two keys can be on the row, and an account whose watch only ever FAILED has
+  // the second without the first. Both have to go on a disable — a stranded
+  // watchRetryAfter would sit out the first ten minutes after a re-enable —
+  // even though only a real watchExpiration means there is something to stop.
+  const state = parseState(account.syncState);
+  const hasWatch = state.watchExpiration !== undefined;
+  if (!hasWatch && state.watchRetryAfter === undefined) return;
+  if (opts.clearState) clearPushState(ctx.db, account.id, ['watchExpiration', 'watchRetryAfter']);
+  if (!hasWatch) return;   // nothing was ever registered, so there is nothing to hand back
 
   // `users/me/stop` is scoped to the MAILBOX, not to our account row, and one
   // address can legitimately be connected twice (two people on a shared

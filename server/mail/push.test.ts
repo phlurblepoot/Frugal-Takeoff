@@ -512,6 +512,37 @@ describe('releaseGmailWatch', () => {
     expect(stateOf(g.id).watchExpiration).toBe(NOW + 3 * 24 * HOUR);
   });
 
+  it('clears the failure backoff too, so a re-enable is not held down by it', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR, watchRetryAfter: NOW + 9 * 60_000 });
+    const api = stubGmail();
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api, { clearState: true });
+    await flush();
+
+    expect(api.stopWatch).toHaveBeenCalledTimes(1);
+    expect(stateOf(g.id)).toEqual({ historyId: '100' });
+    // Re-enabled: the very next tick watches, rather than sitting out the
+    // stand-down left over from before it was disabled.
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+    expect(api.watch).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a stand-down on an account whose watch never once succeeded', async () => {
+    // Misconfigured topic since the day it was connected: watchRetryAfter is
+    // set and watchExpiration never was. There is no watch to stop — but the
+    // key still has to go, or a re-enable inherits the backoff.
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchRetryAfter: NOW + 9 * 60_000 });
+    const api = stubGmail();
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api, { clearState: true });
+    await flush();
+
+    expect(api.stopWatch).not.toHaveBeenCalled();
+    expect(stateOf(g.id)).toEqual({ historyId: '100' });
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+    expect(api.watch).toHaveBeenCalledTimes(1);
+  });
+
   it('costs nothing for an account that never had a watch, or is not Gmail at all', async () => {
     const g = googleAccount();
     setState(g.id, { historyId: '100' });                       // google, but never watched
