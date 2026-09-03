@@ -10,6 +10,7 @@ import { migrations } from './migrationList';
 import {
   RFI_STATUSES, getRfi, listRfis, createRfi, saveRfi, setRfiStatus,
   deleteRfi, addPhoto, removePhoto, markRfiSent, setRfiResponse,
+  setPendingReply, acceptPendingReply, dismissPendingReply,
   ValidationError, ConflictError, NotFoundError,
 } from './rfiStore';
 
@@ -272,6 +273,33 @@ describe('rfiStore', () => {
 
     it('unknown rfi → NotFoundError', () => {
       expect(() => setRfiResponse(db, 'nope', { text: 'x' })).toThrow(NotFoundError);
+    });
+  });
+
+  describe('pending reply', () => {
+    const reply = { threadKey: 'k', accountId: 'a', mailMessageId: 'm', messageIdHeader: 'x@y', from: { addr: 'gc@teg.com', name: 'Mike' }, date: '2026-08-29T10:00:00.000Z', text: 'Corridor 9ft', attachments: [], receivedAt: '2026-08-29T10:00:01.000Z' };
+    it('only a sent RFI accepts a pending reply; status unchanged', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' });
+      expect(setPendingReply(db, id, reply)).toBe(false); expect(getRfi(db, id).pendingReply).toBeNull();
+      markRfiSent(db, id);
+      expect(setPendingReply(db, id, reply)).toBe(true);
+      const r = getRfi(db, id); expect(r.status).toBe('sent'); expect(r.pendingReply).toMatchObject({ text: 'Corridor 9ft', from: { addr: 'gc@teg.com' } }); expect(r.answeredAt).toBeNull();
+    });
+    it('a newer reply replaces the pending one', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id);
+      setPendingReply(db, id, reply); setPendingReply(db, id, { ...reply, text: 'Updated', mailMessageId: 'm2' });
+      expect(getRfi(db, id).pendingReply.text).toBe('Updated');
+    });
+    it('accept sets the response, answered, source fields, clears pending; dismiss only clears', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id); setPendingReply(db, id, reply);
+      expect(acceptPendingReply(db, id, { text: 'Corridor 9ft (edited)' })).toEqual({ status: 'answered' });
+      const r = getRfi(db, id); expect(r.responseText).toBe('Corridor 9ft (edited)'); expect(r.responseSource).toBe('email'); expect(r.responseMessageIdHeader).toBe('x@y'); expect(r.pendingReply).toBeNull(); expect(r.answeredAt).toBeTruthy();
+      const { id: id2 } = createRfi(db, 'p1', { title: 't2' }); markRfiSent(db, id2); setPendingReply(db, id2, reply); dismissPendingReply(db, id2);
+      expect(getRfi(db, id2)).toMatchObject({ status: 'sent', pendingReply: null });
+    });
+    it('accept without text/file uses the pending text', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id); setPendingReply(db, id, reply);
+      acceptPendingReply(db, id, {}); expect(getRfi(db, id).responseText).toBe('Corridor 9ft');
     });
   });
 });
