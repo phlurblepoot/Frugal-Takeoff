@@ -9,6 +9,7 @@ import { sanitizeEmailHtml } from './sanitize';
 import { htmlToText, newMessageIdHeader } from './mime';
 import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, resolveLinkLabel, type ItemType } from './links';
+import { normalizeSubject } from './threadKey';
 import { stageUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
 import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, releaseGmailWatch, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
@@ -1009,6 +1010,111 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     if (!row || (row.linkedByUserId !== u.id && u.role !== 'admin')) return res.status(404).json({ error: 'Link not found' });
     deleteLink(db, req.params.id);
     res.json({ ok: true });
+  });
+
+  /** A link row's participant snapshot, defensively parsed — the column is app-written
+   *  JSON, but a hand-edited or pre-Phase-1 row must not throw a 500 on a listing. */
+  const parseAddrs = (json: string | null | undefined): Addr[] => {
+    try { const v = JSON.parse(json || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+  };
+
+  /**
+   * Every mail thread linked to a project or one of its items (spec Goal 5).
+   *
+   * Deliberately viewer-INDEPENDENT: links are app data everyone on the job can
+   * see, exactly like GET /api/mail/links. Nothing here reads a mailbox — the
+   * subject/participants/firstDate come from the SNAPSHOT columns the linker
+   * stored on the link row, so a user with no account of their own gets the same
+   * rows without any mailbox content leaking out of its owner's account.
+   */
+  app.get('/api/mail/project-threads', authenticateToken, (req, res) => {
+    const projectId = req.query.projectId;
+    if (typeof projectId !== 'string' || !projectId) return res.status(400).json({ error: 'projectId is required' });
+    // The key set is "threads this project touches"; the rows are then EVERY link on
+    // those keys. A thread linked to both a p1 invoice and a p2 RFI shows both chips —
+    // cross-project linking is the point of Goal 1 — while a key the project does not
+    // touch at all never enters the set.
+    const rows = db.prepare(`SELECT l.threadKey, l.subjectSnapshot, l.firstDate, l.participantsJson, l.itemType, l.itemId, l.createdAt,
+        r.lastInboundDate, r.lastOutboundDate
+      FROM mail_thread_links l LEFT JOIN mail_thread_reply_state r ON r.threadKey = l.threadKey
+      WHERE l.threadKey IN (SELECT threadKey FROM mail_thread_links WHERE projectId = ?)
+      ORDER BY l.createdAt, l.rowid`).all(projectId) as any[];
+    const byKey = new Map<string, any>();
+    for (const l of rows) {
+      let t = byKey.get(l.threadKey);
+      if (!t) {
+        t = {
+          threadKey: l.threadKey, subjectSnapshot: null, participants: [], firstDate: null, links: [],
+          lastInboundDate: l.lastInboundDate ?? null, lastOutboundDate: l.lastOutboundDate ?? null, lastActivity: '',
+        };
+        byKey.set(l.threadKey, t);
+      }
+      // Oldest link that captured a snapshot wins: a link made from an ITEM view has no
+      // thread of its own to snapshot and stores nulls, so it must not blank a real one.
+      if (t.subjectSnapshot === null && l.subjectSnapshot !== null) t.subjectSnapshot = l.subjectSnapshot;
+      if (t.firstDate === null && l.firstDate !== null) t.firstDate = l.firstDate;
+      if (!t.participants.length) t.participants = parseAddrs(l.participantsJson);
+      t.links.push({ itemType: l.itemType, itemId: l.itemId, label: resolveLinkLabel(db, l.itemType, l.itemId) });
+      // "Last activity" is the newest thing we can honestly date without a mailbox:
+      // a reply either way, or the moment somebody linked the thread here.
+      for (const d of [l.createdAt, l.lastInboundDate, l.lastOutboundDate]) if (d && d > t.lastActivity) t.lastActivity = d;
+    }
+    res.json([...byKey.values()].sort((a, b) => (a.lastActivity < b.lastActivity ? 1 : a.lastActivity > b.lastActivity ? -1 : 0)));
+  });
+
+  // Caps on the fallback's inputs: they come off a URL a client builds from a link
+  // snapshot, and every one of them ends up in a scan the caller pays for.
+  const MAX_RESOLVE_CHARS = 500;
+  const MAX_RESOLVE_PARTICIPANTS = 20;
+  const RESOLVE_WINDOW_MS = 3 * 86400000;
+
+  /**
+   * Where does THIS user open a thread somebody else linked? (spec Goal 3.)
+   *
+   * 1. exact `threadKey` in one of the caller's own accounts, else
+   * 2. same normalized subject + a first date within ±3 days + at least one shared
+   *    participant address, over the caller's own accounts (newest thread wins), else
+   * 3. `{ match: null }` — the client shows the read-only reference card.
+   *
+   * Every query here is joined to `mail_accounts.userId`, so a thread in someone
+   * else's mailbox is never a match, whatever the caller passes in.
+   */
+  app.get('/api/mail/resolve-thread', authenticateToken, (req, res) => {
+    const uid = userOf(req).id;
+    const str = (v: unknown) => (typeof v === 'string' ? v : '');
+    const threadKey = str(req.query.threadKey);
+    const subject = str(req.query.subject);
+    const participants = str(req.query.participants).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    if (threadKey.length > MAX_RESOLVE_CHARS) return res.status(400).json({ error: 'threadKey is too long' });
+    if (subject.length > MAX_RESOLVE_CHARS) return res.status(400).json({ error: 'subject is too long' });
+    if (participants.length > MAX_RESOLVE_PARTICIPANTS) return res.status(400).json({ error: 'Too many participants' });
+
+    if (threadKey) {
+      const exact = db.prepare(`SELECT t.accountId, t.threadKey FROM mail_threads t JOIN mail_accounts a ON a.id = t.accountId
+        WHERE t.threadKey = ? AND a.userId = ? ORDER BY t.lastDate DESC LIMIT 1`).get(threadKey, uid) as { accountId: string; threadKey: string } | undefined;
+      if (exact) return res.json({ match: exact });
+    }
+
+    const at = Date.parse(str(req.query.firstDate));
+    const want = normalizeSubject(subject);
+    // All three are required for the fallback — a subject alone would open the wrong
+    // conversation, which is worse than showing the reference card.
+    if (!want || !Number.isFinite(at) || !participants.length) return res.json({ match: null });
+    // Every provider normalizes `date` through toISOString(), so these UTC strings sort
+    // chronologically and the SQL range is an exact prefilter; the JS check below is
+    // what actually decides the window, so a stray legacy format can only narrow it.
+    const lo = new Date(at - RESOLVE_WINDOW_MS).toISOString();
+    const hi = new Date(at + RESOLVE_WINDOW_MS).toISOString();
+    const cands = db.prepare(`SELECT t.accountId, t.threadKey, t.subject, t.firstDate, t.participantsJson FROM mail_threads t
+      JOIN mail_accounts a ON a.id = t.accountId
+      WHERE a.userId = ? AND t.firstDate >= ? AND t.firstDate <= ? ORDER BY t.lastDate DESC`).all(uid, lo, hi) as any[];
+    for (const c of cands) {
+      if (normalizeSubject(c.subject || '') !== want) continue;
+      if (!(Math.abs(Date.parse(c.firstDate) - at) <= RESOLVE_WINDOW_MS)) continue;
+      if (!parseAddrs(c.participantsJson).some(p => participants.includes(String(p?.addr ?? '').trim().toLowerCase()))) continue;
+      return res.json({ match: { accountId: c.accountId, threadKey: c.threadKey } });
+    }
+    res.json({ match: null });
   });
 
   app.get('/api/mail/setup-info', authenticateToken, requireAdmin, (_req, res) => {

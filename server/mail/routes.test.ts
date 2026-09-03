@@ -740,6 +740,117 @@ describe('mail routes', () => {
     expect((await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' })).status).toBe(200);
   });
 
+  // ── project-threads / resolve-thread (spec Goals 3 + 5) ──
+
+  /** A second mailbox owned by u2, so "the caller's accounts" can be tested for
+   *  what it excludes as well as what it finds. */
+  const seedOtherUsersMailbox = () => {
+    const a2 = accounts.createAccount(db, crypto, { userId: 'u2', provider: 'fake', emailAddress: 'other@bb.com', auth: { refreshToken: 'r' } });
+    const p2 = getFakeProvider(a2.id);
+    upsertFolders(db, a2.id, p2.folders);
+    upsertEnvelopes(ctx, a2, [env('z1', { messageIdHeader: 'z1@teg.com', subject: 'Secret job', date: '2026-08-10T10:00:00.000Z' })]);
+    return a2;
+  };
+
+  it('GET /api/mail/project-threads gives one row per thread with every link labeled, newest activity first', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    createProject(db, { id: 'p2', name: 'Q', createdAt: 1, pages: [], takeoffs: [] } as any);
+    saveCustomer(db, { id: 'c1', name: 'Big Bear', emails: {} });
+    upsertEnvelopes(ctx, acct, [
+      env('m2', { messageIdHeader: 'm2@teg.com', subject: 'Invoice 12', date: '2026-08-12T10:00:00.000Z' }),
+      env('m3', { messageIdHeader: 'm3@teg.com', subject: 'Other job', date: '2026-08-13T10:00:00.000Z' }),
+    ]);
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'customer', itemId: 'c1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm2@teg.com', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm3@teg.com', itemType: 'project', itemId: 'p2' });
+    // Pin the clock-derived columns so ordering is a fact, not a race.
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-14T00:00:00.000Z' WHERE threadKey = 'm1@teg.com'").run();
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-15T00:00:00.000Z' WHERE threadKey = 'm2@teg.com'").run();
+    db.prepare("UPDATE mail_thread_reply_state SET lastInboundDate = '2026-08-20T00:00:00.000Z', lastOutboundDate = '2026-08-19T00:00:00.000Z' WHERE threadKey = 'm1@teg.com'").run();
+
+    const r = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
+    expect(r.status).toBe(200);
+    expect(r.body.map((t: any) => t.threadKey)).toEqual(['m1@teg.com', 'm2@teg.com']);  // m3 is p2's, not p1's
+    expect(r.body[0]).toMatchObject({
+      threadKey: 'm1@teg.com', subjectSnapshot: 'CO 4', firstDate: '2026-08-10T10:00:00.000Z',
+      lastInboundDate: '2026-08-20T00:00:00.000Z', lastOutboundDate: '2026-08-19T00:00:00.000Z',
+      lastActivity: '2026-08-20T00:00:00.000Z',
+    });
+    expect(r.body[0].participants).toEqual(expect.arrayContaining([{ addr: 'gc@teg.com', name: 'Mike' }]));
+    // Every link on the key — the customer link too, though it carries no projectId.
+    expect(r.body[0].links).toEqual([
+      { itemType: 'project', itemId: 'p1', label: 'P' },
+      { itemType: 'customer', itemId: 'c1', label: 'Big Bear' },
+    ]);
+    // m2 never got a reply-state bump past its own message, so the link date is its activity.
+    expect(r.body[1]).toMatchObject({ subjectSnapshot: 'Invoice 12', lastActivity: '2026-08-15T00:00:00.000Z' });
+
+    const other = await request(app).get('/api/mail/project-threads').query({ projectId: 'p2' });
+    expect(other.body.map((t: any) => t.threadKey)).toEqual(['m3@teg.com']);
+
+    // Viewer-independent by design: links are app data, so a user with no mailbox
+    // at all sees the same rows (same trust model as GET /api/mail/links).
+    currentUser = { id: 'u2', role: 'user' };
+    const asOther = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
+    expect(asOther.body).toEqual(r.body);
+  });
+
+  it('GET /api/mail/project-threads requires projectId and is empty for a project with no linked mail', async () => {
+    expect((await request(app).get('/api/mail/project-threads')).status).toBe(400);
+    expect((await request(app).get('/api/mail/project-threads').query({ projectId: '' })).status).toBe(400);
+    const r = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+  });
+
+  it('GET /api/mail/resolve-thread matches an exact threadKey in the caller\'s own mailbox', async () => {
+    const r = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'm1@teg.com' });
+    expect(r.status).toBe(200);
+    expect(r.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@teg.com' });
+  });
+
+  it('GET /api/mail/resolve-thread falls back to normalized subject + a 3-day window + a shared participant', async () => {
+    const q = { threadKey: 'not-mine@elsewhere', subject: 'Re: Re: CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'GC@teg.com, someone@else.com' };
+    const hit = await request(app).get('/api/mail/resolve-thread').query(q);
+    expect(hit.body.match).toEqual({ accountId: acct.id, threadKey: 'm1@teg.com' });
+
+    const wrongSubject = await request(app).get('/api/mail/resolve-thread').query({ ...q, subject: 'CO 5' });
+    expect(wrongSubject.body.match).toBeNull();
+
+    const outOfWindow = await request(app).get('/api/mail/resolve-thread').query({ ...q, firstDate: '2026-08-14T11:00:00.000Z' });
+    expect(outOfWindow.body.match).toBeNull();
+
+    const noShared = await request(app).get('/api/mail/resolve-thread').query({ ...q, participants: 'nobody@else.com' });
+    expect(noShared.body.match).toBeNull();
+
+    const noParticipants = await request(app).get('/api/mail/resolve-thread').query({ ...q, participants: '' });
+    expect(noParticipants.body.match).toBeNull();
+  });
+
+  it('GET /api/mail/resolve-thread never reaches into another user\'s mailbox', async () => {
+    seedOtherUsersMailbox();
+    const exact = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@teg.com' });
+    expect(exact.body.match).toBeNull();
+    const fallback = await request(app).get('/api/mail/resolve-thread')
+      .query({ threadKey: 'z1@teg.com', subject: 'Secret job', firstDate: '2026-08-10T10:00:00.000Z', participants: 'gc@teg.com' });
+    expect(fallback.body.match).toBeNull();
+    // ...and the owner of that mailbox does find it.
+    currentUser = { id: 'u2', role: 'user' };
+    expect((await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'z1@teg.com' })).body.match)
+      .toMatchObject({ threadKey: 'z1@teg.com' });
+  });
+
+  it('GET /api/mail/resolve-thread caps subject length and participant count', async () => {
+    const base = { subject: 'CO 4', firstDate: '2026-08-11T00:00:00.000Z', participants: 'gc@teg.com' };
+    const longSubject = await request(app).get('/api/mail/resolve-thread').query({ ...base, subject: 'x'.repeat(501) });
+    expect(longSubject.status).toBe(400);
+    const manyParticipants = await request(app).get('/api/mail/resolve-thread')
+      .query({ ...base, participants: Array.from({ length: 21 }, (_, i) => `a${i}@x.com`).join(',') });
+    expect(manyParticipants.status).toBe(400);
+    expect((await request(app).get('/api/mail/resolve-thread').query({ ...base, subject: 'x'.repeat(500) })).status).toBe(200);
+  });
+
   it('GET /api/mail/providers reports which OAuth providers the env configures', async () => {
     expect((await request(app).get('/api/mail/providers')).body).toEqual({ google: false, microsoft: false });
     routeEnv.GOOGLE_OAUTH_CLIENT_ID = 'gid';
