@@ -14,7 +14,7 @@ vi.mock('../../components/Toast', async orig => ({
   useToast: () => ({ toast: h.toast }),
 }));
 
-import { ThreadList } from './ThreadList';
+import { ROW_HEIGHT_PX, ThreadList, VIRTUALIZE_THRESHOLD, visibleRowRange } from './ThreadList';
 
 const row = (over: Partial<ThreadListRow> = {}): ThreadListRow => ({
   threadKey: 'tk-1', subject: 'Roof detail', firstDate: '2026-08-27T12:00:00.000Z',
@@ -234,6 +234,86 @@ describe('ThreadList', () => {
     it('shows no banner in the normal folder view', () => {
       render(<ThreadList {...props()} />);
       expect(screen.queryByTestId('mail-server-results-banner')).toBeNull();
+    });
+  });
+
+  // Piece 2: hand-rolled windowing for big folders (>150 rows). No
+  // react-window — see ThreadList.tsx's header comment.
+  describe('visibleRowRange (slice math)', () => {
+    it('renders everything when the viewport or row count is not yet known', () => {
+      expect(visibleRowRange(500, 0, 0)).toEqual({ start: 0, end: 500 });
+      expect(visibleRowRange(0, 0, 800)).toEqual({ start: 0, end: 0 });
+    });
+
+    it('starts at row 0 with overscan clamped, not negative, at the top of the list', () => {
+      const { start, end } = visibleRowRange(500, 0, 760, 76, 8);
+      expect(start).toBe(0);
+      // 760px / 76px = 10 rows on screen, + 8 rows of trailing overscan.
+      expect(end).toBe(18);
+    });
+
+    it('slides the window forward as scrollTop increases', () => {
+      // 50 rows scrolled past (50 * 76 = 3800), minus 8 rows of leading overscan.
+      const { start, end } = visibleRowRange(500, 3800, 760, 76, 8);
+      expect(start).toBe(42);
+      expect(end).toBe(68);
+    });
+
+    it('clamps the end of the window to the row count near the bottom of the list', () => {
+      const { start, end } = visibleRowRange(60, 3800, 760, 76, 8);
+      expect(start).toBe(42);
+      expect(end).toBe(60);
+    });
+
+    it('uses the real constants the component windows with', () => {
+      const { start, end } = visibleRowRange(1000, 0, ROW_HEIGHT_PX * 10);
+      expect(start).toBe(0);
+      expect(end).toBe(18); // 10 rows on screen + 8 overscan, default overscan.
+    });
+  });
+
+  describe('windowing threshold and scroll behavior', () => {
+    const manyRows = (n: number): ThreadListRow[] =>
+      Array.from({ length: n }, (_, i) => row({ threadKey: `tk-${i}`, subject: `Thread ${i}` }));
+
+    it('renders every row directly at or below the threshold — no spacers', () => {
+      const threads = manyRows(VIRTUALIZE_THRESHOLD);
+      render(<ThreadList {...props({ threads })} />);
+      expect(screen.getAllByTestId('mail-thread-row')).toHaveLength(VIRTUALIZE_THRESHOLD);
+      expect(screen.queryByTestId('mail-list-top-spacer')).toBeNull();
+      expect(screen.queryByTestId('mail-list-bottom-spacer')).toBeNull();
+    });
+
+    it('windows the list once past the threshold — fewer rows in the DOM than in the folder', () => {
+      const threads = manyRows(VIRTUALIZE_THRESHOLD + 1);
+      render(<ThreadList {...props({ threads })} />);
+      const rendered = screen.getAllByTestId('mail-thread-row').length;
+      expect(rendered).toBeGreaterThan(0);
+      expect(rendered).toBeLessThan(threads.length);
+      // The very first row is inside the initial (scrollTop 0) window…
+      expect(screen.getByText('Thread 0')).toBeInTheDocument();
+      // …but a row deep in the folder is not yet mounted.
+      expect(screen.queryByText(`Thread ${threads.length - 1}`)).toBeNull();
+      expect(screen.getByTestId('mail-list-bottom-spacer')).toBeInTheDocument();
+    });
+
+    it('shifts which rows are mounted as the list scrolls, and preserves selection/unread state', () => {
+      const threads = manyRows(300);
+      const { container } = render(<ThreadList {...props({ threads, selectedKey: 'tk-0' })} />);
+
+      expect(screen.getByText('Thread 0')).toBeInTheDocument();
+      const firstRow = screen.getAllByTestId('mail-thread-row')[0];
+      expect(firstRow).toHaveAttribute('data-selected', 'true');
+      expect(firstRow).toHaveAttribute('data-unread', 'true');
+
+      const scrollEl = container.querySelector('.overflow-y-auto') as HTMLDivElement;
+      fireEvent.scroll(scrollEl, { target: { scrollTop: 3800 } });
+
+      // The top of the folder has scrolled out of the window…
+      expect(screen.queryByText('Thread 0')).toBeNull();
+      // …and a row from around the new scroll position has mounted in.
+      expect(screen.getByText('Thread 55')).toBeInTheDocument();
+      expect(screen.getByTestId('mail-list-top-spacer')).toBeInTheDocument();
     });
   });
 });

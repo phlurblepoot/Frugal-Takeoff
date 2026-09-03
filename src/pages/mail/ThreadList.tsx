@@ -1,7 +1,7 @@
 // src/pages/mail/ThreadList.tsx — middle pane: search box, thread rows, and a
 // footer that either pages further back through what is indexed or offers to
 // backfill older mail from the provider.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Inbox, RefreshCw, Search } from 'lucide-react';
 import { Button, EmptyState, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -10,6 +10,44 @@ import { ThreadRow } from './ThreadRow';
 import type { ThreadListRow } from './types';
 
 const SEARCH_DEBOUNCE_MS = 300;
+
+// ── Piece 2: hand-rolled windowing ──────────────────────────────────────────
+// No react-window (repo minimalism per the spec) — below VIRTUALIZE_THRESHOLD
+// rows every row renders exactly as it always has (this is the common case:
+// most folders never come close to 150 threads), so there is zero windowing
+// overhead for the vast majority of mailboxes. Past the threshold, only the
+// rows within ROW_HEIGHT_PX * (viewport + overscan) of the scroll position
+// render; two spacer divs (whose combined height is exactly what the
+// unrendered rows would have taken) keep the scrollbar the correct length and
+// the "Load older mail" footer / sentinel at the correct scroll position,
+// without needing to measure every row's real (slightly variable) height.
+export const VIRTUALIZE_THRESHOLD = 150;
+/** Estimated row height — close enough for scroll math; a row that actually
+ *  renders taller or shorter (snippet wrap, chip overflow) does not throw
+ *  off SELECTION or KEYBOARD nav, only the spacer's pixel-perfectness, which
+ *  self-corrects as the list scrolls past it. */
+export const ROW_HEIGHT_PX = 76;
+const OVERSCAN_ROWS = 8;
+
+export interface VisibleRange { start: number; end: number }
+
+/** Pure slice math: which row indices [start, end) should be in the DOM for a
+ *  given scroll position and viewport height. Exported for direct unit
+ *  testing rather than only exercising it through a rendered scroll event. */
+export function visibleRowRange(
+  rowCount: number,
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number = ROW_HEIGHT_PX,
+  overscan: number = OVERSCAN_ROWS,
+): VisibleRange {
+  if (rowCount <= 0 || viewportHeight <= 0) return { start: 0, end: rowCount };
+  const firstOnScreen = Math.floor(scrollTop / rowHeight);
+  const rowsOnScreen = Math.ceil(viewportHeight / rowHeight);
+  const start = Math.max(0, firstOnScreen - overscan);
+  const end = Math.min(rowCount, firstOnScreen + rowsOnScreen + overscan);
+  return { start, end };
+}
 /** The refresh route answers 202 as soon as the sync worker has been nudged —
  *  the sync itself is still running. Give it a moment before re-querying so the
  *  first reload has something new in it; the live `mailThread` broadcasts the
@@ -157,6 +195,46 @@ export const ThreadList: React.FC<{
     return () => io.disconnect();
   }, [hasMore, threads.length]);
 
+  // Piece 2: windowing state, scoped to the scrollable rows container. Only
+  // tracked (and only paid for) once the folder is actually big enough to
+  // need it — see the `virtualize` guard below, which never even attaches
+  // the scroll listener otherwise.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const virtualize = threads.length > VIRTUALIZE_THRESHOLD;
+
+  useEffect(() => {
+    if (!virtualize) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportHeight(el.clientHeight);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      const h = entries[0]?.contentRect.height;
+      if (h) setViewportHeight(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [virtualize]);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const { visibleThreads, topSpacerPx, bottomSpacerPx } = useMemo(() => {
+    if (!virtualize) return { visibleThreads: threads, topSpacerPx: 0, bottomSpacerPx: 0 };
+    // A viewport height of 0 (not yet measured — no ResizeObserver, or the
+    // very first render) falls back to rendering everything up to a generous
+    // window rather than nothing, so the list is never blank while it waits.
+    const { start, end } = visibleRowRange(threads.length, scrollTop, viewportHeight || ROW_HEIGHT_PX * 20);
+    return {
+      visibleThreads: threads.slice(start, end),
+      topSpacerPx: start * ROW_HEIGHT_PX,
+      bottomSpacerPx: Math.max(0, (threads.length - end) * ROW_HEIGHT_PX),
+    };
+  }, [virtualize, threads, scrollTop, viewportHeight]);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <div className="flex items-center gap-2 border-b border-edge p-3">
@@ -201,7 +279,7 @@ export const ThreadList: React.FC<{
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={virtualize ? handleScroll : undefined} className="min-h-0 flex-1 overflow-y-auto">
         {loading && threads.length === 0 ? (
           <div className="space-y-2 p-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
@@ -220,16 +298,20 @@ export const ThreadList: React.FC<{
             />
           </div>
         ) : (
-          threads.map(row => (
-            <ThreadRow
-              key={row.threadKey}
-              row={row}
-              selected={row.threadKey === selectedKey}
-              ownAddresses={ownAddresses}
-              onOpen={() => onOpen(row)}
-              onToggleStar={() => onToggleStar(row)}
-            />
-          ))
+          <>
+            {topSpacerPx > 0 && <div data-testid="mail-list-top-spacer" style={{ height: topSpacerPx }} aria-hidden="true" />}
+            {visibleThreads.map(row => (
+              <ThreadRow
+                key={row.threadKey}
+                row={row}
+                selected={row.threadKey === selectedKey}
+                ownAddresses={ownAddresses}
+                onOpen={() => onOpen(row)}
+                onToggleStar={() => onToggleStar(row)}
+              />
+            ))}
+            {bottomSpacerPx > 0 && <div data-testid="mail-list-bottom-spacer" style={{ height: bottomSpacerPx }} aria-hidden="true" />}
+          </>
         )}
 
         <div ref={sentinel} />
