@@ -29,7 +29,12 @@ export const SaveAttachmentsModal: React.FC<{
   /** Preselects the Project when the mail thread this message belongs to is
    *  already linked to one. Not yet wired by any caller. */
   defaultProjectId?: string;
-}> = ({ open, onClose, messageId, attachments, defaultProjectId }) => {
+  /** The ids the server minted, for callers that want to do something with the
+   *  saved file (the RFI pending-reply banner offers it as the response
+   *  document). Called once per confirm, only for the files that landed —
+   *  this component is the only place that per-item detail exists. */
+  onSaved?: (fileIds: string[]) => void;
+}> = ({ open, onClose, messageId, attachments, defaultProjectId, onSaved }) => {
   const { toast } = useToast();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -65,6 +70,11 @@ export const SaveAttachmentsModal: React.FC<{
     const total = items.length;
     const ok = result.saved.length;
     const failedCount = result.failed.length;
+
+    // Before the branch below: a partial save still produced real files, and a
+    // caller waiting on them shouldn't have to care that a sibling failed.
+    const savedIds = result.fileIds?.length ? result.fileIds : result.saved.map(s => s.fileId);
+    if (savedIds.length) onSaved?.(savedIds);
 
     if (failedCount === 0) {
       toast(`Saved ${ok} file${ok === 1 ? '' : 's'} to Documents`, { type: 'success' });

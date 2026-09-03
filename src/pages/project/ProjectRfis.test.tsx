@@ -154,3 +154,44 @@ describe('ProjectRfis — PDF status on rows', () => {
     expect(mounts.count).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Inbound email replies (mail client Plan 4): a row whose RFI has an emailed
+// answer waiting for review says so, so the list is the place you notice it.
+
+describe('ProjectRfis — pending reply chip', () => {
+  const PENDING = {
+    threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
+    from: { addr: 'gc@teg.com', name: 'Mike Ruiz' }, date: '2026-08-28T10:00:00.000Z',
+    text: 'Corridor is 9 ft.', attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getDocumentsBySource.mockResolvedValue({});
+    h.getRfi.mockResolvedValue(null);
+  });
+
+  it('flags only the sent RFI that has a reply waiting', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent', pendingReply: PENDING }),
+      listRow({ id: 'r2', number: 2, title: 'Lintel size', status: 'sent' }),
+    ]);
+    mount();
+
+    const chips = await screen.findAllByText('Reply');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveAttribute('title', 'Email reply waiting for review');
+  });
+
+  // The status is the authority: a pendingReply row can outlive an
+  // out-of-band status change, and a chip on an answered RFI is a lie.
+  it('drops the chip once the RFI has moved past sent', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'answered', pendingReply: PENDING }),
+    ]);
+    mount();
+    await screen.findByText('Header detail');
+    expect(screen.queryByText('Reply')).toBeNull();
+  });
+});

@@ -1,6 +1,7 @@
 // src/pages/project/rfi/RfiEditor.tsx
 import React, { useState } from 'react';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
+import { useNavigate } from 'react-router-dom';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
@@ -11,6 +12,9 @@ import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { RfiStatusPill, RFI_STATUS_META } from '../../../components/ui/RfiStatusPill';
+import { PendingReplyBanner } from './PendingReplyBanner';
+import { useMailAccounts } from '../../mail/useMailAccounts';
+import { useItemThreadLinks } from '../../../hooks/useItemThreadLinks';
 import { buildRfiPdf } from './rfiPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
@@ -34,6 +38,31 @@ export const RfiEditor: React.FC<{
   const [responseNeededBy, setResponseNeededBy] = useState(rfi.responseNeededBy ?? '');
   const [responseDraft, setResponseDraft] = useState(rfi.responseText ?? '');
   const [saving, setSaving] = useState(false);
+  // Set when the draft below came from the emailed reply: the same Save then
+  // routes to the accept endpoint, so accepting the reply and editing its text
+  // stay one action (and the pending reply is never left behind).
+  const [acceptFromEmail, setAcceptFromEmail] = useState(false);
+  const navigate = useNavigate();
+
+  // An emailed reply waiting for review. Gated on the status as well as the
+  // row: a pendingReply can outlive an out-of-band status change.
+  const pending = rfi.status === 'sent' ? rfi.pendingReply ?? null : null;
+
+  // Can THIS user open the conversation? pendingReply.accountId is the
+  // receiving user's mailbox, and the mail routes 403/404 for anyone else. The
+  // cheap exact answer is "do I own that mailbox"; the thread-link probe is the
+  // fallback for a thread that also sits in another of my mailboxes.
+  const { accounts } = useMailAccounts({ enabled: !!pending });
+  const threads = useItemThreadLinks(pending ? 'rfi' : undefined, pending ? rfi.id : undefined, accounts);
+  const ownedAccountId = pending && accounts.some(a => a.id === pending.accountId) ? pending.accountId : null;
+  const threadAccountId = ownedAccountId
+    ?? (pending && threads.myThread?.threadKey === pending.threadKey ? threads.myThread.accountId : null);
+  const openPendingThread = () => {
+    if (!pending || !threadAccountId) return;
+    // `_` is the mail page's "no folder filter" — a link records the thread,
+    // not the folder it was filed in.
+    navigate(`/mail/${encodeURIComponent(threadAccountId)}/_/${encodeURIComponent(pending.threadKey)}`);
+  };
 
   const padded = String(rfi.number).padStart(3, '0');
   // One name for the stored document and the email attachment — they upsert
@@ -83,9 +112,30 @@ export const RfiEditor: React.FC<{
     } catch { toast('Failed to attach response', { type: 'error' }); }
   };
 
+  // One writer for the response text so every path (this button, the main
+  // Save) agrees on WHICH endpoint records it: accepting the emailed reply also
+  // clears the pending row and stamps the response as email-sourced, so a
+  // plain setRfiResponse here would leave the banner up over a recorded answer.
+  const persistResponseText = async (text: string) => {
+    if (acceptFromEmail) {
+      await acceptRfiPendingReply(rfi.id, { text });
+      setAcceptFromEmail(false);
+    } else {
+      await setRfiResponse(rfi.id, { text });
+    }
+  };
+
   const saveResponseText = async () => {
-    try { await setRfiResponse(rfi.id, { text: responseDraft.trim() }); toast('Response saved', { type: 'success' }); onSaved(); }
-    catch { toast('Failed to save response', { type: 'error' }); }
+    try { await persistResponseText(responseDraft.trim()); toast('Response saved', { type: 'success' }); onSaved(); }
+    catch (e) {
+      // Someone else accepted or dismissed the same reply first: say what
+      // happened and reload, rather than offering a retry that can't work.
+      if (e instanceof Error && e.name === 'NoPendingReplyError') {
+        setAcceptFromEmail(false);
+        toast(e.message, { type: 'warning' });
+        onSaved();
+      } else { toast('Failed to save response', { type: 'error' }); }
+    }
   };
   const downloadResponseFile = async () => {
     if (!rfi.responseFileId) return;
@@ -158,7 +208,18 @@ export const RfiEditor: React.FC<{
       // Save also persists a typed-but-unsaved response, so switching status,
       // uploading a photo, etc. right after Save never loses the draft.
       if (responseDirty && responseDraft.trim()) {
-        await setRfiResponse(rfi.id, { text: responseDraft.trim() });
+        try {
+          await persistResponseText(responseDraft.trim());
+        } catch (e) {
+          // The RFI itself saved; only the emailed reply moved on underneath us
+          // (someone else accepted or dismissed it). Reporting that as "Save
+          // failed" would be a lie, so say what actually happened and let the
+          // save report success.
+          if (e instanceof Error && e.name === 'NoPendingReplyError') {
+            setAcceptFromEmail(false);
+            toast(e.message, { type: 'warning' });
+          } else throw e;
+        }
       }
       toast('RFI saved', { type: 'success' });
       // A "Keep mine" save adopted a foreign version number; only a remount
@@ -225,6 +286,20 @@ export const RfiEditor: React.FC<{
       </>}
     >
       <EditPresenceBanner state={collab} />
+      {pending && (
+        <PendingReplyBanner
+          rfi={rfi}
+          projectId={projectId}
+          canOpenThread={!!threadAccountId}
+          onOpenThread={openPendingThread}
+          onUseAsResponse={text => { setResponseDraft(text); setAcceptFromEmail(true); }}
+          // keepMounted: both refreshes only change fields this editor reads
+          // from props (pendingReply, responseFileId) — remounting would throw
+          // away anything typed into the form first.
+          onDismissed={() => onSaved({ keepMounted: true })}
+          onResponseFile={() => onSaved({ keepMounted: true })}
+        />
+      )}
       <div className="mb-3 flex items-center gap-2">
         <button onClick={cycleStatus} title="Click to advance status"><RfiStatusPill status={rfi.status} /></button>
         <span className="text-xs text-ink-faint">{Object.values(RFI_STATUS_META).map(m => m.label).join(' → ')}</span>

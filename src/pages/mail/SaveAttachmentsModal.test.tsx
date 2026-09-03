@@ -40,10 +40,10 @@ beforeEach(() => {
   h.toast.mockReset();
 });
 
-const mount = (attachments: AttachmentMeta[], onClose = vi.fn()) => {
+const mount = (attachments: AttachmentMeta[], onClose = vi.fn(), onSaved?: (fileIds: string[]) => void) => {
   render(
     <ToastProvider>
-      <SaveAttachmentsModal open onClose={onClose} messageId="m1" attachments={attachments} />
+      <SaveAttachmentsModal open onClose={onClose} messageId="m1" attachments={attachments} onSaved={onSaved} />
     </ToastProvider>
   );
   return onClose;
@@ -125,5 +125,33 @@ describe('SaveAttachmentsModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
     await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Failed to save 1 file', { type: 'error' }));
+  });
+});
+
+// The RFI pending-reply banner saves an emailed answer through this modal and
+// then offers the saved file as the RFI's response document — it needs the ids
+// the server minted, which only this component ever sees.
+describe('SaveAttachmentsModal — onSaved', () => {
+  const att2 = (): AttachmentMeta => ({ attId: 'a1', name: 'invoice.pdf', mime: 'application/pdf', size: 2048 });
+
+  it('reports the saved file ids to the caller', async () => {
+    h.saveAttachments.mockResolvedValue({ fileIds: ['f1'], saved: [{ attId: 'a1', fileId: 'f1' }], failed: [] });
+    const onSaved = vi.fn();
+    mount([att2()], vi.fn(), onSaved);
+    await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(['f1']));
+  });
+
+  it('stays silent when nothing landed', async () => {
+    h.saveAttachments.mockResolvedValue({ fileIds: [], saved: [], failed: [{ attId: 'a1', error: 'gone' }] });
+    const onSaved = vi.fn();
+    mount([att2()], vi.fn(), onSaved);
+    await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
+    await waitFor(() => expect(h.saveAttachments).toHaveBeenCalled());
+    expect(onSaved).not.toHaveBeenCalled();
   });
 });

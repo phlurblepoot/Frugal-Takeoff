@@ -1,7 +1,7 @@
 // src/pages/project/ProjectRfis.tsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Eye, MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
+import { Eye, Mail, MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
 import {
   Rfi, RfiListItem, getRfis, getRfi, createRfi, deleteRfi,
 } from '../../utils/store';
@@ -118,7 +118,23 @@ export const ProjectRfis: React.FC = () => {
               <TR key={rfi.id} interactive onClick={() => openRfi(rfi.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{rfiNo(rfi.number)}</TD>
                 <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{rfi.title || '(untitled)'}<EditingChip type="rfi" id={rfi.id} /></span></TD>
-                <TD><RfiStatusPill status={rfi.status} /></TD>
+                <TD>
+                  <span className="inline-flex items-center gap-1.5">
+                    <RfiStatusPill status={rfi.status} />
+                    {/* An emailed answer came back and is waiting for someone to
+                        accept or dismiss it in the editor. Gated on the status
+                        as well as the row: a pendingReply can outlive an
+                        out-of-band status change. */}
+                    {rfi.pendingReply && rfi.status === 'sent' && (
+                      <span
+                        title="Email reply waiting for review"
+                        className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-300"
+                      >
+                        <Mail size={11} />Reply
+                      </span>
+                    )}
+                  </span>
+                </TD>
                 <TD className={isRfiOverdue(rfi) ? 'font-medium text-red-600' : 'text-ink-soft'}>
                   {rfi.responseNeededBy ? new Date(`${rfi.responseNeededBy}T00:00:00`).toLocaleDateString() : '—'}
                   {isRfiOverdue(rfi) ? ' · overdue' : ''}

@@ -7,7 +7,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { Rfi } from '../../../utils/store';
 
 const h = vi.hoisted(() => ({
@@ -21,7 +21,13 @@ const h = vi.hoisted(() => ({
   getDocumentBySource: vi.fn(),
   buildRfiPdf: vi.fn(),
   getMailAccounts: vi.fn(),
+  acceptRfiPendingReply: vi.fn(),
+  dismissRfiPendingReply: vi.fn(),
+  mailAccounts: vi.fn(),
+  mailLinks: vi.fn(),
+  mailThread: vi.fn(),
   pickerProps: { last: null as any },
+  bannerProps: { last: null as any },
 }));
 
 const OK_ACCOUNT = { id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 };
@@ -36,6 +42,8 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   saveRfi: h.saveRfi,
   sendRfi: h.sendRfi,
   setRfiResponse: h.setRfiResponse,
+  acceptRfiPendingReply: h.acceptRfiPendingReply,
+  dismissRfiPendingReply: h.dismissRfiPendingReply,
   addRfiPhoto: h.addRfiPhoto,
   uploadProjectFile: h.uploadProjectFile,
   persistGeneratedDocument: h.persistGeneratedDocument,
@@ -96,15 +104,27 @@ vi.mock('../../../pages/mail/compose/MailComposer', async (orig) => ({
 // and the item's mail thread links (for the Sent chip). Neither is under test
 // here; an empty mailbox list is the honest default.
 vi.mock('../../../utils/mailApi', () => ({
-  mailApi: {
-    accounts: vi.fn(async () => []),
-    links: vi.fn(async () => []),
-    thread: vi.fn(async () => { throw new Error('not found'); }),
+  mailApi: { accounts: h.mailAccounts, links: h.mailLinks, thread: h.mailThread },
+}));
+
+// The banner is covered by its own test; here it stands in as a probe for the
+// props the editor computes (chiefly canOpenThread) and a way to fire its
+// callbacks.
+vi.mock('./PendingReplyBanner', () => ({
+  PendingReplyBanner: (props: any) => {
+    h.bannerProps.last = props;
+    return (
+      <div data-testid="pending-banner">
+        <button data-testid="banner-use" onClick={() => props.onUseAsResponse(props.rfi.pendingReply.text)}>use</button>
+        <button data-testid="banner-open-thread" onClick={() => props.onOpenThread()}>open thread</button>
+      </div>
+    );
   },
 }));
 
 import { ToastProvider } from '../../../components/Toast';
 import { RfiEditor } from './RfiEditor';
+import { __resetThreadProbeCache } from '../../../hooks/useItemThreadLinks';
 
 const rfi = (over: Partial<Rfi> = {}): Rfi => ({
   id: 'rfi-1', projectId: 'p1', number: 4, title: 'Header detail',
@@ -151,6 +171,12 @@ beforeEach(() => {
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildRfiPdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
   h.getMailAccounts.mockResolvedValue([OK_ACCOUNT]);
+  h.acceptRfiPendingReply.mockResolvedValue({ status: 'answered' });
+  h.dismissRfiPendingReply.mockResolvedValue(undefined);
+  h.mailAccounts.mockResolvedValue([]);
+  h.mailLinks.mockResolvedValue([]);
+  h.mailThread.mockRejectedValue(new Error('not found'));
+  h.bannerProps.last = null;
 });
 
 describe('RfiEditor — document actions', () => {
@@ -313,5 +339,150 @@ describe('RfiEditor — photos', () => {
     });
     await screen.findByText('Save your changes first');
     expect(h.uploadProjectFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inbound email reply (mail client Plan 4). An emailed answer is captured
+// against the RFI but stays pending until a human accepts it here.
+
+const PENDING = {
+  threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
+  from: { addr: 'gc@teg.com', name: 'Mike Ruiz' },
+  date: '2026-08-28T10:00:00.000Z',
+  text: 'Corridor is 9 ft per the RCP.',
+  attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',
+};
+
+const sentWithReply = (over: Partial<Rfi> = {}) =>
+  rfi({ status: 'sent', sentAt: 5, pendingReply: PENDING, ...over });
+
+describe('RfiEditor — pending email reply', () => {
+  beforeEach(() => { __resetThreadProbeCache(); });
+
+  it('shows the banner for a sent RFI that has a pending reply', async () => {
+    mount(sentWithReply());
+    expect(await screen.findByTestId('pending-banner')).toBeInTheDocument();
+    expect(h.bannerProps.last).toMatchObject({ projectId: 'p1' });
+    expect(h.bannerProps.last.rfi.pendingReply).toEqual(PENDING);
+  });
+
+  // A pendingReply row can outlive an out-of-band status change; the status is
+  // the authority on whether an answer is still awaited.
+  it('hides the banner once the RFI has moved past sent', () => {
+    mount(sentWithReply({ status: 'answered' }));
+    expect(screen.queryByTestId('pending-banner')).toBeNull();
+  });
+
+  it('hides the banner when nothing is pending', () => {
+    mount(rfi({ status: 'sent' }));
+    expect(screen.queryByTestId('pending-banner')).toBeNull();
+  });
+
+  it('Use as response fills the response textarea', async () => {
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    expect((screen.getByLabelText(/Response text/i) as HTMLTextAreaElement).value)
+      .toBe('Corridor is 9 ft per the RCP.');
+  });
+
+  // Accepting and editing the text are one action: the same Save button, but
+  // routed to the accept endpoint so the pending reply is cleared and the
+  // response is recorded as email-sourced.
+  it('Save response text accepts the pending reply instead of setting a plain response', async () => {
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.change(screen.getByLabelText(/Response text/i), { target: { value: 'Corridor is 9 ft (confirmed).' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
+
+    await waitFor(() => expect(h.acceptRfiPendingReply).toHaveBeenCalledWith('rfi-1', { text: 'Corridor is 9 ft (confirmed).' }));
+    expect(h.setRfiResponse).not.toHaveBeenCalled();
+    expect(onSaved).toHaveBeenCalled();
+  });
+
+  it('the main Save also accepts, so the pending reply is never left behind', async () => {
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(h.saveRfi).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(h.acceptRfiPendingReply).toHaveBeenCalledWith('rfi-1', { text: 'Corridor is 9 ft per the RCP.' }));
+    expect(h.setRfiResponse).not.toHaveBeenCalled();
+  });
+
+  // Someone else accepted or dismissed it first. Say so and refresh, rather
+  // than leaving a stale banner over a record that has moved on.
+  it('reports a reply that is already gone and refreshes', async () => {
+    const gone = new Error('No pending reply to accept');
+    gone.name = 'NoPendingReplyError';
+    h.acceptRfiPendingReply.mockRejectedValue(gone);
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
+
+    expect(await screen.findByText('No pending reply to accept')).toBeInTheDocument();
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  // The record still saved — only the reply moved on. Saying "Save failed"
+  // would send the user back to re-enter work that is already stored.
+  it('reports a vanished reply without calling the whole save a failure', async () => {
+    const gone = new Error('No pending reply to accept');
+    gone.name = 'NoPendingReplyError';
+    h.acceptRfiPendingReply.mockRejectedValue(gone);
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(h.saveRfi).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('No pending reply to accept')).toBeInTheDocument();
+    expect(screen.queryByText('Save failed')).toBeNull();
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  // A response text typed WITHOUT touching the banner is still an ordinary
+  // response — accept is only for the reply the banner offered.
+  it('keeps the plain response path for text typed by hand', async () => {
+    mount(sentWithReply());
+    fireEvent.change(await screen.findByLabelText(/Response text/i), { target: { value: 'Called the architect.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
+
+    await waitFor(() => expect(h.setRfiResponse).toHaveBeenCalledWith('rfi-1', { text: 'Called the architect.' }));
+    expect(h.acceptRfiPendingReply).not.toHaveBeenCalled();
+  });
+
+  describe('thread access', () => {
+    const mountRouted = (r: Rfi) =>
+      render(
+        <MemoryRouter initialEntries={['/project/p1/rfis']}>
+          <ToastProvider>
+            <Routes>
+              <Route path="/project/:projectId/rfis" element={
+                <RfiEditor rfi={r} projectId="p1" projectName="Big Job" contractor="GC Inc" onClose={vi.fn()} onSaved={onSaved} />
+              } />
+              <Route path="/mail/:accountId/:folderId/:threadKey" element={<div data-testid="mail-page" />} />
+            </Routes>
+          </ToastProvider>
+        </MemoryRouter>
+      );
+
+    // The reply landed in the mailbox of whoever sent the RFI. For anyone else
+    // the mail routes 403/404, so the banner must be told it cannot deep-link.
+    it('cannot open the thread when the receiving mailbox is not one of ours', async () => {
+      mountRouted(sentWithReply());
+      await screen.findByTestId('pending-banner');
+      await waitFor(() => expect(h.mailLinks).toHaveBeenCalled());
+      expect(h.bannerProps.last.canOpenThread).toBe(false);
+    });
+
+    it('opens the thread in the receiving mailbox when the user owns it', async () => {
+      h.mailAccounts.mockResolvedValue([{ ...OK_ACCOUNT, id: 'acct-1' }]);
+      mountRouted(sentWithReply());
+      await screen.findByTestId('pending-banner');
+      await waitFor(() => expect(h.bannerProps.last.canOpenThread).toBe(true));
+
+      fireEvent.click(screen.getByTestId('banner-open-thread'));
+      expect(await screen.findByTestId('mail-page')).toBeInTheDocument();
+    });
   });
 });

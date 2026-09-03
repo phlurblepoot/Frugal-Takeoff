@@ -1112,6 +1112,9 @@ export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
   description: string | null; status: string; version: number; sentAt: number | null;
   createdAt: number; updatedAt: number; photoCount: number;
+  pendingReply?: RfiPendingReply | null;
+  responseSource?: string | null;
+  responseMessageIdHeader?: string | null;
 }
 
 const issueJson = (method: string, url: string, body?: unknown) =>
@@ -1157,6 +1160,28 @@ export const sendIssue = async (id: string, payload: ItemSendBody): Promise<Item
 // ── RFIs ─────────────────────────────────────────────────────────────────────
 
 export interface RfiPhoto { id: string; fileId: string; sortOrder: number; }
+
+// An emailed reply captured against a sent RFI, waiting for a human to accept
+// or dismiss it. EVERY string here (the body text, the sender's display name,
+// every attachment name) was typed by an outsider into an email: render it as
+// text only — never as markup, never into a PDF/HTML template, and never build
+// a path from an attachment name.
+export interface RfiPendingReplyAttachment { attId: string; name: string; mime: string; size: number; }
+export interface RfiPendingReply {
+  threadKey: string;
+  accountId: string;          // the RECEIVING user's mailbox — usually not the viewer's
+  mailMessageId: string;
+  messageIdHeader: string | null;
+  from: { addr: string; name?: string };
+  date: string;               // ISO
+  text: string;
+  attachments: RfiPendingReplyAttachment[];
+  receivedAt: string;         // ISO
+}
+
+// pendingReply / responseSource / responseMessageIdHeader are optional on the
+// client types purely so existing constructors of an Rfi (editors, fixtures)
+// stay valid — the server always sends them.
 export interface Rfi {
   id: string;
   projectId: string;
@@ -1176,6 +1201,9 @@ export interface Rfi {
   createdAt: number;
   updatedAt: number;
   photos: RfiPhoto[];
+  pendingReply?: RfiPendingReply | null;
+  responseSource?: string | null;            // 'email' once an emailed reply was accepted
+  responseMessageIdHeader?: string | null;
 }
 export interface RfiListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -1184,6 +1212,9 @@ export interface RfiListItem {
   responseText: string | null; responseFileId: string | null;
   status: string; version: number; sentAt: number | null; answeredAt: number | null;
   createdAt: number; updatedAt: number; photoCount: number;
+  pendingReply?: RfiPendingReply | null;
+  responseSource?: string | null;
+  responseMessageIdHeader?: string | null;
 }
 
 const rfiJson = (method: string, url: string, body?: unknown) =>
@@ -1227,6 +1258,39 @@ export const setRfiResponse = async (id: string, input: { fileId?: string; text?
 };
 export const sendRfi = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res); return res.json();
+};
+
+/** The pending reply was accepted or dismissed by someone else first. Distinct
+ *  from a transport failure: the caller's move is to refresh, not to retry. */
+export class NoPendingReplyError extends Error {
+  constructor(message = 'No pending reply') { super(message); this.name = 'NoPendingReplyError'; }
+}
+
+// The server returns 409 { code: 'no_pending_reply' } when the reply is already
+// gone. Both calls funnel through here so callers can tell "stale banner" from
+// "the request failed".
+const rfiPendingReplyPost = async (id: string, action: 'accept' | 'dismiss', body: unknown): Promise<Response> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/pending-reply/${action}`, body);
+  if (res.status === 409) {
+    const err = await res.json().catch(() => ({} as { error?: string; code?: string }));
+    if (err.code === 'no_pending_reply') throw new NoPendingReplyError(err.error || 'No pending reply');
+    throw new HttpError(err.error || 'Request failed', 409);
+  }
+  await handleResponse(res);
+  return res;
+};
+
+/** Promotes the emailed reply into the recorded response. `text` overrides the
+ *  reply's own body; `fileId` (NOT responseFileId) attaches a response document. */
+export const acceptRfiPendingReply = async (
+  id: string, input: { text?: string; fileId?: string } = {},
+): Promise<{ status: string }> => {
+  const res = await rfiPendingReplyPost(id, 'accept', input);
+  return res.json();
+};
+
+export const dismissRfiPendingReply = async (id: string): Promise<void> => {
+  await rfiPendingReplyPost(id, 'dismiss', {});
 };
 
 // ── Daily Reports ──────────────────────────────────────────────────────────
