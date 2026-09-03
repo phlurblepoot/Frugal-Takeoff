@@ -1,20 +1,24 @@
 // src/pages/mail/CreateFromThreadMenu.tsx — ThreadView toolbar's "Create ▾":
-// converts the current conversation into a Task, RFI, or Issue. Prefills
-// title/question from the thread subject and description/question from the
-// latest INBOUND message's body text (falling back to the thread snippet on
-// any failure), creates the item through the existing store functions, links
-// the thread to it (mailApi.createLink — same route the "+ Link" strip
-// uses), then navigates to the new item's editor.
+// converts the current conversation into a Task, RFI, Issue, Change Order, or
+// Invoice (the last two admin-only — billing is admin-gated app-wide, same
+// isAdmin() convention as ProjectBilling/ThreadView). Prefills title/question
+// from the thread subject and description/question from the latest INBOUND
+// message's body text (falling back to the thread snippet on any failure),
+// creates the item through the existing store functions, links the thread to
+// it (mailApi.createLink — same route the "+ Link" strip uses), then
+// navigates to the new item's editor.
 //
 // TRUST BOUNDARY: the email-derived text below only ever lands in create
-// payload VALUES (createTask/createRfi/createIssue string fields) — it is
-// never rendered as HTML anywhere in this component.
+// payload VALUES (createTask/createRfi/createIssue/createChangeOrder string
+// fields) — it is never rendered as HTML anywhere in this component. Invoice
+// has no free-text field to prefill (see createInvoiceItem below), so no
+// email-derived text reaches it at all.
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ListPlus } from 'lucide-react';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
 import {
-  ProjectSummary, createIssue, createRfi, createTask, getProjectsSummary,
+  ProjectSummary, createChangeOrder, createInvoice, createIssue, createRfi, createTask, getProjectsSummary,
 } from '../../utils/store';
 import { Button, Field, Select } from '../../components/ui';
 import type { MessageRow, ThreadLink } from './types';
@@ -22,7 +26,25 @@ import type { MessageRow, ThreadLink } from './types';
 /** How much of the inbound message's body text to carry into the prefill. */
 const MAX_DESCRIPTION_CHARS = 2000;
 
-type CreateType = 'task' | 'rfi' | 'issue';
+// Same "read the app's own logged-in user" convention as ThreadView /
+// ProjectBilling / ProjectView etc. — there is no useAuth hook in this app,
+// just the user blob Login.tsx wrote to localStorage.
+const isAdmin = (): boolean => {
+  try { return JSON.parse(localStorage.getItem('user') || '{}').role === 'admin'; } catch { return false; }
+};
+
+type CreateType = 'task' | 'rfi' | 'issue' | 'changeOrder' | 'invoice';
+/** Types that require a project — everything except Task. */
+type ProjectRequiredType = Exclude<CreateType, 'task'>;
+
+const PROJECT_REQUIRED_LABEL: Record<ProjectRequiredType, string> = {
+  rfi: 'RFI', issue: 'issue', changeOrder: 'change order', invoice: 'invoice',
+};
+/** The project-select step's "An X needs a project." sentence — full noun
+ *  phrase with its article, since "a"/"an" isn't derivable from the label. */
+const ARTICLE_LABEL: Record<ProjectRequiredType, string> = {
+  rfi: 'An RFI', issue: 'An issue', changeOrder: 'A change order', invoice: 'An invoice',
+};
 
 const TOOL =
   'inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-ink-soft transition-colors ' +
@@ -77,10 +99,12 @@ export const CreateFromThreadMenu: React.FC<{
   navigate: (path: string) => void;
 }> = ({ threadKey, subject, snippet, messages, ownAddresses, links, navigate }) => {
   const { toast } = useToast();
+  // Change Order / Invoice are admin-only, same as billing everywhere else.
+  const admin = isAdmin();
   const [open, setOpen] = useState(false);
-  // Set once RFI/Issue is chosen and the thread has no project link yet —
-  // renders the project-select step in place of the type list.
-  const [pendingType, setPendingType] = useState<Extract<CreateType, 'rfi' | 'issue'> | null>(null);
+  // Set once a project-requiring type is chosen and the thread has no project
+  // link yet — renders the project-select step in place of the type list.
+  const [pendingType, setPendingType] = useState<ProjectRequiredType | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -136,6 +160,34 @@ export const CreateFromThreadMenu: React.FC<{
     return { itemType: 'issue', id, path: `/project/${projectId}/issues?open=${id}` };
   };
 
+  const createChangeOrderItem = async (projectId: string): Promise<CreatedItem> => {
+    const description = await buildDescription(messages, ownAddresses, snippet);
+    // Draft with no lines/lump sum — amount 0 is fine, the editor is where
+    // the real numbers get filled in.
+    const { id } = await createChangeOrder(projectId, { title, description });
+    return { itemType: 'changeOrder', id, path: `/project/${projectId}/billing?tab=change-orders&open=${id}` };
+  };
+
+  const createInvoiceItem = async (projectId: string): Promise<CreatedItem> => {
+    // Invoice (see InvoiceInput/Invoice in utils/store) has no free-text
+    // notes/description field to prefill — only `terms` (a short "Net 30"
+    // style field, wrong semantics for email-derived text) and `number`. So
+    // this is a bare draft, the same call InvoicesSection's own "New
+    // invoice" button makes; the admin fills it in from the editor.
+    const { id } = await createInvoice(projectId, { lines: [] });
+    return { itemType: 'invoice', id, path: `/project/${projectId}/billing?tab=invoices&open=${id}` };
+  };
+
+  // One creator per project-required type, keyed the same way as
+  // PROJECT_REQUIRED_LABEL — chooseType/confirmProjectPick below don't need
+  // a per-type branch.
+  const projectRequiredCreators: Record<ProjectRequiredType, (projectId: string) => Promise<CreatedItem>> = {
+    rfi: createRfiItem,
+    issue: createIssueItem,
+    changeOrder: createChangeOrderItem,
+    invoice: createInvoiceItem,
+  };
+
   /** Runs one create step, then links the thread to what it made, and
    *  navigates — the two failure points are handled differently on purpose:
    *  if `create` itself throws, nothing was made, so the item never existed
@@ -177,14 +229,12 @@ export const CreateFromThreadMenu: React.FC<{
       return;
     }
 
-    // RFI/Issue require a project — the thread's own link if it has one,
-    // else a project must be picked before anything is created.
+    // RFI/Issue/Change Order/Invoice all require a project — the thread's
+    // own link if it has one, else a project must be picked before anything
+    // is created.
     const linkedProjectId = projectLink?.projectId;
     if (linkedProjectId) {
-      void runCreate(
-        () => (type === 'rfi' ? createRfiItem(linkedProjectId) : createIssueItem(linkedProjectId)),
-        type === 'rfi' ? 'RFI' : 'issue',
-      );
+      void runCreate(() => projectRequiredCreators[type](linkedProjectId), PROJECT_REQUIRED_LABEL[type]);
       return;
     }
 
@@ -198,10 +248,7 @@ export const CreateFromThreadMenu: React.FC<{
     if (!pendingType || !selectedProjectId || busy) return;
     const type = pendingType;
     const projectId = selectedProjectId;
-    void runCreate(
-      () => (type === 'rfi' ? createRfiItem(projectId) : createIssueItem(projectId)),
-      type === 'rfi' ? 'RFI' : 'issue',
-    );
+    void runCreate(() => projectRequiredCreators[type](projectId), PROJECT_REQUIRED_LABEL[type]);
   };
 
   return (
@@ -229,11 +276,17 @@ export const CreateFromThreadMenu: React.FC<{
               <button type="button" role="menuitem" className={MENU_ITEM} disabled={busy} onClick={() => chooseType('task')}>Task</button>
               <button type="button" role="menuitem" className={MENU_ITEM} disabled={busy} onClick={() => chooseType('rfi')}>RFI</button>
               <button type="button" role="menuitem" className={MENU_ITEM} disabled={busy} onClick={() => chooseType('issue')}>Issue</button>
+              {admin && (
+                <>
+                  <button type="button" role="menuitem" className={MENU_ITEM} disabled={busy} onClick={() => chooseType('changeOrder')}>Change Order</button>
+                  <button type="button" role="menuitem" className={MENU_ITEM} disabled={busy} onClick={() => chooseType('invoice')}>Invoice</button>
+                </>
+              )}
             </>
           ) : (
             <div className="space-y-3 p-2">
               <p className="text-xs text-ink-faint">
-                {pendingType === 'rfi' ? 'An RFI needs a project.' : 'An issue needs a project.'}
+                {ARTICLE_LABEL[pendingType]} needs a project.
               </p>
               <Field label="Project" htmlFor="create-from-thread-project">
                 <Select
@@ -248,7 +301,7 @@ export const CreateFromThreadMenu: React.FC<{
               <div className="flex justify-end gap-2">
                 <Button variant="secondary" size="sm" onClick={reset} disabled={busy}>Cancel</Button>
                 <Button size="sm" onClick={confirmProjectPick} disabled={!selectedProjectId || busy}>
-                  {busy ? 'Creating…' : `Create ${pendingType === 'rfi' ? 'RFI' : 'issue'}`}
+                  {busy ? 'Creating…' : `Create ${PROJECT_REQUIRED_LABEL[pendingType]}`}
                 </Button>
               </div>
             </div>

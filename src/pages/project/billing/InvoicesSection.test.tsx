@@ -73,9 +73,9 @@ const row = (over: Partial<InvoiceListItem> = {}): InvoiceListItem => ({
 
 const FILE = { id: 'f1', name: 'Invoice-INV-1.pdf', mime: 'application/pdf', size: 12, createdAt: 50, versionNumber: 1 };
 
-const mount = () =>
+const mount = (initialEntry = '/') =>
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <ToastProvider>
         <InvoicesSection projectId="p1" />
       </ToastProvider>
@@ -118,6 +118,20 @@ describe('InvoicesSection — PDF status on rows', () => {
     expect(await screen.findByTestId('viewer')).toBeInTheDocument();
     expect(screen.getByText('Invoice-INV-1.pdf')).toBeInTheDocument();
     expect(h.getInvoice).not.toHaveBeenCalled();
+  });
+
+  it('?open= opens that invoice\'s editor (CreateFromThreadMenu convention) and strips the param', async () => {
+    h.getInvoice.mockResolvedValue({ ...row(), lines: [], payments: [] });
+    mount('/?open=inv-1');
+    await screen.findByTestId('editor');
+    expect(h.getInvoice).toHaveBeenCalledWith('inv-1');
+  });
+
+  it('?open= with a stale id fails gracefully (toast, no editor)', async () => {
+    h.getInvoice.mockRejectedValue(new Error('not found'));
+    mount('/?open=nope');
+    await screen.findByText('INV-1');
+    expect(screen.queryByTestId('editor')).toBeNull();
   });
 
   // Mail phase 2 Goal 4: the linked thread got a reply nobody has acted on

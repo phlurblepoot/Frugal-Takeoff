@@ -1,5 +1,6 @@
 // src/pages/project/billing/ChangeOrdersSection.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Eye, FileText, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderListItem,
@@ -56,6 +57,19 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
   const openChangeOrder = async (id: string) => {
     try { setEditing(await getChangeOrder(id)); } catch { toast('Failed to open change order', { type: 'error' }); }
   };
+
+  // Open a specific change order's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3/follow-up) — same one-shot query-param convention as the
+  // Tasks/RFI/Issue pages' ?open=.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openChangeOrder(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const newChangeOrder = async () => {
     if (!projectId) return;
     try {

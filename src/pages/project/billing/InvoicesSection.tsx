@@ -1,5 +1,6 @@
 // src/pages/project/billing/InvoicesSection.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Eye, FileText, Plus, Trash2 } from 'lucide-react';
 import {
   Invoice, InvoiceListItem,
@@ -56,6 +57,19 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
   const openInvoice = async (id: string) => {
     try { setEditing(await getInvoice(id)); } catch { toast('Failed to open invoice', { type: 'error' }); }
   };
+
+  // Open a specific invoice's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3/follow-up) — same one-shot query-param convention as the
+  // Tasks/RFI/Issue pages' ?open=.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openInvoice(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const newInvoice = async () => {
     if (!projectId) return;
     try {
