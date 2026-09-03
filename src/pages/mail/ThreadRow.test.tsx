@@ -77,23 +77,51 @@ describe('ThreadRow', () => {
     expect(screen.getByRole('button', { name: /^Unstar$/ })).toBeInTheDocument();
   });
 
-  it('shows one chip per linked item type', () => {
-    render(<ThreadRow {...props} row={row({ links: [link(), link({ id: 'l2', itemType: 'rfi', itemId: 'r2' }), link({ id: 'l3', itemType: 'proposal', itemId: 'p1' })] })} />);
-    const chips = screen.getAllByTestId('mail-link-chip').map(c => c.textContent);
-    expect(chips).toEqual(['RFI', 'Proposal']);
+  it('shows the resolved label for each linked item, not just its type', () => {
+    render(<ThreadRow {...props} row={row({
+      links: [
+        link({ label: 'RFI-012' }),
+        link({ id: 'l2', itemType: 'proposal', itemId: 'p1', label: 'Proposal #2 — Deck' }),
+      ],
+    })} />);
+    expect(screen.getAllByTestId('mail-link-chip').map(c => c.textContent)).toEqual(['RFI-012', 'Proposal #2 — Deck']);
   });
 
-  // Spot check for spec Goal 1 ("all link displays show resolved labels"):
-  // the server now resolves a `.label` on every ThreadLink (GET /api/mail/threads
-  // included), so row.links[].label is populated here same as anywhere else —
-  // but this component's chip is deliberately one-per-TYPE, not one-per-link
-  // (see the comment above chipTypes in ThreadRow.tsx), so it renders the type
-  // name regardless of whether a resolved label is present. Labeled chips for
-  // individual links are ThreadView's link strip (Task 2); this just confirms
-  // a `.label`-bearing row doesn't break or accidentally leak into this view.
-  it('a resolved label on a link does not change the row chip (type-only by design)', () => {
-    render(<ThreadRow {...props} row={row({ links: [link({ label: 'RFI-012' })] })} />);
+  it('falls back to the item-type name when a link has no resolved label', () => {
+    render(<ThreadRow {...props} row={row({ links: [link({ label: undefined })] })} />);
     expect(screen.getAllByTestId('mail-link-chip').map(c => c.textContent)).toEqual(['RFI']);
+  });
+
+  it('dedupes chips by the rendered label, not by item type — two distinctly labeled RFIs both show', () => {
+    render(<ThreadRow {...props} row={row({
+      links: [
+        link({ label: 'RFI-012' }),
+        link({ id: 'l2', itemId: 'r2', label: 'RFI-013' }),
+        link({ id: 'l3', itemId: 'r2', label: 'RFI-013' }), // exact duplicate label collapses
+      ],
+    })} />);
+    expect(screen.getAllByTestId('mail-link-chip').map(c => c.textContent)).toEqual(['RFI-012', 'RFI-013']);
+  });
+
+  it('caps visible chips and folds the rest into a "+N" overflow chip', () => {
+    render(<ThreadRow {...props} row={row({
+      links: [
+        link({ label: 'RFI-012' }),
+        link({ id: 'l2', itemType: 'proposal', itemId: 'p1', label: 'Proposal #2' }),
+        link({ id: 'l3', itemType: 'invoice', itemId: 'i1', label: 'Invoice 104' }),
+        link({ id: 'l4', itemType: 'issue', itemId: 'iss1', label: 'ISS-004' }),
+        link({ id: 'l5', itemType: 'task', itemId: 't1', label: 'Order material' }),
+      ],
+    })} />);
+    expect(screen.getAllByTestId('mail-link-chip').map(c => c.textContent)).toEqual(['RFI-012', 'Proposal #2', 'Invoice 104']);
+    const overflow = screen.getByTestId('mail-link-chip-overflow');
+    expect(overflow).toHaveTextContent('+2');
+    expect(overflow).toHaveAttribute('title', 'ISS-004, Order material');
+  });
+
+  it('shows no overflow chip when every link fits under the cap', () => {
+    render(<ThreadRow {...props} row={row({ links: [link({ label: 'RFI-012' })] })} />);
+    expect(screen.queryByTestId('mail-link-chip-overflow')).toBeNull();
   });
 
   it('shows the paperclip only when the thread has attachments', () => {

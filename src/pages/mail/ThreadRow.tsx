@@ -16,9 +16,19 @@ export const ThreadRow: React.FC<{
   const unread = row.unreadCount > 0;
   const starred = row.isStarred > 0;
 
-  // A thread linked to three RFIs still gets one "RFI" chip — the chips say
-  // what kind of work the thread touches, not how many rows it touches.
-  const chipTypes = Array.from(new Set(row.links.map(l => l.itemType)));
+  // Spec Goal 1 ("all link displays show resolved labels"): one chip per
+  // distinct resolved label ("RFI-012" over a bare "RFI"), falling back to
+  // the type name for a link the server couldn't resolve. Deduped on the
+  // label text itself, not the item type — two RFIs now render as two
+  // distinct chips ("RFI-012", "RFI-013") since their labels differ, where
+  // the old type-only chips would have collapsed them into one "RFI". A row
+  // linked to many items still needs a density cap, so only the first
+  // CHIP_LIMIT render; the rest fold into a "+N" chip (title lists them) —
+  // same shape as MessageCard's attachment-name overflow ("a, b, c +2").
+  const chipLabels = Array.from(new Set(row.links.map(l => l.label ?? itemTypeLabel(l.itemType))));
+  const CHIP_LIMIT = 3;
+  const visibleChips = chipLabels.slice(0, CHIP_LIMIT);
+  const overflowChips = chipLabels.slice(CHIP_LIMIT);
 
   return (
     <div
@@ -82,17 +92,27 @@ export const ThreadRow: React.FC<{
 
         {row.snippet && <p className="truncate text-xs text-ink-faint">{row.snippet}</p>}
 
-        {chipTypes.length > 0 && (
+        {chipLabels.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
-            {chipTypes.map(t => (
+            {visibleChips.map(label => (
               <span
-                key={t}
+                key={label}
                 data-testid="mail-link-chip"
-                className="rounded bg-accent-500/10 px-1.5 py-0.5 text-[11px] font-medium text-accent-700 dark:text-accent-300"
+                title={label}
+                className="max-w-[140px] truncate rounded bg-accent-500/10 px-1.5 py-0.5 text-[11px] font-medium text-accent-700 dark:text-accent-300"
               >
-                {itemTypeLabel(t)}
+                {label}
               </span>
             ))}
+            {overflowChips.length > 0 && (
+              <span
+                data-testid="mail-link-chip-overflow"
+                title={overflowChips.join(', ')}
+                className="shrink-0 rounded bg-sunken px-1.5 py-0.5 text-[11px] font-medium text-ink-faint"
+              >
+                +{overflowChips.length}
+              </span>
+            )}
           </div>
         )}
       </div>
