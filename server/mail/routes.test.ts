@@ -714,22 +714,27 @@ describe('mail routes', () => {
       .toEqual({ lastInboundDate: '2026-08-10T10:00:00.000Z', lastOutboundDate: '2026-08-11T10:00:00.000Z' });
   });
 
-  it('links are app-wide but thread snapshots are not, and only the linker or an admin can unlink', async () => {
+  it('links and their subject/participant snapshots are visible app-wide; only the linker or an admin can unlink', async () => {
     const l = await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
     expect(l.status).toBe(200);
     expect(l.body.subjectSnapshot).toBe('CO 4');
 
-    // u1 owns the account the thread lives in, so u1 keeps the snapshot fields
+    // u1 owns the account the thread lives in, so u1 sees the snapshot fields
     const owner = await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' });
     expect(owner.body[0].subjectSnapshot).toBe('CO 4');
     expect(JSON.parse(owner.body[0].participantsJson)).toBeInstanceOf(Array);
 
+    // u2 owns no mailbox holding this thread, but the link's snapshot is app data
+    // taken at link time (not a live mailbox read), so it is visible cross-user too —
+    // that's exactly what the #5 cross-user-open resolve/reference-card flow needs.
     currentUser = { id: 'u2', role: 'user' };
     const other = await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' });
     expect(other.body.length).toBe(1);                       // the link itself is item data: still visible
     expect(other.body[0].id).toBe(l.body.id);
-    expect(other.body[0].subjectSnapshot).toBeNull();        // mailbox content: withheld
-    expect(other.body[0].participantsJson).toBeNull();
+    expect(other.body[0].subjectSnapshot).toBe('CO 4');       // snapshot: visible to any viewer
+    expect(JSON.parse(other.body[0].participantsJson)).toBeInstanceOf(Array);
+    // Nothing beyond the link row + label + snapshot columns leaks through.
+    expect(Object.keys(other.body[0]).sort()).toEqual(Object.keys(owner.body[0]).sort());
 
     const denied = await request(app).delete(`/api/mail/links/${l.body.id}`);
     expect(denied.status).toBe(404);

@@ -983,25 +983,17 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         updatedAt = ? WHERE threadKey = ?`).run(inbound, outbound, now, threadKey);
   };
 
-  // Does this user own an account whose index holds that thread? Links themselves are
-  // item data everyone on the job can see, but the thread's subject line and participant
-  // list are mailbox content — only the mailbox's owner gets those.
-  const seesThread = (userId: string, threadKey: string): boolean =>
-    !!db.prepare(`SELECT 1 FROM mail_threads t JOIN mail_accounts a ON a.id = t.accountId
-                  WHERE t.threadKey = ? AND a.userId = ? LIMIT 1`).get(threadKey, userId);
-
+  // The subjectSnapshot/participantsJson columns are app-written snapshots taken at
+  // link time (see POST below) — not a live read of anyone's mailbox — so they carry
+  // no more mailbox content than GET /api/mail/project-threads already serves to every
+  // viewer regardless of who created the link. Redacting them for non-owners protected
+  // nothing and starved the cross-user thread-open flow (#5) of the subject/participants
+  // it needs to resolve or to render the reference card.
   app.get('/api/mail/links', authenticateToken, (req, res) => {
     const { itemType, itemId } = req.query;
     if (!isItemType(itemType)) return res.status(400).json({ error: 'Unknown itemType' });
     if (typeof itemId !== 'string' || !itemId) return res.status(400).json({ error: 'itemId is required' });
-    const uid = userOf(req).id;
-    const visible = new Map<string, boolean>();
-    res.json(listLinksForItem(db, itemType, itemId).map(l => {
-      let ok = visible.get(l.threadKey);
-      if (ok === undefined) { ok = seesThread(uid, l.threadKey); visible.set(l.threadKey, ok); }
-      const withLabel = { ...l, label: resolveLinkLabel(db, l.itemType, l.itemId) };
-      return ok ? withLabel : { ...withLabel, subjectSnapshot: null, participantsJson: null };
-    }));
+    res.json(listLinksForItem(db, itemType, itemId).map(l => ({ ...l, label: resolveLinkLabel(db, l.itemType, l.itemId) })));
   });
 
   app.post('/api/mail/links', authenticateToken, (req, res) => {
