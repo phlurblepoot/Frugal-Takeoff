@@ -124,7 +124,9 @@ test('RFI Email: prefilled composer, send stamps Sent + links a thread, second s
   const thread = authedPage.getByTestId('mail-thread-slot');
   await expect(thread).toHaveAttribute('data-thread-key', threadKey);
   await expect(thread.getByTestId('mail-attachment-chip')).toContainText(`RFI-${rfi.padded}.pdf`);
-  await expect(thread.getByTestId('mail-thread-link-chip')).toHaveText('RFI');
+  // Mail phase 2 (Goal 1): link chips show the resolved item label, not the
+  // bare item type.
+  await expect(thread.getByTestId('mail-thread-link-chip')).toHaveText(`RFI-${rfi.padded} — ${rfiTitle}`);
 
   // ── second send: offered the thread this one started ─────────────────────
   await authedPage.goto(`/project/${projectId}/rfis`);
