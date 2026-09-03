@@ -1190,3 +1190,102 @@ describe('Gmail watch teardown on delete / disable', () => {
     expect((await request(app).delete(`/api/mail/accounts/${acct.id}`)).status).toBe(200);
   });
 });
+
+// Task 4: fake-provider test-injection routes. Gated at registration time on
+// MAIL_FAKE_PROVIDER=1 — the same switch providers/index.ts already uses to
+// route every account through the fake — so they only ever exist in a
+// dev/e2e process and never a real deployment.
+describe('mail _test fixture routes', () => {
+  const settle = () => new Promise(r => setTimeout(r, 50));
+
+  it('404s on both routes when MAIL_FAKE_PROVIDER is unset', async () => {
+    expect((await request(app).post('/api/mail/_test/seed').send({})).status).toBe(404);
+    expect((await request(app).post('/api/mail/_test/inject').send({})).status).toBe(404);
+  });
+
+  it('POST /_test/seed creates a fake account and its threads show up in GET /api/mail/threads', async () => {
+    routeEnv.MAIL_FAKE_PROVIDER = '1';
+    const fakeApp = altApp();
+    const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
+      emailAddress: 'inbox@e2e.test',
+      threads: [
+        { subject: 'RFI 12', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'first message' }] },
+        { subject: 'Change order', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'co message' }] },
+      ],
+    });
+    expect(seedRes.status).toBe(200);
+    expect(seedRes.body.accountId).toBeTruthy();
+    expect(seedRes.body.threadKeys).toHaveLength(2);
+
+    const threadsRes = await request(fakeApp).get(`/api/mail/threads?accountId=${seedRes.body.accountId}`);
+    expect(threadsRes.status).toBe(200);
+    const keys = threadsRes.body.threads.map((t: any) => t.threadKey).sort();
+    expect(keys).toEqual([...seedRes.body.threadKeys].sort());
+  });
+
+  it('reuses an existing fake account for the same caller + email on a second seed call', async () => {
+    routeEnv.MAIL_FAKE_PROVIDER = '1';
+    const fakeApp = altApp();
+    const first = await request(fakeApp).post('/api/mail/_test/seed').send({
+      emailAddress: 'reuse@e2e.test',
+      threads: [{ subject: 'A', from: { addr: 'gc@teg.com' }, messages: [{ text: 'hi' }] }],
+    });
+    const second = await request(fakeApp).post('/api/mail/_test/seed').send({
+      emailAddress: 'reuse@e2e.test',
+      threads: [{ subject: 'B', from: { addr: 'gc@teg.com' }, messages: [{ text: 'hi again' }] }],
+    });
+    expect(second.body.accountId).toBe(first.body.accountId);
+  });
+
+  it('POST /_test/inject lands a message on the given thread', async () => {
+    routeEnv.MAIL_FAKE_PROVIDER = '1';
+    const fakeApp = altApp();
+    const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
+      emailAddress: 'inject@e2e.test',
+      threads: [{ subject: 'RFI 1', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'root message' }] }],
+    });
+    const { accountId, threadKeys } = seedRes.body;
+    const injectRes = await request(fakeApp).post('/api/mail/_test/inject').send({
+      accountId, threadKey: threadKeys[0], from: { addr: 'gc@teg.com', name: 'GC' }, text: 'here is my reply',
+    });
+    expect(injectRes.status).toBe(200);
+    expect(injectRes.body).toEqual({ ok: true });
+    await settle();
+
+    const threadRes = await request(fakeApp).get(`/api/mail/threads/${accountId}/${threadKeys[0]}`);
+    expect(threadRes.status).toBe(200);
+    expect(threadRes.body.messages).toHaveLength(2);
+  });
+
+  it('seeds 2 threads, injects a reply onto one, and the reply lands inbound on that thread only', async () => {
+    routeEnv.MAIL_FAKE_PROVIDER = '1';
+    const fakeApp = altApp();
+    const seedRes = await request(fakeApp).post('/api/mail/_test/seed').send({
+      emailAddress: 'sanity@e2e.test',
+      threads: [
+        { subject: 'Thread one', from: { addr: 'gc@teg.com', name: 'GC' }, messages: [{ text: 'thread one root' }] },
+        { subject: 'Thread two', from: { addr: 'owner@teg.com', name: 'Owner' }, messages: [{ text: 'thread two root' }] },
+      ],
+    });
+    expect(seedRes.status).toBe(200);
+    const { accountId, threadKeys } = seedRes.body;
+    expect(threadKeys).toHaveLength(2);
+
+    const injectRes = await request(fakeApp).post('/api/mail/_test/inject').send({
+      accountId, threadKey: threadKeys[0], from: { addr: 'gc@teg.com', name: 'GC' }, subject: 'Re: Thread one', text: 'a reply on thread one',
+    });
+    expect(injectRes.status).toBe(200);
+    await settle();
+
+    const touched = await request(fakeApp).get(`/api/mail/threads/${accountId}/${threadKeys[0]}`);
+    expect(touched.status).toBe(200);
+    expect(touched.body.thread.messageCount).toBe(2);
+    const last = touched.body.messages[touched.body.messages.length - 1];
+    expect(last.from.addr).toBe('gc@teg.com');
+    expect(last.from.addr).not.toBe('sanity@e2e.test');   // inbound: not from the account's own address
+
+    // The other thread is untouched.
+    const other = await request(fakeApp).get(`/api/mail/threads/${accountId}/${threadKeys[1]}`);
+    expect(other.body.thread.messageCount).toBe(1);
+  });
+});

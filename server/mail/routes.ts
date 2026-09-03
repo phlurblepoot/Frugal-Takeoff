@@ -17,6 +17,8 @@ import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
 import type { AttachmentMeta, Addr, MailProvider, MoveResult } from './providers/types';
 import { AuthExpiredError, ProviderNotFoundError } from './providers/types';
+import { getFakeProvider } from './providers/fakeRegistry';
+import type { Seeded } from './providers/fake';
 
 export interface BodyPayload { html: string; text: string; blockedRemoteImages: number; attachments: AttachmentMeta[] }
 export interface MailRouteDeps {
@@ -990,4 +992,95 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       secretKey: deps.env.MAIL_SECRET_KEY ? 'env' : 'file',
     });
   });
+
+  // ── test-only fixture routes (E2E) ──
+  // Gated at REGISTRATION time, not per-request: MAIL_FAKE_PROVIDER=1 is the
+  // same switch providers/index.ts already uses to route every account
+  // through the fake, so a deployment that never sets it never mounts these
+  // paths at all — a route.test.ts case proves both routes 404 when the flag
+  // is unset. Never reachable in a real deployment.
+  if (deps.env.MAIL_FAKE_PROVIDER === '1') {
+    // Builds one fake envelope. `references`/`inReplyTo` are the caller's own
+    // threading chain — the engine's deriveThreadKey (see threadKey.ts) walks
+    // exactly that chain, so a root message (empty references, no inReplyTo)
+    // becomes its own thread, keyed by its own messageIdHeader.
+    const seededEnvelope = (
+      toAddr: string, domain: string, from: Addr, subject: string,
+      m: { text: string; html?: string; date?: string; attachments?: Array<{ name: string; mime: string; bytesBase64: string }> },
+      references: string[], inReplyTo: string | undefined,
+    ): Seeded => {
+      const atts = Array.isArray(m.attachments) ? m.attachments : [];
+      const attachments: AttachmentMeta[] = atts.map((att, i) => ({ attId: `att${i}`, name: att.name, mime: att.mime, size: Buffer.from(att.bytesBase64 || '', 'base64').length }));
+      const attachmentBytes: Record<string, Buffer> = {};
+      atts.forEach((att, i) => { attachmentBytes[`att${i}`] = Buffer.from(att.bytesBase64 || '', 'base64'); });
+      return {
+        providerMessageId: 'fake-' + uuidv4(), messageIdHeader: newMessageIdHeader(domain), inReplyTo, references,
+        from, to: [{ addr: toAddr }], cc: [], bcc: [],
+        subject, snippet: (m.text || '').slice(0, 200), date: m.date ?? new Date().toISOString(),
+        isRead: false, isStarred: false, isDraft: false,
+        attachments, sizeBytes: (m.html || m.text || '').length,
+        folderProviderIds: ['INBOX'], html: m.html, text: m.text, attachmentBytes,
+      };
+    };
+
+    app.post('/api/mail/_test/seed', authenticateToken, async (req, res) => {
+      const b = req.body ?? {};
+      const uid = userOf(req).id;
+      const email = (typeof b.emailAddress === 'string' && b.emailAddress.trim() ? b.emailAddress : `fake+${uid}@e2e.test`).trim().toLowerCase();
+      let a = accounts.listAccounts(db, uid).find(x => x.provider === 'fake' && x.emailAddress === email);
+      if (!a) a = accounts.createAccount(db, ctx.crypto, { userId: uid, provider: 'fake', emailAddress: email, auth: { refreshToken: 'test' }, status: 'ok' });
+      const domain = email.split('@')[1] || 'e2e.test';
+      const fake = getFakeProvider(a.id);
+      const threads: Array<{ subject?: string; from: Addr; messages?: unknown[] }> = Array.isArray(b.threads) ? b.threads : [];
+      const threadKeys: string[] = [];
+      const list: Seeded[] = [];
+      for (const th of threads) {
+        const headers: string[] = [];
+        const msgs = Array.isArray(th.messages) ? th.messages : [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (msgs as any[]).forEach((m, i) => {
+          const seeded = seededEnvelope(email, domain, th.from, th.subject || '', m, [...headers], headers[headers.length - 1]);
+          headers.push(seeded.messageIdHeader!);
+          list.push(seeded);
+          if (i === 0) threadKeys.push(seeded.messageIdHeader!);   // a root's own header IS its threadKey
+        });
+      }
+      fake.seed(list);
+      // Await the backfill directly (not scheduler.pokeAccount) so the DB —
+      // and the threadKeys this responds with — are true before the response
+      // goes out; startAccount() below only takes over the ONGOING poll.
+      await runBackfill(ctx, accounts.getAccountAny(db, a.id)!, fake);
+      ctx.scheduler?.startAccount(a.id);
+      res.json({ accountId: a.id, threadKeys });
+    });
+
+    app.post('/api/mail/_test/inject', authenticateToken, (req, res) => {
+      const b = req.body ?? {};
+      const a = owned(req, String(b.accountId));
+      if (!a) return res.status(404).json({ error: 'Account not found' });
+      if (!b.from?.addr || typeof b.text !== 'string') return res.status(400).json({ error: 'from and text are required' });
+      const fake = getFakeProvider(a.id);
+      let references: string[] = [];
+      let inReplyTo: string | undefined;
+      if (typeof b.threadKey === 'string' && b.threadKey) {
+        // The thread's own message chain, in arrival order — so the injected
+        // envelope's References line names every message already on it and
+        // deriveThreadKey resolves straight back to this threadKey.
+        const rows = db.prepare('SELECT messageIdHeader FROM mail_messages WHERE accountId = ? AND threadKey = ? ORDER BY date').all(a.id, b.threadKey) as { messageIdHeader: string }[];
+        references = rows.map(r => r.messageIdHeader).filter(Boolean);
+        inReplyTo = references[references.length - 1];
+      } else if (typeof b.inReplyToMessageId === 'string' && b.inReplyToMessageId) {
+        const row = db.prepare('SELECT messageIdHeader, referencesJson FROM mail_messages WHERE id = ? AND accountId = ?').get(b.inReplyToMessageId, a.id) as { messageIdHeader: string; referencesJson: string } | undefined;
+        if (row) { references = [...JSON.parse(row.referencesJson || '[]'), row.messageIdHeader].filter(Boolean); inReplyTo = row.messageIdHeader; }
+      }
+      const domain = a.emailAddress.split('@')[1] || 'e2e.test';
+      const seeded = seededEnvelope(a.emailAddress, domain, b.from, b.subject || '', { text: b.text, html: b.html, attachments: b.attachments }, references, inReplyTo);
+      fake.injectInbound(seeded);
+      // Fire-and-forget, same as every other real nudge (POST .../refresh, a
+      // webhook, IMAP IDLE): the caller learns about it through the same
+      // mailThread broadcast a live inbound message would produce.
+      ctx.scheduler?.pokeAccount(a.id);
+      res.json({ ok: true });
+    });
+  }
 }

@@ -3,7 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { MailProvider, Envelope, ProviderFolder, SyncState, OutgoingMessage, AttachmentMeta, MoveResult } from './types';
 import { ProviderNotFoundError } from './types';
 
-type Seeded = Envelope & { html?: string; text?: string; attachmentBytes?: Record<string, Buffer> };
+// Exported so the test-only fixture routes (server/mail/routes.ts, gated on
+// MAIL_FAKE_PROVIDER=1) can build envelopes without re-declaring this shape.
+export type Seeded = Envelope & { html?: string; text?: string; attachmentBytes?: Record<string, Buffer> };
 
 export class FakeMailProvider implements MailProvider {
   kind = 'fake' as const;
