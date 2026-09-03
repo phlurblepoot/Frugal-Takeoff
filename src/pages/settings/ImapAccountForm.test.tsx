@@ -28,6 +28,10 @@ const ACCOUNT: MailAccount = {
   id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
   signatureHtml: null, isDefault: 1, status: 'needs_review', lastSyncAt: null, lastError: null,
   indexedSince: '2026-02-01T00:00:00.000Z', unreadCount: 0,
+  imapAuth: {
+    imapHost: 'imap.bigbearplaster.com', imapPort: 993, imapSecure: true,
+    smtpHost: 'smtp.bigbearplaster.com', smtpPort: 587, smtpSecure: false, username: 'nathan-imap',
+  },
 };
 
 beforeEach(() => {
@@ -135,21 +139,40 @@ describe('ImapAccountForm', () => {
     expect(h.createImapAccount.mock.calls[1][0]).toEqual(expect.objectContaining({ id: 'new1' }));
   });
 
-  it('prefills an existing account and lets the password stay blank to keep the stored one', async () => {
+  it('prefills an existing account from its non-secret imapAuth, password left blank', async () => {
     h.createImapAccount.mockResolvedValue(ACCOUNT);
     h.testAccount.mockResolvedValue(undefined);
     mount(ACCOUNT);
 
     expect(screen.getByLabelText('Email address')).toHaveValue('nathan@bigbearplaster.com');
     expect(screen.getByLabelText('Display name')).toHaveValue('Nathan');
+    expect(screen.getByLabelText('IMAP host')).toHaveValue('imap.bigbearplaster.com');
+    expect(screen.getByLabelText('IMAP port')).toHaveValue(993);
+    expect(screen.getByLabelText('IMAP uses SSL/TLS')).toBeChecked();
+    expect(screen.getByLabelText('SMTP host')).toHaveValue('smtp.bigbearplaster.com');
+    expect(screen.getByLabelText('SMTP port')).toHaveValue(587);
+    expect(screen.getByLabelText('SMTP uses SSL/TLS (not STARTTLS)')).not.toBeChecked();
+    expect(screen.getByLabelText('Username')).toHaveValue('nathan-imap');
+    expect(screen.getByLabelText('Password')).toHaveValue('');
 
-    fireEvent.change(screen.getByLabelText('IMAP host'), { target: { value: 'imap.bigbear.com' } });
-    fireEvent.change(screen.getByLabelText('SMTP host'), { target: { value: 'smtp.bigbear.com' } });
-    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'nathan' } });
     save();
 
     await waitFor(() => expect(h.createImapAccount).toHaveBeenCalled());
-    expect(h.createImapAccount).toHaveBeenCalledWith(expect.objectContaining({ id: 'a1', password: '' }));
+    expect(h.createImapAccount).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'a1', imapHost: 'imap.bigbearplaster.com', smtpHost: 'smtp.bigbearplaster.com',
+      username: 'nathan-imap', password: '',
+    }));
+  });
+
+  it('an existing account without imapAuth (older row, or not yet loaded) still starts blank', async () => {
+    h.createImapAccount.mockResolvedValue(ACCOUNT);
+    h.testAccount.mockResolvedValue(undefined);
+    const { imapAuth: _omit, ...noAuth } = ACCOUNT;
+    mount(noAuth as MailAccount);
+
+    expect(screen.getByLabelText('IMAP host')).toHaveValue('');
+    expect(screen.getByLabelText('SMTP host')).toHaveValue('');
+    expect(screen.getByLabelText('Username')).toHaveValue('');
   });
 
   it('renders nothing when closed', () => {

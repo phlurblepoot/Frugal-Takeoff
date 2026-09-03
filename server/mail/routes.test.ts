@@ -123,8 +123,30 @@ describe('mail routes', () => {
     expect(r.status).toBe(200);
     expect(r.body[0]).toMatchObject({ id: acct.id, emailAddress: 'me@bb.com', isDefault: 1, unreadCount: 1 });
     expect(r.body[0].authBlob).toBeUndefined();
+    // acct is a 'fake' provider (see beforeEach), so it never gets imapAuth.
+    expect(r.body[0].imapAuth).toBeUndefined();
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/accounts')).body).toEqual([]);
+  });
+
+  it('GET /api/mail/accounts gives imap rows their non-secret auth fields for edit prefill, never a password', async () => {
+    const created = (await request(app).post('/api/mail/accounts/imap').send({
+      emailAddress: 'imap@x.com', imapHost: 'imap.x.com', imapPort: 993, imapSecure: true,
+      smtpHost: 'smtp.x.com', smtpPort: 587, smtpSecure: false, username: 'imapuser', password: 'sekrit',
+    })).body;
+    const r = await request(app).get('/api/mail/accounts');
+    expect(r.status).toBe(200);
+    const row = r.body.find((a: any) => a.id === created.id);
+    expect(row.imapAuth).toEqual({
+      imapHost: 'imap.x.com', imapPort: 993, imapSecure: true,
+      smtpHost: 'smtp.x.com', smtpPort: 587, smtpSecure: false, username: 'imapuser',
+    });
+    // The password must never leave the server, in any shape, on this route.
+    expect(JSON.stringify(r.body)).not.toContain('sekrit');
+    expect(row.imapAuth.password).toBeUndefined();
+    // Non-imap rows (the 'fake' account from beforeEach) carry no imapAuth at all.
+    const fakeRow = r.body.find((a: any) => a.id === acct.id);
+    expect(fakeRow.imapAuth).toBeUndefined();
   });
 
   it('POST /api/mail/accounts/imap creates a needs_review→ok account after test', async () => {

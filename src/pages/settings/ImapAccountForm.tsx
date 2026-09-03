@@ -7,10 +7,11 @@
 // carries the id of the row that was already created — otherwise every attempt
 // would leave another dead account behind.
 //
-// The server never returns stored credentials (see server/mail/accountStore.ts
-// — the auth blob is sealed and read-only to the server), so editing an
-// existing account can prefill only the address and display name; the hosts and
-// username have to be re-entered, while a blank password keeps the stored one.
+// The server never returns the stored PASSWORD (see server/mail/accountStore.ts
+// — the auth blob is sealed and read-only to the server), but the accounts GET
+// route does hand back the rest of an imap account's auth (host/port/username)
+// for edit prefill (server/mail/routes.ts), so only the password field starts
+// blank on an edit — leaving it blank keeps the one already stored.
 import React, { useEffect, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { Button, Checkbox, Field, Input, Modal } from '../../components/ui';
@@ -59,6 +60,13 @@ export const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ open, onClose,
       ...DEFAULTS,
       emailAddress: existing?.emailAddress ?? '',
       displayName: existing?.displayName ?? '',
+      imapHost: existing?.imapAuth?.imapHost ?? '',
+      imapPort: existing?.imapAuth ? String(existing.imapAuth.imapPort) : DEFAULTS.imapPort,
+      imapSecure: existing?.imapAuth?.imapSecure ?? DEFAULTS.imapSecure,
+      smtpHost: existing?.imapAuth?.smtpHost ?? '',
+      smtpPort: existing?.imapAuth ? String(existing.imapAuth.smtpPort) : DEFAULTS.smtpPort,
+      smtpSecure: existing?.imapAuth?.smtpSecure ?? DEFAULTS.smtpSecure,
+      username: existing?.imapAuth?.username ?? '',
     });
     setErrors({});
     setServerError(null);
@@ -151,8 +159,7 @@ export const ImapAccountForm: React.FC<ImapAccountFormProps> = ({ open, onClose,
 
         {existing && (
           <p className="rounded-lg border border-edge bg-sunken px-3 py-2 text-xs text-ink-soft">
-            Stored credentials are never sent back to the browser, so the host, port and username have to be
-            entered again. Leave the password blank to keep the one already saved.
+            The stored password is never sent back to the browser. Leave it blank to keep the one already saved.
           </p>
         )}
 

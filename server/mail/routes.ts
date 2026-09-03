@@ -251,7 +251,23 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const unread = db.prepare(`SELECT COALESCE(SUM(t.unreadCount), 0) n FROM mail_threads t
       JOIN mail_folders f ON f.accountId = t.accountId AND f.role = 'inbox'
       WHERE t.accountId = ? AND instr(t.folderIdsJson, '"' || f.id || '"') > 0`);
-    res.json(accounts.listAccounts(db, userOf(req).id).map(a => ({ ...a, unreadCount: (unread.get(a.id) as { n: number }).n })));
+    res.json(accounts.listAccounts(db, userOf(req).id).map(a => {
+      const row: any = { ...a, unreadCount: (unread.get(a.id) as { n: number }).n };
+      // Non-secret auth fields only, so the Edit form can prefill host/port/
+      // username without a round trip that needs the password re-typed each
+      // time — the password itself never leaves the server on this route.
+      if (a.provider === 'imap') {
+        const auth = accounts.readAuth(db, ctx.crypto, a.id) as accounts.ImapAuth | null;
+        if (auth) {
+          row.imapAuth = {
+            imapHost: auth.imapHost, imapPort: auth.imapPort, imapSecure: auth.imapSecure,
+            smtpHost: auth.smtpHost, smtpPort: auth.smtpPort, smtpSecure: auth.smtpSecure,
+            username: auth.username,
+          };
+        }
+      }
+      return row;
+    }));
   });
 
   app.post('/api/mail/accounts/imap', authenticateToken, (req, res) => {

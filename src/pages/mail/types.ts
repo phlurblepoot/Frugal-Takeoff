@@ -24,6 +24,12 @@ export interface MailAccount {
   indexedSince: string;
   /** Server-computed: unread count across this account's inbox folder(s). */
   unreadCount: number;
+  /** imap accounts only — non-secret auth fields for the Edit form to
+   *  prefill; the password never comes back from the server. */
+  imapAuth?: {
+    imapHost: string; imapPort: number; imapSecure: boolean;
+    smtpHost: string; smtpPort: number; smtpSecure: boolean; username: string;
+  };
 }
 
 export interface MailFolder {
