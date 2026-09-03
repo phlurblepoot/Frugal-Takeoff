@@ -1,5 +1,5 @@
 // server/rfiStore.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
@@ -294,16 +294,31 @@ describe('rfiStore', () => {
     // must not flip the generated-PDF "up to date" chip — that chip compares
     // updatedAt, so capture/dismiss may only bump version.
     it('capture and dismiss bump version but leave updatedAt untouched', () => {
-      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id);
-      const before = getRfi(db, id)!;
-      setPendingReply(db, id, reply);
-      const afterCapture = getRfi(db, id)!;
-      expect(afterCapture.version).toBe(before.version + 1);
-      expect(afterCapture.updatedAt).toBe(before.updatedAt);
-      dismissPendingReply(db, id);
-      const afterDismiss = getRfi(db, id)!;
-      expect(afterDismiss.version).toBe(afterCapture.version + 1);
-      expect(afterDismiss.updatedAt).toBe(before.updatedAt);
+      // Fake timers + an explicit tick between each step so a wrongly-bumped
+      // updatedAt is guaranteed to differ, not just coincidentally equal
+      // (real Date.now() let this assertion pass against the buggy code when
+      // the calls landed in the same millisecond — see review).
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-08-29T10:00:00.000Z'));
+        const { id } = createRfi(db, 'p1', { title: 't' });
+        markRfiSent(db, id);
+        const before = getRfi(db, id)!;
+
+        vi.setSystemTime(new Date('2026-08-29T10:01:00.000Z')); // +60s
+        setPendingReply(db, id, reply);
+        const afterCapture = getRfi(db, id)!;
+        expect(afterCapture.version).toBe(before.version + 1);
+        expect(afterCapture.updatedAt).toBe(before.updatedAt);
+
+        vi.setSystemTime(new Date('2026-08-29T10:02:00.000Z')); // +60s more
+        dismissPendingReply(db, id);
+        const afterDismiss = getRfi(db, id)!;
+        expect(afterDismiss.version).toBe(afterCapture.version + 1);
+        expect(afterDismiss.updatedAt).toBe(before.updatedAt);
+      } finally {
+        vi.useRealTimers();
+      }
     });
     it('accept sets the response, answered, source fields, clears pending; dismiss only clears', () => {
       const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id); setPendingReply(db, id, reply);
