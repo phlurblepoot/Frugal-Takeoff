@@ -16,6 +16,7 @@ import type { AttachmentMeta } from './types';
 const h = vi.hoisted(() => ({
   saveAttachments: vi.fn(),
   toast: vi.fn(),
+  getProjectsSummary: vi.fn(),
 }));
 vi.mock('../../utils/mailApi', () => ({ mailApi: { saveAttachments: h.saveAttachments } }));
 vi.mock('../../components/Toast', async orig => ({
@@ -24,7 +25,7 @@ vi.mock('../../components/Toast', async orig => ({
 }));
 vi.mock('../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  getProjectsSummary: vi.fn().mockResolvedValue([{ id: 'proj1', name: 'Test Project', customerId: 'cust1' }]),
+  getProjectsSummary: h.getProjectsSummary,
   getCustomers: vi.fn().mockResolvedValue([{ id: 'cust1', name: 'Test Customer' }]),
   getDocumentTypes: vi.fn().mockResolvedValue([]),
 }));
@@ -38,9 +39,11 @@ const att = (over: Partial<AttachmentMeta> = {}): AttachmentMeta => ({
 beforeEach(() => {
   h.saveAttachments.mockReset();
   h.toast.mockReset();
+  h.getProjectsSummary.mockReset();
+  h.getProjectsSummary.mockResolvedValue([{ id: 'proj1', name: 'Test Project', customerId: 'cust1' }]);
 });
 
-const mount = (attachments: AttachmentMeta[], onClose = vi.fn(), onSaved?: (fileIds: string[]) => void) => {
+const mount = (attachments: AttachmentMeta[], onClose = vi.fn(), onSaved?: (files: Array<{ fileId: string; name: string }>) => void) => {
   render(
     <ToastProvider>
       <SaveAttachmentsModal open onClose={onClose} messageId="m1" attachments={attachments} onSaved={onSaved} />
@@ -134,14 +137,30 @@ describe('SaveAttachmentsModal', () => {
 describe('SaveAttachmentsModal — onSaved', () => {
   const att2 = (): AttachmentMeta => ({ attId: 'a1', name: 'invoice.pdf', mime: 'application/pdf', size: 2048 });
 
-  it('reports the saved file ids to the caller', async () => {
+  // The id alone is not enough for a caller that wants to NAME the file it just
+  // saved (the RFI banner's confirm does): only this component can join the
+  // server's id back to the name the user submitted.
+  it('reports the saved files, with the names they were saved under', async () => {
     h.saveAttachments.mockResolvedValue({ fileIds: ['f1'], saved: [{ attId: 'a1', fileId: 'f1' }], failed: [] });
     const onSaved = vi.fn();
     mount([att2()], vi.fn(), onSaved);
     await waitFor(() => expect(screen.getByText('invoice.pdf')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(['f1']));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith([{ fileId: 'f1', name: 'invoice.pdf' }]));
+  });
+
+  // Callers that keep the modal mounted while closed (the RFI pending-reply
+  // banner) would otherwise pay for the project/customer/type lists on every
+  // render of the record they sit on.
+  it('loads nothing until it is opened', async () => {
+    render(
+      <ToastProvider>
+        <SaveAttachmentsModal open={false} onClose={vi.fn()} messageId="m1" attachments={[att2()]} />
+      </ToastProvider>
+    );
+    await waitFor(() => expect(screen.queryByText('invoice.pdf')).toBeNull());
+    expect(h.getProjectsSummary).not.toHaveBeenCalled();
   });
 
   it('stays silent when nothing landed', async () => {

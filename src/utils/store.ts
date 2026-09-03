@@ -1112,9 +1112,6 @@ export interface IssueListItem {
   id: string; projectId: string; number: number; title: string | null;
   description: string | null; status: string; version: number; sentAt: number | null;
   createdAt: number; updatedAt: number; photoCount: number;
-  pendingReply?: RfiPendingReply | null;
-  responseSource?: string | null;
-  responseMessageIdHeader?: string | null;
 }
 
 const issueJson = (method: string, url: string, body?: unknown) =>
@@ -1266,15 +1263,18 @@ export class NoPendingReplyError extends Error {
   constructor(message = 'No pending reply') { super(message); this.name = 'NoPendingReplyError'; }
 }
 
-// The server returns 409 { code: 'no_pending_reply' } when the reply is already
-// gone. Both calls funnel through here so callers can tell "stale banner" from
-// "the request failed".
+// A 409 from either of these routes means one thing: the reply is no longer
+// pending (someone else accepted or dismissed it). `code: 'no_pending_reply'`
+// is the explicit marker, but the status alone is treated as sufficient —
+// there is no other conflict these two routes can report, and depending on the
+// marker made the client mis-handle a server that omitted it. Only an explicit
+// version_conflict is passed through as an ordinary failure.
 const rfiPendingReplyPost = async (id: string, action: 'accept' | 'dismiss', body: unknown): Promise<Response> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/pending-reply/${action}`, body);
   if (res.status === 409) {
     const err = await res.json().catch(() => ({} as { error?: string; code?: string }));
-    if (err.code === 'no_pending_reply') throw new NoPendingReplyError(err.error || 'No pending reply');
-    throw new HttpError(err.error || 'Request failed', 409);
+    if (err.code === 'version_conflict') throw new HttpError(err.error || 'Request failed', 409);
+    throw new NoPendingReplyError(err.error || 'No pending reply');
   }
   await handleResponse(res);
   return res;

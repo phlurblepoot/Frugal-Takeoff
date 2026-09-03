@@ -21,6 +21,11 @@ import { mailApi } from '../../utils/mailApi';
 import { UploadDocumentsModal, RemoteUploadItem } from '../documents/UploadDocumentsModal';
 import type { AttachmentMeta } from './types';
 
+/** One file the server made from an attachment — the id AND the name it was
+ *  saved under, because a caller acting on the result (the RFI pending-reply
+ *  banner naming the file in its confirm) can't map ids back to names. */
+export interface SavedAttachment { fileId: string; name: string; }
+
 export const SaveAttachmentsModal: React.FC<{
   open: boolean;
   onClose: () => void;
@@ -29,11 +34,11 @@ export const SaveAttachmentsModal: React.FC<{
   /** Preselects the Project when the mail thread this message belongs to is
    *  already linked to one. Not yet wired by any caller. */
   defaultProjectId?: string;
-  /** The ids the server minted, for callers that want to do something with the
-   *  saved file (the RFI pending-reply banner offers it as the response
-   *  document). Called once per confirm, only for the files that landed —
-   *  this component is the only place that per-item detail exists. */
-  onSaved?: (fileIds: string[]) => void;
+  /** The files the server made, for callers that want to do something with
+   *  them (the RFI pending-reply banner offers one as the response document).
+   *  Called once per confirm, only for what actually landed — this component
+   *  is the only place that per-item detail exists. */
+  onSaved?: (files: SavedAttachment[]) => void;
 }> = ({ open, onClose, messageId, attachments, defaultProjectId, onSaved }) => {
   const { toast } = useToast();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -43,11 +48,15 @@ export const SaveAttachmentsModal: React.FC<{
   // failure so a retry only resubmits what's left.
   const [remaining, setRemaining] = useState<AttachmentMeta[]>(attachments);
 
+  // Gated on `open`: callers that keep the modal mounted while closed (the RFI
+  // pending-reply banner does) would otherwise pay for three list requests on
+  // every render of the host record.
   useEffect(() => {
+    if (!open) return;
     getProjectsSummary().then(setProjects).catch(() => setProjects([]));
     getCustomers().then(setCustomers).catch(() => setCustomers([]));
     getDocumentTypes().then(setCustomTypes).catch(() => setCustomTypes([]));
-  }, []);
+  }, [open]);
 
   // Reset to the full attachment list every time the modal opens (a fresh
   // message, or the same message reopened after a prior save) — mirrors the
@@ -72,9 +81,12 @@ export const SaveAttachmentsModal: React.FC<{
     const failedCount = result.failed.length;
 
     // Before the branch below: a partial save still produced real files, and a
-    // caller waiting on them shouldn't have to care that a sibling failed.
-    const savedIds = result.fileIds?.length ? result.fileIds : result.saved.map(s => s.fileId);
-    if (savedIds.length) onSaved?.(savedIds);
+    // caller waiting on them shouldn't have to care that a sibling failed. The
+    // name comes from the item the caller submitted — result.saved carries ids
+    // only, and the attId is the only thing that joins the two.
+    const nameByAttId = new Map(items.map(it => [it.id, it.name]));
+    const savedFiles = result.saved.map(s => ({ fileId: s.fileId, name: nameByAttId.get(s.attId) ?? '' }));
+    if (savedFiles.length) onSaved?.(savedFiles);
 
     if (failedCount === 0) {
       toast(`Saved ${ok} file${ok === 1 ? '' : 's'} to Documents`, { type: 'success' });

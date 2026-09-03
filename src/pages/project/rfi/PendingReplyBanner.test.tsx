@@ -4,31 +4,38 @@
 // "this is the recorded response". Everything it shows — sender name, body
 // text, attachment names — is a string an outsider typed into an email, so the
 // rendering tests below are as much about the trust boundary as the layout.
+//
+// The store is NOT mocked here: these tests stub `fetch` and assert on the
+// requests that actually go out. A hand-mocked store function can't tell you
+// that the client mis-reads the server's 409 body — which is exactly the bug
+// this file is now shaped to catch.
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { Rfi, RfiPendingReply } from '../../../utils/store';
 
 const h = vi.hoisted(() => ({
-  dismissRfiPendingReply: vi.fn(),
-  setRfiResponse: vi.fn(),
+  fetchMock: vi.fn(),
   saveProps: { last: null as any },
 }));
 
-vi.mock('../../../utils/store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/store')>()),
-  dismissRfiPendingReply: h.dismissRfiPendingReply,
-  setRfiResponse: h.setRfiResponse,
-}));
-
-// Stand-in for the mail-side save modal: records the props it was handed and
-// lets a test fire its onSaved callback with the file ids the server made.
+// Stand-in for the mail-side save modal: records the props it was handed, and
+// lets a test report saved files with or without closing itself (a partial save
+// keeps the real modal open on the failures).
 vi.mock('../../mail/SaveAttachmentsModal', () => ({
   SaveAttachmentsModal: (props: any) => {
     h.saveProps.last = props;
     return props.open ? (
       <div data-testid="save-attachments">
-        <button data-testid="save-attachments-done" onClick={() => props.onSaved?.(['file-77'])}>saved</button>
+        <button
+          data-testid="save-all"
+          onClick={() => { props.onSaved?.([{ fileId: 'file-77', name: 'ceiling-detail.pdf' }]); props.onClose(); }}
+        >saved and closed</button>
+        <button
+          data-testid="save-partial"
+          onClick={() => props.onSaved?.([{ fileId: 'file-77', name: 'ceiling-detail.pdf' }])}
+        >saved, still open</button>
+        <button data-testid="save-close" onClick={() => props.onClose()}>close</button>
       </div>
     ) : null;
   },
@@ -37,6 +44,18 @@ vi.mock('../../mail/SaveAttachmentsModal', () => ({
 import { ToastProvider } from '../../../components/Toast';
 import { ConfirmProvider } from '../../../components/ConfirmDialog';
 import { PendingReplyBanner } from './PendingReplyBanner';
+
+// A minimal Response stand-in: the store reads status/ok/json, and
+// fetchWithRetry touches `body` only to drain a retry (never on these POSTs).
+const res = (status: number, body: unknown = {}) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  json: async () => body,
+  body: null,
+});
+
+const postsTo = (url: string) => h.fetchMock.mock.calls.filter(c => c[0] === url);
+const bodyOf = (call: any[]) => JSON.parse(call[1].body);
 
 const pending = (over: Partial<RfiPendingReply> = {}): RfiPendingReply => ({
   threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
@@ -56,20 +75,21 @@ const rfi = (over: Partial<Rfi> = {}): Rfi => ({
   ...over,
 });
 
-const cb = { onUseAsResponse: vi.fn(), onDismissed: vi.fn(), onOpenThread: vi.fn(), onResponseFile: vi.fn() };
+const cb = { onUseAsResponse: vi.fn(), onDismissed: vi.fn(), onAccepted: vi.fn(), onOpenThread: vi.fn() };
 
-const mount = (r: Rfi = rfi(), canOpenThread = true) =>
+const mount = (r: Rfi = rfi(), opts: { canOpenThread?: boolean; draftText?: string | null } = {}) =>
   render(
     <ToastProvider>
       <ConfirmProvider>
         <PendingReplyBanner
           rfi={r}
           projectId="p1"
-          canOpenThread={canOpenThread}
+          canOpenThread={opts.canOpenThread ?? true}
+          draftText={opts.draftText ?? null}
           onUseAsResponse={cb.onUseAsResponse}
           onDismissed={cb.onDismissed}
+          onAccepted={cb.onAccepted}
           onOpenThread={cb.onOpenThread}
-          onResponseFile={cb.onResponseFile}
         />
       </ConfirmProvider>
     </ToastProvider>
@@ -78,9 +98,10 @@ const mount = (r: Rfi = rfi(), canOpenThread = true) =>
 beforeEach(() => {
   vi.clearAllMocks();
   h.saveProps.last = null;
-  h.dismissRfiPendingReply.mockResolvedValue(undefined);
-  h.setRfiResponse.mockResolvedValue(undefined);
+  h.fetchMock.mockResolvedValue(res(200, { success: true, status: 'answered' }));
+  vi.stubGlobal('fetch', h.fetchMock);
 });
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('PendingReplyBanner', () => {
   it('renders the sender, the date and the reply text', () => {
@@ -148,23 +169,31 @@ describe('PendingReplyBanner', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Use as response' }));
     expect(cb.onUseAsResponse).toHaveBeenCalledWith('Corridor is 9\'-0" per the reflected ceiling plan.');
-    // Nothing is saved from here — the editor's own Save is the commit point.
-    expect(h.setRfiResponse).not.toHaveBeenCalled();
+    // Nothing is written from here — the editor's own Save is the commit point.
+    expect(h.fetchMock).not.toHaveBeenCalled();
   });
 
-  it('Dismiss drops the pending reply and tells the editor to refresh', async () => {
+  it('Dismiss posts to the dismiss route and tells the editor to refresh', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    await waitFor(() => expect(h.dismissRfiPendingReply).toHaveBeenCalledWith('rfi-1'));
+    await waitFor(() => expect(postsTo('/api/rfis/rfi-1/pending-reply/dismiss')).toHaveLength(1));
     await waitFor(() => expect(cb.onDismissed).toHaveBeenCalled());
   });
 
-  // Someone else accepted or dismissed the same reply first. The banner is
-  // stale, so refresh rather than leaving a dead card on screen.
-  it('still refreshes when the reply is already gone server-side', async () => {
-    const gone = new Error('No pending reply to dismiss');
-    gone.name = 'NoPendingReplyError';
-    h.dismissRfiPendingReply.mockRejectedValue(gone);
+  // The real server's 409 body is the thing under test: someone else accepted
+  // or dismissed the same reply first, and the client must read that as "gone"
+  // — including when the body carries no `code` at all.
+  it('treats a bare 409 from the server as "already handled" and refreshes', async () => {
+    h.fetchMock.mockResolvedValue(res(409, { error: 'No pending reply to dismiss' }));
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(await screen.findByText('That reply was already handled')).toBeInTheDocument();
+    await waitFor(() => expect(cb.onDismissed).toHaveBeenCalled());
+  });
+
+  it('reads the coded 409 the same way', async () => {
+    h.fetchMock.mockResolvedValue(res(409, { error: 'No pending reply to dismiss', code: 'no_pending_reply' }));
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(cb.onDismissed).toHaveBeenCalled());
@@ -173,7 +202,7 @@ describe('PendingReplyBanner', () => {
   // A dropped request is not the same thing: the reply is still pending, so the
   // banner has to stay put and say the dismiss failed.
   it('keeps the banner when the dismiss request itself fails', async () => {
-    h.dismissRfiPendingReply.mockRejectedValue(new Error('network down'));
+    h.fetchMock.mockRejectedValue(new Error('network down'));
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(await screen.findByText('Failed to dismiss the reply')).toBeInTheDocument();
@@ -191,7 +220,7 @@ describe('PendingReplyBanner', () => {
   // the mail routes answer 403/404, so the button must not be armed — and the
   // banner has to say why instead of just going quiet.
   it('degrades to a muted note when the mailbox belongs to another user', () => {
-    mount(rfi(), false);
+    mount(rfi(), { canOpenThread: false });
     expect(screen.getByRole('button', { name: 'Open thread' })).toBeDisabled();
     expect(screen.getByTestId('rfi-pending-reply-foreign')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
@@ -216,27 +245,90 @@ describe('PendingReplyBanner', () => {
       });
     });
 
-    it('offers the saved file as the response document, on confirmation', async () => {
+    // ONE call records text and file: accept clears the pending row in the same
+    // transaction. setRfiResponse would flip the RFI to answered and leave the
+    // reply pending — an orphan that the (now hidden) banner could never clear.
+    it('accepts text and file together, using the reply text by default', async () => {
       mount(withAtt());
       fireEvent.click(screen.getByRole('button', { name: /Save to Documents/i }));
-      fireEvent.click(screen.getByTestId('save-attachments-done'));
+      fireEvent.click(screen.getByTestId('save-all'));
 
       // The prompt names the file, and that name is attacker-chosen text —
       // matching it as text proves it stayed text.
       expect(await screen.findByText(/Use ceiling-detail\.pdf as the RFI response document/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Use it' }));
 
-      await waitFor(() => expect(h.setRfiResponse).toHaveBeenCalledWith('rfi-1', { fileId: 'file-77' }));
-      await waitFor(() => expect(cb.onResponseFile).toHaveBeenCalled());
+      await waitFor(() => expect(postsTo('/api/rfis/rfi-1/pending-reply/accept')).toHaveLength(1));
+      expect(bodyOf(postsTo('/api/rfis/rfi-1/pending-reply/accept')[0])).toEqual({
+        text: 'Corridor is 9\'-0" per the reflected ceiling plan.', fileId: 'file-77',
+      });
+      expect(postsTo('/api/rfis/rfi-1/response')).toHaveLength(0);
+      await waitFor(() => expect(cb.onAccepted).toHaveBeenCalled());
+    });
+
+    // Ordering: Use as response first (the user edits the text), THEN save the
+    // attachment. The edit must ride along on the accept, not be overwritten by
+    // the reply's original text.
+    it('carries the editor draft when Use as response came first', async () => {
+      mount(withAtt(), { draftText: 'Corridor is 9 ft — confirmed on site.' });
+      fireEvent.click(screen.getByRole('button', { name: 'Use as response' }));
+      fireEvent.click(screen.getByTestId('save-all'));
+      fireEvent.click(await screen.findByRole('button', { name: 'Use it' }));
+
+      await waitFor(() => expect(postsTo('/api/rfis/rfi-1/pending-reply/accept')).toHaveLength(1));
+      expect(bodyOf(postsTo('/api/rfis/rfi-1/pending-reply/accept')[0])).toEqual({
+        text: 'Corridor is 9 ft — confirmed on site.', fileId: 'file-77',
+      });
+    });
+
+    // Use as response opens the save modal itself when the reply has files, so
+    // the answer and its attachment are filed in one motion.
+    it('opens the save modal from Use as response when there are attachments', () => {
+      mount(withAtt());
+      fireEvent.click(screen.getByRole('button', { name: 'Use as response' }));
+      expect(screen.getByTestId('save-attachments')).toBeInTheDocument();
+    });
+
+    // A partial save leaves the modal open on the files that failed. Asking
+    // "use this one as the response?" over the top of that would interrupt a
+    // retry the user is in the middle of.
+    it('defers the response-document question until the save modal closes', async () => {
+      mount(withAtt());
+      fireEvent.click(screen.getByRole('button', { name: /Save to Documents/i }));
+      fireEvent.click(screen.getByTestId('save-partial'));
+
+      await waitFor(() => expect(h.saveProps.last.open).toBe(true));
+      expect(screen.queryByText(/as the RFI response document/)).toBeNull();
+
+      fireEvent.click(screen.getByTestId('save-close'));
+      expect(await screen.findByText(/Use ceiling-detail\.pdf as the RFI response document/)).toBeInTheDocument();
     });
 
     it('leaves the response alone when the confirmation is declined', async () => {
       mount(withAtt());
       fireEvent.click(screen.getByRole('button', { name: /Save to Documents/i }));
-      fireEvent.click(screen.getByTestId('save-attachments-done'));
+      fireEvent.click(screen.getByTestId('save-all'));
 
       fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
-      await waitFor(() => expect(h.setRfiResponse).not.toHaveBeenCalled());
+      await waitFor(() => expect(h.fetchMock).not.toHaveBeenCalled());
+    });
+
+    // The reply went away while the file was uploading. Accept has nothing left
+    // to clear, so the plain response write is now the right call — the user
+    // still gets the document they picked.
+    it('falls back to a plain response write when the reply vanished mid-flight', async () => {
+      h.fetchMock.mockImplementation(async (url: string) =>
+        url.includes('pending-reply/accept')
+          ? res(409, { error: 'No pending reply to accept', code: 'no_pending_reply' })
+          : res(200, { success: true }));
+      mount(withAtt());
+      fireEvent.click(screen.getByRole('button', { name: /Save to Documents/i }));
+      fireEvent.click(screen.getByTestId('save-all'));
+      fireEvent.click(await screen.findByRole('button', { name: 'Use it' }));
+
+      await waitFor(() => expect(postsTo('/api/rfis/rfi-1/response')).toHaveLength(1));
+      expect(bodyOf(postsTo('/api/rfis/rfi-1/response')[0])).toEqual({ fileId: 'file-77' });
+      await waitFor(() => expect(cb.onAccepted).toHaveBeenCalled());
     });
   });
 });

@@ -117,6 +117,8 @@ vi.mock('./PendingReplyBanner', () => ({
       <div data-testid="pending-banner">
         <button data-testid="banner-use" onClick={() => props.onUseAsResponse(props.rfi.pendingReply.text)}>use</button>
         <button data-testid="banner-open-thread" onClick={() => props.onOpenThread()}>open thread</button>
+        <button data-testid="banner-accepted" onClick={() => props.onAccepted()}>accepted</button>
+        <span data-testid="banner-draft">{props.draftText ?? '(none)'}</span>
       </div>
     );
   },
@@ -410,34 +412,81 @@ describe('RfiEditor — pending email reply', () => {
     expect(h.setRfiResponse).not.toHaveBeenCalled();
   });
 
-  // Someone else accepted or dismissed it first. Say so and refresh, rather
-  // than leaving a stale banner over a record that has moved on.
-  it('reports a reply that is already gone and refreshes', async () => {
+  // Someone else accepted or dismissed the reply while this draft was open.
+  // The text on screen is still what the user means to record and there is no
+  // pending row left to clear, so it must land as an ordinary response rather
+  // than being thrown away with an error.
+  it('falls back to a plain response write when the reply vanished, keeping the edit', async () => {
     const gone = new Error('No pending reply to accept');
     gone.name = 'NoPendingReplyError';
     h.acceptRfiPendingReply.mockRejectedValue(gone);
     mount(sentWithReply());
     fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.change(screen.getByLabelText(/Response text/i), { target: { value: 'Corridor is 9 ft (confirmed).' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
 
-    expect(await screen.findByText('No pending reply to accept')).toBeInTheDocument();
+    await waitFor(() => expect(h.setRfiResponse).toHaveBeenCalledWith('rfi-1', { text: 'Corridor is 9 ft (confirmed).' }));
+    expect(await screen.findByText(/already handled — saving your text as the response/)).toBeInTheDocument();
+    // The edit survives: it was saved, and it is still on screen.
+    expect((screen.getByLabelText(/Response text/i) as HTMLTextAreaElement).value).toBe('Corridor is 9 ft (confirmed).');
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  // The record still saved — only the reply moved on. Saying "Save failed"
-  // would send the user back to re-enter work that is already stored.
-  it('reports a vanished reply without calling the whole save a failure', async () => {
-    const gone = new Error('No pending reply to accept');
-    gone.name = 'NoPendingReplyError';
-    h.acceptRfiPendingReply.mockRejectedValue(gone);
+  // A request that simply failed is different: nothing was recorded, so the
+  // typed draft is the only copy of it and the refresh must not re-key the
+  // editor out from under it.
+  it('keeps the editor mounted when the response write fails outright', async () => {
+    h.acceptRfiPendingReply.mockRejectedValue(new Error('network down'));
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.change(screen.getByLabelText(/Response text/i), { target: { value: 'Corridor is 9 ft (confirmed).' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
+
+    expect(await screen.findByText('Failed to save response')).toBeInTheDocument();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ keepMounted: true }));
+    expect((screen.getByLabelText(/Response text/i) as HTMLTextAreaElement).value).toBe('Corridor is 9 ft (confirmed).');
+  });
+
+  // The banner hands the editor's own draft back on the accept-with-file path,
+  // but only once Use as response put it there — a hand-typed note is not this
+  // reply's text.
+  it('passes the draft to the banner only after Use as response', async () => {
+    mount(sentWithReply());
+    await screen.findByTestId('pending-banner');
+    expect(screen.getByTestId('banner-draft')).toHaveTextContent('(none)');
+
+    fireEvent.click(screen.getByTestId('banner-use'));
+    fireEvent.change(screen.getByLabelText(/Response text/i), { target: { value: 'Corridor is 9 ft (confirmed).' } });
+    expect(screen.getByTestId('banner-draft')).toHaveTextContent('Corridor is 9 ft (confirmed).');
+  });
+
+  // The banner already accepted (text + file in one call), so the pending row
+  // is gone: a later Save must not try to accept again.
+  it('stops accepting once the banner accepted on its own', async () => {
+    mount(sentWithReply());
+    fireEvent.click(await screen.findByTestId('banner-use'));
+    fireEvent.click(screen.getByTestId('banner-accepted'));
+    expect(onSaved).toHaveBeenCalledWith({ keepMounted: true });
+
+    fireEvent.change(screen.getByLabelText(/Response text/i), { target: { value: 'Corridor is 9 ft.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save response text' }));
+    await waitFor(() => expect(h.setRfiResponse).toHaveBeenCalledWith('rfi-1', { text: 'Corridor is 9 ft.' }));
+    expect(h.acceptRfiPendingReply).not.toHaveBeenCalled();
+  });
+
+  // The record still saved — only the response write failed. Calling the whole
+  // thing a failure would send the user back to redo stored work, and a re-key
+  // would take the unsaved response text with it.
+  it('reports a failed response write without calling the whole save a failure', async () => {
+    h.acceptRfiPendingReply.mockRejectedValue(new Error('network down'));
     mount(sentWithReply());
     fireEvent.click(await screen.findByTestId('banner-use'));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(h.saveRfi).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText('No pending reply to accept')).toBeInTheDocument();
+    expect(await screen.findByText('The RFI saved, but the response text did not')).toBeInTheDocument();
     expect(screen.queryByText('Save failed')).toBeNull();
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ keepMounted: true }));
   });
 
   // A response text typed WITHOUT touching the banner is still an ordinary

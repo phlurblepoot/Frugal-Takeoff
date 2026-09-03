@@ -117,24 +117,28 @@ export const RfiEditor: React.FC<{
   // clears the pending row and stamps the response as email-sourced, so a
   // plain setRfiResponse here would leave the banner up over a recorded answer.
   const persistResponseText = async (text: string) => {
-    if (acceptFromEmail) {
+    if (!acceptFromEmail) { await setRfiResponse(rfi.id, { text }); return; }
+    try {
       await acceptRfiPendingReply(rfi.id, { text });
-      setAcceptFromEmail(false);
-    } else {
+    } catch (e) {
+      if (!(e instanceof Error && e.name === 'NoPendingReplyError')) throw e;
+      // Someone else accepted or dismissed the reply while this draft was open.
+      // The text on screen is still what the user means to record, and there is
+      // no pending row left to clear — so record it the ordinary way rather
+      // than making them retype it into a failed save.
+      toast('That email reply was already handled — saving your text as the response', { type: 'warning' });
       await setRfiResponse(rfi.id, { text });
     }
+    setAcceptFromEmail(false);
   };
 
   const saveResponseText = async () => {
     try { await persistResponseText(responseDraft.trim()); toast('Response saved', { type: 'success' }); onSaved(); }
-    catch (e) {
-      // Someone else accepted or dismissed the same reply first: say what
-      // happened and reload, rather than offering a retry that can't work.
-      if (e instanceof Error && e.name === 'NoPendingReplyError') {
-        setAcceptFromEmail(false);
-        toast(e.message, { type: 'warning' });
-        onSaved();
-      } else { toast('Failed to save response', { type: 'error' }); }
+    catch {
+      toast('Failed to save response', { type: 'error' });
+      // Refresh the record without remounting: the typed draft is the only copy
+      // of the user's work, and a re-key would reinitialise it from the server.
+      onSaved({ keepMounted: true });
     }
   };
   const downloadResponseFile = async () => {
@@ -199,6 +203,9 @@ export const RfiEditor: React.FC<{
     // tell a refused save from a successful one.
     if (!title.trim()) { toast('A title is required', { type: 'warning' }); throw new Error('A title is required'); }
     setSaving(true);
+    // Set when the response text could not be stored: the draft is then the
+    // only copy of it, so the refresh below must not re-key this editor.
+    let keepDraft = false;
     try {
       await saveRfi(rfi.id, {
         ...rfi,
@@ -210,21 +217,19 @@ export const RfiEditor: React.FC<{
       if (responseDirty && responseDraft.trim()) {
         try {
           await persistResponseText(responseDraft.trim());
-        } catch (e) {
-          // The RFI itself saved; only the emailed reply moved on underneath us
-          // (someone else accepted or dismissed it). Reporting that as "Save
-          // failed" would be a lie, so say what actually happened and let the
-          // save report success.
-          if (e instanceof Error && e.name === 'NoPendingReplyError') {
-            setAcceptFromEmail(false);
-            toast(e.message, { type: 'warning' });
-          } else throw e;
+        } catch {
+          // The RFI itself saved — only the response write failed. Calling the
+          // whole thing a failure would send the user back to redo work that is
+          // already stored, so report the part that didn't land and keep the
+          // draft on screen.
+          toast('The RFI saved, but the response text did not', { type: 'warning' });
+          keepDraft = true;
         }
       }
       toast('RFI saved', { type: 'success' });
       // A "Keep mine" save adopted a foreign version number; only a remount
       // clears it, otherwise the next save would post a stale version.
-      onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
+      onSaved({ keepMounted: (opts?.keepMounted === true || keepDraft) && collab.keepMineVersion === null });
     } catch (e) {
       toast(e instanceof Error && e.name === 'ConflictError' ? 'RFI changed elsewhere — reopen it' : 'Save failed', { type: 'error' });
       throw e;
@@ -293,11 +298,17 @@ export const RfiEditor: React.FC<{
           canOpenThread={!!threadAccountId}
           onOpenThread={openPendingThread}
           onUseAsResponse={text => { setResponseDraft(text); setAcceptFromEmail(true); }}
+          // The draft only counts as "this reply's text" once Use as response
+          // put it there — otherwise the banner would attribute a hand-typed
+          // note to the email.
+          draftText={acceptFromEmail ? responseDraft : null}
           // keepMounted: both refreshes only change fields this editor reads
-          // from props (pendingReply, responseFileId) — remounting would throw
-          // away anything typed into the form first.
+          // from props (pendingReply, responseFileId, status) — remounting
+          // would throw away anything typed into the form first.
           onDismissed={() => onSaved({ keepMounted: true })}
-          onResponseFile={() => onSaved({ keepMounted: true })}
+          // The banner accepted on our behalf (text + file in one call), so the
+          // pending row is gone and this editor must stop trying to accept.
+          onAccepted={() => { setAcceptFromEmail(false); onSaved({ keepMounted: true }); }}
         />
       )}
       <div className="mb-3 flex items-center gap-2">

@@ -5,7 +5,7 @@
 // response until a person says so — an inbound email is a stranger's text, and
 // the RFI response ends up on a printed, emailed document.
 //
-// Two rules the rest of this file exists to honour:
+// Three rules the rest of this file exists to honour:
 //
 //  1. Everything the banner shows — the body, the sender's display name, every
 //     attachment name — is attacker-chosen. It is rendered as React children
@@ -18,14 +18,21 @@
 //     the mail routes answer 403/404 — so the deep link is gated on
 //     `canOpenThread`, which the editor works out, and the degraded state says
 //     why rather than going silent.
-import React, { useState } from 'react';
+//
+//  3. Recording the answer is ALWAYS the accept endpoint, never a bare
+//     setRfiResponse: accept records text and/or file AND clears the pending
+//     row in one transaction. setRfiResponse would flip the RFI to answered
+//     while leaving the reply pending — an orphan the banner would then hide.
+//     The only exception is the fallback below, where the reply is already
+//     gone and there is nothing left to clear.
+import React, { useEffect, useState } from 'react';
 import { Mail, Paperclip } from 'lucide-react';
-import { Rfi, dismissRfiPendingReply, setRfiResponse } from '../../../utils/store';
+import { Rfi, acceptRfiPendingReply, dismissRfiPendingReply, setRfiResponse } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { Button } from '../../../components/ui';
 import { formatMailDate } from '../../mail/mailFormat';
-import { SaveAttachmentsModal } from '../../mail/SaveAttachmentsModal';
+import { SaveAttachmentsModal, SavedAttachment } from '../../mail/SaveAttachmentsModal';
 
 // Long enough that clamping earns its keep; short enough that a typical
 // two-paragraph answer is shown whole. jsdom can't measure a line-clamp, so the
@@ -38,30 +45,77 @@ export const PendingReplyBanner: React.FC<{
   /** Hands the reply body to the editor's response draft. Accepting it is the
    *  editor's Save, not this button — one action, one confirmation. */
   onUseAsResponse: (text: string) => void;
+  /** The editor's response draft when it came from THIS reply (i.e. after Use
+   *  as response), else null. An attachment accepted from here carries it, so
+   *  edits the user already made are not thrown away by the file path. */
+  draftText?: string | null;
   /** The pending reply is gone (dismissed here, or already gone server-side) —
    *  reload the record. */
   onDismissed: () => void;
+  /** The reply was accepted from here (a saved attachment became the response
+   *  document) — reload the record and drop the editor's accept flag. */
+  onAccepted?: () => void;
   onOpenThread?: () => void;
   /** False when the receiving mailbox belongs to another user. */
   canOpenThread: boolean;
-  /** A saved attachment became the response document — reload the record. */
-  onResponseFile?: () => void;
-}> = ({ rfi, projectId, onUseAsResponse, onDismissed, onOpenThread, canOpenThread, onResponseFile }) => {
+}> = ({ rfi, projectId, onUseAsResponse, draftText, onDismissed, onAccepted, onOpenThread, canOpenThread }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [expanded, setExpanded] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Files that landed in Documents and still need the "use it as the response?"
+  // question. Held rather than asked immediately because a PARTIAL save leaves
+  // the save modal open on the failures — stacking a confirm on top of it would
+  // ask about one file while the user is still retrying another.
+  const [saved, setSaved] = useState<SavedAttachment[]>([]);
 
   const pending = rfi.pendingReply ?? null;
   // The status is the authority on whether an answer is still awaited: a
   // pending row can outlive an out-of-band status change (someone closed the
   // RFI by hand), and reviewing a reply on a closed RFI is nonsense.
-  if (!pending || rfi.status !== 'sent') return null;
+  const live = pending && rfi.status === 'sent' ? pending : null;
 
-  const who = pending.from.name || pending.from.addr;
-  const when = formatMailDate(pending.date);
-  const attachments = pending.attachments ?? [];
+  useEffect(() => {
+    if (saveOpen || !saved.length || !live) return;
+    const files = saved;
+    setSaved([]);
+    void (async () => {
+      const file = files[0];
+      if (!(await confirm({
+        title: 'Response document',
+        message: `Use ${file.name} as the RFI response document?`,
+        confirmLabel: 'Use it',
+      }))) return;
+      // The text the user means to record: their edit if they already pressed
+      // Use as response, otherwise the reply as it arrived. One accept call
+      // records both halves and clears the pending row.
+      const text = (draftText ?? '').trim() || live.text;
+      try {
+        await acceptRfiPendingReply(rfi.id, { text, fileId: file.fileId });
+        toast('Response recorded from the email reply', { type: 'success' });
+        onAccepted?.();
+      } catch (e) {
+        if (e instanceof Error && e.name === 'NoPendingReplyError') {
+          // Someone else handled the reply while the file was uploading. There
+          // is no pending row left to clear, so the plain response write is now
+          // the right call — the user still gets the document they picked.
+          try {
+            await setRfiResponse(rfi.id, { fileId: file.fileId });
+            toast('That reply was already handled — attached the document as the response', { type: 'warning' });
+          } catch { toast('Failed to attach the response document', { type: 'error' }); }
+          onAccepted?.();
+        } else { toast('Failed to attach the response document', { type: 'error' }); }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveOpen, saved]);
+
+  if (!live) return null;
+
+  const who = live.from.name || live.from.addr;
+  const when = formatMailDate(live.date);
+  const attachments = live.attachments ?? [];
 
   const dismiss = async () => {
     setBusy(true);
@@ -81,25 +135,10 @@ export const PendingReplyBanner: React.FC<{
   };
 
   const useAsResponse = () => {
-    onUseAsResponse(pending.text);
+    onUseAsResponse(live.text);
     // The answer often IS the attachment, so offer to file it in the same
     // motion rather than making the user hunt for it in the mail page.
     if (attachments.length) setSaveOpen(true);
-  };
-
-  const onAttachmentsSaved = async (fileIds: string[]) => {
-    if (!fileIds.length) return;
-    const label = attachments.length === 1 ? attachments[0].name : 'the saved attachment';
-    if (!(await confirm({
-      title: 'Response document',
-      message: `Use ${label} as the RFI response document?`,
-      confirmLabel: 'Use it',
-    }))) return;
-    try {
-      await setRfiResponse(rfi.id, { fileId: fileIds[0] });
-      toast('Response document attached', { type: 'success' });
-      onResponseFile?.();
-    } catch { toast('Failed to attach the response document', { type: 'error' }); }
   };
 
   return (
@@ -120,9 +159,9 @@ export const PendingReplyBanner: React.FC<{
         data-testid="rfi-pending-reply-text"
         className={`mt-2 whitespace-pre-wrap break-words text-sm text-ink ${expanded ? '' : 'line-clamp-6'}`}
       >
-        {pending.text}
+        {live.text}
       </div>
-      {isLong(pending.text) && (
+      {isLong(live.text) && (
         <button
           className="mt-1 text-xs font-medium text-amber-800 underline dark:text-amber-300"
           onClick={() => setExpanded(v => !v)}
@@ -165,10 +204,10 @@ export const PendingReplyBanner: React.FC<{
       <SaveAttachmentsModal
         open={saveOpen}
         onClose={() => setSaveOpen(false)}
-        messageId={pending.mailMessageId}
+        messageId={live.mailMessageId}
         attachments={attachments}
         defaultProjectId={projectId}
-        onSaved={onAttachmentsSaved}
+        onSaved={setSaved}
       />
     </div>
   );

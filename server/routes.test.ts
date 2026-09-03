@@ -1132,8 +1132,14 @@ describe('rfi pending-reply routes', () => {
 
   it('409 when nothing is pending, 404 for an unknown RFI', async () => {
     const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'No reply yet' })).body.id;
-    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
-    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({})).status).toBe(409);
+    const accept = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({});
+    const dismiss = await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({});
+    expect(accept.status).toBe(409);
+    expect(dismiss.status).toBe(409);
+    // Both routes carry the same marker: the client uses it to tell "someone
+    // else already handled this" from a request that simply failed.
+    expect(accept.body.code).toBe('no_pending_reply');
+    expect(dismiss.body.code).toBe('no_pending_reply');
     expect((await request(memberApp).post('/api/rfis/nope/pending-reply/accept').send({})).status).toBe(404);
     expect((await request(memberApp).post('/api/rfis/nope/pending-reply/dismiss').send({})).status).toBe(404);
     expect(broadcasts).toEqual([]);

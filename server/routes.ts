@@ -731,7 +731,9 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const before = getRfi(db, req.params.id);
       if (!before) return res.status(404).json({ error: 'RFI not found' });
-      if (!before.pendingReply) return res.status(409).json({ error: 'No pending reply to dismiss' });
+      // Same code the accept route reports through rfiErr: the client keys off
+      // it to tell "someone else already handled this" from a failed request.
+      if (!before.pendingReply) return res.status(409).json({ error: 'No pending reply to dismiss', code: 'no_pending_reply' });
       dismissPendingReply(db, req.params.id);
       const after = getRfi(db, req.params.id);
       deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
