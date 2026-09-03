@@ -16,7 +16,9 @@ import { RfiStatusPill } from '../../components/ui/RfiStatusPill';
 import { RfiEditor } from './rfi/RfiEditor';
 import { EditingChip } from '../../components/EditingChip';
 import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 
 export const rfiNo = (n: number): string => `RFI-${String(n).padStart(3, '0')}`;
@@ -58,6 +60,7 @@ export const ProjectRfis: React.FC = () => {
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('rfi', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New RFI" action.
@@ -135,13 +138,19 @@ export const ProjectRfis: React.FC = () => {
                         accept or dismiss it in the editor. Gated on the status
                         as well as the row: a pendingReply can outlive an
                         out-of-band status change. */}
-                    {rfi.pendingReply && rfi.status === 'sent' && (
+                    {rfi.pendingReply && rfi.status === 'sent' ? (
                       <span
                         title="Email reply waiting for review"
                         className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-300"
                       >
                         <Mail size={11} />Reply
                       </span>
+                    ) : (
+                      // Same reply-state signal as the pendingReply chip above,
+                      // just less rich (no accountId/response file) — shown
+                      // only when pendingReply isn't already covering it, so a
+                      // flagged RFI is never double-chipped.
+                      replyFlags.has(rfi.id) && <ReplyFlagChip data-testid={`rfi-reply-flag-${rfi.id}`} />
                     )}
                   </span>
                 </TD>

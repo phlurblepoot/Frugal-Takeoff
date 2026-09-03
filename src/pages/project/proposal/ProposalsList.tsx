@@ -12,6 +12,7 @@ import {
   getFileMeta,
 } from '../../../utils/store';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
@@ -23,6 +24,7 @@ import { STATUS_TONE, expiryText, proposalLabel } from './proposalPresentation';
 import { optionDefaultsFromPrefs } from './proposalPrefs';
 import { ReviseDialog } from './ReviseDialog';
 import { AcceptDialog } from './AcceptDialog';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 const isAdmin = () => (JSON.parse(localStorage.getItem('user') || '{}').role) === 'admin';
@@ -43,6 +45,7 @@ export const ProposalsList: React.FC = () => {
     getProposals(projectId).then(setRows).catch(() => setRows([]));
   };
   useLiveQuery(load, { types: ['proposal'], projectId });
+  const replyFlags = useReplyFlags('proposal', (rows ?? []).map(r => r.id));
 
   // Every hook above runs unconditionally; the gate is the last thing before
   // render so a non-admin who guesses the URL lands back on the project.
@@ -172,8 +175,11 @@ export const ProposalsList: React.FC = () => {
                   return (
                     <TR key={p.id} interactive data-testid={`proposal-row-${p.number}`} onClick={() => openEditor(p.id)}>
                       <TD className="whitespace-nowrap font-medium text-ink">
-                        {proposalLabel(p)}
-                        {p.legacy && <span className="ml-1 text-xs text-ink-faint">(legacy)</span>}
+                        <span className="inline-flex items-center gap-1.5">
+                          {proposalLabel(p)}
+                          {p.legacy && <span className="text-xs text-ink-faint">(legacy)</span>}
+                          {replyFlags.has(p.id) && <ReplyFlagChip data-testid={`proposal-reply-flag-${p.id}`} />}
+                        </span>
                       </TD>
                       <TD className="max-w-[16rem] truncate text-ink-soft">{p.title || '—'}</TD>
                       <TD>

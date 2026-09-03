@@ -22,6 +22,7 @@ import { Download, ExternalLink, FileText, Mail } from 'lucide-react';
 import { GeneratedDoc, fetchFileBlob, persistGeneratedDocument } from '../../utils/store';
 import { useGeneratedDocument } from '../../hooks/useGeneratedDocument';
 import { useItemThreadLinks } from '../../hooks/useItemThreadLinks';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { downloadBlob } from '../../utils/download';
 import { parseAddresses, textToHtml } from '../../utils/email';
 import { MailComposer, itemTypeFromSource } from '../../pages/mail/compose/MailComposer';
@@ -31,6 +32,7 @@ import { useToast } from '../Toast';
 import { Button, Select } from '../ui';
 import { DocFormat, DocumentStatusChip, FORMAT_WORD } from './DocumentStatusChip';
 import { DocumentGenerationCancelled } from './errors';
+import { ReplyFlagChip } from './ReplyFlagChip';
 import { SentThreadChip } from './SentThreadChip';
 import { VersionOrOverwriteDialog } from './VersionOrOverwriteDialog';
 import { useDocumentViewer } from './useDocumentViewer';
@@ -131,6 +133,12 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
   // no account list at all.
   const { accounts } = useMailAccounts({ enabled: !!send });
   const threads = useItemThreadLinks(itemType, source.sourceId);
+
+  // "The linked thread got a reply nobody has acted on yet" — spec Goal 4.
+  // A single-id batch: useReplyFlags already no-ops on an empty/undefined id.
+  const replyFlagIds = source.sourceId ? [source.sourceId] : [];
+  const replyFlags = useReplyFlags(itemType, replyFlagIds);
+  const hasReplyFlag = !!source.sourceId && replyFlags.has(source.sourceId);
 
   // The awaited version/overwrite choice, mirrored in a ref so unmounting can
   // settle it — a dangling promise would strand the generate/send flow that is
@@ -364,6 +372,8 @@ export const DocumentActionsBar: React.FC<DocumentActionsBarProps> = ({
           resolving={threads.resolving}
           data-testid={`${p}-sent-thread`}
         />
+
+        {hasReplyFlag && <ReplyFlagChip data-testid={`${p}-reply-flag`} />}
 
         {!readOnly && (
           <Button

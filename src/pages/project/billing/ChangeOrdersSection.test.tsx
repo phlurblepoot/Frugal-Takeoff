@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 
 vi.mock('../ProjectLayout', () => ({
   useProjectOutlet: () => ({ summary: { name: 'Big Job', contractor: null, address: null } }),

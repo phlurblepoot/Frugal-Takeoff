@@ -18,7 +18,9 @@ import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
 import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
@@ -48,6 +50,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('changeOrder', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   const openChangeOrder = async (id: string) => {
@@ -86,7 +89,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
               <TBody>
                 {changeOrders.map(co => (
                   <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
-                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">CO-{co.number || '—'}<EditingChip type="changeOrder" id={co.id} /></span></TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">CO-{co.number || '—'}<EditingChip type="changeOrder" id={co.id} />{replyFlags.has(co.id) && <ReplyFlagChip data-testid={`co-reply-flag-${co.id}`} />}</span></TD>
                     <TD className="text-ink-soft">{co.title || '—'}</TD>
                     <TD><ChangeOrderStatusPill status={co.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>

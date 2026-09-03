@@ -26,6 +26,9 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../../documents/DocumentViewerModal', () => ({
   DocumentViewerModal: ({ row }: any) => <div data-testid="viewer">{row.name}</div>,
 }));

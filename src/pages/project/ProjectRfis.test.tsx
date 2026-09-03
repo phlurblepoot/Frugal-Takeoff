@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   getRfis: vi.fn(),
   getRfi: vi.fn(),
   getDocumentsBySource: vi.fn(),
+  // Which RFI ids useReplyFlags reports as flagged — controlled per test.
+  replyFlags: new Set<string>(),
 }));
 
 vi.mock('../../context/CollaborationContext', () => ({
@@ -21,6 +23,9 @@ vi.mock('../../utils/store', async (importOriginal) => ({
 }));
 vi.mock('./ProjectLayout', () => ({
   useProjectOutlet: () => ({ summary: { name: 'P1', contractor: '' } }),
+}));
+vi.mock('../../hooks/useReplyFlags', () => ({
+  useReplyFlags: () => h.replyFlags,
 }));
 vi.mock('../documents/DocumentViewerModal', () => ({
   DocumentViewerModal: ({ row, onClose }: any) => (
@@ -99,6 +104,7 @@ describe('ProjectRfis — PDF status on rows', () => {
     h.getRfis.mockResolvedValue([listRow(), listRow({ id: 'r2', number: 2, title: 'Lintel size' })]);
     h.getDocumentsBySource.mockResolvedValue({ r1: FILE, r2: null });
     h.getRfi.mockResolvedValue(null);
+    h.replyFlags = new Set<string>();
   });
 
   it('shows a chip and an Open button only for the RFI that has a PDF', async () => {
@@ -177,6 +183,7 @@ describe('ProjectRfis — pending reply chip', () => {
     vi.clearAllMocks();
     h.getDocumentsBySource.mockResolvedValue({});
     h.getRfi.mockResolvedValue(null);
+    h.replyFlags = new Set<string>();
   });
 
   it('flags only the sent RFI that has a reply waiting', async () => {
@@ -200,5 +207,34 @@ describe('ProjectRfis — pending reply chip', () => {
     mount();
     await screen.findByText('Header detail');
     expect(screen.queryByText('Reply')).toBeNull();
+  });
+
+  // Both signals (pendingReply and the generic mail-thread reply flag) can be
+  // true for the same RFI at once — the row must still show exactly one chip.
+  it('does not double-chip an RFI that has both a pendingReply and a reply flag', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent', pendingReply: PENDING }),
+    ]);
+    h.replyFlags = new Set(['r1']);
+    mount();
+
+    const chips = await screen.findAllByText('Reply');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveAttribute('title', 'Email reply waiting for review');
+  });
+
+  // No pendingReply (say, the row hasn't refreshed that field yet, or the
+  // reply came in outside the pendingReply flow) but the generic reply-flags
+  // endpoint says the linked thread got a reply — the plain flag chip covers it.
+  it('shows the plain reply-flag chip when flagged but there is no pendingReply', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent' }),
+    ]);
+    h.replyFlags = new Set(['r1']);
+    mount();
+
+    const chip = await screen.findByTestId('rfi-reply-flag-r1');
+    expect(chip).toHaveTextContent('Reply');
+    expect(chip).toHaveAttribute('title', 'The linked email thread has a new reply');
   });
 });

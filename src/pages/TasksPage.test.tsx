@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
 }));
+// Not under test here — see components/tasks/TaskListPanel.test.tsx.
+vi.mock('../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../utils/store', async orig => ({
   ...(await orig<typeof import('../utils/store')>()),
   getTasks: h.getTasks,

@@ -9,6 +9,8 @@ import { TaskListItem } from '../../utils/store';
 import { Card, CardBody, EmptyState, Skeleton } from '../ui';
 import { TaskStatusPill } from '../ui/TaskStatusPill';
 import { EditingChip } from '../EditingChip';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
+import { ReplyFlagChip } from '../documents/ReplyFlagChip';
 
 type Filter = 'all' | 'mine' | 'todo' | 'in_progress' | 'done' | 'overdue';
 
@@ -45,6 +47,7 @@ export const TaskListPanel: React.FC<{
   }, []);
 
   const list = tasks ?? [];
+  const replyFlags = useReplyFlags('task', list.map(t => t.id));
 
   const filtered = useMemo(() => {
     switch (filter) {
@@ -122,6 +125,7 @@ export const TaskListPanel: React.FC<{
                             {t.title || '(untitled)'}
                           </span>
                           <EditingChip type="task" id={t.id} />
+                          {replyFlags.has(t.id) && <ReplyFlagChip data-testid={`task-reply-flag-${t.id}`} />}
                           <span className={`shrink-0 text-xs ${t.assigneeUsername ? 'text-ink-soft' : 'text-ink-faint'}`}>
                             {t.assigneeUsername || 'Unassigned'}
                           </span>

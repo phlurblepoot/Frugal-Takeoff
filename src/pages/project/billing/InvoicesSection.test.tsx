@@ -12,10 +12,15 @@ const h = vi.hoisted(() => ({
   getInvoices: vi.fn(),
   getInvoice: vi.fn(),
   getDocumentsBySource: vi.fn(),
+  // Which invoice ids useReplyFlags reports as flagged — controlled per test.
+  replyFlags: new Set<string>(),
 }));
 
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
+}));
+vi.mock('../../../hooks/useReplyFlags', () => ({
+  useReplyFlags: () => h.replyFlags,
 }));
 
 vi.mock('../ProjectLayout', () => ({
@@ -82,6 +87,7 @@ beforeEach(() => {
   h.getInvoices.mockResolvedValue([row(), row({ id: 'inv-2', number: 'INV-2' })]);
   h.getDocumentsBySource.mockResolvedValue({ 'inv-1': FILE, 'inv-2': null });
   h.getInvoice.mockResolvedValue(null);
+  h.replyFlags = new Set<string>();
 });
 
 describe('InvoicesSection — PDF status on rows', () => {
@@ -112,6 +118,19 @@ describe('InvoicesSection — PDF status on rows', () => {
     expect(await screen.findByTestId('viewer')).toBeInTheDocument();
     expect(screen.getByText('Invoice-INV-1.pdf')).toBeInTheDocument();
     expect(h.getInvoice).not.toHaveBeenCalled();
+  });
+
+  // Mail phase 2 Goal 4: the linked thread got a reply nobody has acted on
+  // yet, flagged only for the invoice useReplyFlags names.
+  it('shows the amber reply chip only on the invoice useReplyFlags flags', async () => {
+    h.replyFlags = new Set(['inv-1']);
+    mount();
+    await screen.findByText('INV-1');
+
+    const chip = await screen.findByTestId('invoice-reply-flag-inv-1');
+    expect(chip).toHaveTextContent('Reply');
+    expect(chip).toHaveAttribute('title', 'The linked email thread has a new reply');
+    expect(screen.queryByTestId('invoice-reply-flag-inv-2')).toBeNull();
   });
 });
 

@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
   },
   accounts: [] as unknown[],
   accountsLoading: false,
+  // Which item ids useReplyFlags reports as flagged — controlled per test.
+  replyFlags: new Set<string>(),
   // Whatever the composer's onSend rejected with — how a test observes that an
   // awaited version choice actually settled.
   sendErrors: [] as unknown[],
@@ -65,6 +67,10 @@ vi.mock('../../pages/mail/useMailAccounts', () => ({
 
 vi.mock('../../hooks/useItemThreadLinks', () => ({
   useItemThreadLinks: () => h.threads,
+}));
+
+vi.mock('../../hooks/useReplyFlags', () => ({
+  useReplyFlags: () => h.replyFlags,
 }));
 
 vi.mock('../../pages/mail/compose/MailComposer', async (orig) => ({
@@ -161,6 +167,7 @@ beforeEach(() => {
   h.threads.myThread = null;
   h.threads.links = [];
   h.threads.resolving = false;
+  h.replyFlags = new Set<string>();
   h.sendErrors.length = 0;
   save.mockResolvedValue(true);
   (persistGeneratedDocument as any).mockResolvedValue({ fileId: 'new-file', versioned: true });
@@ -583,6 +590,20 @@ describe('DocumentActionsBar — composer wiring', () => {
     h.threads.myThread = null;
     renderBar({ send: sendProp() });
     expect(screen.getByTestId('doc-sent-thread')).toHaveAttribute('title', 'Looking for the conversation…');
+  });
+
+  it('shows the amber reply chip next to the Sent chip when the item is flagged', () => {
+    h.replyFlags = new Set(['inv-1']);
+    renderBar({ send: sendProp() });
+    const chip = screen.getByTestId('doc-reply-flag');
+    expect(chip).toHaveTextContent('Reply');
+    expect(chip).toHaveAttribute('title', 'The linked email thread has a new reply');
+  });
+
+  it('hides the reply chip when the item is not flagged', () => {
+    h.replyFlags = new Set<string>();
+    renderBar({ send: sendProp() });
+    expect(screen.queryByTestId('doc-reply-flag')).toBeNull();
   });
 });
 

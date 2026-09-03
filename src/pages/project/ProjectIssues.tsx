@@ -16,7 +16,9 @@ import { IssueStatusPill } from '../../components/ui/IssueStatusPill';
 import { IssueEditor } from './issues/IssueEditor';
 import { EditingChip } from '../../components/EditingChip';
 import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 
 export const issueNo = (n: number): string => `ISS-${String(n).padStart(3, '0')}`;
@@ -50,6 +52,7 @@ export const ProjectIssues: React.FC = () => {
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('issue', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New issue" action.
@@ -119,7 +122,7 @@ export const ProjectIssues: React.FC = () => {
             {issues.map(iss => (
               <TR key={iss.id} interactive onClick={() => openIssue(iss.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{issueNo(iss.number)}</TD>
-                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{iss.title || '(untitled)'}<EditingChip type="issue" id={iss.id} /></span></TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{iss.title || '(untitled)'}<EditingChip type="issue" id={iss.id} />{replyFlags.has(iss.id) && <ReplyFlagChip data-testid={`issue-reply-flag-${iss.id}`} />}</span></TD>
                 <TD><IssueStatusPill status={iss.status} /></TD>
                 <TD className="text-ink-soft">{iss.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{iss.photoCount}</span> : '—'}</TD>
                 <TD onClick={e => e.stopPropagation()}>

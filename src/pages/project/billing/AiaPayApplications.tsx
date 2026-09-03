@@ -14,7 +14,9 @@ import { AiaPayAppEditor } from './AiaPayAppEditor';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
 import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
@@ -50,6 +52,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
     sourceIds: rows.map(a => a.id),
     updatedAtById: Object.fromEntries(rows.map(a => [a.id, a.updatedAt])),
   });
+  const replyFlags = useReplyFlags('payApp', rows.map(a => a.id));
   const viewer = useDocumentViewer();
 
   const startCreate = () => {
@@ -106,7 +109,7 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
                 const meta = STATUS_META[app.status] ?? { label: app.status, tone: 'slate' as PillTone };
                 return (
                   <TR key={app.id} interactive onClick={() => setOpenId(app.id)}>
-                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">#{app.number}<EditingChip type="aiaPayApp" id={app.id} /></span></TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">#{app.number}<EditingChip type="aiaPayApp" id={app.id} />{replyFlags.has(app.id) && <ReplyFlagChip data-testid={`payapp-reply-flag-${app.id}`} />}</span></TD>
                     <TD className="text-ink-soft">{fmtDate(app.periodTo)}</TD>
                     <TD className="text-ink-soft">{fmtDate(app.applicationDate)}</TD>
                     <TD><StatusPill tone={meta.tone}>{meta.label}</StatusPill></TD>

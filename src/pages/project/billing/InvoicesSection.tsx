@@ -18,7 +18,9 @@ import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
 import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
@@ -48,6 +50,7 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('invoice', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   const openInvoice = async (id: string) => {
@@ -87,7 +90,7 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
               <TBody>
                 {invoices.map(inv => (
                   <TR key={inv.id} interactive onClick={() => openInvoice(inv.id)}>
-                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{inv.number || '(untitled)'}<EditingChip type="invoice" id={inv.id} /></span></TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{inv.number || '(untitled)'}<EditingChip type="invoice" id={inv.id} />{replyFlags.has(inv.id) && <ReplyFlagChip data-testid={`invoice-reply-flag-${inv.id}`} />}</span></TD>
                     <TD title="Click to advance status" onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(inv.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(inv.balanceCents)}</TD>

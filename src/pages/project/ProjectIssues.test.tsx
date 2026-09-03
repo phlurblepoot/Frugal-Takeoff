@@ -18,6 +18,9 @@ const { fakeSocket, getIssues, getIssue, getDocumentsBySource } = vi.hoisted(() 
 vi.mock('../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: fakeSocket, sessions: [], mySessionId: 'sock-1' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getIssues, getIssue, getDocumentsBySource,

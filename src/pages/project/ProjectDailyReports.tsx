@@ -17,7 +17,9 @@ import {
 import { EditingChip } from '../../components/EditingChip';
 import { DailyReportEditor } from './daily/DailyReportEditor';
 import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 // Owned by dailyReportForm.ts (a leaf module) so DailyReportEditor/dailyReportPdf
 // can import them without a cycle back through this file. Re-exported here for
@@ -55,6 +57,7 @@ export const ProjectDailyReports: React.FC = () => {
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('dailyReport', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New daily report" action.
@@ -141,7 +144,7 @@ export const ProjectDailyReports: React.FC = () => {
           <TBody>
             {reports.map(r => (
               <TR key={r.id} interactive onClick={() => openReport(r.id)}>
-                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{formatReportDate(r.reportDate)}<EditingChip type="dailyReport" id={r.id} /></span></TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{formatReportDate(r.reportDate)}<EditingChip type="dailyReport" id={r.id} />{replyFlags.has(r.id) && <ReplyFlagChip data-testid={`daily-report-reply-flag-${r.id}`} />}</span></TD>
                 <TD className="text-ink-soft">{manCountTotal(r.manCounts) > 0 ? `${manCountTotal(r.manCounts)} men` : '—'}</TD>
                 <TD className="max-w-[16rem] truncate text-ink-soft">{[r.weatherSummary, r.temperature].filter(Boolean).join(' ') || '—'}</TD>
                 <TD className="text-ink-soft">{r.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{r.photoCount}</span> : '—'}</TD>
