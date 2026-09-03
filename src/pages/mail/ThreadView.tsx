@@ -3,19 +3,27 @@
 // (everything collapsed except the newest message and anything still unread).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Archive, FolderInput, Forward, Mail, MoreHorizontal,
-  PenSquare, Reply, ReplyAll, Star, Trash2,
+  Archive, FolderInput, Forward, Link2, Mail, MoreHorizontal,
+  PenSquare, Reply, ReplyAll, Star, Trash2, X,
 } from 'lucide-react';
 import { Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { mailApi } from '../../utils/mailApi';
 import { MailComposer } from './compose/MailComposer';
 import { orderFolders } from './FolderRail';
+import { LinkPickerModal } from './LinkPickerModal';
 import { MessageCard, type ReplyMode } from './MessageCard';
 import { itemTypeLabel } from './mailFormat';
 import { useMailFolders } from './useMailFolders';
 import { useThread } from './useThread';
 import type { MailAccount, MailAction, MessageRow } from './types';
+
+// Same "read the app's own logged-in user" convention as TaskListPanel /
+// ProjectBilling / ProjectView etc. — there is no useAuth hook in this app,
+// just the user blob Login.tsx wrote to localStorage.
+const currentUser = (): { id?: string; role?: string } => {
+  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
+};
 
 /** How long a message stays open before it counts as read (spec: 1 s). */
 const MARK_READ_DELAY = 1000;
@@ -70,6 +78,11 @@ export const ThreadView: React.FC<{
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  // The link id currently being unlinked (disables just that chip's × while
+  // its DELETE is in flight — a busy state shared across chips would freeze
+  // every other one for no reason).
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
   // `null` = "nobody has clicked yet", so the default (newest + unread) applies.
   const [expandedIds, setExpandedIds] = useState<Set<string> | null>(null);
   // Optimistic read flags: the card's unread styling must go the moment it is
@@ -168,6 +181,22 @@ export const ThreadView: React.FC<{
       if (last) onReply(mode, last);
     },
     [last, onReply],
+  );
+
+  const unlink = useCallback(
+    async (linkId: string) => {
+      if (unlinkingId) return;
+      setUnlinkingId(linkId);
+      try {
+        await mailApi.deleteLink(linkId);
+        reload();
+      } catch {
+        toast('Could not remove that link.', { type: 'error' });
+      } finally {
+        setUnlinkingId(null);
+      }
+    },
+    [unlinkingId, reload, toast],
   );
 
   const starred = (thread?.isStarred ?? 0) > 0;
@@ -349,20 +378,47 @@ export const ThreadView: React.FC<{
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
-        {links.length > 0 && (
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            {links.map(l => (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {links.map(l => {
+            const me = currentUser();
+            const canUnlink = !!me.id && (l.linkedByUserId === me.id || me.role === 'admin');
+            return (
               <span
                 key={l.id}
                 data-testid="mail-thread-link-chip"
-                title={`${itemTypeLabel(l.itemType)} · ${l.itemId}`}
-                className="rounded bg-accent-500/10 px-1.5 py-0.5 text-[11px] font-medium text-accent-700 dark:text-accent-300"
+                title={`${itemTypeLabel(l.itemType)} · ${l.label ?? l.itemId}`}
+                className="inline-flex items-center gap-1 rounded bg-accent-500/10 py-0.5 pl-1.5 pr-1 text-[11px] font-medium text-accent-700 dark:text-accent-300"
               >
-                {itemTypeLabel(l.itemType)}
+                {l.label ?? itemTypeLabel(l.itemType)}
+                {canUnlink && (
+                  <button
+                    type="button"
+                    aria-label={`Unlink ${l.label ?? itemTypeLabel(l.itemType)}`}
+                    disabled={unlinkingId === l.id}
+                    onClick={() => unlink(l.id)}
+                    className="rounded p-0.5 text-accent-700/70 transition-colors hover:bg-accent-500/20 hover:text-accent-700 disabled:opacity-50 dark:text-accent-300/70 dark:hover:text-accent-300"
+                  >
+                    <X size={11} />
+                  </button>
+                )}
               </span>
-            ))}
-          </div>
-        )}
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setLinkModalOpen(true)}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-ink-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <Link2 size={11} /> Link
+          </button>
+        </div>
+
+        <LinkPickerModal
+          open={linkModalOpen}
+          onClose={() => setLinkModalOpen(false)}
+          threadKey={threadKey}
+          onLinked={reload}
+        />
 
         <h1 className="mb-3 text-lg font-semibold text-ink">{thread.subject || '(no subject)'}</h1>
 

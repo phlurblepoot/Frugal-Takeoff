@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   threadActions: vi.fn(),
   messageActions: vi.fn(),
   attachmentUrl: vi.fn(() => '/att'),
+  deleteLink: vi.fn(),
   useThread: vi.fn(),
   folders: vi.fn(),
   toast: vi.fn(),
@@ -36,6 +37,19 @@ vi.mock('./compose/MailComposer', () => ({
       {onOpenInModal && <button onClick={onOpenInModal}>composer-promote</button>}
     </div>
   ),
+}));
+// LinkPickerModal itself is covered by LinkPickerModal.test.tsx; here it's a
+// stub that surfaces exactly the props ThreadView wires (open/threadKey/onLinked).
+vi.mock('./LinkPickerModal', () => ({
+  LinkPickerModal: ({ open, onClose, threadKey, onLinked }: {
+    open: boolean; onClose: () => void; threadKey: string; onLinked: () => void;
+  }) =>
+    open ? (
+      <div data-testid="link-picker-modal-stub" data-thread-key={threadKey}>
+        <button onClick={onClose}>link-picker-close</button>
+        <button onClick={onLinked}>link-picker-linked</button>
+      </div>
+    ) : null,
 }));
 
 import { ThreadView } from './ThreadView';
@@ -102,8 +116,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.threadActions.mockResolvedValue(undefined);
   h.messageActions.mockResolvedValue(undefined);
+  h.deleteLink.mockResolvedValue(undefined);
   h.folders.mockReturnValue(FOLDERS);
   h.useThread.mockReturnValue(state());
+  localStorage.removeItem('user');
 });
 
 afterEach(() => {
@@ -268,6 +284,82 @@ describe('ThreadView', () => {
     h.useThread.mockReturnValue(state({ links: [LINK, { ...LINK, id: 'l2', itemId: 'r2' }, { ...LINK, id: 'l3', itemType: 'invoice', itemId: 'i1' }] }));
     rerender(<ThreadView {...props} />);
     expect(screen.getAllByTestId('mail-thread-link-chip').map(c => c.textContent)).toEqual(['RFI', 'RFI', 'Invoice']);
+  });
+
+  it('shows a chip for every link, resolved label when present, itemTypeLabel as a fallback', () => {
+    h.useThread.mockReturnValue(state({
+      links: [{ ...LINK, label: 'RFI-012' }, { ...LINK, id: 'l2', itemType: 'invoice', itemId: 'i1', label: undefined }],
+    }));
+    render(<ThreadView {...props} />);
+    expect(screen.getAllByTestId('mail-thread-link-chip').map(c => c.textContent)).toEqual(['RFI-012', 'Invoice']);
+  });
+
+  it('always shows a Link button that opens LinkPickerModal for this thread', () => {
+    render(<ThreadView {...props} />);
+    expect(screen.queryByTestId('link-picker-modal-stub')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Link$/ }));
+    const stub = screen.getByTestId('link-picker-modal-stub');
+    expect(stub).toHaveAttribute('data-thread-key', 'tk-1');
+  });
+
+  it('closing LinkPickerModal hides it again', () => {
+    render(<ThreadView {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Link$/ }));
+    fireEvent.click(screen.getByText('link-picker-close'));
+    expect(screen.queryByTestId('link-picker-modal-stub')).toBeNull();
+  });
+
+  it('a successful link reloads the thread', () => {
+    const reload = vi.fn();
+    h.useThread.mockReturnValue(state({ reload }));
+    render(<ThreadView {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Link$/ }));
+    fireEvent.click(screen.getByText('link-picker-linked'));
+    expect(reload).toHaveBeenCalled();
+  });
+
+  describe('unlink', () => {
+    it('shows × on a link the current user made', () => {
+      localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'user' }));
+      h.useThread.mockReturnValue(state({ links: [{ ...LINK, linkedByUserId: 'u1' }] }));
+      render(<ThreadView {...props} />);
+      expect(screen.getByRole('button', { name: /Unlink/i })).toBeInTheDocument();
+    });
+
+    it('hides × on someone else\'s link for a non-admin', () => {
+      localStorage.setItem('user', JSON.stringify({ id: 'u2', role: 'user' }));
+      h.useThread.mockReturnValue(state({ links: [{ ...LINK, linkedByUserId: 'u1' }] }));
+      render(<ThreadView {...props} />);
+      expect(screen.queryByRole('button', { name: /Unlink/i })).toBeNull();
+    });
+
+    it('shows × on any link for an admin, even one they did not make', () => {
+      localStorage.setItem('user', JSON.stringify({ id: 'u2', role: 'admin' }));
+      h.useThread.mockReturnValue(state({ links: [{ ...LINK, linkedByUserId: 'u1' }] }));
+      render(<ThreadView {...props} />);
+      expect(screen.getByRole('button', { name: /Unlink/i })).toBeInTheDocument();
+    });
+
+    it('deletes the link and reloads on click', async () => {
+      const reload = vi.fn();
+      localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'user' }));
+      h.useThread.mockReturnValue(state({ links: [{ ...LINK, id: 'l9', linkedByUserId: 'u1' }], reload }));
+      render(<ThreadView {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /Unlink/i }));
+      await waitFor(() => expect(h.deleteLink).toHaveBeenCalledWith('l9'));
+      await waitFor(() => expect(reload).toHaveBeenCalled());
+    });
+
+    it('toasts and does not reload when the delete fails', async () => {
+      const reload = vi.fn();
+      h.deleteLink.mockRejectedValueOnce(new Error('nope'));
+      localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'user' }));
+      h.useThread.mockReturnValue(state({ links: [{ ...LINK, linkedByUserId: 'u1' }], reload }));
+      render(<ThreadView {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /Unlink/i }));
+      await waitFor(() => expect(h.toast).toHaveBeenCalledWith(expect.stringMatching(/could not remove/i), expect.objectContaining({ type: 'error' })));
+      expect(reload).not.toHaveBeenCalled();
+    });
   });
 
   it('renders no composer under the thread when no reply is in progress', () => {

@@ -83,6 +83,19 @@ describe('ThreadRow', () => {
     expect(chips).toEqual(['RFI', 'Proposal']);
   });
 
+  // Spot check for spec Goal 1 ("all link displays show resolved labels"):
+  // the server now resolves a `.label` on every ThreadLink (GET /api/mail/threads
+  // included), so row.links[].label is populated here same as anywhere else —
+  // but this component's chip is deliberately one-per-TYPE, not one-per-link
+  // (see the comment above chipTypes in ThreadRow.tsx), so it renders the type
+  // name regardless of whether a resolved label is present. Labeled chips for
+  // individual links are ThreadView's link strip (Task 2); this just confirms
+  // a `.label`-bearing row doesn't break or accidentally leak into this view.
+  it('a resolved label on a link does not change the row chip (type-only by design)', () => {
+    render(<ThreadRow {...props} row={row({ links: [link({ label: 'RFI-012' })] })} />);
+    expect(screen.getAllByTestId('mail-link-chip').map(c => c.textContent)).toEqual(['RFI']);
+  });
+
   it('shows the paperclip only when the thread has attachments', () => {
     const { rerender } = render(<ThreadRow {...props} row={row()} />);
     expect(screen.queryByTestId('mail-attachment-icon')).toBeNull();
