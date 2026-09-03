@@ -5,6 +5,10 @@ import crypto from 'crypto';
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
+/** Nothing to accept — the RFI exists, its pending reply does not (already
+ *  accepted or dismissed, possibly by someone else a moment ago). A conflict,
+ *  not bad input, so the routes can answer 409 rather than 400. */
+export class NoPendingReplyError extends ValidationError {}
 
 export const RFI_STATUSES = ['open', 'sent', 'answered', 'closed'] as const;
 
@@ -187,7 +191,7 @@ export function acceptPendingReply(db: Database.Database, id: string, input: { t
   const row = db.prepare('SELECT pendingReplyJson FROM rfis WHERE id = ?').get(id) as { pendingReplyJson: string | null } | undefined;
   if (!row) throw new NotFoundError('RFI not found');
   const pending: RfiPendingReply | null = row.pendingReplyJson ? JSON.parse(row.pendingReplyJson) : null;
-  if (!pending) throw new ValidationError('No pending reply to accept');
+  if (!pending) throw new NoPendingReplyError('No pending reply to accept');
   const hasText = typeof input.text === 'string' && input.text.trim() !== '';
   const hasFile = typeof input.fileId === 'string' && input.fileId.trim() !== '';
   const text = hasText ? input.text : pending.text;

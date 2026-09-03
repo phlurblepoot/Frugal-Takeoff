@@ -36,6 +36,10 @@ export function decodeEntities(s: string): string {
 }
 export function htmlToText(html: string): string {
   return decodeEntities((html || '')
+    // A blockquote is a quote boundary, so BOTH its tags become line breaks
+    // (attributes and all): that is what leaves "On … wrote:" on a line of its
+    // own for stripQuotedReply, whatever the sending client wrapped it in.
+    .replace(/<\s*\/?\s*blockquote(\s[^>]*)?>/gi, '\n')
     .replace(/<\s*(br|\/p|\/div|\/li|\/tr|\/h[1-6])\s*\/?>/gi, '\n')
     .replace(/<[^>]+>/g, ''))
     .split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();

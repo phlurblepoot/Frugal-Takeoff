@@ -14,6 +14,13 @@ import { setPendingReply, type RfiPendingReply } from '../rfiStore';
 /** A body fetch is a provider round-trip; past this the snippet we already
  *  indexed is a better answer than nothing. */
 const BODY_TIMEOUT_MS = 20_000;
+/** The pending reply is a review preview stored as JSON on the RFI row, not an
+ *  archive of the email — the message itself stays in the mail client. Cap both
+ *  the text and the attachment list so a 5 MB auto-reply can't bloat every read
+ *  of that RFI. */
+const MAX_TEXT_CHARS = 4_000;
+const MAX_ATTACHMENTS = 20;
+const clampText = (s: string): string => (s.length > MAX_TEXT_CHARS ? s.slice(0, MAX_TEXT_CHARS) + '…' : s);
 
 interface MessageRow {
   providerMessageId: string; snippet: string; fromAddr: string | null; fromName: string | null;
@@ -27,14 +34,17 @@ export interface InboundEvent { threadKey: string; messageId: string; account: M
 function replyText(raw: RawBody | null, snippet: string): string {
   const source = raw?.text?.trim() ? raw.text : raw?.html ? htmlToText(raw.html) : '';
   const stripped = source.trim() ? stripQuotedReply(source).trim() : '';
-  return stripped || stripQuotedReply(snippet || '').trim();
+  return clampText(stripped || stripQuotedReply(snippet || '').trim());
 }
 
 async function fetchBody(ctx: MailContext, accountId: string, providerMessageId: string): Promise<RawBody | null> {
-  const provider = ctx.scheduler?.getProvider(accountId);
-  if (!provider) return null;
   let timer: NodeJS.Timeout | undefined;
   try {
+    // Inside the try: getProvider reaches into the DB, the crypto seal and the
+    // provider factory, any of which can throw for a broken account — and a
+    // reply captured from the snippet beats no reply at all.
+    const provider = ctx.scheduler?.getProvider(accountId);
+    if (!provider) return null;
     return await Promise.race([
       provider.getBody(providerMessageId),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('getBody timed out')), BODY_TIMEOUT_MS); }),
@@ -43,6 +53,14 @@ async function fetchBody(ctx: MailContext, accountId: string, providerMessageId:
     console.warn('[mail] inbound body fetch failed, using snippet:', (e as Error)?.message ?? e);
     return null;
   } finally { if (timer) clearTimeout(timer); }
+}
+
+/** Ordering for two capture attempts. ISO strings sort correctly, but a
+ *  provider that reports an offset date ("+02:00") does not sort against a Z
+ *  one — parse when both parse, fall back to the raw compare when they don't. */
+function isNewer(prevDate: string, nextDate: string): boolean {
+  const a = Date.parse(prevDate); const b = Date.parse(nextDate);
+  return Number.isFinite(a) && Number.isFinite(b) ? b > a : nextDate > prevDate;
 }
 
 async function captureRfiReply(ctx: MailContext, ev: InboundEvent, msg: MessageRow, rfiIds: string[]): Promise<void> {
@@ -59,16 +77,21 @@ async function captureRfiReply(ctx: MailContext, ev: InboundEvent, msg: MessageR
     from: msg.fromName ? { addr: msg.fromAddr ?? '', name: msg.fromName } : { addr: msg.fromAddr ?? '' },
     date: msg.date,
     text: replyText(raw, msg.snippet),
-    attachments: attachments.map(a => ({ attId: a.attId, name: a.name, mime: a.mime, size: a.size })),
+    attachments: attachments.slice(0, MAX_ATTACHMENTS).map(a => ({ attId: a.attId, name: a.name, mime: a.mime, size: a.size })),
     receivedAt: new Date().toISOString(),
   };
   for (const rfiId of rfiIds) {
     const row = db.prepare('SELECT projectId, pendingReplyJson FROM rfis WHERE id = ?').get(rfiId) as { projectId: string; pendingReplyJson: string | null } | undefined;
     if (!row) continue;
-    // Same message twice (a retried hook, a re-indexed row) must not bump the
-    // version or re-notify — only a genuinely newer reply replaces the pending one.
+    // Only a genuinely newer reply replaces the pending one. Three ways this
+    // capture can be stale, all of which must leave the stored reply alone:
+    // the same row twice (a retried hook), the SAME EMAIL indexed under a
+    // second connected mailbox (different row id, same Message-ID), and an
+    // older message whose slow body fetch resolved after a newer one's.
     const prev: RfiPendingReply | null = row.pendingReplyJson ? JSON.parse(row.pendingReplyJson) : null;
-    if (prev?.mailMessageId === ev.messageId) continue;
+    if (prev && (prev.mailMessageId === ev.messageId
+      || (!!prev.messageIdHeader && prev.messageIdHeader === reply.messageIdHeader)
+      || !isNewer(prev.date, reply.date))) continue;
     // Status is re-checked here, not just before the fetch: the RFI may have
     // been answered by hand while the body was in flight. setPendingReply
     // returns false in that case.

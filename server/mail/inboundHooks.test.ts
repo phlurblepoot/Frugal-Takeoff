@@ -42,6 +42,12 @@ function deliver(m: Seeded): void {
   upsertEnvelopes(ctx, acct, [m]);
 }
 
+/** Points the scheduler at a different provider for this test. */
+function useProvider(p: unknown): void {
+  ctx.providerFactory = () => p as never;
+  ctx.scheduler = new MailScheduler(ctx);
+}
+
 /** Lets the hook's fire-and-forget capture run to completion. */
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
 
@@ -155,6 +161,65 @@ describe('rfi pending-reply inbound hook', () => {
     provider.injectInbound(m);
     provider.failNextWith(new Error('provider down'));
     upsertEnvelopes(ctx, acct, [m]);
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
+    expect(getRfi(db, rfiId).pendingReply.text).toBe('Corridor 9ft (snippet)');
+  });
+
+  it('an older reply whose body arrives late does not overwrite a newer one', async () => {
+    // Both fetches are held open, then released newest-first: the older one
+    // resolving last must not win just because it wrote last.
+    const release = new Map<string, () => void>();
+    const gated = Object.create(provider);
+    gated.getBody = (id: string) => new Promise(res => release.set(id, () => res({ text: id === 'm1' ? 'older answer' : 'newer answer', attachments: [] })));
+    useProvider(gated);
+    const rfiId = makeSentRfi();
+    deliver(env('m1', { date: '2026-08-28T10:00:00.000Z' }));
+    deliver(env('m2', { date: '2026-08-29T10:00:00.000Z' }));
+    await vi.waitFor(() => expect(release.size).toBe(2));
+    release.get('m2')!();
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply?.text).toBe('newer answer'));
+    release.get('m1')!();
+    await settle();
+    expect(getRfi(db, rfiId).pendingReply.text).toBe('newer answer');
+    expect(events.filter(e => e.type === 'rfi')).toHaveLength(1);
+  });
+
+  it('the same email indexed by a second mailbox does not capture twice', async () => {
+    const rfiId = makeSentRfi();
+    const second = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'fake', emailAddress: 'ops@bb.com', auth: { refreshToken: 'r' }, indexedSince: '2026-06-01T00:00:00.000Z' });
+    upsertFolders(db, second.id, provider.folders);
+    const m = env('m1');
+    deliver(m);
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
+    const first = getRfi(db, rfiId);
+    // Same Message-ID, different row (unique index is per account).
+    upsertEnvelopes(ctx, second, [m]);
+    await settle();
+    const after = getRfi(db, rfiId);
+    expect(after.pendingReply.mailMessageId).toBe(first.pendingReply.mailMessageId);
+    expect(after.version).toBe(first.version);
+    expect(events.filter(e => e.type === 'rfi')).toHaveLength(1);
+  });
+
+  it('caps a huge reply body and a long attachment list', async () => {
+    const rfiId = makeSentRfi();
+    deliver(env('m1', {
+      text: 'x'.repeat(50_000),
+      attachments: Array.from({ length: 25 }, (_, i) => ({ attId: 'a' + i, name: `f${i}.pdf`, mime: 'application/pdf', size: 1 })),
+    }));
+    await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
+    const { pendingReply } = getRfi(db, rfiId);
+    expect(pendingReply.text).toHaveLength(4001);        // 4000 + the … marker
+    expect(pendingReply.text.endsWith('…')).toBe(true);
+    expect(pendingReply.attachments).toHaveLength(20);
+    expect(pendingReply.attachments[0].attId).toBe('a0');
+  });
+
+  it('falls back to the snippet when the provider itself cannot be built', async () => {
+    useProvider(null);
+    ctx.providerFactory = () => { throw new Error('undecryptable auth blob'); };
+    const rfiId = makeSentRfi();
+    deliver(env('m1'));
     await vi.waitFor(() => expect(getRfi(db, rfiId).pendingReply).toBeTruthy());
     expect(getRfi(db, rfiId).pendingReply.text).toBe('Corridor 9ft (snippet)');
   });

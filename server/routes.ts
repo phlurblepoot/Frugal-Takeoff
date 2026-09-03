@@ -27,6 +27,7 @@ import {
   addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, setRfiResponse,
   acceptPendingReply, dismissPendingReply,
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
+  NoPendingReplyError as RfiNoPendingReplyError,
 } from './rfiStore';
 import {
   getDailyReport, listDailyReports, createDailyReport, saveDailyReport, deleteDailyReport,
@@ -611,6 +612,8 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   // ── RFIs (any authenticated user — field-created, like issues) ─────────────
   const rfiErr = (e: unknown, res: express.Response) => {
     if (e instanceof RfiNotFoundError) return res.status(404).json({ error: e.message });
+    // Before the ValidationError arm: NoPendingReplyError extends it.
+    if (e instanceof RfiNoPendingReplyError) return res.status(409).json({ error: e.message, code: 'no_pending_reply' });
     if (e instanceof RfiConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof RfiValidationError) return res.status(400).json({ error: e.message });
     console.error('RFI error:', e);
@@ -713,7 +716,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
     try {
       const before = getRfi(db, req.params.id);
       if (!before) return res.status(404).json({ error: 'RFI not found' });
-      if (!before.pendingReply) return res.status(409).json({ error: 'No pending reply to accept' });
+      // No pending-reply pre-check here on purpose: acceptPendingReply re-reads
+      // and throws NoPendingReplyError (→409) inside its own transaction, so a
+      // second client accepting the same reply loses cleanly instead of
+      // squeezing through a check-then-act gap.
       const r = acceptPendingReply(db, req.params.id, { text: req.body?.text, fileId: req.body?.fileId });
       logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_answered', message: `RFI ${rfiNo(before.number)} answered via email` });
       const after = getRfi(db, req.params.id);

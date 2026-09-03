@@ -11,7 +11,7 @@ import {
   RFI_STATUSES, getRfi, listRfis, createRfi, saveRfi, setRfiStatus,
   deleteRfi, addPhoto, removePhoto, markRfiSent, setRfiResponse,
   setPendingReply, acceptPendingReply, dismissPendingReply,
-  ValidationError, ConflictError, NotFoundError,
+  ValidationError, ConflictError, NotFoundError, NoPendingReplyError,
 } from './rfiStore';
 
 let db: Database.Database;
@@ -296,6 +296,13 @@ describe('rfiStore', () => {
       const r = getRfi(db, id); expect(r.responseText).toBe('Corridor 9ft (edited)'); expect(r.responseSource).toBe('email'); expect(r.responseMessageIdHeader).toBe('x@y'); expect(r.pendingReply).toBeNull(); expect(r.answeredAt).toBeTruthy();
       const { id: id2 } = createRfi(db, 'p1', { title: 't2' }); markRfiSent(db, id2); setPendingReply(db, id2, reply); dismissPendingReply(db, id2);
       expect(getRfi(db, id2)).toMatchObject({ status: 'sent', pendingReply: null });
+    });
+    it('accepting nothing throws NoPendingReplyError (a conflict, not bad input)', () => {
+      const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id);
+      expect(() => acceptPendingReply(db, id, {})).toThrow(NoPendingReplyError);
+      setPendingReply(db, id, reply); acceptPendingReply(db, id, {});
+      expect(() => acceptPendingReply(db, id, {})).toThrow(NoPendingReplyError);   // second accept loses
+      expect(() => acceptPendingReply(db, 'nope', {})).toThrow(NotFoundError);
     });
     it('accept without text/file uses the pending text', () => {
       const { id } = createRfi(db, 'p1', { title: 't' }); markRfiSent(db, id); setPendingReply(db, id, reply);

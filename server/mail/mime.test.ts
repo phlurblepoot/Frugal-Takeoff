@@ -12,6 +12,14 @@ describe('mime helpers', () => {
   it('htmlToText keeps line breaks for block elements and drops tags', () => {
     expect(htmlToText('<p>Hi<br>there</p><div>ok &amp; done</div>')).toBe('Hi\nthere\nok & done');
   });
+  it('htmlToText breaks around a blockquote so the quote attribution stands alone', () => {
+    expect(htmlToText('<div>Corridor 9ft</div><blockquote class="gmail_quote" type="cite">On Aug 26 Nathan wrote:<br>RFI attached</blockquote>'))
+      // </div> then <blockquote> is a paragraph break, hence the blank line.
+      .toBe('Corridor 9ft\n\nOn Aug 26 Nathan wrote:\nRFI attached');
+    // The point of the break: the reply survives, the quoted history does not.
+    expect(stripQuotedReply(htmlToText('Corridor 9ft<blockquote>On Aug 26 Nathan wrote:<br>RFI attached</blockquote>')))
+      .toBe('Corridor 9ft');
+  });
   it('htmlToText decodes numeric and the common named entities in one pass', () => {
     expect(htmlToText('<p>Level&nbsp;6 &mdash; Mike&#39;s call&hellip;</p>')).toBe("Level 6 — Mike's call…");
     expect(htmlToText('<p>caf&#xe9; &ndash; &lsquo;ok&rsquo; &ldquo;q&rdquo;</p>')).toBe('café – ‘ok’ “q”');
