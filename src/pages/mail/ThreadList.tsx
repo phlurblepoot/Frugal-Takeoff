@@ -16,37 +16,64 @@ const SEARCH_DEBOUNCE_MS = 300;
 // rows every row renders exactly as it always has (this is the common case:
 // most folders never come close to 150 threads), so there is zero windowing
 // overhead for the vast majority of mailboxes. Past the threshold, only the
-// rows within ROW_HEIGHT_PX * (viewport + overscan) of the scroll position
-// render; two spacer divs (whose combined height is exactly what the
-// unrendered rows would have taken) keep the scrollbar the correct length and
-// the "Load older mail" footer / sentinel at the correct scroll position,
-// without needing to measure every row's real (slightly variable) height.
+// rows within the scroll viewport (plus overscan) render; two spacer divs
+// (whose combined height is exactly what the unrendered rows would have
+// taken) keep the scrollbar the correct length and the "Load older mail"
+// footer / sentinel at the correct scroll position.
+//
+// Row height is two-tier rather than a single uniform estimate: a row with
+// link chips (ThreadRow.tsx renders an extra flex-wrap chip row for any
+// thread with links — common, since sending from an item auto-links it) is
+// reliably taller than one without, by enough (~20px) that treating every
+// row as ROW_HEIGHT_PX undercounts a heavily-linked folder's real height and
+// drifts the spacers out of sync with the actual scroll position. Both
+// heights are still constants, not measured — deterministic and exact for
+// slice math without a ResizeObserver per row — because every OTHER thing
+// that could vary a row's height (subject, snippet, participants) is
+// `truncate`d to one line; only the link-chips row is structural.
 export const VIRTUALIZE_THRESHOLD = 150;
-/** Estimated row height — close enough for scroll math; a row that actually
- *  renders taller or shorter (snippet wrap, chip overflow) does not throw
- *  off SELECTION or KEYBOARD nav, only the spacer's pixel-perfectness, which
- *  self-corrects as the list scrolls past it. */
 export const ROW_HEIGHT_PX = 76;
+export const ROW_HEIGHT_LINKED_PX = 96;
 const OVERSCAN_ROWS = 8;
+
+export const rowHeightPx = (row: ThreadListRow): number => (row.links.length > 0 ? ROW_HEIGHT_LINKED_PX : ROW_HEIGHT_PX);
+
+/** Cumulative pixel offsets for `rows`: `offsets[i]` is row i's top, and
+ *  `offsets[rows.length]` is the folder's total rendered height. The single
+ *  source of truth both the slice math and the spacer heights read from, so
+ *  they can never disagree with each other. */
+export function rowOffsets(rows: ThreadListRow[]): number[] {
+  const offsets = new Array<number>(rows.length + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < rows.length; i++) offsets[i + 1] = offsets[i] + rowHeightPx(rows[i]);
+  return offsets;
+}
 
 export interface VisibleRange { start: number; end: number }
 
 /** Pure slice math: which row indices [start, end) should be in the DOM for a
- *  given scroll position and viewport height. Exported for direct unit
- *  testing rather than only exercising it through a rendered scroll event. */
+ *  given scroll position and viewport height, given `offsets` (see
+ *  `rowOffsets`) rather than a uniform row height — a linear scan (a handful
+ *  of comparisons even for hundreds of rows) rather than division, since
+ *  rows are no longer all the same size. Exported for direct unit testing
+ *  rather than only exercising it through a rendered scroll event. */
 export function visibleRowRange(
-  rowCount: number,
+  offsets: number[],
   scrollTop: number,
   viewportHeight: number,
-  rowHeight: number = ROW_HEIGHT_PX,
   overscan: number = OVERSCAN_ROWS,
 ): VisibleRange {
+  const rowCount = offsets.length - 1;
   if (rowCount <= 0 || viewportHeight <= 0) return { start: 0, end: rowCount };
-  const firstOnScreen = Math.floor(scrollTop / rowHeight);
-  const rowsOnScreen = Math.ceil(viewportHeight / rowHeight);
-  const start = Math.max(0, firstOnScreen - overscan);
-  const end = Math.min(rowCount, firstOnScreen + rowsOnScreen + overscan);
-  return { start, end };
+  const scrollBottom = scrollTop + viewportHeight;
+  // First row whose bottom edge is past the top of the viewport…
+  let first = 0;
+  while (first < rowCount && offsets[first + 1] <= scrollTop) first++;
+  // …and the first row past it whose top edge is at/beyond the viewport's
+  // bottom edge — i.e. the last on-screen row is `last - 1`.
+  let last = first;
+  while (last < rowCount && offsets[last] < scrollBottom) last++;
+  return { start: Math.max(0, first - overscan), end: Math.min(rowCount, last + overscan) };
 }
 /** The refresh route answers 202 as soon as the sync worker has been nudged —
  *  the sync itself is still running. Give it a moment before re-querying so the
@@ -222,18 +249,22 @@ export const ThreadList: React.FC<{
     setScrollTop(e.currentTarget.scrollTop);
   }, []);
 
+  // Recomputed only when the row SET changes (not on every scroll) — scroll
+  // position is read separately below, off the same offsets array.
+  const offsets = useMemo(() => (virtualize ? rowOffsets(threads) : null), [virtualize, threads]);
+
   const { visibleThreads, topSpacerPx, bottomSpacerPx } = useMemo(() => {
-    if (!virtualize) return { visibleThreads: threads, topSpacerPx: 0, bottomSpacerPx: 0 };
+    if (!virtualize || !offsets) return { visibleThreads: threads, topSpacerPx: 0, bottomSpacerPx: 0 };
     // A viewport height of 0 (not yet measured — no ResizeObserver, or the
     // very first render) falls back to rendering everything up to a generous
     // window rather than nothing, so the list is never blank while it waits.
-    const { start, end } = visibleRowRange(threads.length, scrollTop, viewportHeight || ROW_HEIGHT_PX * 20);
+    const { start, end } = visibleRowRange(offsets, scrollTop, viewportHeight || ROW_HEIGHT_PX * 20);
     return {
       visibleThreads: threads.slice(start, end),
-      topSpacerPx: start * ROW_HEIGHT_PX,
-      bottomSpacerPx: Math.max(0, (threads.length - end) * ROW_HEIGHT_PX),
+      topSpacerPx: offsets[start],
+      bottomSpacerPx: Math.max(0, offsets[offsets.length - 1] - offsets[end]),
     };
-  }, [virtualize, threads, scrollTop, viewportHeight]);
+  }, [virtualize, offsets, threads, scrollTop, viewportHeight]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">

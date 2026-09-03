@@ -14,7 +14,9 @@ vi.mock('../../components/Toast', async orig => ({
   useToast: () => ({ toast: h.toast }),
 }));
 
-import { ROW_HEIGHT_PX, ThreadList, VIRTUALIZE_THRESHOLD, visibleRowRange } from './ThreadList';
+import {
+  ROW_HEIGHT_LINKED_PX, ROW_HEIGHT_PX, ThreadList, VIRTUALIZE_THRESHOLD, rowHeightPx, rowOffsets, visibleRowRange,
+} from './ThreadList';
 
 const row = (over: Partial<ThreadListRow> = {}): ThreadListRow => ({
   threadKey: 'tk-1', subject: 'Roof detail', firstDate: '2026-08-27T12:00:00.000Z',
@@ -239,14 +241,49 @@ describe('ThreadList', () => {
 
   // Piece 2: hand-rolled windowing for big folders (>150 rows). No
   // react-window — see ThreadList.tsx's header comment.
+  //
+  // Row height is two-tier (rowHeightPx / ROW_HEIGHT_LINKED_PX for a thread
+  // with link chips), so the slice math works off `rowOffsets` — real
+  // per-row cumulative heights — rather than a uniform estimate. All-plain
+  // (no links) fixtures below reduce to the same numbers a single ROW_HEIGHT_PX
+  // would have produced, which is what proves the general (offsets-based)
+  // math didn't change behavior for the common case; the "mixed heights"
+  // block below is what actually exercises the two-tier part.
+  describe('rowHeightPx / rowOffsets', () => {
+    it('is the plain height for a thread with no links, and the taller one for a thread with any', () => {
+      expect(rowHeightPx(row({ links: [] }))).toBe(ROW_HEIGHT_PX);
+      expect(rowHeightPx(row({ links: [{ id: 'l1', itemType: 'rfi', itemId: 'r1', label: 'RFI-001' } as any] }))).toBe(ROW_HEIGHT_LINKED_PX);
+    });
+
+    it('sums per-row heights, not a uniform one, for a mix of plain and linked rows', () => {
+      const linked = { id: 'l1', itemType: 'rfi', itemId: 'r1', label: 'RFI-001' } as any;
+      const rows = [
+        row({ threadKey: 'a', links: [] }),
+        row({ threadKey: 'b', links: [] }),
+        row({ threadKey: 'c', links: [linked] }),
+        row({ threadKey: 'd', links: [] }),
+      ];
+      expect(rowOffsets(rows)).toEqual([
+        0,
+        ROW_HEIGHT_PX,
+        ROW_HEIGHT_PX * 2,
+        ROW_HEIGHT_PX * 2 + ROW_HEIGHT_LINKED_PX,
+        ROW_HEIGHT_PX * 2 + ROW_HEIGHT_LINKED_PX + ROW_HEIGHT_PX,
+      ]);
+    });
+  });
+
   describe('visibleRowRange (slice math)', () => {
+    const uniformOffsets = (n: number, h: number = ROW_HEIGHT_PX): number[] =>
+      Array.from({ length: n + 1 }, (_, i) => i * h);
+
     it('renders everything when the viewport or row count is not yet known', () => {
-      expect(visibleRowRange(500, 0, 0)).toEqual({ start: 0, end: 500 });
-      expect(visibleRowRange(0, 0, 800)).toEqual({ start: 0, end: 0 });
+      expect(visibleRowRange(uniformOffsets(500), 0, 0)).toEqual({ start: 0, end: 500 });
+      expect(visibleRowRange(uniformOffsets(0), 0, 800)).toEqual({ start: 0, end: 0 });
     });
 
     it('starts at row 0 with overscan clamped, not negative, at the top of the list', () => {
-      const { start, end } = visibleRowRange(500, 0, 760, 76, 8);
+      const { start, end } = visibleRowRange(uniformOffsets(500), 0, 760, 8);
       expect(start).toBe(0);
       // 760px / 76px = 10 rows on screen, + 8 rows of trailing overscan.
       expect(end).toBe(18);
@@ -254,21 +291,46 @@ describe('ThreadList', () => {
 
     it('slides the window forward as scrollTop increases', () => {
       // 50 rows scrolled past (50 * 76 = 3800), minus 8 rows of leading overscan.
-      const { start, end } = visibleRowRange(500, 3800, 760, 76, 8);
+      const { start, end } = visibleRowRange(uniformOffsets(500), 3800, 760, 8);
       expect(start).toBe(42);
       expect(end).toBe(68);
     });
 
     it('clamps the end of the window to the row count near the bottom of the list', () => {
-      const { start, end } = visibleRowRange(60, 3800, 760, 76, 8);
+      const { start, end } = visibleRowRange(uniformOffsets(60), 3800, 760, 8);
       expect(start).toBe(42);
       expect(end).toBe(60);
     });
 
     it('uses the real constants the component windows with', () => {
-      const { start, end } = visibleRowRange(1000, 0, ROW_HEIGHT_PX * 10);
+      const { start, end } = visibleRowRange(uniformOffsets(1000), 0, ROW_HEIGHT_PX * 10);
       expect(start).toBe(0);
       expect(end).toBe(18); // 10 rows on screen + 8 overscan, default overscan.
+    });
+
+    // Review finding 2 (fix round 1): a folder heavy with link chips renders
+    // taller rows than ROW_HEIGHT_PX — using that as a uniform estimate would
+    // undercount how far the user has actually scrolled (dividing a real
+    // scrollTop by too-small a row height overshoots the row index) and skip
+    // rows that are still on screen. These fixed offsets stand in for 5 rows
+    // that are ALL linked (96px each: 0, 96, 192, 288, 384, 480).
+    describe('mixed/linked heights at a scroll boundary', () => {
+      const linkedOffsets = [0, 96, 192, 288, 384, 480];
+
+      it('locates the true first-on-screen row from real offsets, not a uniform-height guess', () => {
+        // scrollTop=380 sits inside row 3's true span (288..384) — a naive
+        // 76px/row estimate would compute floor(380/76)=5 and skip rows 3-4
+        // even though they are still (partly) visible.
+        const { start, end } = visibleRowRange(linkedOffsets, 380, 96, 0);
+        expect(start).toBe(3);
+        expect(end).toBe(5);
+      });
+
+      it('keeps overscan in ROWS, applied after the true index is found', () => {
+        const { start, end } = visibleRowRange(linkedOffsets, 380, 96, 2);
+        expect(start).toBe(1); // 3 - 2
+        expect(end).toBe(5);   // clamped to rowCount
+      });
     });
   });
 
@@ -314,6 +376,32 @@ describe('ThreadList', () => {
       // …and a row from around the new scroll position has mounted in.
       expect(screen.getByText('Thread 55')).toBeInTheDocument();
       expect(screen.getByTestId('mail-list-top-spacer')).toBeInTheDocument();
+    });
+
+    // Review finding 2: a folder where every OTHER row carries a link chip
+    // (taller) still windows correctly end to end — no NaN/undefined spacer
+    // heights, DOM count still well below the folder size.
+    it('windows correctly through the real component when rows alternate plain/linked height', () => {
+      const linked = { id: 'l1', itemType: 'rfi', itemId: 'r1', label: 'RFI-001' } as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const threads = manyRows(300).map((r, i) => (i % 2 === 0 ? { ...r, links: [linked] } : r));
+      const { container } = render(<ThreadList {...props({ threads })} />);
+
+      const rendered = screen.getAllByTestId('mail-thread-row').length;
+      expect(rendered).toBeGreaterThan(0);
+      expect(rendered).toBeLessThan(threads.length);
+
+      const topSpacer = screen.queryByTestId('mail-list-top-spacer');
+      const bottomSpacer = screen.getByTestId('mail-list-bottom-spacer');
+      if (topSpacer) expect(Number(topSpacer.getAttribute('style')?.match(/height:\s*(\d+)/)?.[1])).toBeGreaterThanOrEqual(0);
+      expect(Number(bottomSpacer.getAttribute('style')?.match(/height:\s*(\d+)/)?.[1])).toBeGreaterThan(0);
+
+      // Scroll past a run of taller (linked) rows and confirm the window still
+      // shifts sanely — no crash, still fewer rows than the folder.
+      const scrollEl = container.querySelector('.overflow-y-auto') as HTMLDivElement;
+      fireEvent.scroll(scrollEl, { target: { scrollTop: 6000 } });
+      const afterScroll = screen.getAllByTestId('mail-thread-row').length;
+      expect(afterScroll).toBeGreaterThan(0);
+      expect(afterScroll).toBeLessThan(threads.length);
     });
   });
 });
