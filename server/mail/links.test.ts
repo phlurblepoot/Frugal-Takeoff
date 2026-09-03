@@ -6,7 +6,7 @@ import { openDb } from '../db'; import { runMigrations } from '../migrations'; i
 import { createProject } from '../projectStore';
 import { saveCustomer } from '../customerStore';
 import { createRfi } from '../rfiStore';
-import { resolveChain, createLink, listLinksForItem, listLinksForThread, deleteLink } from './links';
+import { resolveChain, createLink, listLinksForItem, listLinksForThread, deleteLink, resolveLinkLabel } from './links';
 
 let db: Database.Database; let projectId: string; let customerId: string; let rfiId: string;
 beforeEach(() => {
@@ -31,5 +31,52 @@ describe('links', () => {
     expect(listLinksForItem(db, 'rfi', rfiId).length).toBe(1);
     expect(listLinksForThread(db, 'k').map(l => l.itemType)).toEqual(['rfi']);
     deleteLink(db, a.id); expect(listLinksForThread(db, 'k')).toEqual([]);
+  });
+});
+
+describe('resolveLinkLabel', () => {
+  it('formats each item type in the app\'s own display convention', () => {
+    db.prepare(`INSERT INTO proposals (id, projectId, number, status, createdAt, updatedAt) VALUES ('pr1', ?, 2, 'draft', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'proposal', 'pr1')).toBe('Proposal #2');
+
+    db.prepare(`INSERT INTO invoices (id, projectId, number, status, createdAt) VALUES ('in1', ?, '104', 'draft', 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'invoice', 'in1')).toBe('Invoice 104');
+
+    db.prepare(`INSERT INTO change_orders (id, projectId, number, title, description, amount, status, createdAt) VALUES ('co1', ?, '3', 'Kitchen electrical', '', 0, 'pending', 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'changeOrder', 'co1')).toBe('CO-3 — Kitchen electrical');
+
+    db.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, createdAt) VALUES ('pa1', ?, 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'payApp', 'pa1')).toBe('Pay App #1');
+
+    db.prepare(`INSERT INTO issues (id, projectId, number, title, status, createdAt) VALUES ('is1', ?, 4, 'Cracked tile', 'open', 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'issue', 'is1')).toBe('ISS-004 — Cracked tile');
+
+    expect(resolveLinkLabel(db, 'rfi', rfiId)).toBe('RFI-001 — Ceilings');
+
+    db.prepare(`INSERT INTO daily_reports (id, projectId, reportDate, createdAt, updatedAt) VALUES ('dr1', ?, '2026-09-01', 1, 1)`).run(projectId);
+    expect(resolveLinkLabel(db, 'dailyReport', 'dr1')).toBe('Daily Report — 2026-09-01');
+
+    expect(resolveLinkLabel(db, 'punch', projectId)).toBe('Dania');
+    expect(resolveLinkLabel(db, 'project', projectId)).toBe('Dania');
+    expect(resolveLinkLabel(db, 'customer', customerId)).toBe('TEG');
+
+    db.prepare(`INSERT INTO tasks (id, title, createdAt) VALUES ('t1', 'Order shingles', 1)`).run();
+    expect(resolveLinkLabel(db, 'task', 't1')).toBe('Order shingles');
+  });
+
+  it('falls back to the capitalized type name when the row is missing', () => {
+    expect(resolveLinkLabel(db, 'proposal', 'missing')).toBe('Proposal');
+    expect(resolveLinkLabel(db, 'invoice', 'missing')).toBe('Invoice');
+    expect(resolveLinkLabel(db, 'changeOrder', 'missing')).toBe('Change Order');
+    expect(resolveLinkLabel(db, 'payApp', 'missing')).toBe('Pay App');
+    expect(resolveLinkLabel(db, 'issue', 'missing')).toBe('Issue');
+    expect(resolveLinkLabel(db, 'rfi', 'missing')).toBe('RFI');
+    expect(resolveLinkLabel(db, 'dailyReport', 'missing')).toBe('Daily Report');
+    expect(resolveLinkLabel(db, 'punch', 'missing')).toBe('Punch');
+    expect(resolveLinkLabel(db, 'project', 'missing')).toBe('Project');
+    expect(resolveLinkLabel(db, 'task', 'missing')).toBe('Task');
+    expect(resolveLinkLabel(db, 'customer', 'missing')).toBe('Customer');
+    // an itemType with no resolver at all still echoes a fallback, never throws
+    expect(resolveLinkLabel(db, 'nope' as any, 'x')).toBe('nope');
   });
 });

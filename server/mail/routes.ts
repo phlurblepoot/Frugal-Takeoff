@@ -8,7 +8,7 @@ import { upsertEnvelopes, rebuildThread, runBackfill } from './sync/engine';
 import { sanitizeEmailHtml } from './sanitize';
 import { htmlToText, newMessageIdHeader } from './mime';
 import { send, MailSendError } from './sendService';
-import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
+import { createLink, deleteLink, listLinksForItem, listLinksForThread, resolveLinkLabel, type ItemType } from './links';
 import { stageUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
 import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, releaseGmailWatch, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
@@ -545,7 +545,7 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const out = new Map<string, any[]>();
     if (!keys.length) return out;
     const rows = db.prepare(`SELECT id, threadKey, itemType, itemId, projectId, customerId FROM mail_thread_links WHERE threadKey IN (${keys.map(() => '?').join(',')})`).all(...keys) as any[];
-    for (const l of rows) { const arr = out.get(l.threadKey) ?? []; arr.push(l); out.set(l.threadKey, arr); }
+    for (const l of rows) { const withLabel = { ...l, label: resolveLinkLabel(db, l.itemType, l.itemId) }; const arr = out.get(l.threadKey) ?? []; arr.push(withLabel); out.set(l.threadKey, arr); }
     return out;
   };
   const lastSnippet = db.prepare('SELECT snippet FROM mail_messages WHERE accountId = ? AND threadKey = ? ORDER BY date DESC LIMIT 1');
@@ -612,7 +612,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const t = db.prepare('SELECT * FROM mail_threads WHERE accountId = ? AND threadKey = ?').get(a.id, req.params.threadKey) as any;
     if (!t) return res.status(404).json({ error: 'Thread not found' });
     const messages = (db.prepare('SELECT * FROM mail_messages WHERE accountId = ? AND threadKey = ? ORDER BY date').all(a.id, t.threadKey) as any[]).map(parseRow);
-    res.json({ thread: threadRow(t, linksFor([t.threadKey])), messages, links: listLinksForThread(db, t.threadKey) });
+    const threadLinks = listLinksForThread(db, t.threadKey).map(l => ({ ...l, label: resolveLinkLabel(db, l.itemType, l.itemId) }));
+    res.json({ thread: threadRow(t, linksFor([t.threadKey])), messages, links: threadLinks });
   });
 
   // A message the provider could not name yet (see Envelope.replacesProviderMessageId):
@@ -981,7 +982,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     res.json(listLinksForItem(db, itemType, itemId).map(l => {
       let ok = visible.get(l.threadKey);
       if (ok === undefined) { ok = seesThread(uid, l.threadKey); visible.set(l.threadKey, ok); }
-      return ok ? l : { ...l, subjectSnapshot: null, participantsJson: null };
+      const withLabel = { ...l, label: resolveLinkLabel(db, l.itemType, l.itemId) };
+      return ok ? withLabel : { ...withLabel, subjectSnapshot: null, participantsJson: null };
     }));
   });
 

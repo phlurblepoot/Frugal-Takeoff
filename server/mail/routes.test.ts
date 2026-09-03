@@ -148,6 +148,9 @@ describe('mail routes', () => {
   });
 
   it('threads list + detail, scoped by owner', async () => {
+    // Linking the thread to project 'p1' (named 'P' in beforeEach) exercises the
+    // resolved `label` on both the threads-list chip payload and thread detail.
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'project', itemId: 'p1' });
     const folders = (await request(app).get('/api/mail/folders').query({ accountId: acct.id })).body;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const inbox = folders.find((f: any) => f.role === 'inbox');
@@ -155,9 +158,12 @@ describe('mail routes', () => {
     expect(list.status).toBe(200);
     expect(list.body.threads.length).toBe(1);
     expect(list.body.threads[0]).toMatchObject({ threadKey: 'm1@teg.com', unreadCount: 1, hasAttachments: 1, snippet: 'hello' });
+    expect(list.body.threads[0].links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
     const detail = await request(app).get(`/api/mail/threads/${acct.id}/${encodeURIComponent('m1@teg.com')}`);
     expect(detail.body.messages[0]).toMatchObject({ subject: 'CO 4', from: { addr: 'gc@teg.com' } });
     expect(detail.body.messages[0].providerMessageId).toBeUndefined();
+    expect(detail.body.thread.links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
+    expect(detail.body.links).toMatchObject([{ itemType: 'project', itemId: 'p1', label: 'P' }]);
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/threads').query({ accountId: acct.id })).status).toBe(404);
     expect((await request(app).get('/api/mail/folders').query({ accountId: acct.id })).status).toBe(404);
@@ -626,7 +632,9 @@ describe('mail routes', () => {
     expect((await request(app).delete(`/api/mail/drafts/${d.body.draftId}`).query({ accountId: acct.id })).status).toBe(200);
     const l = await request(app).post('/api/mail/links').send({ threadKey: s.body.threadKey, itemType: 'project', itemId: 'p1' });
     expect(l.status).toBe(200);
-    expect((await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' })).body.length).toBe(1);
+    const gl = await request(app).get('/api/mail/links').query({ itemType: 'project', itemId: 'p1' });
+    expect(gl.body.length).toBe(1);
+    expect(gl.body[0].label).toBe('P');
     expect((await request(app).delete(`/api/mail/links/${l.body.id}`)).status).toBe(200);
     expect((await request(app).get('/api/mail/unread-count')).body).toEqual({ total: 1, byAccount: { [acct.id]: 1 } });
     const rc = await request(app).get('/api/mail/recipients').query({ q: 'teg' });
