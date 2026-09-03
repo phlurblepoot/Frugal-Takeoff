@@ -11,7 +11,7 @@ import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
 import { stageUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
-import { getWebhookSecret, handleGraphWebhook, WEBHOOK_PATH } from './push';
+import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
@@ -34,6 +34,9 @@ export interface MailRouteDeps {
   /** Rate limiter for the unauthenticated Graph webhook. Injectable so a test
    *  can assert the limiter is consulted; defaults to WEBHOOK_RATE_LIMIT_PER_MIN. */
   webhookRateLimit?: express.RequestHandler;
+  /** The same, for the unauthenticated Pub/Sub webhook — its own instance, so a
+   *  burst from one provider cannot throttle the other. */
+  googleWebhookRateLimit?: express.RequestHandler;
 }
 
 /** Graph batches change notifications, but a batch is a handful of ids — a body
@@ -49,7 +52,7 @@ export const WEBHOOK_RATE_LIMIT_PER_MIN = 600;
 
 /** The limiter for WEBHOOK_PATH. Exported (and parameterised) so a test can
  *  drive the throttle without issuing hundreds of requests. */
-export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN): express.RequestHandler {
+export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN, label = 'Graph'): express.RequestHandler {
   // Dropped notifications are invisible otherwise — the only symptom is mail
   // that arrives late. One line a minute names the cause without flooding the
   // log with the very burst that tripped the limit.
@@ -63,7 +66,7 @@ export function createWebhookRateLimit(max: number = WEBHOOK_RATE_LIMIT_PER_MIN)
       const now = Date.now();
       if (now - lastWarnedAt >= 60_000) {
         lastWarnedAt = now;
-        console.warn(`[mail] Graph webhook rate limit hit (${max}/min per IP) — notifications are being dropped`);
+        console.warn(`[mail] ${label} webhook rate limit hit (${max}/min per IP) — notifications are being dropped`);
       }
       res.status(429).json({ error: 'Too many notifications' });
     },
@@ -436,6 +439,32 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
       console.error('[mail] graph webhook failed', e);
     }
     res.status(202).end();
+  });
+
+  // ── Gmail change notifications (Cloud Pub/Sub) ──
+  // Same shape of route as the Graph one above and the same hardening, with one
+  // difference that drives its design: a Pub/Sub push body is whatever Gmail
+  // published, so there is no field of ours in it to carry a shared secret.
+  // The secret therefore rides in the query string of the URL the admin pastes
+  // into the subscription — which is why `GET /api/mail/setup-info` (admin
+  // only) is the one place that URL is ever shown.
+  //
+  // The body is believed only as far as "re-sync this mailbox": the address is
+  // matched against accounts we already hold, and the historyId in the payload
+  // is ignored outright — the poll owns that watermark.
+  const googleWebhookLimiter: express.RequestHandler = deps.googleWebhookRateLimit ?? createWebhookRateLimit(WEBHOOK_RATE_LIMIT_PER_MIN, 'Pub/Sub');
+  app.post(GOOGLE_WEBHOOK_PATH, googleWebhookLimiter, webhookSizeGuard, express.json({ limit: WEBHOOK_MAX_BODY_BYTES }), (req, res) => {
+    const token = req.query.token;
+    // 403 with an empty body: a wrong guess learns nothing, not even a length.
+    if (typeof token !== 'string' || !constantTimeEquals(token, getGooglePushSecret(db))) return res.status(403).end();
+    try {
+      for (const id of handleGoogleWebhook(ctx, req.body)) ctx.scheduler?.pokeAccount(id);
+    } catch (e) {
+      // 204 even on a failure: Pub/Sub redelivers anything it does not get an
+      // ack for, and a redelivery cannot help a body we could not read.
+      console.error('[mail] pub/sub webhook failed', e);
+    }
+    res.status(204).end();
   });
 
   // Which OAuth providers the deployment has credentials for (never the values).
@@ -920,7 +949,20 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const base = deps.publicUrl?.replace(/\/+$/, '') ?? null;
     res.json({
       publicUrl: base,
-      google: { configured: !!(deps.env.GOOGLE_OAUTH_CLIENT_ID && deps.env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: base ? redirectUri(base, 'google') : null },
+      google: {
+        configured: !!(deps.env.GOOGLE_OAUTH_CLIENT_ID && deps.env.GOOGLE_OAUTH_CLIENT_SECRET),
+        redirectUri: base ? redirectUri(base, 'google') : null,
+        // Optional real-time push. The webhook URL embeds the shared secret
+        // because Pub/Sub has nowhere else to put it (see the route above), so
+        // this block is admin-only like the rest of this response — and it is
+        // shown even when unconfigured, since an admin needs the URL in hand to
+        // create the subscription in the first place.
+        pubsub: {
+          configured: !!deps.env.GOOGLE_PUBSUB_TOPIC,
+          topic: deps.env.GOOGLE_PUBSUB_TOPIC || null,
+          webhookUrl: base ? `${base}${GOOGLE_WEBHOOK_PATH}?token=${encodeURIComponent(getGooglePushSecret(db))}` : null,
+        },
+      },
       microsoft: {
         configured: !!(deps.env.MS_OAUTH_CLIENT_ID && deps.env.MS_OAUTH_CLIENT_SECRET),
         redirectUri: base ? redirectUri(base, 'microsoft') : null,

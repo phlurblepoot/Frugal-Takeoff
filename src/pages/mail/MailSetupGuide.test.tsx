@@ -23,7 +23,15 @@ import { MailSetupGuide } from './MailSetupGuide';
 
 const INFO: SetupInfo = {
   publicUrl: 'https://takeoff.example.com',
-  google: { configured: true, redirectUri: 'https://takeoff.example.com/api/mail/oauth/google/callback' },
+  google: {
+    configured: true,
+    redirectUri: 'https://takeoff.example.com/api/mail/oauth/google/callback',
+    pubsub: {
+      configured: true,
+      topic: 'projects/ft/topics/mail',
+      webhookUrl: 'https://takeoff.example.com/api/mail/google/webhook?token=s3cr3t',
+    },
+  },
   microsoft: {
     configured: false,
     redirectUri: 'https://takeoff.example.com/api/mail/oauth/microsoft/callback',
@@ -64,12 +72,31 @@ describe('MailSetupGuide', () => {
     h.setupInfo.mockResolvedValue({
       ...INFO,
       publicUrl: null,
-      google: { configured: false, redirectUri: null },
+      google: { configured: false, redirectUri: null, pubsub: { configured: false, topic: null, webhookUrl: null } },
       microsoft: { configured: false, redirectUri: null, webhookUrl: null, tenant: 'common' },
     });
     render(<MailSetupGuide />);
     expect(await screen.findByText(/APP_PUBLIC_URL is not set/)).toBeInTheDocument();
     expect(screen.getByTestId('env-APP_PUBLIC_URL')).toHaveTextContent('not set');
+  });
+
+  it('shows the Pub/Sub topic and the push URL an admin pastes into the subscription', async () => {
+    render(<MailSetupGuide />);
+    expect(await screen.findByText('https://takeoff.example.com/api/mail/google/webhook?token=s3cr3t')).toBeInTheDocument();
+    expect(screen.getByTestId('env-GOOGLE_PUBSUB_TOPIC')).toHaveTextContent('set');
+    expect(screen.getByTestId('env-GOOGLE_PUBSUB_TOPIC')).toHaveTextContent('projects/ft/topics/mail');
+  });
+
+  it('marks Gmail push as optional and unconfigured without a topic', async () => {
+    h.setupInfo.mockResolvedValue({
+      ...INFO,
+      google: { ...INFO.google, pubsub: { configured: false, topic: null, webhookUrl: INFO.google.pubsub.webhookUrl } },
+    });
+    render(<MailSetupGuide />);
+    expect(await screen.findByText(/Real-time push/)).toBeInTheDocument();
+    expect(screen.getByTestId('env-GOOGLE_PUBSUB_TOPIC')).toHaveTextContent('not set');
+    // Still shown: an admin needs the URL in hand to create the subscription.
+    expect(screen.getByText('https://takeoff.example.com/api/mail/google/webhook?token=s3cr3t')).toBeInTheDocument();
   });
 
   it('notes the generated key file when MAIL_SECRET_KEY is unset', async () => {

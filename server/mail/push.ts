@@ -16,19 +16,38 @@ import { ProviderNotFoundError, type SyncState } from './providers/types';
 
 /** Path Microsoft POSTs to; also what `GET /api/mail/setup-info` shows an admin. */
 export const WEBHOOK_PATH = '/api/mail/ms/webhook';
+/** Path Cloud Pub/Sub POSTs Gmail's notifications to. */
+export const GOOGLE_WEBHOOK_PATH = '/api/mail/google/webhook';
 /** Graph refuses a `/me/messages` subscription longer than 4230 minutes (~3 days). */
 export const MAX_SUBSCRIPTION_MINUTES = 4230;
 /** Two days, comfortably inside the cap and well over one renewal cycle. */
 const SUBSCRIPTION_TTL_MS = 2 * 24 * 3600_000;
 /** Renew once the remaining life drops below this — several slow polls' worth of slack. */
 const RENEW_WHEN_LEFT_MS = 12 * 3600_000;
+/** A Gmail watch lasts about seven days; Google's own advice is to renew daily. */
+const WATCH_RENEW_WHEN_LEFT_MS = 24 * 3600_000;
+/** What a watch is worth when Gmail's response carries no readable expiry. */
+const WATCH_TTL_FALLBACK_MS = 7 * 24 * 3600_000;
 const SECRET_KEY = 'mail.webhookSecret';
+const GOOGLE_SECRET_KEY = 'mail.googlePushSecret';
 
 /** The slice of GraphProvider this module borrows. Kept structural so the
  *  scheduler can duck-type a provider and tests need no Graph client. */
 export interface GraphPushApi {
   createSubscription(notificationUrl: string, clientState: string, expirationIso: string): Promise<{ id: string; expirationDateTime: string }>;
   renewSubscription(id: string, expirationIso: string): Promise<{ id: string; expirationDateTime: string }>;
+}
+
+/** The slice of GmailProvider this module borrows, for the same reason. */
+export interface GmailWatchApi {
+  watch(topicName: string): Promise<{ historyId: string; expiration: string }>;
+  stopWatch(): Promise<void>;
+}
+
+/** True when this provider instance can carry a Gmail Pub/Sub watch. */
+export function hasGmailWatchApi(p: unknown): p is GmailWatchApi {
+  const c = p as Partial<GmailWatchApi> | null;
+  return typeof c?.watch === 'function' && typeof c?.stopWatch === 'function';
 }
 
 /** True when this provider instance can carry a Graph subscription. */
@@ -40,10 +59,25 @@ export function hasGraphPushApi(p: unknown): p is GraphPushApi {
 /** The `clientState` every notification must echo back. Generated once and kept
  *  in `settings` under a `mail.` key, which `/api/settings` withholds. */
 export function getWebhookSecret(db: Database.Database): string {
-  const read = () => (db.prepare('SELECT value FROM settings WHERE key = ?').get(SECRET_KEY) as { value: string } | undefined)?.value;
+  return getOrCreateSecret(db, SECRET_KEY);
+}
+
+/** The secret Pub/Sub must present in the webhook's query string.
+ *
+ *  Graph echoes its secret inside the notification body, so the Microsoft URL
+ *  can stay clean. A Pub/Sub push carries only the topic's own payload — there
+ *  is no field of ours in it — so the shared secret has to ride in the URL the
+ *  admin pastes into the subscription. Its own key, so rotating one provider's
+ *  secret never disturbs the other. */
+export function getGooglePushSecret(db: Database.Database): string {
+  return getOrCreateSecret(db, GOOGLE_SECRET_KEY);
+}
+
+function getOrCreateSecret(db: Database.Database, key: string): string {
+  const read = () => (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value;
   const existing = read();
   if (existing) return existing;
-  db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run(SECRET_KEY, randomBytes(24).toString('hex'));
+  db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run(key, randomBytes(24).toString('hex'));
   return read()!;
 }
 
@@ -54,7 +88,7 @@ export function getWebhookSecret(db: Database.Database): string {
 // to be carried across those writes or the very next poll orphans the
 // subscription and the scheduler creates a fresh one every tick.
 
-const PUSH_STATE_KEYS = ['subscriptionId', 'subscriptionExpires'] as const;
+const PUSH_STATE_KEYS = ['subscriptionId', 'subscriptionExpires', 'watchExpiration'] as const;
 
 const parseState = (json: string | null): Record<string, unknown> => {
   if (!json) return {};
@@ -140,9 +174,43 @@ export async function ensureGraphSubscription(
   }
 }
 
+/** Keeps the account's Gmail watch alive. Gmail has no subscription object to
+ *  renew — `watch` is idempotent and simply resets the clock — so this is one
+ *  call a week, and network-free on every other tick.
+ *
+ *  Never rejects, for the same reason ensureGraphSubscription doesn't: it runs
+ *  inside a sync tick. The likeliest failure is a 403 because the topic has not
+ *  granted gmail-api-push@system.gserviceaccount.com the Publisher role, which
+ *  is an admin's console step — the mailbox itself is healthy and keeps polling.
+ *  Leaving the stored state untouched means the next tick retries. */
+export async function ensureGmailWatch(
+  ctx: MailContext, account: MailAccountRow, provider: GmailWatchApi, topic: string | null, now = Date.now(),
+): Promise<void> {
+  const topicName = (topic ?? '').trim();
+  if (!topicName) return;                              // no topic → poll only
+
+  const expires = Number(parseState(account.syncState).watchExpiration);
+  if (Number.isFinite(expires) && expires - now > WATCH_RENEW_WHEN_LEFT_MS) return;
+
+  try {
+    const { expiration } = await provider.watch(topicName);
+    // Gmail sends a millisecond epoch as a string. A response we cannot read is
+    // worth a week anyway — the alternative is re-watching on every 30s tick.
+    let watchExpiration = Number(expiration);
+    if (!Number.isFinite(watchExpiration) || watchExpiration <= now) {
+      console.warn(`[mail] Gmail returned no usable watch expiry for ${account.id} (${expiration || 'empty'}); assuming a week`);
+      watchExpiration = now + WATCH_TTL_FALLBACK_MS;
+    }
+    mergePushState(ctx.db, account.id, { watchExpiration });
+  } catch (e) {
+    console.error(`[mail] Gmail watch failed for ${account.id}:`, (e as Error).message);
+  }
+}
+
 // ── incoming notifications ──────────────────────────────────────────────────
 
-const constantTimeEquals = (a: string, b: string): boolean => {
+/** Compares two secrets without leaking their common prefix through timing. */
+export const constantTimeEquals = (a: string, b: string): boolean => {
   const x = Buffer.from(a, 'utf8');
   const y = Buffer.from(b, 'utf8');
   return x.length === y.length && timingSafeEqual(x, y);
@@ -183,4 +251,49 @@ function lookupBySubscription(db: Database.Database, subscriptionId: string): st
   const pattern = '%' + needle.replace(/[\\%_]/g, c => '\\' + c) + '%';
   const row = db.prepare(`SELECT id FROM mail_accounts WHERE syncState LIKE ? ESCAPE '\\' LIMIT 1`).get(pattern) as { id: string } | undefined;
   return row?.id ?? null;
+}
+
+/** Reads a Cloud Pub/Sub push and returns the accounts to re-sync.
+ *
+ *  The payload is Gmail's, wrapped by Pub/Sub: `message.data` is base64 of
+ *  `{ emailAddress, historyId }`. Only the address is used, and only to look up
+ *  accounts we already have — the historyId in the push is not believed (the
+ *  poll owns that watermark) and nothing from the body is stored. A push we
+ *  cannot decode is dropped rather than retried: Pub/Sub would redeliver it,
+ *  and a redelivery cannot fix a body we could not read.
+ *
+ *  One address can legitimately map to several accounts — the same shared
+ *  mailbox connected by two people — so every match is poked. */
+export function handleGoogleWebhook(ctx: MailContext, body: unknown): string[] {
+  const emailAddress = decodePubsubEmail(body);
+  if (!emailAddress) { warnUndecodablePush(); return []; }
+  const rows = ctx.db
+    .prepare(`SELECT id FROM mail_accounts WHERE LOWER(emailAddress) = ? AND provider = 'google'`)
+    .all(emailAddress.toLowerCase()) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+/** The mailbox a Pub/Sub push is about, or null if the body is not one. */
+export function decodePubsubEmail(body: unknown): string | null {
+  const data = (body as { message?: { data?: unknown } } | null | undefined)?.message?.data;
+  if (typeof data !== 'string' || !data) return null;
+  try {
+    // Buffer's base64 decoder is lenient rather than throwing, so garbage in
+    // arrives here as garbage out and JSON.parse is what actually rejects it.
+    const parsed = JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as { emailAddress?: unknown };
+    const addr = (parsed as { emailAddress?: unknown } | null)?.emailAddress;
+    return typeof addr === 'string' && addr ? addr : null;
+  } catch {
+    return null;
+  }
+}
+
+// A misconfigured subscription can post continuously; one line a minute names
+// the problem without the log becoming the bigger problem.
+let lastUndecodableWarnAt = 0;
+function warnUndecodablePush(): void {
+  const now = Date.now();
+  if (now - lastUndecodableWarnAt < 60_000) return;
+  lastUndecodableWarnAt = now;
+  console.warn(`[mail] a POST to ${GOOGLE_WEBHOOK_PATH} was not a decodable Pub/Sub push — check the subscription's payload format`);
 }

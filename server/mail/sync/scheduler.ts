@@ -6,7 +6,7 @@ import * as accounts from '../accountStore';
 import type { MailProvider } from '../providers/types';
 import { AuthExpiredError } from '../providers/types';
 import { runBackfill, runIncremental } from './engine';
-import { ensureGraphSubscription, hasGraphPushApi } from '../push';
+import { ensureGmailWatch, ensureGraphSubscription, hasGmailWatchApi, hasGraphPushApi } from '../push';
 
 interface Worker {
   accountId: string; provider: MailProvider; timer: NodeJS.Timeout | null; failures: number;
@@ -24,9 +24,13 @@ export class MailScheduler {
   /** Where Microsoft should post change notifications. Null (APP_PUBLIC_URL
    *  unset) means Graph accounts fall back to polling only — spec §4.2. */
   private readonly publicUrl: string | null;
-  constructor(private ctx: MailContext, opts: { fastMs?: number; slowMs?: number; backoffMaxMs?: number; now?: () => number; publicUrl?: string | null } = {}) {
+  /** The Cloud Pub/Sub topic Gmail should publish to (GOOGLE_PUBSUB_TOPIC).
+   *  Null means Google accounts poll only, exactly as they did before. */
+  private readonly googlePubsubTopic: string | null;
+  constructor(private ctx: MailContext, opts: { fastMs?: number; slowMs?: number; backoffMaxMs?: number; now?: () => number; publicUrl?: string | null; googlePubsubTopic?: string | null } = {}) {
     this.fastMs = opts.fastMs ?? 30_000; this.slowMs = opts.slowMs ?? 300_000; this.backoffMaxMs = opts.backoffMaxMs ?? 600_000; this.now = opts.now ?? (() => Date.now());
     this.publicUrl = opts.publicUrl ?? null;
+    this.googlePubsubTopic = opts.googlePubsubTopic ?? null;
   }
   // Never throws: one account whose provider cannot be constructed (bad/undecryptable
   // auth blob, provider factory blowing up) must not take the whole mail subsystem —
@@ -167,6 +171,14 @@ export class MailScheduler {
         if (this.publicUrl && account.provider === 'microsoft' && hasGraphPushApi(w.provider)) {
           const fresh = accounts.getAccountAny(this.ctx.db, w.accountId);
           if (fresh) await ensureGraphSubscription(this.ctx, fresh, w.provider, this.publicUrl, this.now());
+        }
+        // Gmail's watch is the same shape of problem: a registration that lapses
+        // after about a week, with no socket to hold in the meantime. Same rules
+        // — no network until renewal is due, and it never throws, so a Pub/Sub
+        // misconfiguration costs latency rather than the poll.
+        if (this.googlePubsubTopic && account.provider === 'google' && hasGmailWatchApi(w.provider)) {
+          const fresh = accounts.getAccountAny(this.ctx.db, w.accountId);
+          if (fresh) await ensureGmailWatch(this.ctx, fresh, w.provider, this.googlePubsubTopic, this.now());
         }
       } catch (e) {
         if (e instanceof AuthExpiredError) { this.stopAccount(w.accountId); this.providers.delete(w.accountId); return; }

@@ -304,6 +304,35 @@ describe('MailScheduler push', () => {
     await s.stop(); vi.useRealTimers();
   });
 
+  it('keeps a Gmail watch alive on each tick when a Pub/Sub topic is configured', async () => {
+    vi.useFakeTimers();
+    const g = accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@bb.com', auth: { refreshToken: 'r' } });
+    const gmail = provider as FakeMailProvider & { watch: ReturnType<typeof vi.fn>; stopWatch: ReturnType<typeof vi.fn> };
+    gmail.watch = vi.fn(async () => ({ historyId: '7', expiration: String(Date.now() + 7 * 24 * 3600_000) }));
+    gmail.stopWatch = vi.fn(async () => {});
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000, googlePubsubTopic: 'projects/ft/topics/mail' });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(gmail.watch).toHaveBeenCalledWith('projects/ft/topics/mail');
+    const state = JSON.parse(accounts.getAccountAny(ctx.db, g.id)!.syncState || '{}');
+    expect(typeof state.watchExpiration).toBe('number');
+    expect(state.cursor).toBe(0);                       // the provider's own sync state is intact
+
+    await vi.advanceTimersByTimeAsync(5001);            // next tick: still days of life left
+    expect(gmail.watch).toHaveBeenCalledTimes(1);
+    await s.stop(); vi.useRealTimers();
+  });
+
+  it('leaves Gmail alone when no Pub/Sub topic is configured — polling is the whole story', async () => {
+    vi.useFakeTimers();
+    accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'google', emailAddress: 'g@bb.com', auth: { refreshToken: 'r' } });
+    const gmail = provider as FakeMailProvider & { watch: ReturnType<typeof vi.fn>; stopWatch: ReturnType<typeof vi.fn> };
+    gmail.watch = vi.fn(); gmail.stopWatch = vi.fn();
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+    expect(gmail.watch).not.toHaveBeenCalled();
+    await s.stop(); vi.useRealTimers();
+  });
+
   it('leaves Graph alone when no public URL is configured', async () => {
     vi.useFakeTimers();
     accounts.createAccount(ctx.db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'ms@bb.com', auth: { refreshToken: 'r' } });

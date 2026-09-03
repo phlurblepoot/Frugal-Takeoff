@@ -26,6 +26,7 @@ actually resolved.
 | `MAIL_SECRET_KEY` | optional | 32 bytes as hex (64 chars) or base64. Encrypts stored refresh tokens / IMAP passwords (AES‑256‑GCM). **If unset, the server generates `data/mail.key` (mode 0600) on first use** — back that file up with the data directory. Losing the key only forces users to reconnect their accounts. |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google | From the Google Cloud OAuth client (§2). |
 | `MS_OAUTH_CLIENT_ID` / `MS_OAUTH_CLIENT_SECRET` | Microsoft | From the Entra app registration (§3). |
+| `GOOGLE_PUBSUB_TOPIC` | Google (optional) | Full topic name, `projects/<project>/topics/<topic>`. Turns on Gmail real-time push (§2.1). Unset, Gmail polls — which is the only difference. |
 | `MS_OAUTH_TENANT` | Microsoft (optional) | Your tenant id, or `common` (default). Use the tenant id for a single-tenant registration. |
 | `MAIL_FAKE_PROVIDER=1` | dev / E2E only | Every account uses an in-memory fake provider. Never set in production. |
 
@@ -45,7 +46,38 @@ is host-specific).
 5. Scopes requested by the app (nothing to configure, listed for the consent screen):
    `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.send`, `openid`, `email`.
 
-Sync: Gmail history polling (every 30 s while a user has the Mail tab open, otherwise every 5 min). Pub/Sub push is not required.
+Sync: Gmail history polling (every 30 s while a user has the Mail tab open,
+otherwise every 5 min). That is enough on its own — the push below is optional.
+
+### 2.1 Real-time push (optional)
+
+With a Cloud Pub/Sub topic configured, Gmail publishes a notification the moment
+a mailbox changes and new mail lands in the app within a second or two instead
+of up to 30 s. **Polling is not replaced** — it keeps running underneath, so a
+broken or misconfigured topic costs latency and nothing else.
+
+1. Google Cloud Console → **Pub/Sub → Topics → Create topic** (same project as the OAuth client).
+2. On the topic → **Permissions → Grant access**: principal `gmail-api-push@system.gserviceaccount.com`, role **Pub/Sub Publisher**. *(Skipping this is the usual cause of a `403 … User not authorized to perform this action` in the server log.)*
+3. On the topic → **Create subscription** → delivery type **Push**, endpoint URL = the **Gmail push endpoint** shown in **Settings → Mail → Server setup guide** (or `google.pubsub.webhookUrl` from `GET /api/mail/setup-info`). Copy it exactly: it ends in `?token=…`, and that token is what authenticates the push.
+4. Set `GOOGLE_PUBSUB_TOPIC=projects/<project>/topics/<topic>` and restart.
+
+The endpoint's token is a shared secret held in the `settings` table
+(`mail.googlePushSecret`, which `/api/settings` withholds). It is only ever
+shown by the admin-only setup route, because Pub/Sub delivers Gmail's own
+payload and has nowhere in the body to carry a secret — unlike Graph, which
+echoes `clientState` back to us. Treat the URL like a password; anyone holding
+it can make the server re-check a mailbox, and nothing more. (It rides in the
+query string because Pub/Sub offers no other place to put it, so a reverse proxy
+in front of the app will record it in access logs — worth a thought if those
+logs are shipped somewhere.)
+
+Each mailbox's `watch` lasts about seven days and every sync tick renews it once
+less than 24 hours are left, so there is nothing to schedule. Push notifications
+are believed only as far as "re-sync this mailbox": the address in the payload
+is matched against accounts already connected, the `historyId` in it is ignored
+(the poll owns that watermark), and nothing from the body is stored. The route
+takes the same **256 KB** body cap and **600 requests/min per IP** limit as the
+Graph webhook.
 
 ---
 
@@ -65,9 +97,9 @@ subscription is created; the subscription itself lasts two days and every sync
 tick renews it once less than 12 hours are left. If `APP_PUBLIC_URL` is unset,
 Microsoft accounts fall back to delta polling every 5 min.
 
-That webhook is the only route in the app that accepts an unauthenticated POST
-body. It has to be (Microsoft has no token of ours to send), so
-it is narrow by construction: a notification is believed only far enough to say
+That webhook is one of the two routes in the app that accept an unauthenticated
+POST body (the other is the optional Gmail push endpoint, §2.1). It has to be
+(Microsoft has no token of ours to send), so it is narrow by construction: a notification is believed only far enough to say
 "re-sync account X" — the `clientState` secret must match, the subscription id
 must already belong to an account, and nothing from the payload is stored. The
 route also caps the body at **256 KB** and rate-limits itself to **600
@@ -113,6 +145,8 @@ other data is lost).
 | Account shows **Reconnect needed** (`auth_error`) | The refresh token/password was revoked or rotated. Press Reconnect (OAuth) or Edit → re-enter password (IMAP). |
 | Microsoft push never arrives | `APP_PUBLIC_URL` not reachable from the internet, or a proxy strips the validation handshake / the `?validationToken=` query. The server logs subscription failures; polling still works, so the only symptom is latency. |
 | Webhook returns 413 or 429 | The body cap (256 KB) or the per-IP rate limit (600/min) fired. Real Graph batches are far under both — check what else is POSTing to that path. |
+| `Gmail watch failed … 403 … User not authorized` in the log | The Pub/Sub topic has not granted `gmail-api-push@system.gserviceaccount.com` the **Publisher** role (§2.1 step 2). The mailbox is fine and keeps polling. |
+| Gmail push never arrives | Check the subscription's endpoint URL against the one in **Settings → Mail** — a missing or edited `?token=` answers **403** (Pub/Sub reports it as a delivery failure), and a topic name that does not match `GOOGLE_PUBSUB_TOPIC` means nothing is ever published. The server logs the watch renewal; polling still works, so the only symptom is latency. |
 | Gmail "history expired" in the log | Normal after long downtime; Gmail drops history ids it no longer holds and the account re-backfills automatically. |
 | Sync stuck for one folder (IMAP) | A folder that LISTs but refuses SELECT is skipped with a warning; others continue. |
 | A message's body says "still being filed" (Microsoft) | Sent copy not yet in Sent Items; it appears within the next sync. |

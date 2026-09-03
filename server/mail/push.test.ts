@@ -14,15 +14,20 @@ import { runIncremental, runBackfill } from './sync/engine';
 import {
   getWebhookSecret, handleGraphWebhook, ensureGraphSubscription,
   pickPushState, writeSyncState, MAX_SUBSCRIPTION_MINUTES, type GraphPushApi,
+  getGooglePushSecret, handleGoogleWebhook, ensureGmailWatch, GOOGLE_WEBHOOK_PATH,
+  hasGmailWatchApi, type GmailWatchApi,
 } from './push';
 import { ProviderNotFoundError } from './providers/types';
 import type { GraphProvider } from './providers/microsoft';
+import type { GmailProvider } from './providers/google';
 import type { MailContext } from './context';
 
 // Compile-time proof that the real provider still satisfies the narrow surface
 // push.ts asks for — `npm run lint` fails if either signature drifts.
 const _graphSatisfiesPushApi: GraphPushApi = null as unknown as GraphProvider;
 void _graphSatisfiesPushApi;
+const _gmailSatisfiesWatchApi: GmailWatchApi = null as unknown as GmailProvider;
+void _gmailSatisfiesWatchApi;
 
 const crypto = new MailCrypto(Buffer.alloc(32, 9));
 let db: Database.Database;
@@ -240,5 +245,179 @@ describe('push state survives the sync engine', () => {
     writeSyncState(db, acct.id, { ...stateOf(acct.id), subscriptionId: 'sub-1' });
     await runBackfill(ctx, accounts.getAccountAny(db, acct.id)!, provider, new Date(0));
     expect(stateOf(acct.id).subscriptionId).toBe('sub-1');
+  });
+});
+
+// ── Gmail real-time push (Cloud Pub/Sub) ────────────────────────────────────
+// Gmail has no socket to hold and no subscription object of its own: it
+// publishes to a topic we own, and Pub/Sub POSTs that to our webhook. So the
+// moving parts here are the watch's renewal clock and the mapping from the
+// email address in a push back to the accounts that hold it.
+
+const HOUR = 3600_000;
+const NOW = Date.parse('2026-08-29T00:00:00.000Z');
+const TOPIC = 'projects/ft/topics/mail';
+
+/** A stand-in for GmailProvider's two watch calls. */
+function stubGmail(over: Partial<GmailWatchApi> = {}) {
+  const watch = vi.fn(async (_topic: string) => ({ historyId: '4242', expiration: String(NOW + 7 * 24 * HOUR) }));
+  const stopWatch = vi.fn(async () => {});
+  return { watch, stopWatch, ...over } as GmailWatchApi & { watch: typeof watch; stopWatch: typeof stopWatch };
+}
+
+const googleAccount = (email = 'nate@bigbear.com', userId = 'u1') =>
+  accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
+
+const pubsubBody = (payload: unknown, over: Record<string, unknown> = {}) => ({
+  message: {
+    data: Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload), 'utf8').toString('base64'),
+    messageId: '1',
+    ...over,
+  },
+  subscription: 'projects/ft/subscriptions/mail-push',
+});
+
+describe('getGooglePushSecret', () => {
+  it('generates its own hex secret, stable and separate from the Graph one', () => {
+    const a = getGooglePushSecret(db);
+    expect(a).toMatch(/^[0-9a-f]{48}$/);
+    expect(getGooglePushSecret(db)).toBe(a);
+    expect(a).not.toBe(getWebhookSecret(db));
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'mail.googlePushSecret'").get() as { value: string };
+    expect(row.value).toBe(a);
+  });
+
+  it('names the path Pub/Sub posts to', () => {
+    expect(GOOGLE_WEBHOOK_PATH).toBe('/api/mail/google/webhook');
+  });
+});
+
+describe('hasGmailWatchApi', () => {
+  it('recognises a provider that can carry a watch, and nothing else', () => {
+    expect(hasGmailWatchApi(stubGmail())).toBe(true);
+    expect(hasGmailWatchApi(provider)).toBe(false);
+    expect(hasGmailWatchApi(null)).toBe(false);
+    expect(hasGmailWatchApi({ watch: 1 })).toBe(false);
+  });
+});
+
+describe('ensureGmailWatch', () => {
+  it('registers a watch when the account has none, keeping the history watermark', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100' });
+    const api = stubGmail();
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(api.watch).toHaveBeenCalledWith(TOPIC);
+    // The watch's own historyId is NOT adopted: the poll owns that watermark,
+    // and overwriting it here would skip everything between the two.
+    expect(stateOf(g.id)).toEqual({ historyId: '100', watchExpiration: NOW + 7 * 24 * HOUR });
+  });
+
+  it('renews once less than a day is left', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 20 * HOUR });
+    const api = stubGmail();
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(api.watch).toHaveBeenCalledTimes(1);
+    expect(stateOf(g.id).watchExpiration).toBe(NOW + 7 * 24 * HOUR);
+  });
+
+  it('does nothing while the watch has more than a day left', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
+    const api = stubGmail();
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(api.watch).not.toHaveBeenCalled();
+    expect(stateOf(g.id).watchExpiration).toBe(NOW + 3 * 24 * HOUR);
+  });
+
+  it('does nothing without a topic — the deployment simply polls', async () => {
+    const g = googleAccount();
+    const api = stubGmail();
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, null, NOW);
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, '  ', NOW);
+    expect(api.watch).not.toHaveBeenCalled();
+  });
+
+  it('never rejects when Gmail refuses, and leaves the stored state alone', async () => {
+    // A 403 here is the topic missing its Publisher grant — an admin's console
+    // step, not a broken account. It must not fail the tick that called it.
+    const g = googleAccount();
+    setState(g.id, { historyId: '100' });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const api = stubGmail({ watch: vi.fn(async () => { throw new Error('Gmail 403: User not authorized to perform this action.'); }) });
+
+    await expect(ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW)).resolves.toBeUndefined();
+    expect(stateOf(g.id)).toEqual({ historyId: '100' });
+    expect(String(err.mock.calls[0])).toMatch(/User not authorized/);
+    err.mockRestore();
+  });
+
+  it('merges into a syncState written while the watch call was in flight', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100' });
+    const api = stubGmail({
+      watch: vi.fn(async () => {
+        setState(g.id, { historyId: '200' });   // a poll finished mid-flight
+        return { historyId: '4242', expiration: String(NOW + 7 * 24 * HOUR) };
+      }),
+    });
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(stateOf(g.id)).toEqual({ historyId: '200', watchExpiration: NOW + 7 * 24 * HOUR });
+  });
+
+  it('falls back to Gmail\'s documented week when the response has no usable expiry', async () => {
+    // Without a fallback an unparsable expiry would re-watch on every 30s tick.
+    const g = googleAccount();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = stubGmail({ watch: vi.fn(async () => ({ historyId: '1', expiration: 'nonsense' })) });
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(stateOf(g.id).watchExpiration).toBe(NOW + 7 * 24 * HOUR);
+    warn.mockRestore();
+  });
+
+  it('keeps the watch expiry across an incremental poll', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
+    writeSyncState(db, g.id, { historyId: '101' });
+    expect(stateOf(g.id)).toEqual({ historyId: '101', watchExpiration: NOW + 3 * 24 * HOUR });
+    expect(pickPushState(JSON.stringify({ historyId: 'x', watchExpiration: 5 }))).toEqual({ watchExpiration: 5 });
+  });
+});
+
+describe('handleGoogleWebhook', () => {
+  it('maps the pushed address to every google account that holds it, case-insensitively', () => {
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
+    const a = googleAccount('Nate@BigBear.com', 'u1');
+    const b = googleAccount('nate@bigbear.com', 'u2');
+    const ids = handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'NATE@bigbear.com', historyId: 9 }));
+    expect(new Set(ids)).toEqual(new Set([a.id, b.id]));
+  });
+
+  it('never pokes an account on another provider that happens to share the address', () => {
+    const g = googleAccount('me@bb.com');           // acct (microsoft) already has me@bb.com
+    expect(handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'me@bb.com' }))).toEqual([g.id]);
+  });
+
+  it('returns nothing for an address no account holds', () => {
+    googleAccount();
+    expect(handleGoogleWebhook(ctx, pubsubBody({ emailAddress: 'stranger@elsewhere.com' }))).toEqual([]);
+  });
+
+  it('shrugs off a body that is not a decodable Pub/Sub push, logging at most once a minute', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(handleGoogleWebhook(ctx, { message: { data: '!!!not base64!!!' } })).toEqual([]);
+    expect(handleGoogleWebhook(ctx, pubsubBody('{ not json'))).toEqual([]);
+    expect(handleGoogleWebhook(ctx, pubsubBody({ historyId: 9 }))).toEqual([]);   // no emailAddress
+    expect(handleGoogleWebhook(ctx, { message: {} })).toEqual([]);
+    expect(handleGoogleWebhook(ctx, undefined)).toEqual([]);
+    expect(handleGoogleWebhook(ctx, 'garbage')).toEqual([]);
+    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+    warn.mockRestore();
   });
 });

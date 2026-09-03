@@ -146,7 +146,13 @@ export interface Recipient extends Addr {
 
 export interface SetupInfo {
   publicUrl: string | null;
-  google: { configured: boolean; redirectUri: string | null };
+  google: {
+    configured: boolean;
+    redirectUri: string | null;
+    /** Optional Gmail real-time push. `webhookUrl` embeds the shared secret, so
+     *  it only ever comes back from the admin-only setup-info route. */
+    pubsub: { configured: boolean; topic: string | null; webhookUrl: string | null };
+  };
   microsoft: { configured: boolean; redirectUri: string | null; webhookUrl: string | null; tenant: string };
   secretKey: 'env' | 'file';
 }

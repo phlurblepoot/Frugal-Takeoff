@@ -1,7 +1,7 @@
 // server/mail/providers/google.test.ts
 // Every Gmail call goes through an injected `fetch`, so the whole provider is
 // exercised against recorded API shapes without a network or a real account.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GmailProvider, googleRefresh } from './google';
@@ -374,6 +374,57 @@ describe('GmailProvider', () => {
     const f = fakeFetch([[/\/labels$/, () => new Response('{"error":{"message":"boom"}}', { status: 500 })]]);
     await expect(provider(f).listFolders()).rejects.toThrow(/Gmail 500/);
     await expect(provider(f).listFolders()).rejects.not.toThrow(/AT/);
+  });
+
+  // ── Cloud Pub/Sub watch (real-time push; polling stays as the fallback) ──
+
+  it('watch registers the mailbox against a Pub/Sub topic and returns the expiry', async () => {
+    const f = fakeFetch([[/\/watch$/, () => fx('gmail-watch.json')]]);
+    const r = await provider(f).watch('projects/ft/topics/mail');
+
+    expect(r).toEqual({ historyId: '9876543210', expiration: '1788307200000' });
+    expect(f.calls[0].url).toMatch(/users\/me\/watch$/);
+    expect(f.calls[0].init.method).toBe('POST');
+    // No labelIds: a filtered watch would silently skip mail that lands outside
+    // the filter, and the poke it triggers re-syncs the whole mailbox anyway.
+    expect(JSON.parse(f.calls[0].init.body)).toEqual({ topicName: 'projects/ft/topics/mail' });
+  });
+
+  it('surfaces a topic-permission 403 as an ordinary error, NOT as dead credentials', async () => {
+    // The account is fine — the topic simply has not granted
+    // gmail-api-push@system.gserviceaccount.com the Publisher role. Treating
+    // that as AuthExpiredError would park a healthy mailbox in auth_error and
+    // send its owner to reconnect a connection that was never broken.
+    const body = '{"error":{"code":403,"message":"User not authorized to perform this action."}}';
+    const f = fakeFetch([[/\/watch$/, () => new Response(body, { status: 403 })]]);
+    const err = await provider(f).watch('projects/ft/topics/mail').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(AuthExpiredError);
+    // The message is what tells an admin WHICH console step is missing.
+    expect((err as Error).message).toMatch(/User not authorized/);
+    expect(f.calls.length).toBe(1);   // no retry: a 403 is not a stale token
+  });
+
+  it('watch still treats a 401 as dead credentials after one retry', async () => {
+    const f = fakeFetch([[/\/watch$/, () => new Response('{}', { status: 401 })]]);
+    await expect(provider(f).watch('projects/ft/topics/mail')).rejects.toBeInstanceOf(AuthExpiredError);
+    expect(f.calls.length).toBe(2);
+  });
+
+  it('stopWatch posts to users/me/stop and is best-effort', async () => {
+    const f = fakeFetch([[/\/stop$/, () => new Response('', { status: 204 })]]);
+    await expect(provider(f).stopWatch()).resolves.toBeUndefined();
+    expect(f.calls[0].url).toMatch(/users\/me\/stop$/);
+    expect(f.calls[0].init.method).toBe('POST');
+
+    // Nothing depends on the stop succeeding — the watch expires on its own —
+    // so a failure must not reject into a caller that is tearing an account down.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const broken = fakeFetch([[/\/stop$/, () => new Response('{}', { status: 500 })]]);
+    await expect(provider(broken).stopWatch()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('googleRefresh posts the form and surfaces invalid_grant', async () => {

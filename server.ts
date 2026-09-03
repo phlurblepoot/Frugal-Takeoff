@@ -29,7 +29,7 @@ import type { MailCrypto } from './server/mail/crypto';
 import { createMailProvider, defaultProviderDeps } from './server/mail/providers';
 import { registerMailRoutes } from './server/mail/routes';
 import { MailScheduler } from './server/mail/sync/scheduler';
-import { WEBHOOK_PATH } from './server/mail/push';
+import { WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './server/mail/push';
 import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
 
@@ -134,10 +134,11 @@ async function startServer() {
   // steps aside for exactly those:
   //   * POST /api/mail/uploads streams a raw attachment body (its own
   //     express.raw parser lives in registerMailRoutes);
-  //   * the Graph webhook is unauthenticated and open to the internet, so it
-  //     takes a 256 KB express.json() of its own instead of this 50 MB one.
+  //   * the Graph and Pub/Sub webhooks are unauthenticated and open to the
+  //     internet, so each takes a 256 KB express.json() of its own instead of
+  //     this 50 MB one.
   const jsonParser = express.json({ limit: "50mb" });
-  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH;
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
   app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
@@ -607,7 +608,13 @@ async function startServer() {
   // publicUrl is what lets Graph accounts use change notifications instead of
   // polling alone: the scheduler both points Microsoft at our webhook and keeps
   // the subscription renewed. Unset → poll only (spec §4.2).
-  mailScheduler = new MailScheduler(mailCtx, { publicUrl: process.env.APP_PUBLIC_URL || null });
+  // GOOGLE_PUBSUB_TOPIC does the same for Gmail: with a topic configured the
+  // scheduler keeps each Gmail watch renewed and Pub/Sub posts to
+  // /api/mail/google/webhook. Both are optional — polling never stops either way.
+  mailScheduler = new MailScheduler(mailCtx, {
+    publicUrl: process.env.APP_PUBLIC_URL || null,
+    googlePubsubTopic: process.env.GOOGLE_PUBSUB_TOPIC || null,
+  });
   mailCtx.scheduler = mailScheduler;
 
   registerMailRoutes(app, {

@@ -131,6 +131,35 @@ export const MailSetupGuide: React.FC = () => {
           <Step>Put the client id and secret in <code>GOOGLE_OAUTH_CLIENT_ID</code> / <code>GOOGLE_OAUTH_CLIENT_SECRET</code> and restart.</Step>
           <Step>Scopes requested (nothing to configure): <code>gmail.modify</code>, <code>gmail.send</code>, <code>openid</code>, <code>email</code>.</Step>
         </ol>
+
+        {/* Optional: Gmail pushes through a Pub/Sub topic you own. Without it
+            Gmail simply polls, which is why this reads as an add-on rather
+            than a step 6 that looks mandatory. */}
+        <div className="space-y-2 rounded-lg border border-edge bg-sunken/50 p-3">
+          <h4 className="flex items-center gap-2 text-sm font-semibold text-ink">
+            Real-time push (optional)
+            <StatusPill tone={info.google.pubsub.configured ? 'green' : 'slate'}>
+              {info.google.pubsub.configured ? 'Configured' : 'Not configured'}
+            </StatusPill>
+          </h4>
+          <p className="text-xs text-ink-faint">
+            Gmail polls every 30 seconds while Mail is open and every 5 minutes otherwise. Cloud Pub/Sub makes new
+            mail arrive within a second or two; polling stays on as the fallback either way.
+          </p>
+          <ol className="list-decimal space-y-1 pl-5">
+            <Step>Google Cloud Console → Pub/Sub → <strong>Create topic</strong>.</Step>
+            <Step>On that topic, grant <code>gmail-api-push@system.gserviceaccount.com</code> the <strong>Pub/Sub Publisher</strong> role.</Step>
+            <Step>Create a <strong>Push</strong> subscription on the topic with this endpoint URL (it contains a secret — treat it like a password):</Step>
+          </ol>
+          <CopyValue label="the Gmail push endpoint" value={info.google.pubsub.webhookUrl} />
+          <ol className="list-decimal space-y-1 pl-5" start={4}>
+            <Step>
+              Set <code>GOOGLE_PUBSUB_TOPIC</code> to the full topic name
+              {info.google.pubsub.topic ? <> (currently <code>{info.google.pubsub.topic}</code>)</> : <> (<code>projects/&lt;project&gt;/topics/&lt;topic&gt;</code>)</>}
+              {' '}and restart. The server renews each mailbox&rsquo;s watch automatically.
+            </Step>
+          </ol>
+        </div>
       </section>
 
       {/* ── Microsoft ── */}
@@ -172,6 +201,7 @@ export const MailSetupGuide: React.FC = () => {
         <div className="divide-y divide-edge">
           <EnvRow name="APP_PUBLIC_URL" set={!!info.publicUrl} note={info.publicUrl ?? 'required for OAuth and Microsoft push'} />
           <EnvRow name="GOOGLE_OAUTH_CLIENT_ID" set={info.google.configured} note="with GOOGLE_OAUTH_CLIENT_SECRET" />
+          <EnvRow name="GOOGLE_PUBSUB_TOPIC" set={info.google.pubsub.configured} note={info.google.pubsub.topic ?? 'optional — Gmail real-time push'} />
           <EnvRow name="MS_OAUTH_CLIENT_ID" set={info.microsoft.configured} note="with MS_OAUTH_CLIENT_SECRET" />
           <EnvRow name="MS_OAUTH_TENANT" set={info.microsoft.tenant !== 'common'} note={info.microsoft.tenant} />
           <EnvRow name="MAIL_SECRET_KEY" set={info.secretKey === 'env'} note="encrypts stored mail credentials" />

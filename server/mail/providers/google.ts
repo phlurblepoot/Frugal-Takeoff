@@ -405,6 +405,36 @@ export class GmailProvider implements MailProvider {
     return { upserts, deletes, state: { historyId } };
   }
 
+  // -- real-time push (Cloud Pub/Sub) ---------------------------------------
+
+  /** Asks Gmail to publish this mailbox's change notifications to `topicName`
+   *  (a full `projects/<project>/topics/<topic>`). A watch lasts about seven
+   *  days, so push.ts renews it from the sync tick.
+   *
+   *  Deliberately unfiltered: `labelIds` would narrow what Gmail publishes, and
+   *  since a notification only ever means "re-sync this mailbox" the filter
+   *  could only lose mail, never save work. The returned `expiration` is a
+   *  millisecond epoch **as a string** — Gmail's own encoding, kept verbatim so
+   *  the caller decides how to parse it. */
+  async watch(topicName: string): Promise<{ historyId: string; expiration: string }> {
+    const r = await this.api<{ historyId?: string; expiration?: string }>('watch', {
+      method: 'POST',
+      body: JSON.stringify({ topicName }),
+    });
+    return { historyId: r.historyId ?? '', expiration: r.expiration ?? '' };
+  }
+
+  /** Cancels the mailbox's watch. Best effort by design: it is called while an
+   *  account is being torn down, nothing downstream depends on it, and an
+   *  abandoned watch expires by itself within a week. */
+  async stopWatch(): Promise<void> {
+    try {
+      await this.api<void>('stop', { method: 'POST' });
+    } catch (e) {
+      console.warn(`[mail] could not stop the Gmail watch for ${this.opts.emailAddress}:`, (e as Error).message);
+    }
+  }
+
   // -- bodies and attachments -----------------------------------------------
 
   /** Drafts are addressed by draft id everywhere else in this class, so a

@@ -17,7 +17,7 @@ import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
 import { registerMailRoutes, createWebhookRateLimit, WEBHOOK_MAX_BODY_BYTES, WEBHOOK_RATE_LIMIT_PER_MIN, type MailRouteDeps } from './routes';
-import { getWebhookSecret } from './push';
+import { getWebhookSecret, getGooglePushSecret, GOOGLE_WEBHOOK_PATH } from './push';
 import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
 import { MailScheduler } from './sync/scheduler';
@@ -72,7 +72,7 @@ beforeEach(() => {
   // Mirrors server.ts: the app-level parser steps aside for the two mail paths
   // that bring their own (the upload stream, and the webhook's 256 KB cap).
   const appJson = express.json({ limit: '50mb' });
-  app.use((req, res, next) => (req.path.startsWith('/api/mail/uploads') || req.path === '/api/mail/ms/webhook' ? next() : appJson(req, res, next)));
+  app.use((req, res, next) => (req.path.startsWith('/api/mail/uploads') || req.path === '/api/mail/ms/webhook' || req.path === GOOGLE_WEBHOOK_PATH ? next() : appJson(req, res, next)));
   registerMailRoutes(app, {
     ctx,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -547,6 +547,13 @@ describe('mail routes', () => {
       google: { configured: false, redirectUri: 'https://app.test/api/mail/oauth/google/callback' },
       microsoft: { configured: false, redirectUri: 'https://app.test/api/mail/oauth/microsoft/callback' },
     });
+    // Pub/Sub is optional: unconfigured, the URL is still shown (an admin needs
+    // it to create the subscription) but the topic is null.
+    expect(si.body.google.pubsub).toEqual({
+      configured: false,
+      topic: null,
+      webhookUrl: `https://app.test${GOOGLE_WEBHOOK_PATH}?token=${getGooglePushSecret(db)}`,
+    });
     currentUser = { id: 'u2', role: 'user' };
     expect((await request(app).get('/api/mail/setup-info')).status).toBe(403);
   });
@@ -978,5 +985,129 @@ describe('POST /api/mail/ms/webhook', () => {
     expect(calls).toBe(1);
     expect(poke).not.toHaveBeenCalled();
     poke.mockRestore();
+  });
+});
+
+describe('POST /api/mail/google/webhook', () => {
+  // Pub/Sub sends only the topic's payload — there is no field of ours in the
+  // body to echo a secret back in, the way Graph echoes clientState — so the
+  // shared secret rides in the query string of the URL the admin registers.
+  const token = () => getGooglePushSecret(db);
+  const push = (payload: unknown) => ({
+    message: { data: Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload), 'utf8').toString('base64'), messageId: '1' },
+    subscription: 'projects/ft/subscriptions/mail-push',
+  });
+  const gmailAccount = (email: string, userId = 'u1') =>
+    accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
+
+  it('pokes every google account holding the pushed address, whatever its case', async () => {
+    const a = gmailAccount('Nate@BigBear.com');
+    const b = gmailAccount('nate@bigbear.com', 'u2');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'NATE@bigbear.com', historyId: 42 }));
+    expect(r.status).toBe(204);
+    expect(new Set(poke.mock.calls.map(c => c[0]))).toEqual(new Set([a.id, b.id]));
+    poke.mockRestore();
+  });
+
+  it('refuses a missing or wrong token with 403 and does not act on the body', async () => {
+    gmailAccount('nate@bigbear.com');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const body = push({ emailAddress: 'nate@bigbear.com' });
+    expect((await request(app).post(GOOGLE_WEBHOOK_PATH).send(body)).status).toBe(403);
+    expect((await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'forged' }).send(body)).status).toBe(403);
+    // A token of the right length must fail too — the compare is on content.
+    expect((await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'f'.repeat(token().length) }).send(body)).status).toBe(403);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('never echoes the secret back to a caller that guessed wrong', async () => {
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'forged' }).send(push({ emailAddress: 'x@y.com' }));
+    expect(r.text).not.toContain(token());
+    expect(r.body).toEqual({});
+  });
+
+  it('acks an undecodable push instead of making Pub/Sub redeliver it', async () => {
+    gmailAccount('nate@bigbear.com');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const post = (body: unknown) => request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(body as object);
+    expect((await post({ message: { data: '!!!not base64!!!' } })).status).toBe(204);
+    expect((await post(push('{ not json'))).status).toBe(204);
+    expect((await post({ nope: true })).status).toBe(204);
+    expect(poke).not.toHaveBeenCalled();
+    warn.mockRestore();
+    poke.mockRestore();
+  });
+
+  it('acks an address no account holds', async () => {
+    gmailAccount('nate@bigbear.com');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'stranger@elsewhere.com' }));
+    expect(r.status).toBe(204);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  // ── open to the internet, same hardening as the Graph webhook ──
+
+  it('rejects an oversized body with 413 before the token is even consulted', async () => {
+    gmailAccount('nate@bigbear.com');
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: token() })
+      .send(push({ emailAddress: 'nate@bigbear.com', pad: 'x'.repeat(WEBHOOK_MAX_BODY_BYTES) }));
+    expect(r.status).toBe(413);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('parses its own body, so the cap does not depend on the app-level parser', async () => {
+    const a = gmailAccount('nate@bigbear.com');
+    const bare = altApp({}, { json: false });
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(bare).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    expect(r.status).toBe(204);
+    expect(poke).toHaveBeenCalledWith(a.id);
+    poke.mockRestore();
+  });
+
+  it('runs its own rate limiter before the handler', async () => {
+    gmailAccount('nate@bigbear.com');
+    let calls = 0;
+    const limited = altApp({ googleWebhookRateLimit: (_req, res) => { calls++; res.status(429).end(); } });
+    const poke = vi.spyOn(ctx.scheduler!, 'pokeAccount').mockImplementation(() => {});
+    const r = await request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    expect(r.status).toBe(429);
+    expect(calls).toBe(1);
+    expect(poke).not.toHaveBeenCalled();
+    poke.mockRestore();
+  });
+
+  it('throttles at the same documented ceiling as the Graph webhook', async () => {
+    gmailAccount('nate@bigbear.com');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const limited = altApp({ googleWebhookRateLimit: createWebhookRateLimit(2, 'Pub/Sub') });
+    const post = () => request(limited).post(GOOGLE_WEBHOOK_PATH).query({ token: token() }).send(push({ emailAddress: 'nate@bigbear.com' }));
+    expect((await post()).status).toBe(204);
+    expect((await post()).status).toBe(204);
+    expect((await post()).status).toBe(429);
+    expect(warn.mock.calls.filter(c => String(c[0]).includes('Pub/Sub webhook rate limit'))).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('reports the topic when GOOGLE_PUBSUB_TOPIC is set, and only to an admin', async () => {
+    routeEnv.GOOGLE_PUBSUB_TOPIC = 'projects/ft/topics/mail';
+    const si = await request(app).get('/api/mail/setup-info');
+    expect(si.body.google.pubsub).toEqual({
+      configured: true,
+      topic: 'projects/ft/topics/mail',
+      webhookUrl: `https://app.test${GOOGLE_WEBHOOK_PATH}?token=${token()}`,
+    });
+    // The URL carries the secret, so it must never leave the admin-only route.
+    currentUser = { id: 'u2', role: 'user' };
+    const denied = await request(app).get('/api/mail/setup-info');
+    expect(denied.status).toBe(403);
+    expect(denied.text).not.toContain(token());
   });
 });
