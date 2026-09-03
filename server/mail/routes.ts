@@ -11,7 +11,7 @@ import { send, MailSendError } from './sendService';
 import { createLink, deleteLink, listLinksForItem, listLinksForThread, type ItemType } from './links';
 import { stageUpload } from './uploads';
 import { buildAuthUrl, createVerifier, challengeOf, signState, verifyState, exchangeCode, isOAuthProvider, redactGrant, redirectUri } from './oauth';
-import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
+import { getWebhookSecret, getGooglePushSecret, handleGraphWebhook, handleGoogleWebhook, releaseGmailWatch, constantTimeEquals, WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './push';
 import { putBuffer } from '../files';
 import { listCustomers } from '../customerStore';
 import type { BodyCache } from './sync/bodyCache';
@@ -262,7 +262,14 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     const patch: Parameters<typeof accounts.updateAccount>[2] = {};
     if (typeof b.displayName === 'string') patch.displayName = b.displayName;
     if (typeof b.signatureHtml === 'string') patch.signatureHtml = b.signatureHtml;
-    if (b.status === 'disabled') { patch.status = 'disabled'; ctx.scheduler?.stopAccount(a.id); }
+    if (b.status === 'disabled') {
+      patch.status = 'disabled';
+      ctx.scheduler?.stopAccount(a.id);
+      // Nothing is left to poke a disabled account, so a live Gmail watch would
+      // only publish into a mailbox nobody is syncing. Clearing the stored
+      // expiry is what makes re-enabling register a fresh watch straight away.
+      releaseGmailWatch(ctx, a, () => providerFor(a.id), { clearState: true });
+    }
     else if (b.status === 'ok' && a.status === 'disabled') { patch.status = 'ok'; }
     accounts.updateAccount(db, a.id, patch);
     if (patch.status === 'ok') ctx.scheduler?.startAccount(a.id);   // only after the row says 'ok'
@@ -277,6 +284,10 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
     // Stop the worker and drop the cached provider BEFORE the row goes away —
     // a live worker would otherwise tick against a deleted account.
     ctx.scheduler?.stopAccount(a.id);
+    // Between stopping the worker and dropping the cached provider: the stop
+    // needs a client with live credentials, and the row is about to go, so
+    // there is no state left to clear.
+    releaseGmailWatch(ctx, a, () => providerFor(a.id));
     ctx.scheduler?.dropProvider(a.id);
     accounts.deleteAccount(db, a.id);
     ctx.broadcastChange({ type: 'mailAccount', id: a.id, action: 'deleted', byUserId: a.userId });

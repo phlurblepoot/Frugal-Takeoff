@@ -207,6 +207,47 @@ export async function ensureGmailWatch(
   }
 }
 
+/** Hands an account's Gmail watch back when the account is going away or being
+ *  disabled. Best effort in every direction: an abandoned watch expires within
+ *  a week on its own, and its notifications are dropped anyway once the address
+ *  no longer matches a connected account — so nothing here is worth failing a
+ *  delete or a disable over, and nothing is awaited.
+ *
+ *  `resolveProvider` is a thunk rather than a provider so the cheap guards run
+ *  first: an account that never had a watch must not pay for a provider being
+ *  built (and a token refreshed) just to learn there is nothing to stop.
+ *
+ *  `clearState` is for the disable path, where the row survives: dropping
+ *  `watchExpiration` is what makes a later re-enable register a fresh watch on
+ *  its next tick instead of trusting an expiry we just cancelled. */
+export function releaseGmailWatch(
+  ctx: MailContext, account: MailAccountRow, resolveProvider: () => unknown, opts: { clearState?: boolean } = {},
+): void {
+  if (account.provider !== 'google') return;
+  if (parseState(account.syncState).watchExpiration === undefined) return;
+  if (opts.clearState) clearPushState(ctx.db, account.id, ['watchExpiration']);
+
+  let provider: unknown;
+  try {
+    provider = resolveProvider();
+  } catch (e) {
+    console.warn(`[mail] could not reach Gmail to stop the watch for ${account.id}:`, (e as Error).message);
+    return;
+  }
+  if (!hasGmailWatchApi(provider)) return;
+  void Promise.resolve().then(() => provider.stopWatch())
+    .catch(e => console.warn(`[mail] could not stop the Gmail watch for ${account.id}:`, (e as Error).message));
+}
+
+/** Removes push bookkeeping keys, leaving the provider's own sync state intact. */
+export function clearPushState(db: Database.Database, accountId: string, keys: readonly string[]): void {
+  const row = accounts.getAccountAny(db, accountId);
+  if (!row) return;
+  const state = parseState(row.syncState);
+  for (const k of keys) delete state[k];
+  accounts.updateAccount(db, accountId, { syncState: JSON.stringify(state) });
+}
+
 // ── incoming notifications ──────────────────────────────────────────────────
 
 /** Compares two secrets without leaking their common prefix through timing. */

@@ -15,7 +15,7 @@ import {
   getWebhookSecret, handleGraphWebhook, ensureGraphSubscription,
   pickPushState, writeSyncState, MAX_SUBSCRIPTION_MINUTES, type GraphPushApi,
   getGooglePushSecret, handleGoogleWebhook, ensureGmailWatch, GOOGLE_WEBHOOK_PATH,
-  hasGmailWatchApi, type GmailWatchApi,
+  hasGmailWatchApi, releaseGmailWatch, clearPushState, type GmailWatchApi,
 } from './push';
 import { ProviderNotFoundError } from './providers/types';
 import type { GraphProvider } from './providers/microsoft';
@@ -419,5 +419,71 @@ describe('handleGoogleWebhook', () => {
     expect(handleGoogleWebhook(ctx, 'garbage')).toEqual([]);
     expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
     warn.mockRestore();
+  });
+});
+
+describe('releaseGmailWatch', () => {
+  const flush = () => new Promise(r => setTimeout(r, 0));
+
+  it('stops the watch and can clear the key so a re-enable re-watches', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
+    const api = stubGmail();
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api, { clearState: true });
+    await flush();
+
+    expect(api.stopWatch).toHaveBeenCalledTimes(1);
+    // The poll's own watermark stays; only the push bookkeeping goes.
+    expect(stateOf(g.id)).toEqual({ historyId: '100' });
+
+    // …and with no expiry on the row, the next tick registers a fresh watch.
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+    expect(api.watch).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the stored state alone when the caller only wants the watch stopped', async () => {
+    // The delete path: the row is about to vanish, so there is nothing to clear.
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
+    const api = stubGmail();
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api);
+    await flush();
+
+    expect(api.stopWatch).toHaveBeenCalledTimes(1);
+    expect(stateOf(g.id).watchExpiration).toBe(NOW + 3 * 24 * HOUR);
+  });
+
+  it('costs nothing for an account that never had a watch, or is not Gmail at all', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100' });                       // google, but never watched
+    const resolve = vi.fn(() => stubGmail());
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, resolve, { clearState: true });
+    // acct is the microsoft one, with a subscription rather than a watch
+    setState(acct.id, { deltaLinks: {}, subscriptionId: 'sub-1' });
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, acct.id)!, resolve);
+    await flush();
+
+    // The provider is never even built — no token refresh for a no-op.
+    expect(resolve).not.toHaveBeenCalled();
+    expect(stateOf(acct.id).subscriptionId).toBe('sub-1');
+  });
+
+  it('never throws when the provider cannot be built or the stop fails', async () => {
+    const g = googleAccount();
+    setState(g.id, { watchExpiration: NOW + HOUR });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(() => releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => { throw new Error('auth blob unreadable'); })).not.toThrow();
+    const broken = stubGmail({ stopWatch: vi.fn(async () => { throw new Error('Gmail 500'); }) });
+    expect(() => releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => broken)).not.toThrow();
+    await flush();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('clearPushState drops only the named keys', () => {
+    setState(acct.id, { deltaLinks: { A: '1' }, subscriptionId: 's', watchExpiration: 5 });
+    clearPushState(db, acct.id, ['watchExpiration']);
+    expect(stateOf(acct.id)).toEqual({ deltaLinks: { A: '1' }, subscriptionId: 's' });
   });
 });

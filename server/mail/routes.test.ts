@@ -17,7 +17,7 @@ import * as accounts from './accountStore';
 import { FakeMailProvider } from './providers/fake';
 import { getFakeProvider, resetFakes } from './providers/fakeRegistry';
 import { registerMailRoutes, createWebhookRateLimit, WEBHOOK_MAX_BODY_BYTES, WEBHOOK_RATE_LIMIT_PER_MIN, type MailRouteDeps } from './routes';
-import { getWebhookSecret, getGooglePushSecret, GOOGLE_WEBHOOK_PATH } from './push';
+import { getWebhookSecret, getGooglePushSecret, ensureGmailWatch, GOOGLE_WEBHOOK_PATH, type GmailWatchApi } from './push';
 import { signState, verifyState } from './oauth';
 import { BodyCache } from './sync/bodyCache';
 import { MailScheduler } from './sync/scheduler';
@@ -1109,5 +1109,65 @@ describe('POST /api/mail/google/webhook', () => {
     const denied = await request(app).get('/api/mail/setup-info');
     expect(denied.status).toBe(403);
     expect(denied.text).not.toContain(token());
+  });
+});
+
+describe('Gmail watch teardown on delete / disable', () => {
+  // A watch nobody hands back keeps publishing for up to a week into a mailbox
+  // the app has stopped syncing. Best effort throughout: the account operation
+  // must succeed whatever Gmail says.
+  const flush = () => new Promise(r => setTimeout(r, 0));
+  const watched = (email = 'nate@bigbear.com') => {
+    const g = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
+    accounts.updateAccount(db, g.id, { syncState: JSON.stringify({ historyId: '100', watchExpiration: Date.now() + 3 * 86400_000 }) });
+    const p = getFakeProvider(g.id) as FakeMailProvider & GmailWatchApi;
+    p.watch = vi.fn(async (_topic: string) => ({ historyId: '7', expiration: String(Date.now() + 7 * 86400_000) }));
+    p.stopWatch = vi.fn(async () => {});
+    return { g, p };
+  };
+
+  it('DELETE hands the watch back before the account disappears', async () => {
+    const { g, p } = watched();
+    expect((await request(app).delete(`/api/mail/accounts/${g.id}`)).status).toBe(200);
+    await flush();
+    expect(p.stopWatch).toHaveBeenCalledTimes(1);
+    expect(accounts.getAccountAny(db, g.id)).toBeNull();
+  });
+
+  it('disabling stops the watch and clears the expiry, keeping the poll watermark', async () => {
+    const { g, p } = watched();
+    expect((await request(app).patch(`/api/mail/accounts/${g.id}`).send({ status: 'disabled' })).status).toBe(200);
+    await flush();
+    expect(p.stopWatch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(accounts.getAccountAny(db, g.id)!.syncState!)).toEqual({ historyId: '100' });
+    expect(accounts.getAccountAny(db, g.id)!.status).toBe('disabled');
+  });
+
+  it('re-enabling registers a fresh watch on the next tick', async () => {
+    const { g, p } = watched();
+    await request(app).patch(`/api/mail/accounts/${g.id}`).send({ status: 'disabled' });
+    await flush();
+    expect((await request(app).patch(`/api/mail/accounts/${g.id}`).send({ status: 'ok' })).status).toBe(200);
+    // What the scheduler does on that account's next tick, with a topic set.
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, p, 'projects/ft/topics/mail');
+    expect(p.watch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(accounts.getAccountAny(db, g.id)!.syncState!).watchExpiration).toBeGreaterThan(Date.now());
+  });
+
+  it('a delete still succeeds when Gmail refuses the stop', async () => {
+    const { g, p } = watched();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    p.stopWatch = vi.fn(async () => { throw new Error('Gmail 500'); });
+    expect((await request(app).delete(`/api/mail/accounts/${g.id}`)).status).toBe(200);
+    await flush();
+    expect(accounts.getAccountAny(db, g.id)).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('touches nothing for an account that has no watch to hand back', async () => {
+    // acct is the fake/IMAP-shaped one — no watch, no Gmail call, and the
+    // provider is not even resolved.
+    expect((await request(app).patch(`/api/mail/accounts/${acct.id}`).send({ status: 'disabled' })).status).toBe(200);
+    expect((await request(app).delete(`/api/mail/accounts/${acct.id}`)).status).toBe(200);
   });
 });
