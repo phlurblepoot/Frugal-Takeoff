@@ -342,18 +342,40 @@ describe('ensureGmailWatch', () => {
     expect(api.watch).not.toHaveBeenCalled();
   });
 
-  it('never rejects when Gmail refuses, and leaves the stored state alone', async () => {
+  it('never rejects when Gmail refuses, and stands the account down instead', async () => {
     // A 403 here is the topic missing its Publisher grant — an admin's console
-    // step, not a broken account. It must not fail the tick that called it.
+    // step, not a broken account. It must not fail the tick that called it, and
+    // it will not be fixed within 30 seconds, so retrying that fast would spend
+    // quota on a certain failure.
     const g = googleAccount();
     setState(g.id, { historyId: '100' });
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const api = stubGmail({ watch: vi.fn(async () => { throw new Error('Gmail 403: User not authorized to perform this action.'); }) });
 
     await expect(ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW)).resolves.toBeUndefined();
-    expect(stateOf(g.id)).toEqual({ historyId: '100' });
+    expect(stateOf(g.id)).toEqual({ historyId: '100', watchRetryAfter: NOW + 10 * 60_000 });
     expect(String(err.mock.calls[0])).toMatch(/User not authorized/);
+
+    // The next few ticks cost nothing at all…
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW + 60_000);
+    expect(api.watch).toHaveBeenCalledTimes(1);
+    // …and one line a minute, not one per attempt.
+    expect(err.mock.calls.length).toBe(1);
+
+    // …until the stand-down runs out.
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW + 11 * 60_000);
+    expect(api.watch).toHaveBeenCalledTimes(2);
     err.mockRestore();
+  });
+
+  it('a success ends the stand-down, so a fixed topic is not held back', async () => {
+    const g = googleAccount();
+    setState(g.id, { historyId: '100', watchRetryAfter: NOW - 1 });
+    const api = stubGmail();
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
+
+    expect(api.watch).toHaveBeenCalledTimes(1);
+    expect(stateOf(g.id)).toEqual({ historyId: '100', watchExpiration: NOW + 7 * 24 * HOUR });
   });
 
   it('merges into a syncState written while the watch call was in flight', async () => {
@@ -439,6 +461,43 @@ describe('releaseGmailWatch', () => {
     // …and with no expiry on the row, the next tick registers a fresh watch.
     await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, api, TOPIC, NOW);
     expect(api.watch).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a shared mailbox\'s watch alone and re-arms the accounts that remain', async () => {
+    // users/me/stop is scoped to the MAILBOX. Two people can connect the same
+    // shared mailbox — the webhook pokes both on purpose — so stopping here on
+    // behalf of one would silently cancel the other's push, and their stored
+    // expiry would hide it for up to six days.
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u2','b','x','user')`).run();
+    const a = googleAccount('Shared@bigbear.com', 'u1');
+    const b = googleAccount('shared@bigbear.com', 'u2');
+    setState(a.id, { historyId: '100', watchExpiration: NOW + 3 * 24 * HOUR });
+    setState(b.id, { historyId: '200', watchExpiration: NOW + 3 * 24 * HOUR, watchRetryAfter: NOW + HOUR });
+    const api = stubGmail();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, a.id)!, () => api, { clearState: true });
+    await flush();
+
+    expect(api.stopWatch).not.toHaveBeenCalled();
+    // The survivor keeps its watermark but loses the bookkeeping, so its next
+    // tick re-asserts the watch rather than trusting one it did not place.
+    expect(stateOf(b.id)).toEqual({ historyId: '200' });
+    await ensureGmailWatch(ctx, accounts.getAccountAny(db, b.id)!, api, TOPIC, NOW);
+    expect(api.watch).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('still stops the watch when the address is connected only once', async () => {
+    const g = googleAccount('sole@bigbear.com');
+    setState(g.id, { watchExpiration: NOW + 3 * 24 * HOUR });
+    // A microsoft account on the same address is not a sibling — its push is a
+    // Graph subscription and nothing about it is mailbox-scoped here.
+    accounts.createAccount(db, crypto, { userId: 'u1', provider: 'microsoft', emailAddress: 'sole@bigbear.com', auth: { refreshToken: 'r' } });
+    const api = stubGmail();
+    releaseGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, () => api);
+    await flush();
+    expect(api.stopWatch).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the stored state alone when the caller only wants the watch stopped', async () => {

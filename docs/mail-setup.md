@@ -72,7 +72,11 @@ in front of the app will record it in access logs — worth a thought if those
 logs are shipped somewhere.)
 
 Each mailbox's `watch` lasts about seven days and every sync tick renews it once
-less than 24 hours are left, so there is nothing to schedule. Push notifications
+less than 24 hours are left, so there is nothing to schedule. Removing or
+disabling an account hands its watch back — unless the same address is still
+connected by another account, in which case the watch stays (Gmail's `stop` is
+scoped to the mailbox, not to one connection) and the remaining accounts
+re-assert it on their next tick. Push notifications
 are believed only as far as "re-sync this mailbox": the address in the payload
 is matched against accounts already connected, the `historyId` in it is ignored
 (the poll owns that watermark), and nothing from the body is stored. The route
@@ -145,7 +149,7 @@ other data is lost).
 | Account shows **Reconnect needed** (`auth_error`) | The refresh token/password was revoked or rotated. Press Reconnect (OAuth) or Edit → re-enter password (IMAP). |
 | Microsoft push never arrives | `APP_PUBLIC_URL` not reachable from the internet, or a proxy strips the validation handshake / the `?validationToken=` query. The server logs subscription failures; polling still works, so the only symptom is latency. |
 | Webhook returns 413 or 429 | The body cap (256 KB) or the per-IP rate limit (600/min) fired. Real Graph batches are far under both — check what else is POSTing to that path. |
-| `Gmail watch failed … 403 … User not authorized` in the log | The Pub/Sub topic has not granted `gmail-api-push@system.gserviceaccount.com` the **Publisher** role (§2.1 step 2). The mailbox is fine and keeps polling. |
+| `Gmail watch failed … 403 … User not authorized` in the log | The Pub/Sub topic has not granted `gmail-api-push@system.gserviceaccount.com` the **Publisher** role (§2.1 step 2). The mailbox is fine and keeps polling. After a failure the server stands that mailbox down for 10 minutes before retrying and logs at most one line a minute, so fix the grant and expect push within ~10 min (or restart). |
 | Gmail push never arrives | Check the subscription's endpoint URL against the one in **Settings → Mail** — a missing or edited `?token=` answers **403** (Pub/Sub reports it as a delivery failure), and a topic name that does not match `GOOGLE_PUBSUB_TOPIC` means nothing is ever published. The server logs the watch renewal; polling still works, so the only symptom is latency. |
 | Gmail "history expired" in the log | Normal after long downtime; Gmail drops history ids it no longer holds and the account re-backfills automatically. |
 | Sync stuck for one folder (IMAP) | A folder that LISTs but refuses SELECT is skipped with a warning; others continue. |

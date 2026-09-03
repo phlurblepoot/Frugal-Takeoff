@@ -464,10 +464,17 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   // matched against accounts we already hold, and the historyId in the payload
   // is ignored outright — the poll owns that watermark.
   const googleWebhookLimiter: express.RequestHandler = deps.googleWebhookRateLimit ?? createWebhookRateLimit(WEBHOOK_RATE_LIMIT_PER_MIN, 'Pub/Sub');
-  app.post(GOOGLE_WEBHOOK_PATH, googleWebhookLimiter, webhookSizeGuard, express.json({ limit: WEBHOOK_MAX_BODY_BYTES }), (req, res) => {
+  // The token is in the URL, so it can be checked before a byte of body is
+  // parsed — an unauthenticated caller gets no free JSON parsing out of us.
+  // (The Graph route cannot do this: its clientState arrives inside the body,
+  // so there is nothing to check until after the parser has run.)
+  const googleTokenGuard: express.RequestHandler = (req, res, next) => {
     const token = req.query.token;
     // 403 with an empty body: a wrong guess learns nothing, not even a length.
     if (typeof token !== 'string' || !constantTimeEquals(token, getGooglePushSecret(db))) return res.status(403).end();
+    next();
+  };
+  app.post(GOOGLE_WEBHOOK_PATH, googleWebhookLimiter, webhookSizeGuard, googleTokenGuard, express.json({ limit: WEBHOOK_MAX_BODY_BYTES }), (req, res) => {
     try {
       for (const id of handleGoogleWebhook(ctx, req.body)) ctx.scheduler?.pokeAccount(id);
     } catch (e) {

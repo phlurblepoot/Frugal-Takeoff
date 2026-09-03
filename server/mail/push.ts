@@ -28,6 +28,10 @@ const RENEW_WHEN_LEFT_MS = 12 * 3600_000;
 const WATCH_RENEW_WHEN_LEFT_MS = 24 * 3600_000;
 /** What a watch is worth when Gmail's response carries no readable expiry. */
 const WATCH_TTL_FALLBACK_MS = 7 * 24 * 3600_000;
+/** How long a failed `watch` stands down for. The usual cause is a console step
+ *  an admin has not done yet, which will not be fixed inside a 30s tick — and
+ *  retrying that fast would spend the account's quota on a certain failure. */
+const WATCH_RETRY_BACKOFF_MS = 10 * 60_000;
 const SECRET_KEY = 'mail.webhookSecret';
 const GOOGLE_SECRET_KEY = 'mail.googlePushSecret';
 
@@ -88,7 +92,7 @@ function getOrCreateSecret(db: Database.Database, key: string): string {
 // to be carried across those writes or the very next poll orphans the
 // subscription and the scheduler creates a fresh one every tick.
 
-const PUSH_STATE_KEYS = ['subscriptionId', 'subscriptionExpires', 'watchExpiration'] as const;
+const PUSH_STATE_KEYS = ['subscriptionId', 'subscriptionExpires', 'watchExpiration', 'watchRetryAfter'] as const;
 
 const parseState = (json: string | null): Record<string, unknown> => {
   if (!json) return {};
@@ -189,8 +193,13 @@ export async function ensureGmailWatch(
   const topicName = (topic ?? '').trim();
   if (!topicName) return;                              // no topic → poll only
 
-  const expires = Number(parseState(account.syncState).watchExpiration);
+  const state = parseState(account.syncState);
+  const expires = Number(state.watchExpiration);
   if (Number.isFinite(expires) && expires - now > WATCH_RENEW_WHEN_LEFT_MS) return;
+
+  // A previous attempt failed and its stand-down has not run out yet.
+  const retryAfter = Number(state.watchRetryAfter);
+  if (Number.isFinite(retryAfter) && retryAfter > now) return;
 
   try {
     const { expiration } = await provider.watch(topicName);
@@ -202,9 +211,23 @@ export async function ensureGmailWatch(
       watchExpiration = now + WATCH_TTL_FALLBACK_MS;
     }
     mergePushState(ctx.db, account.id, { watchExpiration });
+    clearPushState(ctx.db, account.id, ['watchRetryAfter']);   // a success ends any stand-down
   } catch (e) {
-    console.error(`[mail] Gmail watch failed for ${account.id}:`, (e as Error).message);
+    mergePushState(ctx.db, account.id, { watchRetryAfter: now + WATCH_RETRY_BACKOFF_MS });
+    warnWatchFailed(account.id, e as Error);
   }
+}
+
+// One line a minute per account. The backoff above already spaces the attempts
+// out, but a mailbox that fails, gets poked, and fails again should still not be
+// able to fill the log. Keyed by account id, which is bounded by the number of
+// connected mailboxes.
+const lastWatchWarnAt = new Map<string, number>();
+function warnWatchFailed(accountId: string, e: Error): void {
+  const now = Date.now();
+  if (now - (lastWatchWarnAt.get(accountId) ?? -Infinity) < 60_000) return;
+  lastWatchWarnAt.set(accountId, now);
+  console.error(`[mail] Gmail watch failed for ${accountId} (standing down ${WATCH_RETRY_BACKOFF_MS / 60_000} min):`, e.message);
 }
 
 /** Hands an account's Gmail watch back when the account is going away or being
@@ -226,6 +249,22 @@ export function releaseGmailWatch(
   if (account.provider !== 'google') return;
   if (parseState(account.syncState).watchExpiration === undefined) return;
   if (opts.clearState) clearPushState(ctx.db, account.id, ['watchExpiration']);
+
+  // `users/me/stop` is scoped to the MAILBOX, not to our account row, and one
+  // address can legitimately be connected twice (two people on a shared
+  // mailbox — the webhook pokes both by design). Stopping here would silently
+  // cancel the sibling's push, and the sibling's own stored expiry would then
+  // suppress a re-watch for up to six days. So when a sibling exists we leave
+  // the watch alone and clear THEIR expiry instead: re-watching is idempotent
+  // and costs one call, where a dropped watch costs days of latency.
+  const siblings = ctx.db
+    .prepare(`SELECT id FROM mail_accounts WHERE provider = 'google' AND LOWER(emailAddress) = ? AND id != ?`)
+    .all(account.emailAddress.toLowerCase(), account.id) as Array<{ id: string }>;
+  if (siblings.length) {
+    for (const s of siblings) clearPushState(ctx.db, s.id, ['watchExpiration', 'watchRetryAfter']);
+    console.warn(`[mail] ${account.emailAddress} is connected by ${siblings.length + 1} accounts; leaving the Gmail watch in place for the ${siblings.length} that remain`);
+    return;
+  }
 
   let provider: unknown;
   try {

@@ -1022,6 +1022,14 @@ describe('POST /api/mail/google/webhook', () => {
     poke.mockRestore();
   });
 
+  it('checks the token before parsing the body, so a stranger gets no free parse', async () => {
+    // Malformed JSON: if the parser ran first this would be a 400, and an
+    // unauthenticated caller would have had 256 KB of parsing done for them.
+    const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'forged' })
+      .set('Content-Type', 'application/json').send('{ not json');
+    expect(r.status).toBe(403);
+  });
+
   it('never echoes the secret back to a caller that guessed wrong', async () => {
     const r = await request(app).post(GOOGLE_WEBHOOK_PATH).query({ token: 'forged' }).send(push({ emailAddress: 'x@y.com' }));
     expect(r.text).not.toContain(token());
@@ -1117,8 +1125,8 @@ describe('Gmail watch teardown on delete / disable', () => {
   // the app has stopped syncing. Best effort throughout: the account operation
   // must succeed whatever Gmail says.
   const flush = () => new Promise(r => setTimeout(r, 0));
-  const watched = (email = 'nate@bigbear.com') => {
-    const g = accounts.createAccount(db, crypto, { userId: 'u1', provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
+  const watched = (email = 'nate@bigbear.com', userId = 'u1') => {
+    const g = accounts.createAccount(db, crypto, { userId, provider: 'google', emailAddress: email, auth: { refreshToken: 'r' } });
     accounts.updateAccount(db, g.id, { syncState: JSON.stringify({ historyId: '100', watchExpiration: Date.now() + 3 * 86400_000 }) });
     const p = getFakeProvider(g.id) as FakeMailProvider & GmailWatchApi;
     p.watch = vi.fn(async (_topic: string) => ({ historyId: '7', expiration: String(Date.now() + 7 * 86400_000) }));
@@ -1152,6 +1160,17 @@ describe('Gmail watch teardown on delete / disable', () => {
     await ensureGmailWatch(ctx, accounts.getAccountAny(db, g.id)!, p, 'projects/ft/topics/mail');
     expect(p.watch).toHaveBeenCalledTimes(1);
     expect(JSON.parse(accounts.getAccountAny(db, g.id)!.syncState!).watchExpiration).toBeGreaterThan(Date.now());
+  });
+
+  it('does not cancel a shared mailbox\'s watch when a sibling account remains', async () => {
+    // users/me/stop is mailbox-scoped, and the webhook pokes every account on
+    // an address on purpose. Deleting one must not take the other's push down.
+    const { g: a, p } = watched('shared@bigbear.com');
+    const { g: b } = watched('Shared@bigbear.com');
+    expect((await request(app).delete(`/api/mail/accounts/${a.id}`)).status).toBe(200);
+    await flush();
+    expect(p.stopWatch).not.toHaveBeenCalled();
+    expect(JSON.parse(accounts.getAccountAny(db, b.id)!.syncState!)).toEqual({ historyId: '100' });
   });
 
   it('a delete still succeeds when Gmail refuses the stop', async () => {
