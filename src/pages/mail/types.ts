@@ -96,6 +96,12 @@ export interface ProjectThreadRow {
   links: ProjectThreadLinkRef[];
   lastInboundDate: string | null;
   lastOutboundDate: string | null;
+  /** The earliest link's createdAt across every row aggregated into this
+   *  thread — the floor for the reply-indicator rule (spec Goal 4:
+   *  `lastInboundDate > max(lastOutboundDate, link.createdAt)`), so a thread
+   *  linked to this project only just now doesn't read as an unanswered
+   *  reply for mail that predates the link entirely. */
+  earliestLinkCreatedAt: string;
   lastActivity: string;
 }
 

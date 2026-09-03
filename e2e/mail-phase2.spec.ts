@@ -213,6 +213,11 @@ test('project Mail tab lists a thread linked to the project', async ({ authedPag
   await expect(row).toHaveCount(1);
   // participantsLabel: first name only, and the account owner reads as "me".
   await expect(row).toContainText('Dana');
+  // Regression coverage for the earliestLinkCreatedAt fix: this thread's only
+  // message predates the link (nothing was ever sent about it from this
+  // project), so it must NOT read as an unanswered reply just because it was
+  // linked after the fact.
+  await expect(row.locator('[data-testid^="project-mail-reply-"]')).toHaveCount(0);
 });
 
 test('reply indicator: an injected reply flags a linked, sent invoice', async ({ authedPage, apiToken, request }) => {

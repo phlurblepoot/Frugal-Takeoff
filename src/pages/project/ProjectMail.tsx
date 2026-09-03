@@ -111,7 +111,14 @@ export const ProjectMail: React.FC = () => {
                 const chipLabels = Array.from(new Set(row.links.map(l => l.label || itemTypeLabel(l.itemType))));
                 const visibleChips = chipLabels.slice(0, CHIP_LIMIT);
                 const overflowChips = chipLabels.slice(CHIP_LIMIT);
-                const hasReply = !!row.lastInboundDate && row.lastInboundDate > (row.lastOutboundDate ?? '');
+                // Floored at the thread's earliest link, not just lastOutboundDate
+                // (spec Goal 4's max(lastOutboundDate, link.createdAt), same rule
+                // the per-item reply-flags route applies) — otherwise linking an
+                // already-old inbound-only thread reads as an unanswered reply
+                // from before anyone here was tracking it.
+                const floor = row.lastOutboundDate && row.lastOutboundDate > row.earliestLinkCreatedAt
+                  ? row.lastOutboundDate : row.earliestLinkCreatedAt;
+                const hasReply = !!row.lastInboundDate && row.lastInboundDate > floor;
 
                 return (
                   <TR

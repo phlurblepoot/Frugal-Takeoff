@@ -804,6 +804,8 @@ describe('mail routes', () => {
       threadKey: 'm1@teg.com', subjectSnapshot: 'CO 4', firstDate: '2026-08-10T10:00:00.000Z',
       lastInboundDate: '2026-08-20T00:00:00.000Z', lastOutboundDate: '2026-08-19T00:00:00.000Z',
       lastActivity: '2026-08-20T00:00:00.000Z',
+      // Both m1 links (project + customer) were pinned to the same createdAt above.
+      earliestLinkCreatedAt: '2026-08-14T00:00:00.000Z',
     });
     expect(r.body[0].participants).toEqual(expect.arrayContaining([{ addr: 'gc@teg.com', name: 'Mike' }]));
     // Every link on the key — the customer link too, though it carries no projectId.
@@ -812,7 +814,9 @@ describe('mail routes', () => {
       { itemType: 'customer', itemId: 'c1', label: 'Big Bear' },
     ]);
     // m2 never got a reply-state bump past its own message, so the link date is its activity.
-    expect(r.body[1]).toMatchObject({ subjectSnapshot: 'Invoice 12', lastActivity: '2026-08-15T00:00:00.000Z' });
+    expect(r.body[1]).toMatchObject({
+      subjectSnapshot: 'Invoice 12', lastActivity: '2026-08-15T00:00:00.000Z', earliestLinkCreatedAt: '2026-08-15T00:00:00.000Z',
+    });
 
     const other = await request(app).get('/api/mail/project-threads').query({ projectId: 'p2' });
     expect(other.body.map((t: any) => t.threadKey)).toEqual(['m3@teg.com']);
@@ -822,6 +826,25 @@ describe('mail routes', () => {
     currentUser = { id: 'u2', role: 'user' };
     const asOther = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
     expect(asOther.body).toEqual(r.body);
+  });
+
+  // Review finding 3 (fix round 1): the client's reply indicator floors on
+  // this field (max(lastOutboundDate, earliestLinkCreatedAt)) so an
+  // already-old thread just linked to the project doesn't read as an
+  // unanswered reply. Proven here as the server's MIN across every link on
+  // the key, independent of link/query order.
+  it('GET /api/mail/project-threads.earliestLinkCreatedAt is the MIN createdAt across every link on the thread', async () => {
+    // Two links on the SAME thread, deliberately created out of chronological
+    // order so a naive "first row" read (rather than an actual MIN) would fail.
+    await request(app).post('/api/mail/links').send({ threadKey: 'm5@teg.com', itemType: 'project', itemId: 'p1' });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm5@teg.com', itemType: 'customer', itemId: 'c1' });
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-20T00:00:00.000Z' WHERE threadKey = 'm5@teg.com' AND itemType = 'project'").run();
+    db.prepare("UPDATE mail_thread_links SET createdAt = '2026-08-05T00:00:00.000Z' WHERE threadKey = 'm5@teg.com' AND itemType = 'customer'").run();
+
+    const r = await request(app).get('/api/mail/project-threads').query({ projectId: 'p1' });
+    const m5 = r.body.find((t: any) => t.threadKey === 'm5@teg.com');
+    expect(m5).toBeTruthy();
+    expect(m5.earliestLinkCreatedAt).toBe('2026-08-05T00:00:00.000Z');
   });
 
   it('GET /api/mail/project-threads requires projectId and is empty for a project with no linked mail', async () => {

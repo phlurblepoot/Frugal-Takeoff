@@ -1091,6 +1091,14 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
         t = {
           threadKey: l.threadKey, subjectSnapshot: null, participants: [], firstDate: null, links: [],
           lastInboundDate: l.lastInboundDate ?? null, lastOutboundDate: l.lastOutboundDate ?? null, lastActivity: '',
+          // Rows are queried `ORDER BY l.createdAt`, so the first row seen for
+          // this key IS its earliest link — the moment this thread first
+          // became project mail. The client's reply-indicator rule floors on
+          // this (spec Goal 4's `max(lastOutboundDate, link.createdAt)`, same
+          // as the per-item reply-flags route just above) so linking an
+          // already-old inbound-only thread doesn't read as an unanswered
+          // reply that arrived before anyone here was tracking it.
+          earliestLinkCreatedAt: l.createdAt,
         };
         byKey.set(l.threadKey, t);
       }

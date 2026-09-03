@@ -51,6 +51,10 @@ const row = (over: Partial<ProjectThreadRow> = {}): ProjectThreadRow => ({
   links: [{ itemType: 'invoice', itemId: 'inv-1', label: 'INV-012' }],
   lastInboundDate: null,
   lastOutboundDate: '2026-08-27T12:00:00.000Z',
+  // Well before every date used elsewhere in this file — a neutral "this
+  // thread was linked a while ago" default so it never becomes the floor
+  // unless a test deliberately sets it to.
+  earliestLinkCreatedAt: '2026-08-01T00:00:00.000Z',
   lastActivity: '2026-08-27T12:00:00.000Z',
   ...over,
 });
@@ -103,6 +107,35 @@ describe('ProjectMail', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('project-mail-row')).toBeInTheDocument());
     expect(screen.queryByTestId(/project-mail-reply-/)).toBeNull();
+  });
+
+  // Review finding 3 (fix round 1): linking an already-existing, inbound-only
+  // thread must not immediately read as "they answered, you haven't" — the
+  // floor is max(lastOutboundDate, earliestLinkCreatedAt), not just
+  // lastOutboundDate, so mail from before anyone tracked this thread against
+  // the project doesn't count as an unanswered reply.
+  it('does not show the reply chip for a freshly-linked, old inbound-only thread', async () => {
+    h.projectThreads.mockResolvedValue([row({
+      threadKey: 'tk-old-inbound',
+      lastInboundDate: '2026-08-10T12:00:00.000Z', // predates the link entirely
+      lastOutboundDate: null,                       // never sent from this project
+      earliestLinkCreatedAt: '2026-08-27T09:00:00.000Z', // linked just now
+    })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('project-mail-row')).toBeInTheDocument());
+    expect(screen.queryByTestId(/project-mail-reply-/)).toBeNull();
+  });
+
+  it('still shows the reply chip when the inbound reply arrived AFTER the thread was linked, with no outbound at all', async () => {
+    h.projectThreads.mockResolvedValue([row({
+      threadKey: 'tk-reply-after-link',
+      lastInboundDate: '2026-08-28T12:00:00.000Z',
+      lastOutboundDate: null,
+      earliestLinkCreatedAt: '2026-08-27T09:00:00.000Z',
+    })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('project-mail-row')).toBeInTheDocument());
+    expect(screen.getByTestId('project-mail-reply-tk-reply-after-link')).toBeInTheDocument();
   });
 
   it('collapses more than 3 distinct item labels into an overflow chip', async () => {
