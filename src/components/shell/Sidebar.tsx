@@ -57,6 +57,7 @@ const PROJECT_NAV: {
   { id: 'issues',    label: 'Issues',             Icon: AlertCircle, path: '/issues',    match: (p, b) => p.startsWith(`${b}/issues`) },
   { id: 'rfis',      label: 'RFIs',               Icon: MessageCircleQuestion, path: '/rfis', match: (p, b) => p.startsWith(`${b}/rfis`) },
   { id: 'daily-reports', label: 'Daily Reports',  Icon: CalendarDays, path: '/daily-reports', match: (p, b) => p.startsWith(`${b}/daily-reports`) },
+  { id: 'mail',      label: 'Mail',               Icon: Mail,        path: '/mail',      match: (p, b) => p.startsWith(`${b}/mail`) },
   { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
   { id: 'settings',  label: 'Project Settings',   Icon: SlidersHorizontal, path: '/settings', match: (p, b) => p.startsWith(`${b}/settings`), adminOnly: true },
 ];

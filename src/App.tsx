@@ -16,6 +16,7 @@ import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectRfis } from './pages/project/ProjectRfis';
 import { ProjectDailyReports } from './pages/project/ProjectDailyReports';
+import { ProjectMail } from './pages/project/ProjectMail';
 import { ProjectPunch } from './pages/project/ProjectPunch';
 import { ProposalsList } from './pages/project/proposal/ProposalsList';
 import { ProposalEditor } from './pages/project/proposal/ProposalEditor';
@@ -129,6 +130,7 @@ export default function App() {
             { path: 'issues', element: <ProjectIssues /> },
             { path: 'rfis', element: <ProjectRfis /> },
             { path: 'daily-reports', element: <ProjectDailyReports /> },
+            { path: 'mail', element: <ProjectMail /> },
             { path: 'billing', element: <ProjectBilling /> },
             { path: 'settings', element: <ProjectSettings /> },
             { path: 'page/:pageId', element: <CanvasView /> },
