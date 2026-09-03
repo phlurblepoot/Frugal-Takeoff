@@ -17,7 +17,12 @@
 //     RFI is usually not the person reading this banner, and for anyone else
 //     the mail routes answer 403/404 — so the deep link is gated on
 //     `canOpenThread`, which the editor works out, and the degraded state says
-//     why rather than going silent.
+//     why rather than going silent. The SAME rule governs the attachments:
+//     saving one posts to /api/mail/messages/:id/save on the receiving
+//     mailbox, so for a non-owner it 404s. `ownsMailbox` gates that half —
+//     separately from `canOpenThread`, which may be true via a second mailbox
+//     of the viewer's that happens to hold the same thread, and that fallback
+//     mailbox is NOT where this message id lives.
 //
 //  3. Recording the answer is ALWAYS the accept endpoint, never a bare
 //     setRfiResponse: accept records text and/or file AND clears the pending
@@ -58,7 +63,11 @@ export const PendingReplyBanner: React.FC<{
   onOpenThread?: () => void;
   /** False when the receiving mailbox belongs to another user. */
   canOpenThread: boolean;
-}> = ({ rfi, projectId, onUseAsResponse, draftText, onDismissed, onAccepted, onOpenThread, canOpenThread }) => {
+  /** True only when the viewer owns `pendingReply.accountId` itself — the
+   *  mailbox the attachment save route reads the message from. Strictly
+   *  narrower than `canOpenThread`. */
+  ownsMailbox: boolean;
+}> = ({ rfi, projectId, onUseAsResponse, draftText, onDismissed, onAccepted, onOpenThread, canOpenThread, ownsMailbox }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [expanded, setExpanded] = useState(false);
@@ -137,8 +146,10 @@ export const PendingReplyBanner: React.FC<{
   const useAsResponse = () => {
     onUseAsResponse(live.text);
     // The answer often IS the attachment, so offer to file it in the same
-    // motion rather than making the user hunt for it in the mail page.
-    if (attachments.length) setSaveOpen(true);
+    // motion rather than making the user hunt for it in the mail page — but
+    // only for the mailbox's owner. For anyone else the save 404s, so opening
+    // the modal would turn a working text-only accept into a dead end.
+    if (attachments.length && ownsMailbox) setSaveOpen(true);
   };
 
   return (
@@ -178,7 +189,17 @@ export const PendingReplyBanner: React.FC<{
               <span className="break-all">{a.name}</span>
             </span>
           ))}
-          <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}>Save to Documents…</Button>
+          {ownsMailbox ? (
+            <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}>Save to Documents…</Button>
+          ) : (
+            // Deliberately not a repeat of the Open-thread note below: for a
+            // non-owner both are usually shown, and two identical sentences
+            // stacked would read as a rendering bug rather than as two
+            // controls each explaining itself.
+            <span data-testid="rfi-pending-reply-attachments-foreign" className="text-xs text-ink-faint">
+              Saving needs the receiving mailbox
+            </span>
+          )}
         </div>
       )}
 
@@ -202,7 +223,7 @@ export const PendingReplyBanner: React.FC<{
       </div>
 
       <SaveAttachmentsModal
-        open={saveOpen}
+        open={saveOpen && ownsMailbox}
         onClose={() => setSaveOpen(false)}
         messageId={live.mailMessageId}
         attachments={attachments}

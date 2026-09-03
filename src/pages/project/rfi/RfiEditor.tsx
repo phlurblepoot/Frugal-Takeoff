@@ -296,6 +296,10 @@ export const RfiEditor: React.FC<{
           rfi={rfi}
           projectId={projectId}
           canOpenThread={!!threadAccountId}
+          // Narrower than canOpenThread on purpose: the attachment save reads
+          // the message out of pendingReply.accountId specifically, so the
+          // thread-link fallback mailbox above does not qualify.
+          ownsMailbox={!!ownedAccountId}
           onOpenThread={openPendingThread}
           onUseAsResponse={text => { setResponseDraft(text); setAcceptFromEmail(true); }}
           // The draft only counts as "this reply's text" once Use as response

@@ -77,7 +77,10 @@ const rfi = (over: Partial<Rfi> = {}): Rfi => ({
 
 const cb = { onUseAsResponse: vi.fn(), onDismissed: vi.fn(), onAccepted: vi.fn(), onOpenThread: vi.fn() };
 
-const mount = (r: Rfi = rfi(), opts: { canOpenThread?: boolean; draftText?: string | null } = {}) =>
+const mount = (
+  r: Rfi = rfi(),
+  opts: { canOpenThread?: boolean; ownsMailbox?: boolean; draftText?: string | null } = {}
+) =>
   render(
     <ToastProvider>
       <ConfirmProvider>
@@ -85,6 +88,7 @@ const mount = (r: Rfi = rfi(), opts: { canOpenThread?: boolean; draftText?: stri
           rfi={r}
           projectId="p1"
           canOpenThread={opts.canOpenThread ?? true}
+          ownsMailbox={opts.ownsMailbox ?? true}
           draftText={opts.draftText ?? null}
           onUseAsResponse={cb.onUseAsResponse}
           onDismissed={cb.onDismissed}
@@ -316,6 +320,38 @@ describe('PendingReplyBanner', () => {
     // The reply went away while the file was uploading. Accept has nothing left
     // to clear, so the plain response write is now the right call — the user
     // still gets the document they picked.
+    // The save route reads the message out of pendingReply.accountId, so for
+    // anyone who doesn't own that mailbox it 404s. Offering the button would
+    // hand them a guaranteed failure; the muted note says why instead.
+    it('offers no save button for a mailbox the viewer does not own', () => {
+      mount(withAtt(), { ownsMailbox: false });
+      // The attachment is still LISTED — knowing an answer came with a file
+      // is useful even when you can't file it.
+      expect(screen.getByText('ceiling-detail.pdf')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Save to Documents/i })).toBeNull();
+      expect(screen.getByTestId('rfi-pending-reply-attachments-foreign')).toBeInTheDocument();
+    });
+
+    // ownsMailbox is NARROWER than canOpenThread: the thread may also sit in a
+    // second mailbox of the viewer's (so the deep link works), but this
+    // message id lives only in the receiving one.
+    it('gates the save on the mailbox, not on the thread link', () => {
+      mount(withAtt(), { canOpenThread: true, ownsMailbox: false });
+      expect(screen.getByRole('button', { name: 'Open thread' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: /Save to Documents/i })).toBeNull();
+    });
+
+    // Use as response opens the save modal for the owner (test above). For a
+    // non-owner it must stay shut — the text-only accept still has to work,
+    // and a modal whose every save 404s is a dead end.
+    it('does not auto-open the save modal from Use as response for a non-owner', () => {
+      mount(withAtt(), { ownsMailbox: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Use as response' }));
+      expect(cb.onUseAsResponse).toHaveBeenCalledWith('Corridor is 9\'-0" per the reflected ceiling plan.');
+      expect(screen.queryByTestId('save-attachments')).toBeNull();
+      expect(h.saveProps.last?.open ?? false).toBe(false);
+    });
+
     it('falls back to a plain response write when the reply vanished mid-flight', async () => {
       h.fetchMock.mockImplementation(async (url: string) =>
         url.includes('pending-reply/accept')
