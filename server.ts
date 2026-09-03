@@ -32,6 +32,7 @@ import { MailScheduler } from './server/mail/sync/scheduler';
 import { WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './server/mail/push';
 import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
+import { installInboundHooks } from './server/mail/inboundHooks';
 
 dotenv.config();
 
@@ -636,6 +637,9 @@ async function startServer() {
     mailCtx,
   });
 
+  // Before the first sync tick: a reply that lands in that tick must still be
+  // captured against its RFI.
+  installInboundHooks();
   mailScheduler.start();
   // Staged compose attachments are written to disk before the message exists;
   // reap the ones no send ever claimed.

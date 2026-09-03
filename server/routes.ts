@@ -25,6 +25,7 @@ import {
 import {
   listRfis, getRfi, createRfi, saveRfi, setRfiStatus, deleteRfi,
   addPhoto as addRfiPhoto, removePhoto as removeRfiPhoto, setRfiResponse,
+  acceptPendingReply, dismissPendingReply,
   ValidationError as RfiValidationError, ConflictError as RfiConflictError, NotFoundError as RfiNotFoundError,
 } from './rfiStore';
 import {
@@ -700,6 +701,35 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
         deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
       }
       res.json({ success: true, ...r });
+    } catch (e) { rfiErr(e, res); }
+  });
+
+  // An emailed reply captured against a sent RFI waits for a human: accepting
+  // promotes it to the recorded response (optionally with edited text and an
+  // attachment saved as the response file), dismissing just drops it. Both are
+  // 409 rather than 404 when there is nothing pending — the RFI exists, the
+  // reply is simply gone (someone else already dealt with it).
+  app.post('/api/rfis/:id/pending-reply/accept', authenticateToken, (req, res) => {
+    try {
+      const before = getRfi(db, req.params.id);
+      if (!before) return res.status(404).json({ error: 'RFI not found' });
+      if (!before.pendingReply) return res.status(409).json({ error: 'No pending reply to accept' });
+      const r = acceptPendingReply(db, req.params.id, { text: req.body?.text, fileId: req.body?.fileId });
+      logActivity(db, { projectId: before.projectId, userId: (req as any).user?.id, type: 'rfi_answered', message: `RFI ${rfiNo(before.number)} answered via email` });
+      const after = getRfi(db, req.params.id);
+      deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true, ...r });
+    } catch (e) { rfiErr(e, res); }
+  });
+  app.post('/api/rfis/:id/pending-reply/dismiss', authenticateToken, (req, res) => {
+    try {
+      const before = getRfi(db, req.params.id);
+      if (!before) return res.status(404).json({ error: 'RFI not found' });
+      if (!before.pendingReply) return res.status(409).json({ error: 'No pending reply to dismiss' });
+      dismissPendingReply(db, req.params.id);
+      const after = getRfi(db, req.params.id);
+      deps.broadcastChange({ type: 'rfi', id: req.params.id, projectId: before.projectId, version: after?.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
     } catch (e) { rfiErr(e, res); }
   });
 

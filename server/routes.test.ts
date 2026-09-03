@@ -10,6 +10,7 @@ import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
+import { markRfiSent, setPendingReply, type RfiPendingReply } from './rfiStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
 import { SheetSessionStore } from './realtime/sheetSessions';
 import { MailCrypto } from './mail/crypto';
@@ -1050,6 +1051,98 @@ describe('rfi routes', () => {
     expect((await request(app).get(`/api/rfis/${id}`)).body.status).toBe('closed');
 
     expect((await request(app).post('/api/rfis/nope/response').send({ text: 'x' })).status).toBe(404);
+  });
+});
+
+describe('rfi pending-reply routes', () => {
+  let broadcasts: EntityChangedEvent[];
+  // RFIs are field work: the accept/dismiss routes must work for a non-admin,
+  // so this app's stub user is a member and requireAdmin refuses outright.
+  let memberApp: express.Express;
+
+  const PENDING: RfiPendingReply = {
+    threadKey: 'rfi-thread@bb.com', accountId: 'acct-1', mailMessageId: 'mm1', messageIdHeader: 'm1@teg.com',
+    from: { addr: 'gc@teg.com', name: 'Mike' }, date: '2026-08-28T10:00:00.000Z', text: 'Corridor is 9ft',
+    attachments: [{ attId: 'a1', name: 'sketch.pdf', mime: 'application/pdf', size: 9 }], receivedAt: '2026-08-28T10:00:01.000Z',
+  };
+
+  beforeEach(async () => {
+    broadcasts = [];
+    memberApp = express();
+    memberApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(memberApp, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'member' }; next(); },
+      requireAdmin: (_req: any, res: any) => res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: ev => { broadcasts.push(ev); },
+    });
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  const stageReply = async (): Promise<string> => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Corridor height?' })).body.id;
+    markRfiSent(db, id);
+    setPendingReply(db, id, PENDING);
+    return id;
+  };
+
+  it('accept promotes the emailed reply, logs the activity and clears the pending reply', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, status: 'answered' });
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.status).toBe('answered');
+    expect(after.responseText).toBe('Corridor is 9ft');
+    expect(after.responseSource).toBe('email');
+    expect(after.responseMessageIdHeader).toBe('m1@teg.com');
+    expect(after.answeredAt).toBeTruthy();
+    expect(after.pendingReply).toBeNull();
+    expect((db.prepare(`SELECT message FROM activity WHERE type = 'rfi_answered'`).all() as any[]).map(r => r.message)).toEqual(['RFI RFI-001 answered via email']);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ type: 'rfi', id, projectId: 'p1', version: after.version, action: 'updated', byUserId: 'u1' });
+  });
+
+  it('accept honours edited text and a response file', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({ text: 'Corridor is 9\'-0" per RFI reply', fileId: 'file-1' });
+    expect(res.status).toBe(200);
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.responseText).toBe('Corridor is 9\'-0" per RFI reply');
+    expect(after.responseFileId).toBe('file-1');
+    expect(after.pendingReply).toBeNull();
+  });
+
+  it('dismiss clears the pending reply and leaves the RFI unanswered', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.pendingReply).toBeNull();
+    expect(after.status).toBe('sent');
+    expect(after.responseText ?? null).toBeNull();
+    expect(db.prepare(`SELECT COUNT(*) c FROM activity WHERE type = 'rfi_answered'`).get()).toEqual({ c: 0 });
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ type: 'rfi', id, projectId: 'p1', version: after.version, action: 'updated', byUserId: 'u1' });
+  });
+
+  it('409 when nothing is pending, 404 for an unknown RFI', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'No reply yet' })).body.id;
+    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
+    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({})).status).toBe(409);
+    expect((await request(memberApp).post('/api/rfis/nope/pending-reply/accept').send({})).status).toBe(404);
+    expect((await request(memberApp).post('/api/rfis/nope/pending-reply/dismiss').send({})).status).toBe(404);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('a dismissed reply cannot then be accepted', async () => {
+    const id = await stageReply();
+    await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({}).expect(200);
+    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
   });
 });
 
