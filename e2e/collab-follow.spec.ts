@@ -37,15 +37,19 @@ test.describe('app-wide session-scoped Follow', () => {
       await a.page.goto(projectPath);
       await b.page.goto(projectPath);
 
-      // Session list shows B's device folded into A's self ("you") row, and
-      // offers no Follow checkbox there (own-account gate).
+      // Session list shows BOTH A's own session and B's device line MERGED
+      // into one self ("you") row (same admin JWT -> same userId), and
+      // offers no Follow checkbox there (own-account gate). Assert by count,
+      // not mere presence: A's own session alone would already satisfy a
+      // single /Chrome/ match, so this only proves B showed up too if there
+      // are two lines.
       await a.page.getByTestId('sidebar-presence').click();
       const presence = a.page.getByTestId('presence-popover');
       await expect(presence.getByText(/Online now/i)).toBeVisible();
-      await expect(presence.getByText(/\(you\)/)).toBeVisible();
+      await expect(presence.getByText(/\(you\)/)).toHaveCount(1);
       // headless Chromium on Linux -> deviceLabel() (server/realtime/deviceLabel.ts)
-      // produces "Linux · Chrome".
-      await expect(presence.getByText(/Chrome/)).toBeVisible();
+      // produces "Linux · Chrome" for both A and B.
+      await expect(presence.locator('p', { hasText: /Chrome/ })).toHaveCount(2);
       await expect(presence.getByRole('checkbox')).toHaveCount(0);
     } finally {
       await a.context.close().catch(() => {});

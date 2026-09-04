@@ -62,4 +62,23 @@ describe('SidebarPresence', () => {
     // Still shows the stack (1 online) — presence is a permanent fixture:
     expect(screen.getByTestId('sidebar-presence')).toHaveTextContent('1 online');
   });
+
+  it('merges a second tab of my own account into the self group instead of dropping it', () => {
+    collab.sessions = [
+      mkSession({ sessionId: 'me', userId: 'me-u', name: 'Nathan', device: 'Windows · Chrome' }),
+      mkSession({ sessionId: 'me2', userId: 'me-u', name: 'Nathan', device: 'iPad · Safari' }),
+    ];
+    renderIt();
+    // One user online (both sessions are mine), not two:
+    expect(screen.getByTestId('sidebar-presence')).toHaveTextContent('1 online');
+
+    fireEvent.click(screen.getByTestId('sidebar-presence'));
+    // Both sessions' device lines render under the single "(you)" row —
+    // the second tab must not be dropped.
+    expect(screen.getByText(/Windows · Chrome/)).toBeInTheDocument();
+    expect(screen.getByText(/iPad · Safari/)).toBeInTheDocument();
+    expect(screen.getAllByText(/\(you\)/)).toHaveLength(1);
+    // A same-account session never gets a Follow checkbox:
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
 });

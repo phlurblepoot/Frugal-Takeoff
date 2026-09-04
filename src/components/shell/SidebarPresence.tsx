@@ -33,14 +33,21 @@ export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) =
   }, [open]);
 
   // groupSessionsByUser omits the caller's own current-tab session entirely
-  // (it only surfaces a self group when a *second* tab of mine is open) —
-  // the sidebar needs a permanent self row (for the cursor-color picker) and
-  // an inclusive "N online" count, so we splice that self session back in as
-  // its own group and drop any secondary self group it produced.
+  // (it only surfaces a self group — sessions sharing my userId minus my own
+  // literal session — when a *second* tab of mine is open) — the sidebar
+  // needs a permanent self row (for the cursor-color picker) and an
+  // inclusive "N online" count, so we splice that current-tab session back
+  // in, MERGED with any other same-account sessions groupSessionsByUser
+  // already found, rather than discarding them.
   const mySession = sessions.find(s => s.sessionId === mySessionId) ?? null;
-  const otherGroups = groupSessionsByUser(sessions, mySessionId).filter(g => !g.isMe);
+  const allGroups = groupSessionsByUser(sessions, mySessionId);
+  const selfGroup = allGroups.find(g => g.isMe);
+  const otherGroups = allGroups.filter(g => !g.isMe);
   const groups = mySession
-    ? [{ userId: mySession.userId, name: mySession.name, color: mySession.color, isMe: true, sessions: [mySession] }, ...otherGroups]
+    ? [{
+        userId: mySession.userId, name: mySession.name, color: mySession.color, isMe: true,
+        sessions: [mySession, ...(selfGroup?.sessions ?? [])],
+      }, ...otherGroups]
     : otherGroups;
   const count = groups.length;
   const user = JSON.parse(localStorage.getItem('user') || '{}');
