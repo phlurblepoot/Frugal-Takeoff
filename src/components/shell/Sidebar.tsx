@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useMailUnread } from '../../pages/mail/useMailUnread';
+import { SidebarPresence } from './SidebarPresence';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -203,6 +204,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
 
       {/* Footer */}
       <div className="px-2 pb-3 pt-2 pb-safe border-t border-edge space-y-0.5 shrink-0">
+        <SidebarPresence expanded={expanded} />
         <NavRow
           label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
           Icon={mode === 'dark' ? Sun : Moon}

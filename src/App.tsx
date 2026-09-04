@@ -32,7 +32,6 @@ import { CustomersSplitView } from './pages/customers/CustomersSplitView';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
-import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { FollowPill } from './components/FollowPill';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
@@ -56,7 +55,6 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
             <NotesProvider>
               {!isLoginPage && <CommandPalette />}
               <AppShell appName={appName}>
-                <UserPresenceOverlay />
                 <FollowPill />
                 <NotesOverlay />
                 <PageTransition>

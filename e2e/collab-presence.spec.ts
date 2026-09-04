@@ -7,13 +7,12 @@ import { openAuthedContext } from './fixtures/collab';
 // realtime presence protocol (sessions-snapshot / session-joined /
 // session-left), not the old full-array `global-users` broadcast.
 //
-// UserPresenceOverlay hides itself on canvas `/page/` routes (it has its own
-// sidebar list there — see UserPresenceOverlay.tsx), so this uses the
-// non-canvas Takeoffs tab. Its floating button lives at a unique
-// `.fixed.bottom-6.right-6.z-50` container (NotesBoard's similarly-positioned
-// element is `absolute`, not `fixed`), so all assertions are scoped inside it
-// to avoid colliding with "admin" text rendered elsewhere in the shell (e.g.
-// the logged-in-user indicator).
+// Presence now lives in ONE place app-wide: the sidebar's SidebarPresence
+// popover (`sidebar-presence` trigger / `presence-popover` content), which
+// replaced the old floating bottom-right bubble AND the canvas tool-pane's
+// own Collaboration block (Task 6, UI rehaul Wave 1). It's reachable the
+// same way on every route, including canvas, so there is no more
+// "hides on canvas" special case to prove.
 
 test('two live sessions see each other in the presence overlay, and departure is reflected live', async ({ browser, request }) => {
   const { token, user } = await login(request);
@@ -27,19 +26,22 @@ test('two live sessions see each other in the presence overlay, and departure is
     await a.page.goto(projectPath);
     await b.page.goto(projectPath);
 
-    const presence = b.page.locator('div.fixed.bottom-6.right-6.z-50');
-    await presence.locator('button').click();
-    await expect(presence.getByText('Active Users')).toBeVisible();
-    // B's overlay excludes B's own socket (UserPresenceOverlay filters
-    // u.id !== socket.id) but must show A's independently-connected session.
-    await expect(presence.getByText('admin', { exact: true })).toBeVisible();
+    await b.page.getByTestId('sidebar-presence').click();
+    const presence = b.page.getByTestId('presence-popover');
+    await expect(presence.getByText(/Online now/i)).toBeVisible();
+    // B's own row is folded into a self ("you") group, but A's
+    // independently-connected session must still show up as its own row.
+    await expect(presence.getByText('admin', { exact: false })).toBeVisible();
 
     // Close A's context — its socket disconnects, the server broadcasts
     // `session-left`, and B's context should drop the entry live. This is
     // driven by the disconnect handler, not the (much slower) heartbeat
     // sweep, but give it a generous window rather than a fixed sleep.
     await a.context.close();
-    await expect(presence.getByText('No other users online')).toBeVisible({ timeout: 15_000 });
+    // Empty state: only the self row remains (marked "(you)"), no one else,
+    // and no Follow checkboxes.
+    await expect(presence.getByText(/\(you\)/)).toBeVisible({ timeout: 15_000 });
+    await expect(presence.getByRole('checkbox')).toHaveCount(0);
   } finally {
     await a.context.close().catch(() => {});
     await b.context.close();

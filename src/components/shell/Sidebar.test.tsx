@@ -14,6 +14,17 @@ vi.mock('../../pages/mail/useMailUnread', () => ({
   useMailUnread: () => useMailUnread(),
 }));
 
+// SidebarPresence (mounted in the footer) also needs a CollaborationProvider
+// — mock it out the same way, since these tests exercise nav, not presence.
+vi.mock('../../context/CollaborationContext', async (orig) => ({
+  ...(await orig()),
+  useCollaboration: () => ({
+    sessions: [], mySessionId: null, followedSessionId: null,
+    setFollowedSessionId: vi.fn(), updateUser: vi.fn(),
+  }),
+}));
+vi.mock('../../hooks/useLiveQuery', () => ({ useLiveQuery: () => {} }));
+
 const { Sidebar } = await import('./Sidebar');
 
 const renderAt = (path: string) =>

@@ -53,7 +53,7 @@ const CanvasViewInner: React.FC = () => {
   const [searchParams] = useSearchParams();
   const searchTerm = searchParams.get('search') || '';
   
-  const { socket, users, globalUsers, sessions, mySessionId, followedSessionId, setFollowedSessionId, sendCursor, sendMeasurementOp, joinCanvas, onMeasurementApplied, updateUser, setPageName } = useCollaboration();
+  const { socket, users, sendCursor, sendMeasurementOp, joinCanvas, onMeasurementApplied, setPageName } = useCollaboration();
 
   const [project, setProject] = useState<Project | null>(null);
   const [page, setPage] = useState<ProjectPage | null>(null);
@@ -1910,66 +1910,6 @@ const CanvasViewInner: React.FC = () => {
               />
             </div>
           )}
-
-          {(() => {
-            const otherSessions = sessions.filter(s => s.sessionId !== mySessionId);
-            if (otherSessions.length === 0) return null;
-            return (
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Collaboration</h3>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Cursor Color</label>
-                  <input
-                    type="color"
-                    value={globalUsers.find(u => u.id === socket?.id)?.color || '#000000'}
-                    onChange={(e) => {
-                      const currentUser = globalUsers.find(u => u.id === socket?.id);
-                      if (currentUser) {
-                        updateUser(currentUser.name, e.target.value);
-                        localStorage.setItem('userColor', e.target.value);
-                      }
-                    }}
-                    className="h-8 w-full rounded cursor-pointer border border-slate-300 p-0.5"
-                  />
-                </div>
-                <div className="pt-2">
-                  <p className="text-xs text-slate-500 mb-2">Other Users:</p>
-                  <div className="space-y-2">
-                    {otherSessions.map(session => (
-                      <div key={session.sessionId} className="flex items-center justify-between gap-2 text-sm">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: session.color }}></div>
-                          <div
-                            className="min-w-0 cursor-pointer hover:text-accent-600 transition-colors"
-                            onClick={() => session.location?.path && navigate(session.location.path)}
-                          >
-                            <p className="text-slate-700 truncate font-medium" title={session.name}>{session.name}</p>
-                            <p className="text-[10px] text-slate-400 truncate">{session.device}</p>
-                            {session.location?.pageId !== pageId && (
-                              <p className="text-[10px] text-slate-400 truncate">
-                                {session.location?.pageId ? (session.location?.label || 'another page') : 'elsewhere in the app'}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <label className="flex items-center gap-1 cursor-pointer group">
-                          <input
-                            type="checkbox"
-                            checked={followedSessionId === session.sessionId}
-                            onChange={(e) => setFollowedSessionId(e.target.checked ? session.sessionId : null)}
-                            className="w-3.5 h-3.5 rounded border-slate-300 text-accent-600 focus:ring-accent-500"
-                          />
-                          <span className="text-[10px] font-medium text-slate-400 group-hover:text-accent-600 transition-colors">Follow</span>
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-            );
-          })()}
         </div>
       </div>
       <button
