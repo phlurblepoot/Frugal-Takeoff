@@ -193,6 +193,15 @@ body {
     border-color: var(--card-border);
   }
 
+  /* Uniform soft zoom (spec §2.2 rule 8). Springy curve matches the motion
+     system; .motion-reduce neutralizes the transform entirely. */
+  .soft-zoom {
+    transition: transform 0.3s cubic-bezier(0.34, 1.8, 0.64, 1);
+  }
+  .soft-zoom:hover {
+    transform: scale(var(--soft-zoom, 1.015));
+  }
+
   /* CSS-level reduced motion override */
   .motion-reduce *,
   .motion-reduce *::before,
@@ -202,6 +211,8 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+.motion-reduce .soft-zoom:hover { transform: none; }
 
 /* Dark glass-subtle override */
 .dark .glass-subtle {
