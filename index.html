@@ -21,6 +21,7 @@
         scales.forEach(function (s) {
           el.style.setProperty('--color-accent-' + s[0], 'oklch(' + s[1] + ' ' + s[2] + ' ' + h + ')');
         });
+        el.style.setProperty('--accent-h', String(h));
         if (m === 'reduced') el.classList.add('motion-reduce');
       })();
     </script>

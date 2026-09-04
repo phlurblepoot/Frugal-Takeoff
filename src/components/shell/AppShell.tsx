@@ -120,7 +120,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
       )}
 
       <div
-        className="min-h-screen bg-surface"
+        className="min-h-screen"
         style={{
           marginLeft,
           transition: 'margin-left 200ms',

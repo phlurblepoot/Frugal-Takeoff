@@ -34,6 +34,7 @@ function applyAccent(key: AccentKey, customHex: string) {
   // fixed lightness/chroma scale, so contrast stays consistent with presets.
   const h = key === 'custom' ? hexToAccentHue(customHex) : ACCENT_HUES[key];
   const el = document.documentElement;
+  el.style.setProperty('--accent-h', String(h));   // NEW: drives the ambient scene
   ACCENT_SCALES.forEach(([step, l, c]) => {
     el.style.setProperty(`--color-accent-${step}`, `oklch(${l} ${c} ${h})`);
   });
