@@ -42,7 +42,7 @@ const NavRow: React.FC<{
   Icon: NavEntry['Icon'];
   active?: boolean;
   expanded: boolean;
-  onClick: () => void;
+  onClick: (e?: React.MouseEvent) => void;
   trailing?: React.ReactNode;
   // Unread-style count badge (currently just Mail). >0 shows a pill with the
   // count when expanded, or a plain dot on the icon when collapsed.
@@ -52,7 +52,7 @@ const NavRow: React.FC<{
   badgeTestId?: string;
 }> = ({ label, Icon, active = false, expanded, onClick, trailing, badge, badgeTestId }) => (
   <button
-    onClick={onClick}
+    onClick={e => onClick(e)}
     title={!expanded ? label : undefined}
     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors group ${
       active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink active:bg-hover'
@@ -209,7 +209,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
           label={mode === 'dark' ? 'Light mode' : 'Dark mode'}
           Icon={mode === 'dark' ? Sun : Moon}
           expanded={expanded}
-          onClick={toggleMode}
+          onClick={(e?: React.MouseEvent) => {
+            const rect = (e?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect();
+            window.dispatchEvent(new CustomEvent('theme-wipe', {
+              detail: { x: rect ? rect.left + rect.width / 2 : 32, y: rect ? rect.top + rect.height / 2 : window.innerHeight - 96 },
+            }));
+            toggleMode();
+          }}
         />
         <NavRow
           label="Settings"

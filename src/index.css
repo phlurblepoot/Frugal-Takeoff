@@ -264,3 +264,23 @@ html.dark[data-daypart='evening'] body {
   from { opacity: 0; transform: translateX(9px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* Cinematic theme wipe: the OLD theme's ground color shrinks away from the
+   toggle as a growing transparent circle reveals the new theme. --wipe-r is
+   a registered property so the mask radius can transition. */
+@property --wipe-r {
+  syntax: '<length>';
+  initial-value: 0px;
+  inherits: false;
+}
+.theme-wipe-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  --wipe-r: 0px;
+  mask-image: radial-gradient(circle at var(--wipe-x) var(--wipe-y), transparent var(--wipe-r), black calc(var(--wipe-r) + 1px));
+  -webkit-mask-image: radial-gradient(circle at var(--wipe-x) var(--wipe-y), transparent var(--wipe-r), black calc(var(--wipe-r) + 1px));
+  transition: --wipe-r 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.theme-wipe-overlay.wipe-go { --wipe-r: 160vmax; }
