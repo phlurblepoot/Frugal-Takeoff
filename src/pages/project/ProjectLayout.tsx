@@ -57,9 +57,9 @@ export const ProjectLayout: React.FC = () => {
     <>
       {!isCanvas && (
         <div className="glass-panel sticky top-0 z-30 border-b border-edge px-4 pt-3 pb-2 space-y-2 md:px-6">
-          <h1 className="text-lg font-bold tracking-tight text-ink truncate">
+          <p className="text-lg font-bold tracking-tight text-ink truncate">
             {summary?.name ?? 'Project'}
-          </h1>
+          </p>
           {projectId && <ProjectTabBar projectId={projectId} isAdmin={isAdmin} />}
         </div>
       )}
