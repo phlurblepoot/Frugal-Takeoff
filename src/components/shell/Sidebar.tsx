@@ -54,11 +54,11 @@ const NavRow: React.FC<{
   <button
     onClick={onClick}
     title={!expanded ? label : undefined}
-    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors group ${
       active ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink active:bg-hover'
     }`}
   >
-    <span className="relative shrink-0">
+    <span className="relative shrink-0 nav-icon inline-flex">
       <Icon size={18} className="shrink-0" />
       {!expanded && !!badge && badge > 0 && (
         <span
@@ -162,7 +162,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
       </div>
 
       {/* Nav */}
-      <div className="flex-1 py-2 px-2 overflow-y-auto">
+      <div className="flex-1 py-2 px-2 overflow-y-auto scroll-fade">
         <NavRow
           label="Search"
           Icon={Search}
