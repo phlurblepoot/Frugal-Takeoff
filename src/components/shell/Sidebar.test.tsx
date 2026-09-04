@@ -27,6 +27,17 @@ const renderAt = (path: string) =>
     </ThemeProvider>
   );
 
+const renderLockedAt = (path: string) =>
+  render(
+    <ThemeProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <NotesProvider>
+          <Sidebar state="expanded" onChange={() => {}} locked />
+        </NotesProvider>
+      </MemoryRouter>
+    </ThemeProvider>
+  );
+
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('token', 'test-token');
@@ -110,5 +121,18 @@ describe('Sidebar — company mode', () => {
     renderAt('/project/p1/billing');
     const btn = screen.getByRole('button', { name: 'Projects' });
     expect(btn.className).toContain('glow-accent');
+  });
+
+  it('shows the size toggles when not locked', () => {
+    renderAt('/dashboard');
+    expect(screen.getByTitle('Collapse')).toBeInTheDocument();
+    expect(screen.getByTitle('Hide sidebar')).toBeInTheDocument();
+  });
+
+  it('hides the size toggles when locked', () => {
+    renderLockedAt('/dashboard');
+    expect(screen.queryByTitle('Collapse')).toBeNull();
+    expect(screen.queryByTitle('Expand navigation')).toBeNull();
+    expect(screen.queryByTitle('Hide sidebar')).toBeNull();
   });
 });
