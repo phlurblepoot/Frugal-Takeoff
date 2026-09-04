@@ -50,17 +50,6 @@
   --ink:         #0f172a;
   --ink-soft:    #475569;
   --ink-faint:   #94a3b8;
-
-  /* Legacy aliases — pre-Phase-2 classes (theme-page/theme-card) resolve to
-     the same tokens, so old screens track theme changes automatically. */
-  --surface-bg:  var(--surface);
-  --card-bg:     var(--raised);
-  --card-border: var(--edge);
-
-  --glass-bg:     rgba(255, 255, 255, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.40);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
-  --glass-blur:   blur(16px);
 }
 
 .dark {
@@ -73,10 +62,6 @@
   --ink:         #f1f5f9;
   --ink-soft:    #94a3b8;
   --ink-faint:   #64748b;
-
-  --glass-bg:     rgba(15, 23, 42, 0.75);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.40);
 }
 
 /* ── Glow accents (spec §5 rule 2) ────────────────────────────────────────
@@ -158,41 +143,7 @@ body {
    `can-hover:opacity-0 can-hover:group-hover:opacity-100`. */
 @custom-variant can-hover (@media (hover: hover) and (pointer: fine));
 
-/* ── Legacy utility classes (kept until Phases 3–5 restyle the screens) ── */
 @layer utilities {
-  .glass {
-    background: var(--glass-bg);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-  }
-
-  .glass-card {
-    background: var(--glass-bg);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--glass-shadow);
-    border-radius: 1rem;
-  }
-
-  .glass-subtle {
-    background: rgba(255, 255, 255, 0.50);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.30);
-  }
-
-  .theme-page {
-    background-color: var(--surface-bg);
-  }
-
-  .theme-card {
-    background-color: var(--card-bg);
-    border-color: var(--card-border);
-  }
-
   /* Uniform soft zoom (spec §2.2 rule 8). Springy curve matches the motion
      system; .motion-reduce neutralizes the transform entirely. */
   .soft-zoom {
@@ -218,12 +169,6 @@ body {
 }
 
 .motion-reduce .soft-zoom:hover { transform: none; }
-
-/* Dark glass-subtle override */
-.dark .glass-subtle {
-  background: rgba(30, 41, 59, 0.60);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
 
 .dark body {
   color-scheme: dark;

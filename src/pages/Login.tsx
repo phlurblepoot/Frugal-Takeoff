@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useOutletContext } from 'react-router-dom';
 import { Lock, User, Loader2, FolderOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export const Login: React.FC = () => {
+  const { appName } = useOutletContext<{ appName: string; logoUrl: string }>();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -43,14 +44,12 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen overflow-y-auto theme-page flex items-center justify-center p-4 font-sans
-                    bg-gradient-to-br from-slate-100 via-slate-50 to-blue-50
-                    dark:from-slate-950 dark:via-slate-900 dark:to-slate-800">
+    <div className="min-h-screen overflow-y-auto flex items-center justify-center p-4">
       <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.97 }}
+        initial={{ opacity: 0, y: 28, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-        className="glass-card w-full max-w-md"
+        transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+        className="glass-panel rounded-2xl border border-edge shadow-2xl w-full max-w-md"
       >
         <div className="p-8">
           {/* Branding */}
@@ -58,8 +57,8 @@ export const Login: React.FC = () => {
             <div className="w-14 h-14 bg-accent-600 rounded-2xl mx-auto mb-4 flex items-center justify-center shadow-lg shadow-accent-600/25">
               <FolderOpen size={28} className="text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Takeoff Pro</h1>
-            <p className="text-slate-500 dark:text-slate-400 mt-2">Sign in to your account</p>
+            <h1 className="text-3xl font-bold text-ink">{appName}</h1>
+            <p className="text-ink-soft mt-2">Sign in to your account</p>
           </div>
 
           {/* Error message */}
@@ -79,20 +78,20 @@ export const Login: React.FC = () => {
 
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-ink-soft mb-2">
                 Username
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-ink-faint">
                   <User size={18} />
                 </div>
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600
-                             bg-white/80 dark:bg-slate-800/50 text-slate-900 dark:text-white
-                             placeholder-slate-400 dark:placeholder-slate-500
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-edge
+                             bg-raised/70 text-ink
+                             placeholder-ink-faint
                              focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
                   placeholder="Enter your username"
                   required
@@ -102,20 +101,20 @@ export const Login: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-ink-soft mb-2">
                 Password
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-ink-faint">
                   <Lock size={18} />
                 </div>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600
-                             bg-white/80 dark:bg-slate-800/50 text-slate-900 dark:text-white
-                             placeholder-slate-400 dark:placeholder-slate-500
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-edge
+                             bg-raised/70 text-ink
+                             placeholder-ink-faint
                              focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all"
                   placeholder="Enter your password"
                   required
