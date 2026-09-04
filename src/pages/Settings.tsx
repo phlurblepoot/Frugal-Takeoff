@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
@@ -631,7 +631,7 @@ function accentSwatchColor(hue: number) {
 }
 
 const PreferencesTab: React.FC = () => {
-  const { mode, accentColor, customAccentHex, reducedMotion, toggleMode, setAccentColor, setCustomAccent, setReducedMotion } = useTheme();
+  const { mode, accentColor, customAccentHex, reducedMotion, timeAmbience, solidSurfaces, toggleMode, setAccentColor, setCustomAccent, setReducedMotion, setTimeAmbience, setSolidSurfaces } = useTheme();
   const { toast } = useToast();
 
   const [currentPassword, setCurrentPassword] = useState('');
@@ -768,6 +768,46 @@ const PreferencesTab: React.FC = () => {
             >
               <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
                 className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${reducedMotion ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
+
+          {/* Time-of-day ambience */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-accent-100 dark:bg-accent-900/40 flex items-center justify-center text-accent-600 dark:text-accent-400 shrink-0">
+                <Sunrise size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Time-of-day ambience</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Background scene warms and cools with the clock (always in your accent's hues)</p>
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={timeAmbience} onClick={() => setTimeAmbience(!timeAmbience)}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${timeAmbience ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+            >
+              <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${timeAmbience ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
+
+          {/* Solid surfaces */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-accent-100 dark:bg-accent-900/40 flex items-center justify-center text-accent-600 dark:text-accent-400 shrink-0">
+                <Layers size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Solid surfaces</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Replace translucent glass panels with solid ones (better on low-power devices)</p>
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={solidSurfaces} onClick={() => setSolidSurfaces(!solidSurfaces)}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${solidSurfaces ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+            >
+              <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${solidSurfaces ? 'left-6' : 'left-0.5'}`} />
             </button>
           </div>
         </div>
