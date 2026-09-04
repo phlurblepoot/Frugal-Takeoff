@@ -210,6 +210,11 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /* Tab-switch tier (spec §3): quick glance, not an arrival. */
+  .anim-tab-in {
+    animation: tab-in 0.18s ease-out;
+  }
 }
 
 .motion-reduce .soft-zoom:hover { transform: none; }
@@ -245,4 +250,9 @@ body {
 }
 .progress-indeterminate {
   animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes tab-in {
+  from { opacity: 0; transform: translateX(9px); }
+  to   { opacity: 1; transform: none; }
 }

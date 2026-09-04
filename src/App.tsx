@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
+import { PageTransition } from './components/motion/PageTransition';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
@@ -58,7 +59,9 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
                 <UserPresenceOverlay />
                 <FollowPill />
                 <NotesOverlay />
-                <Outlet context={{ appName, logoUrl }} />
+                <PageTransition>
+                  <Outlet context={{ appName, logoUrl }} />
+                </PageTransition>
               </AppShell>
             </NotesProvider>
           </CollaborationProvider>
