@@ -108,7 +108,7 @@ test.describe('app-wide session-scoped Follow', () => {
       await expect(a.page).toHaveURL(new RegExp(`/project/${seeded.projectId}/takeoff$`), { timeout: 15_000 });
       await expect(a.page.getByText(/Following/)).toBeVisible();
 
-      await a.page.getByRole('button', { name: 'All Projects' }).click();
+      await a.page.getByRole('button', { name: 'Projects' }).click();
       await expect(a.page.getByText(/Following/)).toHaveCount(0);
     } finally {
       await a.context.close().catch(() => {});
