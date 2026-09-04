@@ -3,12 +3,11 @@ import React, { useEffect, useState } from 'react';
 import { useLocation, matchPath } from 'react-router-dom';
 import { Menu, Search } from 'lucide-react';
 import { Sidebar, SidebarState } from './Sidebar';
-import { ProjectShellProvider } from '../../context/ProjectShellContext';
 
 // Keep the legacy storage key so existing users keep their saved preference.
 const SIDEBAR_STORAGE_KEY = 'sideDockState';
 
-export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AppShell: React.FC<{ appName: string; children: React.ReactNode }> = ({ appName, children }) => {
   const location = useLocation();
   const isLoginPage = location.pathname === '/login';
   const isCanvasPage = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
@@ -63,7 +62,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const showMobileTopBar = isMobile && !isCanvasPage && !isLoginPage;
 
   return (
-    <ProjectShellProvider>
+    <>
       {showSidebar &&
         (isMobile ? (
           <>
@@ -100,7 +99,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         ))}
 
       {showMobileTopBar && (
-        <header className="fixed top-0 inset-x-0 z-40 flex items-center gap-2 h-14 px-2 pt-safe bg-surface border-b border-edge md:hidden">
+        <header className="fixed top-0 inset-x-0 z-40 flex items-center gap-2 h-14 px-2 pt-safe glass-panel border-b border-edge md:hidden">
           <button
             onClick={() => setMobileSidebarOpen(true)}
             aria-label="Open navigation"
@@ -108,7 +107,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           >
             <Menu size={20} />
           </button>
-          <span className="flex-1 truncate font-semibold text-ink">Takeoff Pro</span>
+          <span className="flex-1 truncate font-semibold text-ink">{appName}</span>
           <button
             onClick={() => window.dispatchEvent(new CustomEvent('open-command-palette'))}
             aria-label="Search"
@@ -133,6 +132,6 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
       >
         {children}
       </div>
-    </ProjectShellProvider>
+    </>
   );
 };

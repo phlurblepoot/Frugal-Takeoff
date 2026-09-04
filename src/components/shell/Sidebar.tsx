@@ -1,14 +1,12 @@
 // src/components/shell/Sidebar.tsx
 import React from 'react';
-import { useLocation, useNavigate, matchPath } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Menu, PanelLeftClose, Search, FolderKanban, ListTodo, Clock,
   FileEdit, Sheet, Settings, LogOut, Sun, Moon,
-  ArrowLeft, LayoutGrid, Ruler, FolderOpen, StickyNote, LayoutDashboard, DollarSign, AlertCircle,
-  ClipboardCheck, FileText, SlidersHorizontal, Users, MessageCircleQuestion, CalendarDays, Mail,
+  FolderOpen, LayoutDashboard, Users, Mail,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
-import { useProjectShell } from '../../context/ProjectShellContext';
 import { useMailUnread } from '../../pages/mail/useMailUnread';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
@@ -34,32 +32,6 @@ const WORKSPACE_NAV: NavEntry[] = [
 const TOOLS_NAV: NavEntry[] = [
   { id: 'pdf-editor', label: 'PDF Editor', Icon: FileEdit, path: '/tools/pdf', match: p => p.startsWith('/tools/pdf') || p.startsWith('/pdf-editor') },
   { id: 'spreadsheet-editor', label: 'Spreadsheet', Icon: Sheet, path: '/tools/sheets', match: p => p.startsWith('/tools/sheets') || p.startsWith('/spreadsheet-editor') },
-];
-
-// Project sections (spec §4.2), Phase 3b edition: real nested routes.
-// 'Takeoff & Estimate' keeps its internal ?tab= sub-tabs; Punch/Issues/Billing
-// arrive in Phase 4; Project Settings in Phase 5.
-const PROJECT_NAV: {
-  id: string;
-  label: string;
-  Icon: NavEntry['Icon'];
-  path: string;
-  match: (pathname: string, base: string) => boolean;
-  adminOnly?: boolean;
-}[] = [
-  { id: 'overview',  label: 'Overview',           Icon: LayoutGrid,  path: '',           match: (p, b) => p === b },
-  { id: 'takeoff',   label: 'Takeoff & Estimate', Icon: Ruler,       path: '/takeoff',   match: (p, b) => p.startsWith(`${b}/takeoff`) || p.startsWith(`${b}/page/`) },
-  { id: 'proposal',  label: 'Proposal',           Icon: FileText,    path: '/proposal',  match: (p, b) => p.startsWith(`${b}/proposal`), adminOnly: true },
-  { id: 'documents', label: 'Documents',          Icon: FolderOpen,  path: '/documents', match: (p, b) => p.startsWith(`${b}/documents`) },
-  { id: 'punch',     label: 'Punch & Checklists', Icon: ClipboardCheck, path: '/punch',  match: (p, b) => p.startsWith(`${b}/punch`) },
-  { id: 'notes',     label: 'Notes',              Icon: StickyNote,  path: '/notes',     match: (p, b) => p.startsWith(`${b}/notes`) },
-  { id: 'time',      label: 'Time',               Icon: Clock,       path: '/time',      match: (p, b) => p.startsWith(`${b}/time`) },
-  { id: 'issues',    label: 'Issues',             Icon: AlertCircle, path: '/issues',    match: (p, b) => p.startsWith(`${b}/issues`) },
-  { id: 'rfis',      label: 'RFIs',               Icon: MessageCircleQuestion, path: '/rfis', match: (p, b) => p.startsWith(`${b}/rfis`) },
-  { id: 'daily-reports', label: 'Daily Reports',  Icon: CalendarDays, path: '/daily-reports', match: (p, b) => p.startsWith(`${b}/daily-reports`) },
-  { id: 'mail',      label: 'Mail',               Icon: Mail,        path: '/mail',      match: (p, b) => p.startsWith(`${b}/mail`) },
-  { id: 'billing',   label: 'Billing',            Icon: DollarSign,  path: '/billing',   match: (p, b) => p.startsWith(`${b}/billing`), adminOnly: true },
-  { id: 'settings',  label: 'Project Settings',   Icon: SlidersHorizontal, path: '/settings', match: (p, b) => p.startsWith(`${b}/settings`), adminOnly: true },
 ];
 
 // Row used by every nav item. The active item gets the glow treatment —
@@ -133,15 +105,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   // Wrap navigation so the mobile drawer closes on selection.
   const go = (path: string) => { navigate(path); onNavigate?.(); };
   const { mode, toggleMode } = useTheme();
-  const { project } = useProjectShell();
   const mailUnread = useMailUnread();
-  const projectMatch = matchPath({ path: '/project/:projectId', end: false }, location.pathname);
-  const projectId = projectMatch?.params.projectId;
 
   if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin = user.role === 'admin';
   const expanded = state === 'expanded';
 
   const handleLogout = () => {
@@ -164,7 +132,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
 
   return (
     <div
-      className={`fixed left-0 top-0 h-full z-40 flex flex-col bg-surface border-r border-edge overflow-hidden transition-all duration-200 ${
+      className={`fixed left-0 top-0 h-full z-40 flex flex-col glass-panel border-r border-edge overflow-hidden transition-all duration-200 ${
         expanded ? 'w-52' : 'w-16'
       }`}
     >
@@ -203,72 +171,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
             <kbd className="hidden md:inline-flex text-[10px] font-mono text-ink-faint border border-edge rounded px-1 py-0.5">⌘K</kbd>
           }
         />
-        {projectId ? (
-          <>
-            <div className="pt-2">
-              <NavRow
-                label="All Projects"
-                Icon={ArrowLeft}
-                expanded={expanded}
-                onClick={() => go('/projects')}
-              />
-            </div>
-            {expanded && (
-              <p
-                className="px-3 pt-3 pb-1 text-sm font-semibold text-ink truncate"
-                title={project && project.id === projectId ? project.name : undefined}
-              >
-                {project && project.id === projectId ? project.name : 'Project'}
-              </p>
-            )}
-            <div className="space-y-0.5">
-              {PROJECT_NAV.filter(item => !item.adminOnly || isAdmin).map(item => {
-                const base = `/project/${projectId}`;
-                return (
-                  <NavRow
-                    key={item.id}
-                    label={item.label}
-                    Icon={item.Icon}
-                    expanded={expanded}
-                    active={item.match(location.pathname, base)}
-                    onClick={() => go(`${base}${item.path}`)}
-                  />
-                );
-              })}
-            </div>
-          </>
-        ) : (
-          <>
-            <SectionLabel show={expanded}>Workspace</SectionLabel>
-            <div className="space-y-0.5">
-              {WORKSPACE_NAV.map(item => (
-                <NavRow
-                  key={item.id}
-                  label={item.label}
-                  Icon={item.Icon}
-                  expanded={expanded}
-                  active={item.match(location.pathname)}
-                  onClick={() => go(item.path)}
-                  badge={item.id === 'mail' ? mailUnread : undefined}
-                  badgeTestId={item.id === 'mail' ? 'sidebar-mail-badge' : undefined}
-                />
-              ))}
-            </div>
-            <SectionLabel show={expanded}>Tools</SectionLabel>
-            <div className="space-y-0.5">
-              {TOOLS_NAV.map(item => (
-                <NavRow
-                  key={item.id}
-                  label={item.label}
-                  Icon={item.Icon}
-                  expanded={expanded}
-                  active={item.match(location.pathname)}
-                  onClick={() => go(item.path)}
-                />
-              ))}
-            </div>
-          </>
-        )}
+        <SectionLabel show={expanded}>Workspace</SectionLabel>
+        <div className="space-y-0.5">
+          {WORKSPACE_NAV.map(item => (
+            <NavRow
+              key={item.id}
+              label={item.label}
+              Icon={item.Icon}
+              expanded={expanded}
+              active={item.match(location.pathname)}
+              onClick={() => go(item.path)}
+              badge={item.id === 'mail' ? mailUnread : undefined}
+              badgeTestId={item.id === 'mail' ? 'sidebar-mail-badge' : undefined}
+            />
+          ))}
+        </div>
+        <SectionLabel show={expanded}>Tools</SectionLabel>
+        <div className="space-y-0.5">
+          {TOOLS_NAV.map(item => (
+            <NavRow
+              key={item.id}
+              label={item.label}
+              Icon={item.Icon}
+              expanded={expanded}
+              active={item.match(location.pathname)}
+              onClick={() => go(item.path)}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Footer */}

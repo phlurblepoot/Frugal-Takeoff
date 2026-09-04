@@ -55,7 +55,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
           <CollaborationProvider>
             <NotesProvider>
               {!isLoginPage && <CommandPalette />}
-              <AppShell>
+              <AppShell appName={appName}>
                 <UserPresenceOverlay />
                 <FollowPill />
                 <NotesOverlay />
