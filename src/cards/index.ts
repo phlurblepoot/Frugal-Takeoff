@@ -16,3 +16,4 @@ export { CardGrid } from './CardGrid';
 import './dashboard/coreCards';
 import './dashboard/libraryCards';
 import './project/coreCards';
+import './project/libraryCards';
