@@ -14,3 +14,4 @@ export { CardGrid } from './CardGrid';
 // runs once, here, after registry.tsx above has already initialized
 // CARD_REGISTRY. Appended by Tasks 6-11 as each page's default cards land.
 import './dashboard/coreCards';
+import './dashboard/libraryCards';
