@@ -307,13 +307,23 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
       setGestureId(null);
       setArmed(false);
     };
+    // pointercancel means the gesture was REVOKED (a second touch starting a
+    // pinch, the OS taking over, etc.) — drag-cancel semantics are "act on
+    // nothing", so this must never commit a reorder using whatever
+    // hoverIdRef last held. Same cleanup as onUp, minus the setLayout call.
+    const onCancel = () => {
+      cancelLongPress();
+      hoverIdRef.current = null;
+      setGestureId(null);
+      setArmed(false);
+    };
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('pointercancel', onCancel);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gestureId]);

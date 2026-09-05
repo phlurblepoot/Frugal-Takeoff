@@ -395,6 +395,73 @@ describe('CardGrid touch reorder', () => {
     });
   });
 
+  it('pointercancel aborts the gesture instead of committing (drag-cancel semantics: act on nothing), and fully resets for the next gesture', async () => {
+    localStorage.setItem('token', 'tok');
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+    const c = grid.querySelector('[data-card-id="card-c"]') as HTMLElement;
+    document.elementFromPoint = vi.fn(() => c);
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(a.className).toContain('scale-105');
+    vi.useRealTimers();
+
+    // Hovering over card-c (a drop here would normally reorder before it),
+    // then the system revokes the gesture — e.g. a second touch starting a
+    // pinch, or an OS interruption.
+    fireEvent.pointerMove(window, { clientX: 12, clientY: 12 });
+    fireEvent.pointerCancel(window);
+
+    // Cleanup happened (disarmed, lift class gone, scroll lock released)...
+    expect(a.className).not.toContain('scale-105');
+    expect(grid.style.touchAction).not.toBe('none');
+    // ...but nothing was committed: order unchanged, nothing persisted.
+    expect(wrapperIds()).toEqual(['card-a', 'card-b', 'card-c']);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(saveUserPreferences).not.toHaveBeenCalled();
+
+    // Armed state was fully cleaned up (refs/timers/listeners) — a fresh
+    // long-press right after still works normally.
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(a.className).toContain('scale-105');
+    vi.useRealTimers();
+
+    fireEvent.pointerMove(window, { clientX: 12, clientY: 12 });
+    fireEvent.pointerUp(window);
+    expect(wrapperIds()).toEqual(['card-b', 'card-a', 'card-c']);
+  });
+
+  it('dropping on the origin card (self-hit) is a no-op', () => {
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+    document.elementFromPoint = vi.fn(() => a);
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    act(() => { vi.advanceTimersByTime(500); });
+    vi.useRealTimers();
+
+    fireEvent.pointerMove(window, { clientX: 11, clientY: 11 }); // still hovering itself
+    fireEvent.pointerUp(window);
+
+    expect(a.className).not.toContain('scale-105');
+    expect(wrapperIds()).toEqual(['card-a', 'card-b', 'card-c']);
+  });
+
   it('a move past tolerance before the long-press fires cancels the gesture as a scroll, not a reorder', () => {
     mockTouchDevice();
     seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
