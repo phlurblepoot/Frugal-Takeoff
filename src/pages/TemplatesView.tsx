@@ -407,7 +407,7 @@ export const TemplatesView: React.FC = () => {
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <Card className="rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+          <Card className="shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-edge">
               <h3 className="text-lg font-semibold text-ink">Delete Template</h3>
             </div>
@@ -436,7 +436,7 @@ export const TemplatesView: React.FC = () => {
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <Card className="rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+          <Card className="shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-6 border-b border-edge">
               <h3 className="text-lg font-semibold text-ink">
                 {editingTemplate ? 'Edit Template' : 'Create Template'}

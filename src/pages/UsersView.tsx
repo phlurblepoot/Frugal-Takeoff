@@ -195,7 +195,7 @@ export const UsersView: React.FC = () => {
             </TR>
           ) : (
             users.map((user) => (
-              <TR key={user.id} interactive className="group">
+              <TR key={user.id} className="group">
                 <TD className="font-medium text-ink flex items-center gap-2">
                   <User size={16} className="text-ink-faint" />
                   {user.username}
