@@ -1,12 +1,13 @@
 // src/pages/Dashboard.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act, screen, within, waitFor as rtlWaitFor } from '@testing-library/react';
+import { render, screen, waitFor as rtlWaitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 import { hoursThisWeek, startOfWeek, timeAgo } from './Dashboard';
-import type { OutstandingProposal } from '../utils/store';
 
-const { fakeSocket, getProjectsSummary, getActivity, getMyTimeEntries, getTasks, getOutstandingProposals } = vi.hoisted(() => {
+const {
+  fakeSocket, getDashboardAttention, getDashboardMoney, getTasks, getProjectsSummary, getActivity,
+} = vi.hoisted(() => {
   const handlers: Record<string, ((...a: any[]) => void)[]> = {};
   const fakeSocket = {
     handlers,
@@ -17,21 +18,23 @@ const { fakeSocket, getProjectsSummary, getActivity, getMyTimeEntries, getTasks,
   };
   return {
     fakeSocket,
+    getDashboardAttention: vi.fn(),
+    getDashboardMoney: vi.fn(),
+    getTasks: vi.fn(),
     getProjectsSummary: vi.fn(),
     getActivity: vi.fn(),
-    getMyTimeEntries: vi.fn(),
-    getTasks: vi.fn(),
-    getOutstandingProposals: vi.fn(),
   };
 });
 vi.mock('../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: fakeSocket, sessions: [], mySessionId: 'sock-1' }),
 }));
 vi.mock('../utils/store', async (importOriginal) => ({
-  ...(await importOriginal<object>()), getProjectsSummary, getActivity, getMyTimeEntries, getTasks, getOutstandingProposals,
+  ...(await importOriginal<object>()),
+  getDashboardAttention, getDashboardMoney, getTasks, getProjectsSummary, getActivity,
 }));
 
-// Imported after the mocks above so Dashboard picks up the mocked store/collaboration context.
+// Imported after the mocks above so Dashboard (and the cards it renders via
+// CardGrid) pick up the mocked store/collaboration context.
 import { Dashboard } from './Dashboard';
 
 function mount() {
@@ -72,102 +75,39 @@ describe('timeAgo', () => {
   });
 });
 
-describe('Dashboard live refresh', () => {
+describe('Dashboard page', () => {
   beforeEach(() => {
-    getProjectsSummary.mockReset();
-    getActivity.mockReset();
-    getMyTimeEntries.mockReset();
-    getTasks.mockReset();
-    for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
-  });
-
-  it('refetches when a foreign task event arrives', async () => {
-    getProjectsSummary.mockResolvedValue([]);
-    getActivity.mockResolvedValue([]);
-    getMyTimeEntries.mockResolvedValue([]);
-    getTasks.mockResolvedValue([]);
-    mount();
-    await rtlWaitFor(() => expect(getActivity).toHaveBeenCalledTimes(1));
-    expect(getTasks).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      fakeSocket.fire('entity-changed', { type: 'task', id: 't1', action: 'created', bySessionId: 'other-tab' });
+    getDashboardAttention.mockReset().mockResolvedValue([]);
+    getDashboardMoney.mockReset().mockResolvedValue({
+      outstandingCents: 0, contractTotalCents: 0, billedCents: 0, paidCents: 0,
+      draftPayAppCount: 0, recentPayments: [], trend: [],
     });
-
-    await rtlWaitFor(() => expect(getActivity).toHaveBeenCalledTimes(2), { timeout: 2000 });
-    await rtlWaitFor(() => expect(getTasks).toHaveBeenCalledTimes(2), { timeout: 2000 });
-  });
-});
-
-const outstandingProposal = (over: Partial<OutstandingProposal> = {}): OutstandingProposal => ({
-  id: 'pr1', projectId: 'proj1', projectName: 'Stucco Job', number: 3, revisedFromId: null, revisedFromNumber: null,
-  status: 'sent', legacy: false, title: null, validUntil: null,
-  fontFamily: null, coverNotes: null, terms: null, inclusions: [], exclusions: [], paymentSchedule: null,
-  showGrandTotal: true, includeCostDetail: false, includeSignature: true, highlightQuality: 'best',
-  fileId: null, signedFileId: null, sentAt: Date.now(), sentTo: null, acceptedAt: null, declinedAt: null,
-  version: 1, createdBy: null, createdAt: 0, updatedAt: 0,
-  totalCents: 250000, alternateCount: 0, hasOverride: false, photoCount: 0, attachmentCount: 0,
-  ...over,
-});
-
-describe('Dashboard outstanding proposals card', () => {
-  beforeEach(() => {
+    getTasks.mockReset().mockResolvedValue([]);
     getProjectsSummary.mockReset().mockResolvedValue([]);
     getActivity.mockReset().mockResolvedValue([]);
-    getMyTimeEntries.mockReset().mockResolvedValue([]);
-    getTasks.mockReset().mockResolvedValue([]);
-    getOutstandingProposals.mockReset();
     for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
   });
   afterEach(() => localStorage.removeItem('user'));
 
-  it('is not shown to a non-admin, and never fetches outstanding proposals', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'user' }));
+  it('renders the greeting and the card grid with the default card titles, for an admin', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'admin' }));
     mount();
-    await rtlWaitFor(() => expect(getActivity).toHaveBeenCalledTimes(1));
-    expect(getOutstandingProposals).not.toHaveBeenCalled();
-    expect(screen.queryByText('Outstanding proposals')).not.toBeInTheDocument();
+
+    expect(screen.getByText(/Welcome back, nathan/)).toBeInTheDocument();
+    expect(await screen.findByTestId('card-grid')).toBeInTheDocument();
+
+    expect(await screen.findByText('⚡ Needs your attention')).toBeInTheDocument();
+    expect(screen.getByText('Money pulse')).toBeInTheDocument();
+    expect(screen.getByText('📅 On deck')).toBeInTheDocument();
+    expect(screen.getByText('Team activity')).toBeInTheDocument();
   });
 
-  it('lists an admin\'s outstanding proposals with amount and expiry, capped at 6, linking to the editor', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'admin' }));
-    const rows = [
-      outstandingProposal({ id: 'pr1', title: 'Stucco package', totalCents: 250000, validUntil: '2000-01-01' }), // expired
-      ...Array.from({ length: 6 }, (_, i) => outstandingProposal({ id: `extra-${i}`, number: 10 + i })),
-    ];
-    getOutstandingProposals.mockResolvedValue(rows);
+  it('hides the Money pulse card for a non-admin', async () => {
+    localStorage.setItem('user', JSON.stringify({ id: 'u1', username: 'nathan', role: 'user' }));
     mount();
 
-    await rtlWaitFor(() => expect(getOutstandingProposals).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText('Outstanding proposals')).toBeInTheDocument();
-    const firstRow = screen.getByText(/Stucco Job · #3 — Stucco package/).closest('a')!;
-    expect(within(firstRow).getByText('$2,500.00')).toBeInTheDocument();
-    const expired = within(firstRow).getByText(/expired/);
-    expect(expired.className).toMatch(/text-red-600/);
-    expect(firstRow).toHaveAttribute('href', '/project/proj1/proposal/pr1');
-
-    // 7 rows fetched, only 6 rendered.
-    const links = screen.getAllByRole('link', { name: /Stucco Job/ });
-    expect(links).toHaveLength(6);
-  });
-
-  it('shows an empty state when there is nothing outstanding', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'admin' }));
-    getOutstandingProposals.mockResolvedValue([]);
-    mount();
-    expect(await screen.findByText('No proposals awaiting a response.')).toBeInTheDocument();
-  });
-
-  it('refetches outstanding proposals when a proposal event arrives', async () => {
-    localStorage.setItem('user', JSON.stringify({ id: 'u1', role: 'admin' }));
-    getOutstandingProposals.mockResolvedValue([]);
-    mount();
-    await rtlWaitFor(() => expect(getOutstandingProposals).toHaveBeenCalledTimes(1));
-
-    act(() => {
-      fakeSocket.fire('entity-changed', { type: 'proposal', id: 'pr9', action: 'created', bySessionId: 'other-tab' });
-    });
-
-    await rtlWaitFor(() => expect(getOutstandingProposals).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await screen.findByTestId('card-grid');
+    await rtlWaitFor(() => expect(screen.getByText('⚡ Needs your attention')).toBeInTheDocument());
+    expect(screen.queryByText('Money pulse')).not.toBeInTheDocument();
   });
 });

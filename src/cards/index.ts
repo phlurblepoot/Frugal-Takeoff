@@ -9,3 +9,8 @@ export * from './registry';
 export { CardShell } from './CardShell';
 export { useCardLayout } from './useCardLayout';
 export { CardGrid } from './CardGrid';
+
+// Side-effect imports: each card module's top-level registerCards(...) call
+// runs once, here, after registry.tsx above has already initialized
+// CARD_REGISTRY. Appended by Tasks 6-11 as each page's default cards land.
+import './dashboard/coreCards';
