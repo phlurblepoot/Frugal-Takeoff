@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 
 type Variant = 'confetti' | 'pulse';
@@ -31,6 +31,10 @@ const pieces = Array.from({ length: CONFETTI_COUNT }, (_, i) => {
 export const CelebrationOverlay: React.FC = () => {
   const { reducedMotion } = useTheme();
   const [celebration, setCelebration] = useState<Celebration | null>(null);
+  // Monotonic counter, not Date.now() — two events inside the same
+  // millisecond (or under fake timers, where Date.now() is frozen between
+  // ticks) would otherwise collide and share a React key.
+  const nextId = useRef(0);
 
   useEffect(() => {
     const onCelebrate = (e: Event) => {
@@ -39,7 +43,7 @@ export const CelebrationOverlay: React.FC = () => {
       const variant: Variant = detail.variant === 'pulse' ? 'pulse' : 'confetti';
       const x = detail.x ?? window.innerWidth / 2;
       const y = detail.y ?? window.innerHeight / 2;
-      setCelebration({ variant, x, y, id: Date.now() });
+      setCelebration({ variant, x, y, id: nextId.current++ });
     };
     window.addEventListener('celebrate', onCelebrate);
     return () => window.removeEventListener('celebrate', onCelebrate);
@@ -47,8 +51,14 @@ export const CelebrationOverlay: React.FC = () => {
 
   useEffect(() => {
     if (!celebration) return;
+    const { id } = celebration;
     const duration = celebration.variant === 'confetti' ? 1000 : 700;
-    const t = setTimeout(() => setCelebration(null), duration);
+    // Guard by id (ThemeWipe idiom): if a second celebration has already
+    // replaced this one by the time the timer fires, this timeout must not
+    // clear the NEW celebration out from under it.
+    const t = setTimeout(() => {
+      setCelebration(current => (current?.id === id ? null : current));
+    }, duration);
     return () => clearTimeout(t);
   }, [celebration]);
 
@@ -57,6 +67,7 @@ export const CelebrationOverlay: React.FC = () => {
   if (celebration.variant === 'pulse') {
     return (
       <div
+        key={celebration.id}
         data-testid="celebration-pulse"
         className="celebration-pulse"
         style={{ ['--pulse-x' as any]: `${celebration.x}px`, ['--pulse-y' as any]: `${celebration.y}px` }}
@@ -66,6 +77,7 @@ export const CelebrationOverlay: React.FC = () => {
 
   return (
     <div
+      key={celebration.id}
       data-testid="celebration-confetti"
       className="celebration-confetti"
       style={{ ['--confetti-x' as any]: `${celebration.x}px`, ['--confetti-y' as any]: `${celebration.y}px` }}

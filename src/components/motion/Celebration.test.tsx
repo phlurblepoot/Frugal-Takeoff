@@ -38,6 +38,41 @@ describe('CelebrationOverlay', () => {
     expect(screen.getByTestId('celebration-confetti')).toBeInTheDocument();
   });
 
+  it('remounts the overlay DOM node on a rapid re-fire so the animation replays', () => {
+    render(<ThemeProvider><CelebrationOverlay /></ThemeProvider>);
+    act(() => {
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse', x: 1, y: 1 } }));
+    });
+    const first = screen.getByTestId('celebration-pulse');
+    act(() => { vi.advanceTimersByTime(300); });
+    act(() => {
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse', x: 2, y: 2 } }));
+    });
+    const second = screen.getByTestId('celebration-pulse');
+    // Same testid, but a genuinely new DOM node — a reused node would keep
+    // its CSS animation in its already-finished/paused state and never
+    // visibly replay the pulse.
+    expect(second).not.toBe(first);
+  });
+
+  it("does not let event 1's removal timer clear event 2's overlay", () => {
+    render(<ThemeProvider><CelebrationOverlay /></ThemeProvider>);
+    act(() => {
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse', x: 1, y: 1 } }));
+    });
+    act(() => { vi.advanceTimersByTime(300); });
+    act(() => {
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse', x: 2, y: 2 } }));
+    });
+    // Event 1 fired at t=0 with a 700ms timer, due at t=700. Event 2 fired at
+    // t=300; advancing another 400ms (t=700 overall) must NOT tear down
+    // event 2's overlay, which still has 300ms left on ITS OWN timer.
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(screen.getByTestId('celebration-pulse')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(350); });
+    expect(screen.queryByTestId('celebration-pulse')).toBeNull();
+  });
+
   it('does nothing under reduced motion', () => {
     localStorage.setItem('theme-motion', 'reduced');
     render(<ThemeProvider><CelebrationOverlay /></ThemeProvider>);
