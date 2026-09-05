@@ -111,7 +111,7 @@ describe('dash-project-health', () => {
     pageCount: 0, takeoffCount: 0, pageIds: [], openIssueCount: 2, punchDone: 1, punchTotal: 3,
   };
 
-  it('shows only active projects with open-item count and admin billed %', async () => {
+  it('shows only active projects with open-item count and admin outstanding amount', async () => {
     getProjectsSummary.mockResolvedValue([
       { ...base },
       { ...base, id: 'p2', name: 'Estimating Job', status: 'bidding' },
@@ -126,17 +126,27 @@ describe('dash-project-health', () => {
     // openIssueCount(2) + (punchTotal(3) - punchDone(1)) = 4
     expect(screen.getByText('4 open')).toBeInTheDocument();
     expect(screen.getByText('Billed Job')).toBeInTheDocument();
-    expect(screen.getByText('25% billed')).toBeInTheDocument();
+    expect(screen.getByText('$250.00 outstanding')).toBeInTheDocument();
   });
 
-  it('hides billed % for non-admins even when the fields are present', async () => {
+  it('hides the outstanding amount for non-admins even when the fields are present', async () => {
     getProjectsSummary.mockResolvedValue([
       { ...base, outstandingCents: 25000, contractValueCents: 100000 },
     ]);
     mount('dash-project-health', 2, { isAdmin: false });
 
     await screen.findByText('Acme Tower');
-    expect(screen.queryByText(/% billed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/outstanding/)).not.toBeInTheDocument();
+  });
+
+  it('renders nothing extra when outstandingCents is 0 (a clean row, not "$0.00 outstanding")', async () => {
+    getProjectsSummary.mockResolvedValue([
+      { ...base, outstandingCents: 0, contractValueCents: 100000 },
+    ]);
+    mount('dash-project-health', 2, { isAdmin: true });
+
+    await screen.findByText('Acme Tower');
+    expect(screen.queryByText(/outstanding/)).not.toBeInTheDocument();
   });
 
   it('shows the empty state with no active projects', async () => {

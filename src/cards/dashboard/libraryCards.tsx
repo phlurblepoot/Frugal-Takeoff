@@ -85,8 +85,8 @@ const ProjectHealthCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ w
       <ul className="divide-y divide-edge">
         {active.map(p => {
           const openItems = p.openIssueCount + (p.punchTotal - p.punchDone);
-          const showBilled = ctx.isAdmin && p.outstandingCents !== undefined && p.contractValueCents !== undefined && p.contractValueCents > 0;
-          const billedPct = showBilled ? Math.round((p.outstandingCents! / p.contractValueCents!) * 100) : null;
+          const showOutstanding = ctx.isAdmin && p.outstandingCents !== undefined && p.contractValueCents !== undefined
+            && p.contractValueCents > 0 && p.outstandingCents > 0;
           return (
             <li key={p.id}>
               <Link to={`/project/${p.id}`} className="flex items-center justify-between gap-3 px-4 py-2 transition-colors hover:bg-hover">
@@ -94,7 +94,7 @@ const ProjectHealthCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ w
                   <span className="block truncate text-sm font-medium text-ink">{p.name}</span>
                   <span className="flex items-center gap-2">
                     <ProjectStatusPill status={p.status} />
-                    {billedPct !== null && <span className="text-xs text-ink-faint">{billedPct}% billed</span>}
+                    {showOutstanding && <span className="text-xs text-ink-faint">{formatMoney(p.outstandingCents!)} outstanding</span>}
                   </span>
                 </span>
                 {openItems > 0 && (
