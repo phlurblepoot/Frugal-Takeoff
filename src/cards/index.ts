@@ -8,3 +8,4 @@ export * from './types';
 export * from './registry';
 export { CardShell } from './CardShell';
 export { useCardLayout } from './useCardLayout';
+export { CardGrid } from './CardGrid';

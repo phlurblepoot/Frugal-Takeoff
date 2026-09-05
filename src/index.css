@@ -156,6 +156,15 @@ html.solid-surfaces body { background: var(--surface) !important; }
   100% { transform: rotate(0) scale(1); }
 }
 
+/* CardGrid customize-mode wiggle (Wave 2 Task 4). Applied via the Tailwind
+   arbitrary-value utility animate-[card-wiggle_.4s_ease-in-out_infinite_alternate]
+   directly on each card wrapper — this @keyframes just has to exist somewhere
+   at file scope for that utility to resolve. */
+@keyframes card-wiggle {
+  from { transform: rotate(-0.35deg); }
+  to { transform: rotate(0.35deg); }
+}
+
 /* ── Glass material (rehaul spec §2.1) ───────────────────────────────────
    Standard translucent panel for shell chrome and (from Wave 2) cards.
    Solid fallbacks: no backdrop-filter support, prefers-reduced-transparency,
@@ -238,6 +247,7 @@ html.solid-surfaces body { background: var(--surface) !important; }
 
 .motion-reduce .soft-zoom:hover { transform: none; }
 .motion-reduce .group:hover .nav-icon { animation: none; }
+.motion-reduce [class*='card-wiggle'] { animation: none; }
 
 .dark body {
   color-scheme: dark;
