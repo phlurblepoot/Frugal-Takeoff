@@ -12,16 +12,27 @@ import { CountUp } from './CountUp';
 import { formatMoney } from '../../utils/money';
 
 // Vitest can't spy on a live ESM named export ("Module namespace is not
-// configurable"), so the stop() observation for the unmount-cleanup test is
-// wired through a real vi.mock that wraps the actual `animate` — hoisted spy
-// so both the mock factory and the test can reach it.
-const { stopSpy } = vi.hoisted(() => ({ stopSpy: vi.fn() }));
+// configurable"), so both the stop() observation (unmount-cleanup test) and
+// the onUpdate observation (genuine-tween test below) are wired through a
+// real vi.mock that wraps the actual `animate` — hoisted spies so both the
+// mock factory and the tests can reach them.
+const { stopSpy, onUpdateSpy } = vi.hoisted(() => ({ stopSpy: vi.fn(), onUpdateSpy: vi.fn() }));
 vi.mock('motion/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('motion/react')>();
   return {
     ...actual,
-    animate: (...args: Parameters<typeof actual.animate>) => {
-      const controls = actual.animate(...args);
+    animate: (...args: unknown[]) => {
+      const [from, to, options] = args as [number, number, { onUpdate?: (v: number) => void } & Record<string, unknown> | undefined];
+      const wrappedOptions = options
+        ? {
+            ...options,
+            onUpdate: (latest: number) => {
+              onUpdateSpy(latest);
+              options.onUpdate?.(latest);
+            },
+          }
+        : options;
+      const controls = actual.animate(from, to, wrappedOptions as never);
       const originalStop = controls.stop.bind(controls);
       controls.stop = () => {
         stopSpy();
@@ -119,5 +130,41 @@ describe('CountUp — normal motion', () => {
 
     expect(() => unmount()).not.toThrow();
     expect(stopSpy).toHaveBeenCalled();
+  });
+
+  // Regression coverage: a mutation that replaces the tween with a synchronous
+  // no-op (render format(value) immediately, never call animate) still passes
+  // every "eventually shows the final value" test above, because those only
+  // assert the end-state. This test proves motion's animate() is genuinely
+  // driving multiple, monotonically-progressing onUpdate frames from below the
+  // target up to it — not a single jump. Verified this actually goes RED
+  // against that no-op mutation (see fix report for the stashed repro).
+  it('proves a genuine tween: onUpdate fires repeatedly with increasing values up to the target', async () => {
+    onUpdateSpy.mockClear();
+    render(
+      <ThemeProvider>
+        <CountUp value={1000} durationMs={150} />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('1,000')).toBeInTheDocument();
+    });
+
+    const observed = onUpdateSpy.mock.calls.map(([latest]) => latest as number);
+
+    // A no-op / synchronous implementation never calls animate() at all, so
+    // onUpdate is never invoked — this is the assertion that catches it.
+    expect(observed.length).toBeGreaterThan(1);
+
+    // Frames must actually progress toward the target, not jump straight there.
+    expect(observed[0]).toBeLessThan(1000);
+
+    // easeOut is monotonically non-decreasing from 0 -> 1000 for this call.
+    for (let i = 1; i < observed.length; i++) {
+      expect(observed[i]).toBeGreaterThanOrEqual(observed[i - 1]);
+    }
+
+    expect(observed[observed.length - 1]).toBe(1000);
   });
 });
