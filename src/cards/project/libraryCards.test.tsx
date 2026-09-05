@@ -311,17 +311,30 @@ describe('pj-daily-latest', () => {
 });
 
 describe('threadNeedsReply', () => {
-  it('is true when the last inbound message is newer than the last outbound', () => {
-    expect(threadNeedsReply({ lastInboundDate: '2026-09-02', lastOutboundDate: '2026-09-01' })).toBe(true);
+  // Mirrors ProjectMail.tsx's `hasReply` (commit 0e5c8b1): floored at
+  // max(lastOutboundDate, earliestLinkCreatedAt), not just lastOutboundDate.
+  it('is true when the last inbound message is newer than both the last outbound and the link floor', () => {
+    expect(threadNeedsReply({ lastInboundDate: '2026-09-02', lastOutboundDate: '2026-09-01', earliestLinkCreatedAt: '2026-08-01' })).toBe(true);
   });
-  it('is true when there is no outbound at all but there is an inbound', () => {
-    expect(threadNeedsReply({ lastInboundDate: '2026-09-02', lastOutboundDate: null })).toBe(true);
+  it('is true when there is no outbound at all but the inbound is newer than the link floor', () => {
+    expect(threadNeedsReply({ lastInboundDate: '2026-09-02', lastOutboundDate: null, earliestLinkCreatedAt: '2026-08-01' })).toBe(true);
   });
   it('is false when the outbound is newer or equal', () => {
-    expect(threadNeedsReply({ lastInboundDate: '2026-09-01', lastOutboundDate: '2026-09-02' })).toBe(false);
+    expect(threadNeedsReply({ lastInboundDate: '2026-09-01', lastOutboundDate: '2026-09-02', earliestLinkCreatedAt: '2026-08-01' })).toBe(false);
   });
   it('is false with no inbound at all', () => {
-    expect(threadNeedsReply({ lastInboundDate: null, lastOutboundDate: null })).toBe(false);
+    expect(threadNeedsReply({ lastInboundDate: null, lastOutboundDate: null, earliestLinkCreatedAt: '2026-08-01' })).toBe(false);
+  });
+  // Regression (team-lead fix-round-1 finding): a thread linked to this
+  // project AFTER its only inbound message must not read as needing a reply
+  // — the inbound predates our tracking of the thread entirely, even with no
+  // outbound message at all.
+  it('is false when the only inbound predates the earliest link to this project, even with no outbound', () => {
+    expect(threadNeedsReply({ lastInboundDate: '2026-07-01', lastOutboundDate: null, earliestLinkCreatedAt: '2026-08-01' })).toBe(false);
+  });
+  it('is true when the inbound is newer than the link floor even though it is older than a stale outbound-before-link', () => {
+    // outbound predates the link too, so the floor is earliestLinkCreatedAt, not lastOutboundDate.
+    expect(threadNeedsReply({ lastInboundDate: '2026-08-15', lastOutboundDate: '2026-07-01', earliestLinkCreatedAt: '2026-08-01' })).toBe(true);
   });
 });
 
@@ -336,6 +349,12 @@ describe('pj-mail-threads', () => {
     projectThreads.mockResolvedValue([
       row({ threadKey: 't1', subjectSnapshot: 'Older', lastActivity: '2026-09-01T00:00:00Z' }),
       row({ threadKey: 't2', subjectSnapshot: 'Newer, needs reply', lastActivity: '2026-09-03T00:00:00Z', lastInboundDate: '2026-09-03T00:00:00Z', lastOutboundDate: '2026-09-02T00:00:00Z' }),
+      // Regression: inbound predates the thread's link to this project, no
+      // outbound at all — must NOT show a reply chip (team-lead fix round 1).
+      row({
+        threadKey: 't3', subjectSnapshot: 'Stale inbound before link', lastActivity: '2026-09-02T00:00:00Z',
+        lastInboundDate: '2026-08-15T00:00:00Z', lastOutboundDate: null, earliestLinkCreatedAt: '2026-09-01T00:00:00Z',
+      }),
     ]);
     mount('pj-mail-threads', 1);
 
@@ -344,6 +363,7 @@ describe('pj-mail-threads', () => {
     expect(items[0]).toHaveTextContent('Newer, needs reply'); // sorted newest-first
     expect(screen.getByTestId('pj-mail-reply-t2')).toBeInTheDocument();
     expect(screen.queryByTestId('pj-mail-reply-t1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pj-mail-reply-t3')).not.toBeInTheDocument();
     expect(screen.getByText('Newer, needs reply').closest('a')).toHaveAttribute('href', '/project/p1/mail');
   });
 

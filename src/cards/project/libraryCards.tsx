@@ -369,10 +369,16 @@ const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
 };
 
 // ── pj-mail-threads ──────────────────────────────────────────────────────
-export function threadNeedsReply(row: Pick<ProjectThreadRow, 'lastInboundDate' | 'lastOutboundDate'>): boolean {
-  if (!row.lastInboundDate) return false;
-  if (!row.lastOutboundDate) return true;
-  return row.lastInboundDate > row.lastOutboundDate;
+// Mirrors ProjectMail.tsx's `hasReply` exactly (commit 0e5c8b1, spec Goal 4):
+// floored at max(lastOutboundDate, earliestLinkCreatedAt), not just
+// lastOutboundDate — otherwise a thread whose only inbound predates its link
+// to this project would false-positive as an unanswered reply.
+export function threadNeedsReply(
+  row: Pick<ProjectThreadRow, 'lastInboundDate' | 'lastOutboundDate' | 'earliestLinkCreatedAt'>
+): boolean {
+  const floor = row.lastOutboundDate && row.lastOutboundDate > row.earliestLinkCreatedAt
+    ? row.lastOutboundDate : row.earliestLinkCreatedAt;
+  return !!row.lastInboundDate && row.lastInboundDate > floor;
 }
 
 const MailThreadsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }) => {
