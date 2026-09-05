@@ -48,7 +48,7 @@ export const RoleEmailsEditor: React.FC<Props> = ({ value, onChange, disabled })
             className={`px-3 py-2 text-xs font-medium transition-colors relative whitespace-nowrap ${
               activeTab === tab.key
                 ? 'text-accent-600'
-                : 'text-ink-soft hover:text-ink-soft '
+                : 'text-ink-soft hover:text-ink'
             }`}
           >
             {tab.label}

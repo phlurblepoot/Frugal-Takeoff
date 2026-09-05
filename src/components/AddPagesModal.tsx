@@ -88,7 +88,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className={`bg-white rounded-2xl shadow-xl w-full ${addPagesStep === 'name_pages' ? 'max-w-4xl' : 'max-w-md'} overflow-hidden flex flex-col max-h-[90vh]`}>
+      <div className={`bg-raised rounded-2xl shadow-xl w-full ${addPagesStep === 'name_pages' ? 'max-w-4xl' : 'max-w-md'} overflow-hidden flex flex-col max-h-[90vh]`}>
         <div className="p-6 border-b border-edge flex justify-between items-center">
           <div>
             <h3 className="text-xl font-bold text-ink">
@@ -113,7 +113,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setUseExistingPlanSet(false)}
-                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${!useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-ink-soft hover:text-ink-soft'}`}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${!useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-ink-soft hover:text-ink'}`}
                 >
                   New Plan Set
                 </button>
@@ -125,7 +125,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                       setTargetPlanSetId(project.planSets[0].id);
                     }
                   }}
-                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-ink-soft hover:text-ink-soft'}`}
+                  className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${useExistingPlanSet ? 'bg-white text-accent-600 shadow-sm' : 'text-ink-soft hover:text-ink'}`}
                 >
                   Existing Plan Set
                 </button>
@@ -176,7 +176,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                 <label className="block text-sm font-medium text-ink-soft mb-1.5">Blueprint PDFs</label>
                 <div
                   className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
-                    newPlanSetFiles.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-edge-strong hover:border-accent-400 bg-sunken hover:bg-sunken cursor-pointer'
+                    newPlanSetFiles.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-edge-strong hover:border-accent-400 bg-sunken hover:bg-hover cursor-pointer'
                   }`}
                   onClick={() => !isAddingPages && newPlanSetFiles.length === 0 && fileInputRef.current?.click()}
                 >
@@ -184,7 +184,7 @@ export const AddPagesModal: React.FC<AddPagesModalProps> = ({
                     <div className="flex flex-col items-center w-full">
                       <div className="w-full space-y-2 mb-3">
                         {newPlanSetFiles.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-2 rounded-lg border border-accent-200 shadow-sm">
+                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-raised p-2 rounded-lg border border-accent-200 shadow-sm">
                             <div className="flex items-center gap-2 overflow-hidden">
                               <FileImage size={16} className="text-accent-500 shrink-0" />
                               <div className="text-left overflow-hidden">

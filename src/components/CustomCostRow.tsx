@@ -20,7 +20,7 @@ export const CustomCostRow: React.FC<{
   };
 
   return (
-    <div className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-edge shadow-sm">
+    <div className="flex flex-col gap-2 p-3 bg-raised rounded-lg border border-edge shadow-sm">
       <div className="flex flex-wrap gap-2 items-center">
         <select
           value={item.type}

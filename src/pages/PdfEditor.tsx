@@ -1634,7 +1634,7 @@ export const PdfEditor: React.FC = () => {
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-sm font-medium cursor-pointer select-none flex-shrink-0 max-w-[200px] border border-b-0 transition-colors ${
                   isActive
                     ? 'bg-raised text-ink border-edge-strong'
-                    : 'bg-sunken text-ink-soft border-transparent hover:bg-sunken '
+                    : 'bg-sunken text-ink-soft border-transparent hover:bg-hover'
                 }`}
                 onClick={() => switchTab(tab.id, activeTabId)}
               >
@@ -2104,7 +2104,7 @@ export const PdfEditor: React.FC = () => {
               <FolderOpen size={40} className="text-accent-600 dark:text-accent-400" />
             </div>
             <div>
-              <p className="text-lg font-semibold text-ink-soft">Open a PDF to get started</p>
+              <p className="text-lg font-semibold text-ink">Open a PDF to get started</p>
               <p className="text-sm text-ink-soft mt-1">Annotate, sign, and export — entirely in your browser</p>
             </div>
             <button

@@ -867,7 +867,7 @@ export const NewProject: React.FC = () => {
                 </label>
                 <div
                   className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                    files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-edge-strong hover:border-accent-400 bg-sunken hover:bg-sunken cursor-pointer'
+                    files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-edge-strong hover:border-accent-400 bg-sunken hover:bg-hover cursor-pointer'
                   }`}
                   onClick={() => !isProcessing && files.length === 0 && fileInputRef.current?.click()}
                   onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
@@ -878,7 +878,7 @@ export const NewProject: React.FC = () => {
                     <div className="flex flex-col items-center w-full">
                       <div className="w-full max-w-md space-y-3 mb-4">
                         {files.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-white p-3 rounded-lg border border-accent-200 shadow-sm">
+                          <div key={`${file.name}-${index}`} className="flex items-center justify-between bg-raised p-3 rounded-lg border border-accent-200 shadow-sm">
                             <div className="flex items-center gap-3 overflow-hidden">
                               <FileText size={20} className="text-accent-500 shrink-0" />
                               <div className="text-left overflow-hidden">
