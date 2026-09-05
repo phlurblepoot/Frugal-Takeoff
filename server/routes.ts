@@ -61,7 +61,7 @@ import {
   listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
   customerSummaries, customerOverview,
 } from './customerStore';
-import { dashboardAttention, dashboardMoney } from './dashboardStore';
+import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
@@ -103,6 +103,16 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
   });
   app.get('/api/dashboard/money', authenticateToken, requireAdmin, (_req, res) => {
     res.json(dashboardMoney(db));
+  });
+
+  // Project happenings feed (Wave 2 Task 2) — literal-before-parameterized
+  // ordering note above applies here too, even though '/:id/happenings' can't
+  // actually collide with a sibling '/:id' route; kept alongside the other
+  // dashboard aggregates per the wave-2 brief.
+  app.get('/api/projects/:id/happenings', authenticateToken, (req, res) => {
+    const parsed = parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+    res.json({ items: projectHappenings(db, req.params.id, limit) });
   });
 
   // ── Projects ──────────────────────────────────────────────────────────────

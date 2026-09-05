@@ -6,6 +6,7 @@
 import type Database from 'better-sqlite3';
 import { listBilledDocuments, billingSummary, toCents } from './billingStore';
 import { computeG702 } from './aiaStore';
+import { listActivity } from './activity';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -67,7 +68,9 @@ function loadProjectRows(db: Database.Database): ProjectRow[] {
 
 // Billed-document date is either an invoice's epoch `date` column or a pay
 // app's `applicationDate` ('YYYY-MM-DD' text). Both normalize to epoch ms.
-function billedDocDateMs(date: string | number | null): number | null {
+// Exported for reuse by customerStore's aging-bucket rollup, which needs the
+// same invoice/pay-app date normalization over the same ledger documents.
+export function billedDocDateMs(date: string | number | null): number | null {
   if (date == null) return null;
   if (typeof date === 'number') return date;
   const parsed = new Date(`${date}T00:00:00`).getTime();
@@ -259,4 +262,60 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
   });
 
   return { outstandingCents, contractTotalCents, billedCents, paidCents, draftPayAppCount, recentPayments, trend };
+}
+
+export interface HappeningItem {
+  kind: 'activity' | 'mail';
+  id: string;
+  type?: string;
+  message: string;
+  username?: string | null;
+  createdAt: number;
+}
+
+// A project's recent-activity feed: the existing activity log, merged with
+// mail threads on the project that have a reply newer than our last outbound
+// (or newer than the thread's link, if we've never sent on it) — same
+// "unanswered reply" rule as GET /api/mail/reply-flags (mail/routes.ts:1035),
+// applied per-thread (grouped by threadKey, MIN(link.createdAt) standing in
+// for reply-flags' single-link createdAt) rather than per-link, since a
+// project can have several item links (invoice + RFI, etc.) on the same
+// thread and each thread should surface at most once here.
+export function projectHappenings(db: Database.Database, projectId: string, limit = 12): HappeningItem[] {
+  const activityItems: HappeningItem[] = listActivity(db, limit, projectId).map(a => ({
+    kind: 'activity',
+    id: a.id,
+    type: a.type,
+    message: a.message,
+    username: a.username ?? null,
+    createdAt: a.createdAt,
+  }));
+
+  const threadRows = db.prepare(`
+    SELECT l.threadKey, l.subjectSnapshot, MIN(l.createdAt) AS earliestCreatedAt,
+           r.lastInboundDate, r.lastOutboundDate
+    FROM mail_thread_links l LEFT JOIN mail_thread_reply_state r ON r.threadKey = l.threadKey
+    WHERE l.projectId = ?
+    GROUP BY l.threadKey
+  `).all(projectId) as {
+    threadKey: string; subjectSnapshot: string | null; earliestCreatedAt: string;
+    lastInboundDate: string | null; lastOutboundDate: string | null;
+  }[];
+
+  const mailItems: HappeningItem[] = [];
+  for (const t of threadRows) {
+    if (!t.lastInboundDate) continue;
+    const floor = t.lastOutboundDate && t.lastOutboundDate > t.earliestCreatedAt ? t.lastOutboundDate : t.earliestCreatedAt;
+    if (!(t.lastInboundDate > floor)) continue;
+    mailItems.push({
+      kind: 'mail',
+      id: t.threadKey,
+      message: `Reply on "${t.subjectSnapshot ?? ''}"`,
+      createdAt: Date.parse(t.lastInboundDate),
+    });
+  }
+
+  return [...activityItems, ...mailItems]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, limit);
 }

@@ -1064,7 +1064,8 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
   };
 
   /**
-   * Every mail thread linked to a project or one of its items (spec Goal 5).
+   * Every mail thread linked to a project (or, alternatively, a customer) or
+   * one of its items (spec Goal 5, extended for Wave 2's customer mail view).
    *
    * Deliberately viewer-INDEPENDENT: links are app data everyone on the job can
    * see, exactly like GET /api/mail/links. Nothing here reads a mailbox — the
@@ -1074,16 +1075,21 @@ export function registerMailRoutes(app: express.Express, deps: MailRouteDeps): v
    */
   app.get('/api/mail/project-threads', authenticateToken, (req, res) => {
     const projectId = req.query.projectId;
-    if (typeof projectId !== 'string' || !projectId) return res.status(400).json({ error: 'projectId is required' });
-    // The key set is "threads this project touches"; the rows are then EVERY link on
-    // those keys. A thread linked to both a p1 invoice and a p2 RFI shows both chips —
-    // cross-project linking is the point of Goal 1 — while a key the project does not
-    // touch at all never enters the set.
+    const customerId = req.query.customerId;
+    const hasProjectId = typeof projectId === 'string' && projectId.length > 0;
+    const hasCustomerId = typeof customerId === 'string' && customerId.length > 0;
+    if (hasProjectId === hasCustomerId) return res.status(400).json({ error: 'Exactly one of projectId or customerId is required' });
+    // The key set is "threads this project/customer touches"; the rows are then EVERY
+    // link on those keys. A thread linked to both a p1 invoice and a p2 RFI shows both
+    // chips — cross-project linking is the point of Goal 1 — while a key the
+    // project/customer does not touch at all never enters the set.
+    const filterColumn = hasProjectId ? 'projectId' : 'customerId';
+    const filterValue = hasProjectId ? projectId : customerId;
     const rows = db.prepare(`SELECT l.threadKey, l.subjectSnapshot, l.firstDate, l.participantsJson, l.itemType, l.itemId, l.createdAt,
         r.lastInboundDate, r.lastOutboundDate
       FROM mail_thread_links l LEFT JOIN mail_thread_reply_state r ON r.threadKey = l.threadKey
-      WHERE l.threadKey IN (SELECT threadKey FROM mail_thread_links WHERE projectId = ?)
-      ORDER BY l.createdAt, l.rowid`).all(projectId) as any[];
+      WHERE l.threadKey IN (SELECT threadKey FROM mail_thread_links WHERE ${filterColumn} = ?)
+      ORDER BY l.createdAt, l.rowid`).all(filterValue) as any[];
     const byKey = new Map<string, any>();
     for (const l of rows) {
       let t = byKey.get(l.threadKey);

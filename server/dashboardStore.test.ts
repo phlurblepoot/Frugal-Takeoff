@@ -9,7 +9,8 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
 import { createSovLine, savePayAppLines } from './aiaStore';
-import { dashboardAttention, dashboardMoney } from './dashboardStore';
+import { logActivity } from './activity';
+import { dashboardAttention, dashboardMoney, projectHappenings } from './dashboardStore';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -198,5 +199,68 @@ describe('dashboardMoney', () => {
     expect(money.recentPayments[0].projectId).toBe('p1');
     // most recent (i=0, date closest to now) first
     expect(money.recentPayments[0].amount).toBe(10);
+  });
+});
+
+describe('projectHappenings', () => {
+  let d: Database.Database;
+  beforeEach(() => {
+    d = db();
+    d.prepare(`INSERT INTO projects (id, name, status, version, createdAt) VALUES ('p1', 'Proj', 'in_progress', 1, ?)`).run(Date.now());
+  });
+
+  function linkThread(threadKey: string, opts: { subjectSnapshot?: string; createdAt: string; lastInboundDate?: string | null; lastOutboundDate?: string | null }) {
+    d.prepare(`INSERT INTO mail_thread_links (id, threadKey, subjectSnapshot, firstDate, participantsJson, itemType, itemId, projectId, customerId, linkedByUserId, createdAt)
+      VALUES (?, ?, ?, NULL, '[]', 'project', 'p1', 'p1', NULL, 'u1', ?)`)
+      .run(`link-${threadKey}`, threadKey, opts.subjectSnapshot ?? null, opts.createdAt);
+    if (opts.lastInboundDate !== undefined || opts.lastOutboundDate !== undefined) {
+      d.prepare(`INSERT INTO mail_thread_reply_state (threadKey, lastInboundDate, lastOutboundDate, updatedAt) VALUES (?, ?, ?, ?)`)
+        .run(threadKey, opts.lastInboundDate ?? null, opts.lastOutboundDate ?? null, new Date().toISOString());
+    }
+  }
+
+  it('merges an activity row with a mail thread reply newer than the last outbound, sorted desc', () => {
+    logActivity(d, { projectId: 'p1', userId: 'u1', type: 'note', message: 'Old note' });
+    d.prepare(`UPDATE activity SET createdAt = ? WHERE projectId = 'p1'`).run(new Date('2026-01-01T00:00:00.000Z').getTime());
+
+    linkThread('th1@teg.com', {
+      subjectSnapshot: 'Invoice 12',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      lastInboundDate: '2026-01-05T00:00:00.000Z',
+      lastOutboundDate: null,
+    });
+
+    const items = projectHappenings(d, 'p1', 12);
+    expect(items).toHaveLength(2);
+    // mail item sorts first — its inbound date is newer than the activity row's.
+    expect(items[0]).toMatchObject({
+      kind: 'mail', id: 'th1@teg.com', message: 'Reply on "Invoice 12"',
+      createdAt: new Date('2026-01-05T00:00:00.000Z').getTime(),
+    });
+    expect(items[1]).toMatchObject({ kind: 'activity', type: 'note', message: 'Old note' });
+  });
+
+  it('omits a thread whose last inbound is not newer than the last outbound (or the link itself)', () => {
+    // Reply already answered: inbound predates outbound.
+    linkThread('th-answered@teg.com', {
+      subjectSnapshot: 'Answered',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastInboundDate: '2026-01-02T00:00:00.000Z',
+      lastOutboundDate: '2026-01-03T00:00:00.000Z',
+    });
+    // No reply at all yet.
+    linkThread('th-none@teg.com', { subjectSnapshot: 'No reply yet', createdAt: '2026-01-01T00:00:00.000Z' });
+
+    const items = projectHappenings(d, 'p1', 12);
+    expect(items.find(i => i.id === 'th-answered@teg.com')).toBeUndefined();
+    expect(items.find(i => i.id === 'th-none@teg.com')).toBeUndefined();
+  });
+
+  it('caps merged items at limit', () => {
+    for (let i = 0; i < 5; i++) {
+      logActivity(d, { projectId: 'p1', userId: 'u1', type: 'note', message: `Note ${i}` });
+    }
+    const items = projectHappenings(d, 'p1', 3);
+    expect(items).toHaveLength(3);
   });
 });

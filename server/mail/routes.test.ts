@@ -855,6 +855,27 @@ describe('mail routes', () => {
     expect(r.body).toEqual([]);
   });
 
+  it('GET /api/mail/project-threads accepts a customerId filter instead of projectId, and rejects both/neither', async () => {
+    saveCustomer(db, { id: 'c1', name: 'Big Bear', emails: {} });
+    await request(app).post('/api/mail/links').send({ threadKey: 'm1@teg.com', itemType: 'customer', itemId: 'c1' });
+
+    const byCustomer = await request(app).get('/api/mail/project-threads').query({ customerId: 'c1' });
+    expect(byCustomer.status).toBe(200);
+    expect(byCustomer.body.map((t: any) => t.threadKey)).toEqual(['m1@teg.com']);
+    expect(byCustomer.body[0].links).toEqual([{ itemType: 'customer', itemId: 'c1', label: 'Big Bear' }]);
+
+    // A customer with no linked mail is an empty list, not an error.
+    saveCustomer(db, { id: 'c2', name: 'Nobody', emails: {} });
+    const empty = await request(app).get('/api/mail/project-threads').query({ customerId: 'c2' });
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual([]);
+
+    // Neither param, or both at once, is a 400 — exactly one is required.
+    expect((await request(app).get('/api/mail/project-threads')).status).toBe(400);
+    expect((await request(app).get('/api/mail/project-threads').query({ customerId: '' })).status).toBe(400);
+    expect((await request(app).get('/api/mail/project-threads').query({ projectId: 'p1', customerId: 'c1' })).status).toBe(400);
+  });
+
   it('GET /api/mail/resolve-thread matches an exact threadKey in the caller\'s own mailbox', async () => {
     const r = await request(app).get('/api/mail/resolve-thread').query({ threadKey: 'm1@teg.com' });
     expect(r.status).toBe(200);
