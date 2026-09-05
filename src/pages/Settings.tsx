@@ -22,6 +22,13 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.13.1',
+    date: 'September 5, 2026',
+    changes: [
+      'Dashboard/project/customer cards now pack tightly: a tall card no longer stretches its whole row and strands empty space beside shorter neighbors, and narrower cards fill leftover gaps automatically instead of always starting a fresh row.',
+    ],
+  },
+  {
     version: '2.13.0',
     date: 'September 5, 2026',
     changes: [

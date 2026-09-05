@@ -231,4 +231,53 @@ describe('CardGrid', () => {
     expect(screen.getByTestId('cards-tray')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '+ Card A' })).toBeInTheDocument();
   });
+
+  it('(i) grid container uses dense auto-flow with fine-grained rows for masonry packing', () => {
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+    mount();
+
+    const grid = screen.getByTestId('card-grid');
+    expect(grid.style.gridAutoFlow).toBe('dense');
+    expect(grid.style.gridAutoRows).toBe('8px');
+    // Row-gap must be 0 with fine-grained auto-rows (a non-zero row-gap would
+    // sit between every 8px track a card spans, inflating its height); the
+    // visual gap is instead baked into each wrapper's paddingBottom below.
+    expect(grid.style.rowGap).toBe('0px');
+    expect(grid.style.columnGap).toBe('12px');
+  });
+
+  it('(j) each card wrapper carries the visual gap as paddingBottom, not CSS row-gap', () => {
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+    mount();
+
+    const wrapper = screen.getByTestId('card-grid').querySelector('[data-card-id="card-a"]') as HTMLElement;
+    expect(wrapper.style.paddingBottom).toBe('12px');
+  });
+
+  it('(k) measures content height and sets a plausible grid-row span', () => {
+    // jsdom (test env) has no ResizeObserver — stub it (mirrors
+    // useSoftZoom.test.tsx) so the hook's effect runs to completion; the
+    // rerender-after-defineProperty pattern is also borrowed from there.
+    const original = (globalThis as any).ResizeObserver;
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    try {
+      seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+      const { rerender } = mount();
+
+      const wrapper = screen.getByTestId('card-grid').querySelector('[data-card-id="card-a"]') as HTMLElement;
+      // Not editing, so the measured inner div is the wrapper's only child.
+      const inner = wrapper.firstElementChild as HTMLElement;
+      Object.defineProperty(inner, 'offsetHeight', { value: 500, configurable: true });
+      rerender(<CardGrid page="dashboard" ctx={{ isAdmin: true }} />);
+
+      // (500px content + 12px gap) / 8px rows = 64.
+      expect(wrapper.style.gridRow).toBe('span 64');
+    } finally {
+      (globalThis as any).ResizeObserver = original;
+    }
+  });
 });

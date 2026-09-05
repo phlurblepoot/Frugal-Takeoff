@@ -6,9 +6,10 @@
 // cards currently off the layout. Cards render their own CardShell chrome —
 // this component only positions them on the grid.
 import React, { useEffect, useRef, useState } from 'react';
-import type { CardContext, CardLayoutEntry, CardPage, CardWidth } from './types';
+import type { CardContext, CardDef, CardLayoutEntry, CardPage, CardWidth } from './types';
 import { cardsForPage } from './registry';
 import { useCardLayout } from './useCardLayout';
+import { MASONRY_GAP_PX, MASONRY_ROW_PX, useMasonrySpan } from './useMasonrySpan';
 
 function computeCols(w1600: boolean, w1024: boolean, w640: boolean): number {
   if (w1600) return 4;
@@ -49,6 +50,76 @@ function useColumnCount(): number {
 
   return cols;
 }
+
+// One grid item: owns the masonry-span measurement (a hook, so each card
+// needs its own component instance rather than being called inline from a
+// .map). Editing decorations (wiggle, drag handlers, width/remove overlay)
+// live on the outer wrapper exactly as before; only the card body itself
+// moves into the inner measured div.
+const CardGridItem: React.FC<{
+  entry: CardLayoutEntry;
+  def: CardDef;
+  ctx: CardContext;
+  editing: boolean;
+  effectiveWidth: CardWidth;
+  widths: CardWidth[];
+  onDragStart: () => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onWidthChange: (w: CardWidth) => void;
+  onRemove: () => void;
+}> = ({ entry, def, ctx, editing, effectiveWidth, widths, onDragStart, onDragOver, onDrop, onWidthChange, onRemove }) => {
+  const { ref: measureRef, span } = useMasonrySpan<HTMLDivElement>();
+
+  return (
+    <div
+      data-card-id={entry.id}
+      draggable={editing}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={
+        'relative' + (editing ? ' animate-[card-wiggle_.4s_ease-in-out_infinite_alternate]' : '')
+      }
+      style={{
+        gridColumn: `span ${effectiveWidth}`,
+        gridRow: `span ${span}`,
+        paddingBottom: MASONRY_GAP_PX,
+      }}
+    >
+      {editing && (
+        <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
+          <div role="group" aria-label={`${def.title} width`} className="flex gap-0.5">
+            {widths.map(w => (
+              <button
+                key={w}
+                type="button"
+                className={
+                  'flex size-5 items-center justify-center rounded text-[10px] font-medium ' +
+                  (w === entry.width ? 'glow-accent' : 'bg-raised text-ink-soft hover:text-ink')
+                }
+                onClick={() => onWidthChange(w)}
+              >
+                {w}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            aria-label={`Remove ${def.title}`}
+            className="flex size-5 items-center justify-center rounded bg-raised text-ink-soft hover:text-ink"
+            onClick={onRemove}
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <div ref={measureRef}>
+        <def.Component width={effectiveWidth} ctx={ctx} />
+      </div>
+    </div>
+  );
+};
 
 export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page, ctx }) => {
   const { layout, setLayout, reset } = useCardLayout(page, ctx);
@@ -136,8 +207,22 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
 
       <div
         data-testid="card-grid"
-        className="grid gap-3"
-        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+        className="grid"
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          // Dense masonry packing: fine-grained 8px auto-rows let each card
+          // span exactly as many rows as its measured content needs (see
+          // useMasonrySpan), and `dense` lets later, narrower cards backfill
+          // holes left by a tall neighbor instead of only ever flowing
+          // forward. Row-gap must be 0 here — with 8px tracks a non-zero
+          // row-gap would sit between EVERY track a card spans, inflating
+          // its apparent height every time; the visual gap is instead baked
+          // into each wrapper's paddingBottom (see CardGridItem).
+          gridAutoRows: `${MASONRY_ROW_PX}px`,
+          gridAutoFlow: 'dense',
+          columnGap: MASONRY_GAP_PX,
+          rowGap: 0,
+        }}
       >
         {layout.cards.map(entry => {
           const def = byId.get(entry.id);
@@ -146,48 +231,20 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
           const widths = [...def.widths].sort((a, b) => a - b);
 
           return (
-            <div
+            <CardGridItem
               key={entry.id}
-              data-card-id={entry.id}
-              draggable={editing}
+              entry={entry}
+              def={def}
+              ctx={ctx}
+              editing={editing}
+              effectiveWidth={effectiveWidth}
+              widths={widths}
               onDragStart={handleDragStart(entry.id)}
               onDragOver={handleDragOver}
               onDrop={handleDrop(entry.id)}
-              className={
-                'relative' +
-                (editing ? ' animate-[card-wiggle_.4s_ease-in-out_infinite_alternate]' : '')
-              }
-              style={{ gridColumn: `span ${effectiveWidth}` }}
-            >
-              {editing && (
-                <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
-                  <div role="group" aria-label={`${def.title} width`} className="flex gap-0.5">
-                    {widths.map(w => (
-                      <button
-                        key={w}
-                        type="button"
-                        className={
-                          'flex size-5 items-center justify-center rounded text-[10px] font-medium ' +
-                          (w === entry.width ? 'glow-accent' : 'bg-raised text-ink-soft hover:text-ink')
-                        }
-                        onClick={() => updateEntry(entry.id, { width: w })}
-                      >
-                        {w}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${def.title}`}
-                    className="flex size-5 items-center justify-center rounded bg-raised text-ink-soft hover:text-ink"
-                    onClick={() => removeCard(entry.id)}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-              <def.Component width={effectiveWidth} ctx={ctx} />
-            </div>
+              onWidthChange={w => updateEntry(entry.id, { width: w })}
+              onRemove={() => removeCard(entry.id)}
+            />
           );
         })}
 
