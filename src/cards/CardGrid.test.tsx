@@ -255,29 +255,25 @@ describe('CardGrid', () => {
   });
 
   it('(k) measures content height and sets a plausible grid-row span', () => {
-    // jsdom (test env) has no ResizeObserver — stub it (mirrors
-    // useSoftZoom.test.tsx) so the hook's effect runs to completion; the
-    // rerender-after-defineProperty pattern is also borrowed from there.
-    const original = (globalThis as any).ResizeObserver;
-    (globalThis as any).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    // useMasonrySpan measures synchronously in a layout effect (runs before
+    // paint, deps []) — so unlike a plain-effect hook, there's no chance to
+    // fake the height after mount and force a re-run via rerender(). Stub
+    // offsetHeight at the HTMLElement prototype instead, so it's already in
+    // place for the very first (and only) measurement the mount triggers.
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => 500,
+    });
     try {
       seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
-      const { rerender } = mount();
+      mount();
 
       const wrapper = screen.getByTestId('card-grid').querySelector('[data-card-id="card-a"]') as HTMLElement;
-      // Not editing, so the measured inner div is the wrapper's only child.
-      const inner = wrapper.firstElementChild as HTMLElement;
-      Object.defineProperty(inner, 'offsetHeight', { value: 500, configurable: true });
-      rerender(<CardGrid page="dashboard" ctx={{ isAdmin: true }} />);
-
       // (500px content + 12px gap) / 8px rows = 64.
       expect(wrapper.style.gridRow).toBe('span 64');
     } finally {
-      (globalThis as any).ResizeObserver = original;
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', descriptor);
     }
   });
 });
