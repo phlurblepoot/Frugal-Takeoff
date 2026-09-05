@@ -4,36 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { Button } from '../components/ui';
 import { CardGrid } from '../cards';
-import type { TimeEntryLite } from '../utils/store';
 
-const DAY = 86_400_000;
-
-export const timeAgo = (ms: number): string => {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < DAY) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / DAY)}d ago`;
-};
-
-// Monday 00:00 local time of the week containing `now`.
-export const startOfWeek = (now: Date = new Date()): number => {
-  const d = new Date(now);
-  const dow = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
-  d.setHours(0, 0, 0, 0);
-  return d.getTime() - dow * DAY;
-};
-
-export const hoursThisWeek = (entries: TimeEntryLite[], now: number = Date.now()): number => {
-  const start = startOfWeek(new Date(now));
-  let ms = 0;
-  for (const e of entries) {
-    // An entry is charged to the week it STARTED in (a Sun→Mon overnight
-    // shift counts toward last week) — intended for contractor billing.
-    if (e.clockIn >= start) ms += (e.clockOut ?? now) - e.clockIn;
-  }
-  return ms / 3_600_000;
-};
+// Re-exported for back-compat — ProjectOverview.tsx / ProjectTime.tsx import
+// these from this module. Canonical implementations now live in
+// src/utils/time.ts (shared with the card modules, which can't import this
+// file directly without a circular import through CardGrid).
+export { timeAgo, startOfWeek, hoursThisWeek } from '../utils/time';
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();

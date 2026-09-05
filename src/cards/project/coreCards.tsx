@@ -18,19 +18,7 @@ import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { CardShell } from '../CardShell';
 import { registerCards } from '../registry';
 import type { CardContext, CardWidth } from '../types';
-
-const DAY = 86_400_000;
-
-// Local, private copy of Dashboard.tsx's timeAgo — same rationale as
-// dashboard/coreCards.tsx's copy: importing Dashboard here would create a
-// circular import back through CardGrid.
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < DAY) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / DAY)}d ago`;
-}
+import { timeAgo } from '../../utils/time';
 
 // ── pj-financial-band ───────────────────────────────────────────────────────
 // Ledger-family math only — see task-8-brief.md / controller ruling: paid and

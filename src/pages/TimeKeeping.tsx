@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Clock, LogIn, LogOut, PenLine, Trash2, ChevronLeft, ChevronRight, Users, User as UserIcon } from 'lucide-react';
 import { useLiveQuery } from '../hooks/useLiveQuery';
+import { startOfWeek } from '../utils/time';
 
 interface TimeEntry {
   id: string;
@@ -354,14 +355,7 @@ export const TimeKeeping: React.FC = () => {
 
   const weekMs = entries
     .filter(e => e.clockOut)
-    .filter(e => {
-      const d = new Date(e.clockIn);
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay());
-      startOfWeek.setHours(0, 0, 0, 0);
-      return d >= startOfWeek;
-    })
+    .filter(e => e.clockIn >= startOfWeek())
     .reduce((s, e) => s + (e.clockOut! - e.clockIn), 0);
 
   // Per-user totals for the team view summary

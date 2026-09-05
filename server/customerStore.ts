@@ -87,7 +87,7 @@ function todayStr(): string {
 }
 
 function daysBetween(fromMs: number, toMs: number): number {
-  return Math.max(0, Math.round((toMs - fromMs) / 86400000));
+  return Math.max(0, Math.floor((toMs - fromMs) / 86400000));
 }
 
 interface ProjectRollupRow {

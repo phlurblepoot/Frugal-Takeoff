@@ -44,26 +44,7 @@ import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { CardShell } from '../CardShell';
 import { registerCards } from '../registry';
 import type { CardContext, CardWidth } from '../types';
-
-const DAY = 86_400_000;
-
-// Local, private copy of Dashboard.tsx's startOfWeek/hoursThisWeek — same
-// rationale as dashboard/libraryCards.tsx's copy: importing Dashboard here
-// would create a circular import back through CardGrid.
-function startOfWeek(now: Date = new Date()): number {
-  const d = new Date(now);
-  const dow = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
-  d.setHours(0, 0, 0, 0);
-  return d.getTime() - dow * DAY;
-}
-function hoursThisWeek(entries: TimeEntryLite[], now: number = Date.now()): number {
-  const start = startOfWeek(new Date(now));
-  let ms = 0;
-  for (const e of entries) {
-    if (e.clockIn >= start) ms += (e.clockOut ?? now) - e.clockIn;
-  }
-  return ms / 3_600_000;
-}
+import { DAY, hoursThisWeek } from '../../utils/time';
 
 // ── pj-billed-ring ───────────────────────────────────────────────────────
 // Ledger-family math only, per controller ruling: billed = invoiceBilledCents
