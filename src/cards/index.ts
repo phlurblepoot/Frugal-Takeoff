@@ -15,3 +15,4 @@ export { CardGrid } from './CardGrid';
 // CARD_REGISTRY. Appended by Tasks 6-11 as each page's default cards land.
 import './dashboard/coreCards';
 import './dashboard/libraryCards';
+import './project/coreCards';
