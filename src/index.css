@@ -165,6 +165,14 @@ html.solid-surfaces body { background: var(--surface) !important; }
   to { transform: rotate(0.35deg); }
 }
 
+/* Sparkline draw-in (Wave 2 Task 5). The line path sets pathLength={1} so
+   stroke-dasharray/offset are in normalized [0,1] units regardless of the
+   path's actual geometry — no getTotalLength() measurement needed. */
+@keyframes chart-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
 /* ── Glass material (rehaul spec §2.1) ───────────────────────────────────
    Standard translucent panel for shell chrome and (from Wave 2) cards.
    Solid fallbacks: no backdrop-filter support, prefers-reduced-transparency,
@@ -243,11 +251,20 @@ html.solid-surfaces body { background: var(--surface) !important; }
   .anim-tab-in {
     animation: tab-in 0.18s ease-out;
   }
+
+  /* Sparkline stroke draw-in (Wave 2 Task 5); skipped by the component itself
+     when reducedMotion is on, and neutralized again below for defense in depth. */
+  .chart-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: chart-draw 0.6s ease-out forwards;
+  }
 }
 
 .motion-reduce .soft-zoom:hover { transform: none; }
 .motion-reduce .group:hover .nav-icon { animation: none; }
 .motion-reduce [class*='card-wiggle'] { animation: none; }
+.motion-reduce .chart-draw { animation: none; stroke-dashoffset: 0; }
 
 .dark body {
   color-scheme: dark;
