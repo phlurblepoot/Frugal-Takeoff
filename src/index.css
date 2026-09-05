@@ -173,6 +173,12 @@ html.solid-surfaces body { background: var(--surface) !important; }
   to { stroke-dashoffset: 0; }
 }
 
+/* Command palette row cascade (Wave 3 Task 8). See .palette-row-cascade below. */
+@keyframes palette-row-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ── Glass material (rehaul spec §2.1) ───────────────────────────────────
    Standard translucent panel for shell chrome and (from Wave 2) cards.
    Solid fallbacks: no backdrop-filter support, prefers-reduced-transparency,
@@ -259,12 +265,22 @@ html.solid-surfaces body { background: var(--surface) !important; }
     stroke-dashoffset: 1;
     animation: chart-draw 0.6s ease-out forwards;
   }
+
+  /* Command palette row cascade (Wave 3 Task 8): each row sets --i to its
+     (capped) index and staggers in on open. The component itself skips this
+     class when reducedMotion is on; the .motion-reduce override below is
+     defense-in-depth for anything that slips through. */
+  .palette-row-cascade {
+    animation: palette-row-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(var(--i, 0) * 18ms);
+  }
 }
 
 .motion-reduce .soft-zoom:hover { transform: none; }
 .motion-reduce .group:hover .nav-icon { animation: none; }
 .motion-reduce [class*='card-wiggle'] { animation: none; }
 .motion-reduce .chart-draw { animation: none; stroke-dashoffset: 0; }
+.motion-reduce .palette-row-cascade { animation: none; }
 
 .dark body {
   color-scheme: dark;
