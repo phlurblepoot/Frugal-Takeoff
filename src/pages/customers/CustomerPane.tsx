@@ -11,7 +11,7 @@ import { CustomerOverview, getCustomerOverview } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
 import { useToast } from '../../components/Toast';
 import { Button, Skeleton } from '../../components/ui';
-import { CustomerOverviewTab } from './CustomerOverviewTab';
+import { CardGrid } from '../../cards';
 import { CustomerProjectsTab } from './CustomerProjectsTab';
 import { CustomerTasksTab } from './CustomerTasksTab';
 import { CustomerBillingTab } from './CustomerBillingTab';
@@ -152,7 +152,9 @@ export const CustomerPane: React.FC<{
 
       {/* Active section */}
       <div className="flex-1 px-4 py-6 sm:px-6">
-        {activeTab === 'overview' && <CustomerOverviewTab overview={overview} />}
+        {activeTab === 'overview' && (
+          <CardGrid page="customer" ctx={{ isAdmin: admin, customerId: customer.id }} key={customer.id} />
+        )}
         {activeTab === 'projects' && <CustomerProjectsTab projects={overview.projects} />}
         {activeTab === 'tasks' && <CustomerTasksTab customerId={customer.id} />}
         {activeTab === 'billing' && admin && <CustomerBillingTab billing={overview.billing} />}

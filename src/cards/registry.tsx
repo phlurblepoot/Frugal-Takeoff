@@ -29,7 +29,7 @@ export const DEFAULT_LAYOUTS: Record<CardPage, CardLayout> = {
   ]},
   customer: { version: 1, cards: [
     { id: 'cu-rollup', width: 3 },
-    { id: 'cu-projects', width: 2 }, { id: 'cu-correspondence', width: 1 },
+    { id: 'cu-projects', width: 2 }, { id: 'cu-attention', width: 1 }, { id: 'cu-correspondence', width: 1 },
   ]},
 };
 

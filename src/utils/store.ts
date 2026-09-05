@@ -1822,6 +1822,10 @@ export interface CustomerBilling {
   paidCents: number;
   outstandingCents: number;
   ledger: CustomerBillingLedgerEntry[];
+  // Every outstanding (balanceCents > 0) ledger doc bucketed by age of its
+  // billed date — see server/customerStore.ts's customerOverview. Present
+  // whenever `billing` itself is (i.e. always, for admins).
+  aging: { current: number; days31to60: number; days61plus: number };
   contract: { billedCents: number; paidCents: number; outstandingCents: number };
   invoices: { invoicedCents: number; paidCents: number; outstandingCents: number };
 }
