@@ -2291,7 +2291,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         </div>
       )}
       {isSearching && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-raised/90 backdrop-blur border border-edge rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 glass-panel border border-edge rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
           <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
           <span className="text-sm font-medium text-ink">Searching...</span>
         </div>
@@ -2314,7 +2314,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
-          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-raised/90 backdrop-blur-sm border border-edge rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
+          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center glass-panel border border-edge rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
             <button
               onClick={handleZoomOut}
               className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
@@ -2537,7 +2537,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       }
                     }}
                   >
-                    <div className="flex items-center gap-1 bg-raised/95 backdrop-blur border border-edge rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
+                    <div className="flex items-center gap-1 glass-panel border border-edge rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
                       <button
                         onClick={() => onDeleteMeasurement(selectedMeasurementId)}
                         className="p-2.5 text-red-500 hover:bg-red-50 rounded-full active:scale-90 transition-all"

@@ -1924,7 +1924,7 @@ const CanvasViewInner: React.FC = () => {
   {/* Main Canvas Area */}
       <div className="flex-1 relative bg-slate-200 min-w-0 min-h-0 flex flex-col">
         {/* Mobile Header (only visible when sidebars are closed) */}
-        <div className={`md:hidden fixed top-0 left-0 right-0 h-14 bg-raised/90 backdrop-blur-md border-b border-edge z-40 flex items-center px-4 justify-between transition-all duration-300 ${(!isLeftSidebarOpen && !isRightSidebarOpen) ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
+        <div className={`md:hidden fixed top-0 left-0 right-0 h-14 glass-panel border-b border-edge z-40 flex items-center px-4 justify-between transition-all duration-300 ${(!isLeftSidebarOpen && !isRightSidebarOpen) ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setIsLeftSidebarOpen(true)}
@@ -2003,13 +2003,13 @@ const CanvasViewInner: React.FC = () => {
                 <>
                   <Link
                     to={`/project/${project.id}/takeoff${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`}
-                    className="inline-flex items-center gap-2 bg-raised/90 backdrop-blur border border-edge rounded-lg px-3 py-2 text-ink-soft hover:text-ink shadow-sm transition-all font-medium text-sm"
+                    className="inline-flex items-center gap-2 glass-panel border border-edge rounded-lg px-3 py-2 text-ink-soft hover:text-ink shadow-sm transition-all font-medium text-sm"
                   >
                     <ArrowLeft size={16} />
                     Back to Project
                   </Link>
                   
-                  <div className="flex items-center bg-raised/90 backdrop-blur border border-edge rounded-lg shadow-sm overflow-hidden">
+                  <div className="flex items-center glass-panel border border-edge rounded-lg shadow-sm overflow-hidden">
                     <Link
                       to={prevPageId ? `/project/${project.id}/page/${prevPageId}${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}` : '#'}
                       state={{ pageIds }}
@@ -2034,7 +2034,7 @@ const CanvasViewInner: React.FC = () => {
               )}
             </div>
             
-            <div className={`pointer-events-auto flex flex-wrap items-center justify-center gap-1 md:gap-2 bg-raised/90 backdrop-blur border border-edge rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
+            <div className={`pointer-events-auto flex flex-wrap items-center justify-center gap-1 md:gap-2 glass-panel border border-edge rounded-xl p-1 md:p-1.5 shadow-lg mx-auto md:ml-auto md:mr-0 max-w-[95vw] overflow-x-auto no-scrollbar ${isLeftSidebarOpen || isRightSidebarOpen ? 'hidden md:flex' : 'flex'}`}>
               <ToolButton
                 testId="tool-pan"
                 active={currentTool === 'pan'}
