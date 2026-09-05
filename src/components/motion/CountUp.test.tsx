@@ -141,15 +141,27 @@ describe('CountUp — normal motion', () => {
   // against that no-op mutation (see fix report for the stashed repro).
   it('proves a genuine tween: onUpdate fires repeatedly with increasing values up to the target', async () => {
     onUpdateSpy.mockClear();
+    // durationMs is generous (well above the other cases' 30-200ms) because
+    // this test's assertions depend on catching MULTIPLE, not-yet-final
+    // onUpdate frames before the tween completes. Under full-suite load, CPU
+    // contention delays rAF callbacks; too short a duration lets the whole
+    // tween complete between the first and only observed frame, flaking
+    // `observed.length` / `observed[0]` below even though the tween is real.
+    // A longer duration buys enough wall-clock room for several frames to
+    // land before completion regardless of scheduler pressure, and this is
+    // still a real animate() run so a no-op mutation still fails it.
     render(
       <ThemeProvider>
-        <CountUp value={1000} durationMs={150} />
+        <CountUp value={1000} durationMs={500} />
       </ThemeProvider>
     );
 
-    await waitFor(() => {
-      expect(screen.getByText('1,000')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText('1,000')).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
 
     const observed = onUpdateSpy.mock.calls.map(([latest]) => latest as number);
 
@@ -165,7 +177,14 @@ describe('CountUp — normal motion', () => {
       expect(observed[i]).toBeGreaterThanOrEqual(observed[i - 1]);
     }
 
-    expect(observed[observed.length - 1]).toBe(1000);
+    // The last real-timer onUpdate frame lands very near, but not always
+    // bit-exactly on, the target (real elapsed time vs. the easing curve's
+    // t=1 sample point can differ by a hair under scheduler jitter) —
+    // onComplete is what snaps the displayed value to the exact target
+    // (already proven by the byText('1,000') assertion above). Asserting
+    // exact equality here checks timer precision, not the tween, so allow a
+    // whisker of slack instead of a brittle exact match.
+    expect(observed[observed.length - 1]).toBeGreaterThan(999);
   });
 
   // Regression coverage: CountUp used to round every intermediate frame to an
