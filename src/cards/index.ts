@@ -18,3 +18,4 @@ import './dashboard/libraryCards';
 import './project/coreCards';
 import './project/libraryCards';
 import './customer/coreCards';
+import './customer/libraryCards';
