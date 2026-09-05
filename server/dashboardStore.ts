@@ -5,6 +5,7 @@
 // over existing stores — no new tables, no migration.
 import type Database from 'better-sqlite3';
 import { listBilledDocuments, billingSummary, toCents } from './billingStore';
+import { computeG702 } from './aiaStore';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -171,6 +172,15 @@ export function dashboardAttention(db: Database.Database, isAdmin: boolean): Att
         SELECT id, number, createdAt FROM aia_pay_apps WHERE projectId = ? AND status = 'draft' AND createdAt < ?
       `).all(p.id, now - 5 * DAY_MS) as { id: string; number: number; createdAt: number }[];
       for (const app of draftApps) {
+        // A draft with no SOV lines yet (or otherwise unable to price) should
+        // still surface in the feed — just without a dollar figure — rather
+        // than crash the whole endpoint.
+        let balanceCents: number | undefined;
+        try {
+          balanceCents = computeG702(db, app.id).L8currentPaymentDueCents;
+        } catch {
+          balanceCents = undefined;
+        }
         items.push({
           type: 'draft_payapp',
           label: `Pay app #${app.number} in draft`,
@@ -180,6 +190,7 @@ export function dashboardAttention(db: Database.Database, isAdmin: boolean): Att
           itemId: app.id,
           date: app.createdAt,
           severity: 'amber',
+          ...(balanceCents !== undefined ? { balanceCents } : {}),
         });
       }
     }

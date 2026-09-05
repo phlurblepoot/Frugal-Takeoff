@@ -8,6 +8,7 @@ import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createInvoice, setInvoiceStatus, recordPayment } from './billingStore';
+import { createSovLine, savePayAppLines } from './aiaStore';
 import { dashboardAttention, dashboardMoney } from './dashboardStore';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -100,6 +101,21 @@ describe('dashboardAttention', () => {
     expect(item).toBeTruthy();
     expect(item.label).toContain('Pay app #2');
     expect(item.projectId).toBe('p1');
+  });
+
+  it('draft pay app attention item carries balanceCents from computeG702 L8', () => {
+    // Mirrors aiaStore.test.ts's "list figures" seed: a $1,000 SOV line at 50%
+    // complete with default 10% retainage → L8 = round(100000*50%) - round(50000*10%)
+    // = 50000 - 5000 = 45000c.
+    d.prepare(`INSERT INTO projects (id, name, status, version, createdAt) VALUES ('p1', 'Proj', 'in_progress', 1, ?)`).run(Date.now());
+    const { id: sov1 } = createSovLine(d, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
+    d.prepare(`INSERT INTO aia_pay_apps (id, projectId, number, status, version, createdAt) VALUES (?, ?, ?, 'draft', 1, ?)`)
+      .run('app1', 'p1', 2, Date.now() - 6 * DAY);
+    savePayAppLines(d, 'app1', [{ sovLineId: sov1, percentComplete: 50, storedMaterialsCents: 0 }], 1);
+
+    const item = dashboardAttention(d, true).find(i => i.type === 'draft_payapp')!;
+    expect(item).toBeTruthy();
+    expect(item.balanceCents).toBe(45000);
   });
 
   it('sorts red before amber and caps at 20', () => {
