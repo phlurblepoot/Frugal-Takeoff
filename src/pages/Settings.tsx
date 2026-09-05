@@ -22,6 +22,21 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.12.0',
+    date: 'September 4, 2026',
+    changes: [
+      'New look throughout the app: an ambient background scene derives its colors from your accent color, and cards, panels, and modals now sit on a soft frosted-glass surface instead of flat panels.',
+      'Smoother motion everywhere: moving between pages plays a gentle springy transition, and switching tabs within a page animates in place instead of jumping.',
+      'Hover effects on cards and buttons now grow subtly in place, tuned so they never overlap into neighboring elements no matter the screen size.',
+      'The sidebar and a project\'s section tabs are now permanently in view and no longer swap out or hide depending on where you are — one consistent global sidebar, with the project\'s sections in a horizontal tab bar at the top.',
+      'Who else is online now shows right in the sidebar in place of the old floating bubble — click it to open the presence list and Follow a teammate for a live view of what they\'re doing.',
+      'The Login screen has been rebuilt with the same ambient glass look as the rest of the app, and a batch of leftover legacy glass/theme styling was cleaned out behind the scenes.',
+      'New preferences: a time-of-day setting that shifts the ambient scene\'s mood (morning/day/evening/night to match your clock, or a fixed choice), and a "solid surfaces" toggle for anyone who\'d rather have opaque panels than the glass effect — the app also falls back to solid surfaces automatically on lower-powered devices.',
+      'Scrollbars, the fade edge on scrollable panels, and sidebar icons now pick up the glass/accent styling, with icons reacting subtly on hover.',
+      'Switching between light and dark mode now plays a short cinematic wipe animation out from the toggle button instead of switching instantly.',
+    ],
+  },
+  {
     version: '2.11.0',
     date: 'September 3, 2026',
     changes: [

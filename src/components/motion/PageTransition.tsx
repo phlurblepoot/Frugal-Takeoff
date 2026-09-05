@@ -4,6 +4,18 @@
 // segments so /project/:id section hops and canvas entry do NOT replay the
 // entrance (the tab tier owns those), and canvas never sits under a
 // transformed ancestor mid-animation.
+//
+// mode="wait" (NOT "popLayout") is load-bearing: "popLayout" lets the
+// outgoing page keep its DOM mounted and fully interactive while its exit
+// fade plays, so a route change that lands on a page which immediately
+// opens something itself (the app's one-shot `?open=<id>` / `?new=1`
+// arrival convention used by RFI/Issue/Task/mail flows) could momentarily
+// coexist with a still-live previous page — two independently-interactive
+// instances of "the same" element (e.g. two open dialogs, two thread rows)
+// at once. "wait" makes that structurally impossible: the old child fully
+// unmounts before the new one mounts, so only one page instance can ever
+// exist. Confirmed via a live DOM probe during the mail→RFI conversion flow
+// (two concurrent, independently-animating dialog nodes under popLayout).
 import React from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLocation } from 'react-router-dom';
@@ -21,7 +33,7 @@ export const PageTransition: React.FC<{ children: React.ReactNode }> = ({ childr
   if (reducedMotion) return <>{children}</>;
 
   return (
-    <AnimatePresence mode="popLayout" initial={false}>
+    <AnimatePresence mode="wait" initial={false}>
       <motion.div
         key={pageKey(location.pathname)}
         data-page-transition
