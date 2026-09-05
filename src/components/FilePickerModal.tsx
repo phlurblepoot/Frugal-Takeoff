@@ -329,7 +329,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
         <Button onClick={confirm} disabled={selected.size === 0 || picking}>Add {selected.size} file{selected.size === 1 ? '' : 's'}</Button>
       </>)}>
       {upload && (
-        <div role="tablist" aria-label="File source" className="mb-3 inline-flex gap-1 rounded-lg border border-edge bg-surface-2 p-1">
+        <div role="tablist" aria-label="File source" className="mb-3 inline-flex gap-1 rounded-lg border border-edge bg-sunken p-1">
           {(['existing', 'upload'] as const).map(t => (
             <button
               key={t}
@@ -408,7 +408,7 @@ export const FilePickerModal: React.FC<FilePickerModalProps> = ({
           ) : (
             <ul className="divide-y divide-edge">
               {visible.map(row => (
-                <li key={row.id} className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2"
+                <li key={row.id} className="flex items-center gap-3 px-3 py-2 hover:bg-hover"
                     onMouseEnter={hoverCapable ? (e) => setHover({ row, x: e.clientX, y: e.clientY }) : undefined}
                     onMouseLeave={hoverCapable ? () => setHover(null) : undefined}>
                   <input type="checkbox" aria-label={row.name ?? row.id} checked={selected.has(row.id)} onChange={() => toggle(row)} className="h-4 w-4 accent-accent-600" />

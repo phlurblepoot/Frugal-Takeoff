@@ -5,6 +5,7 @@ import { calculateTakeoffTotalCost } from './math';
 import { CLIENT_SESSION_ID } from './clientSession';
 import type { ItemSendPayload } from './itemSend';
 import type { SendResult, ProjectThreadRow } from '../pages/mail/types';
+import { dedupeInFlight } from './dedupeFetch';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -1087,10 +1088,11 @@ export const removeCOPhoto = async (coId: string, fileId: string): Promise<void>
 export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
 };
-export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
-  const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
-  await handleResponse(res); return res.json();
-};
+export const getBillingSummary = async (projectId: string): Promise<BillingSummary> =>
+  dedupeInFlight(`billing-summary:${projectId}`, async () => {
+    const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
+    await handleResponse(res); return res.json();
+  });
 export const sendInvoice = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
@@ -1850,11 +1852,12 @@ export const getCustomersSummary = async (): Promise<CustomerSummary[]> => {
   return await res.json();
 };
 
-export const getCustomerOverview = async (id: string): Promise<CustomerOverview> => {
-  const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
-  await handleResponse(res);
-  return await res.json();
-};
+export const getCustomerOverview = async (id: string): Promise<CustomerOverview> =>
+  dedupeInFlight(`customer-overview:${id}`, async () => {
+    const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
+    await handleResponse(res);
+    return await res.json();
+  });
 
 export const getCustomers = async (): Promise<Customer[]> => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
 export const getCustomer = async (id: string): Promise<Customer> => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
