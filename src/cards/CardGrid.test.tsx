@@ -202,6 +202,26 @@ describe('CardGrid', () => {
     });
   });
 
+  it('drag is inert outside Customize mode (handlers gated, not just draggable)', async () => {
+    localStorage.setItem('token', 'tok');
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
+    mount();
+    // Not editing — no fireEvent.click(cards-customize).
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+    const c = grid.querySelector('[data-card-id="card-c"]') as HTMLElement;
+
+    fireEvent.dragStart(a);
+    fireEvent.dragOver(c);
+    fireEvent.drop(c);
+
+    expect(wrapperIds()).toEqual(['card-a', 'card-b', 'card-c']);
+    // Give any errant async persistence a tick to have fired before asserting its absence.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(saveUserPreferences).not.toHaveBeenCalled();
+  });
+
   it('shows a hint and a reachable tray when the layout is empty', () => {
     seed({ version: 1, cards: [] });
     mount();

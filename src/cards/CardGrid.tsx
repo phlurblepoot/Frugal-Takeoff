@@ -76,15 +76,23 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
     setLayout({ ...layout, cards: [...layout.cards, { id, width: defaultWidth }] });
   };
 
+  // Native drag events bubble regardless of a wrapper's own `draggable`
+  // attribute — an in-card text-selection drag can still fire dragstart on
+  // an ancestor. Gate the handlers themselves (not just `draggable`) so
+  // dragging is completely inert outside Customize mode: no drop target, no
+  // reorder, no persisted write.
   const handleDragStart = (id: string) => () => {
+    if (!editing) return;
     dragId.current = id;
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!editing) return;
     e.preventDefault();
   };
 
   const handleDrop = (targetId: string) => (e: React.DragEvent<HTMLDivElement>) => {
+    if (!editing) return;
     e.preventDefault();
     const draggedId = dragId.current;
     dragId.current = null;
