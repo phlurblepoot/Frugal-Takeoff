@@ -230,25 +230,25 @@ export const CommandPalette: React.FC = () => {
             onClick={close} role="dialog" aria-modal="true" aria-label="Command palette"
           >
             <motion.div
-              className="w-full max-w-xl bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+              className="w-full max-w-xl bg-raised rounded-2xl shadow-2xl border border-edge overflow-hidden"
               initial={{ opacity: 0, scale: 0.97, y: -8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: -8 }}
               transition={{ duration: 0.15 }} onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center gap-3 px-4 border-b border-slate-100 dark:border-slate-700">
-                <Search size={18} className="text-slate-400 shrink-0" />
+              <div className="flex items-center gap-3 px-4 border-b border-edge">
+                <Search size={18} className="text-ink-faint shrink-0" />
                 <input
                   ref={inputRef}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search projects, pages, takeoffs…"
                   aria-label="Search"
-                  className="flex-1 py-4 bg-transparent outline-none text-slate-900 dark:text-white placeholder-slate-400 text-sm"
+                  className="flex-1 py-4 bg-transparent outline-none text-ink placeholder:text-ink-faint text-sm"
                 />
                 {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-accent-600 shrink-0" />}
               </div>
               <div className="max-h-[50vh] overflow-y-auto py-2">
                 {items.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-sm text-slate-400">
+                  <div className="px-4 py-8 text-center text-sm text-ink-faint">
                     {query.trim().length < 2 ? 'Type to search…' : 'No matches found.'}
                   </div>
                 ) : (
@@ -258,24 +258,24 @@ export const CommandPalette: React.FC = () => {
                       onMouseEnter={() => setSelected(i)}
                       onClick={() => runItem(item)}
                       className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                        i === selected ? 'bg-accent-50 dark:bg-accent-900/30' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                        i === selected ? 'bg-accent-50 dark:bg-accent-900/30' : 'hover:bg-hover/50'
                       }`}
                     >
-                      <span className={`shrink-0 ${i === selected ? 'text-accent-600' : 'text-slate-400'}`}>
+                      <span className={`shrink-0 ${i === selected ? 'text-accent-600' : 'text-ink-faint'}`}>
                         {('icon' in item && item.icon) || <Search size={16} />}
                       </span>
                       <span className="flex-1 min-w-0">
-                        <span className="block truncate text-sm text-slate-900 dark:text-white">{item.title}</span>
+                        <span className="block truncate text-sm text-ink">{item.title}</span>
                         {'subtitle' in item && item.subtitle && (
-                          <span className="block truncate text-xs text-slate-400">{item.subtitle}</span>
+                          <span className="block truncate text-xs text-ink-faint">{item.subtitle}</span>
                         )}
                       </span>
                       {item.type !== 'action' && (
-                        <span className="shrink-0 text-[10px] uppercase tracking-wider font-semibold text-slate-400 bg-slate-100 dark:bg-slate-700 rounded px-1.5 py-0.5">
+                        <span className="shrink-0 text-[10px] uppercase tracking-wider font-semibold text-ink-faint bg-sunken rounded px-1.5 py-0.5">
                           {typeLabel[item.type]}
                         </span>
                       )}
-                      {i === selected && <CornerDownLeft size={14} className="shrink-0 text-slate-400" />}
+                      {i === selected && <CornerDownLeft size={14} className="shrink-0 text-ink-faint" />}
                     </button>
                   ))
                 )}
@@ -293,25 +293,25 @@ export const CommandPalette: React.FC = () => {
             onClick={() => setHelpOpen(false)} role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
           >
             <motion.div
-              className="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+              className="w-full max-w-md bg-raised rounded-2xl shadow-xl border border-edge overflow-hidden"
               initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
               transition={{ duration: 0.15 }} onClick={(e) => e.stopPropagation()}
             >
-              <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <div className="px-6 py-4 border-b border-edge flex items-center justify-between">
+                <h2 className="text-lg font-bold text-ink flex items-center gap-2">
                   <Keyboard size={18} className="text-accent-600" /> Keyboard shortcuts
                 </h2>
-                <button onClick={() => setHelpOpen(false)} aria-label="Close" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700">
+                <button onClick={() => setHelpOpen(false)} aria-label="Close" className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-hover">
                   <X size={18} />
                 </button>
               </div>
               <div className="p-6 space-y-3">
                 {shortcuts.map((s, i) => (
                   <div key={i} className="flex items-center justify-between gap-4 text-sm">
-                    <span className="text-slate-600 dark:text-slate-300">{s.label}</span>
+                    <span className="text-ink-soft">{s.label}</span>
                     <span className="flex items-center gap-1 shrink-0">
                       {s.keys.map((k, j) => (
-                        <kbd key={j} className="px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-xs font-mono text-slate-700 dark:text-slate-200">{k}</kbd>
+                        <kbd key={j} className="px-2 py-1 rounded-md bg-sunken border border-edge text-xs font-mono text-ink-soft">{k}</kbd>
                       ))}
                     </span>
                   </div>

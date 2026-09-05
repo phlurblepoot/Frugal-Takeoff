@@ -8,11 +8,11 @@ export const Skeleton: React.FC<{ className?: string }> = ({ className = '' }) =
 
 // Skeleton for the desktop projects table (7 columns).
 export const ProjectTableSkeleton: React.FC<{ rows?: number }> = ({ rows = 6 }) => (
-  <div className="hidden md:block bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-    <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+  <div className="hidden md:block bg-raised rounded-xl border border-edge shadow-sm overflow-hidden">
+    <div className="px-6 py-4 bg-sunken border-b border-edge">
       <Skeleton className="h-4 w-32" />
     </div>
-    <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
+    <div className="divide-y divide-edge">
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="px-6 py-4 flex items-center gap-6">
           <Skeleton className="h-4 flex-[2]" />
@@ -32,7 +32,7 @@ export const ProjectTableSkeleton: React.FC<{ rows?: number }> = ({ rows = 6 }) 
 export const ProjectCardsSkeleton: React.FC<{ count?: number }> = ({ count = 4 }) => (
   <div className="md:hidden space-y-4">
     {Array.from({ length: count }).map((_, i) => (
-      <div key={i} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm space-y-3">
+      <div key={i} className="bg-raised rounded-xl border border-edge p-4 shadow-sm space-y-3">
         <Skeleton className="h-5 w-3/4" />
         <Skeleton className="h-4 w-1/2" />
         <div className="flex gap-3 pt-1">

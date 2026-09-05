@@ -39,7 +39,7 @@ export const RoleEmailsEditor: React.FC<Props> = ({ value, onChange, disabled })
   return (
     <div>
       {/* Tab bar */}
-      <div className="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto no-scrollbar -mx-0.5 mb-3">
+      <div className="flex border-b border-edge overflow-x-auto no-scrollbar -mx-0.5 mb-3">
         {TABS.map(tab => (
           <button
             key={tab.key}
@@ -48,7 +48,7 @@ export const RoleEmailsEditor: React.FC<Props> = ({ value, onChange, disabled })
             className={`px-3 py-2 text-xs font-medium transition-colors relative whitespace-nowrap ${
               activeTab === tab.key
                 ? 'text-accent-600'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                : 'text-ink-soft hover:text-ink-soft '
             }`}
           >
             {tab.label}

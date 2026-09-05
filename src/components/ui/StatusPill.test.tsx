@@ -14,7 +14,10 @@ describe('StatusPill', () => {
 
   it('defaults to the slate tone', () => {
     render(<StatusPill>Meh</StatusPill>);
-    expect(screen.getByText('Meh').className).toContain('slate');
+    // Tone NAME stays 'slate' in the API; its classes were retokened to the
+    // neutral sunken/ink-soft pair (Wave 3 token migration), so the rendered
+    // className no longer contains the literal string "slate".
+    expect(screen.getByText('Meh').className).toContain('bg-sunken');
   });
 });
 
@@ -54,7 +57,9 @@ describe('ProjectStatusPill', () => {
 
   it('shows Unknown rather than guessing when the status is missing', () => {
     render(<ProjectStatusPill status={null} />);
-    expect(screen.getByText('Unknown').className).toContain('slate');
+    // See StatusPill's 'defaults to the slate tone' test: the slate tone's
+    // classes were retokened, so assert on the token class, not the name.
+    expect(screen.getByText('Unknown').className).toContain('bg-sunken');
   });
 });
 

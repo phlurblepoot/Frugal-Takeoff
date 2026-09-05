@@ -7,7 +7,7 @@ export type PillTone =
 // Soft colour-tinted pills (spec §5 rule 1). Full class strings per tone so
 // Tailwind's scanner sees every class statically.
 const TONES: Record<PillTone, string> = {
-  slate:   'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-400/10 dark:text-slate-300 dark:border-slate-400/20',
+  slate:   'bg-sunken text-ink-soft border-edge',
   blue:    'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-400/10 dark:text-blue-300 dark:border-blue-400/20',
   violet:  'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-400/10 dark:text-violet-300 dark:border-violet-400/20',
   green:   'bg-green-50 text-green-700 border-green-200 dark:bg-green-400/10 dark:text-green-300 dark:border-green-400/20',

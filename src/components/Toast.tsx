@@ -61,7 +61,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               t.type === 'success' ? 'bg-green-600 text-white' :
               t.type === 'warning' ? 'bg-amber-500 text-white' :
               t.type === 'error'   ? 'bg-red-600 text-white' :
-                                     'bg-slate-800 text-white'
+                                     'bg-black/90 text-white'
             }`}
           >
             {t.type === 'success' && <CheckCircle size={16} className="shrink-0" />}

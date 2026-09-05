@@ -692,11 +692,11 @@ export const NewProject: React.FC = () => {
 
   if (step === 'name_pages') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
+      <div className="p-4 sm:p-8 font-sans">
         <div className="max-w-4xl mx-auto">
           <button
             onClick={() => setStep('details')}
-            className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium"
+            className="inline-flex items-center gap-2 text-ink-soft hover:text-ink mb-6 transition-colors font-medium"
           >
             <ArrowLeft size={18} />
             Back to Details
@@ -718,23 +718,23 @@ export const NewProject: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 sm:p-8 font-sans">
+    <div className="p-4 sm:p-8 font-sans">
       <div className="max-w-2xl mx-auto">
-        <Link to="/projects" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-300 mb-6 transition-colors font-medium">
+        <Link to="/projects" className="inline-flex items-center gap-2 text-ink-soft hover:text-ink mb-6 transition-colors font-medium">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
         
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-          <div className="p-6 sm:p-8 border-b border-slate-100 dark:border-slate-700">
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">New Project</h1>
-            <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1">Add blueprint PDFs now, or create the project and add pages later</p>
+        <div className="bg-raised rounded-2xl shadow-sm border border-edge overflow-hidden">
+          <div className="p-6 sm:p-8 border-b border-edge">
+            <h1 className="text-xl sm:text-2xl font-bold text-ink">New Project</h1>
+            <p className="text-sm sm:text-base text-ink-soft mt-1">Add blueprint PDFs now, or create the project and add pages later</p>
           </div>
 
           <form onSubmit={handleProcessFiles} className="p-6 sm:p-8">
             <div className="space-y-6">
               <div>
-                <label htmlFor="name" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                <label htmlFor="name" className="block text-sm font-medium text-ink mb-2">
                   Project Name
                 </label>
                 <input
@@ -742,7 +742,7 @@ export const NewProject: React.FC = () => {
                   id="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                  className="w-full px-4 py-3 rounded-xl border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint"
                   placeholder="e.g. Main Floor Plan"
                   required
                   disabled={isProcessing}
@@ -751,7 +751,7 @@ export const NewProject: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label htmlFor="customerId" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="customerId" className="block text-sm font-medium text-ink mb-2">
                     Customer (Optional)
                   </label>
                   <select
@@ -771,7 +771,7 @@ export const NewProject: React.FC = () => {
                       }
                     }}
                     disabled={isProcessing}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 bg-white"
+                    className="w-full px-4 py-3 rounded-xl border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint bg-raised"
                   >
                     <option value="">— None —</option>
                     {customers.map(c => (
@@ -788,7 +788,7 @@ export const NewProject: React.FC = () => {
                         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddNewCustomer(); } }}
                         placeholder="Customer name"
                         disabled={addingCustomer || isProcessing}
-                        className="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 text-sm"
+                        className="flex-1 px-3 py-2 rounded-lg border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint text-sm"
                         autoFocus
                       />
                       <button
@@ -803,7 +803,7 @@ export const NewProject: React.FC = () => {
                   )}
                 </div>
                 <div>
-                  <label htmlFor="address" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="address" className="block text-sm font-medium text-ink mb-2">
                     Address (Optional)
                   </label>
                   <AddressAutocomplete
@@ -814,7 +814,7 @@ export const NewProject: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label htmlFor="bidDueDate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="bidDueDate" className="block text-sm font-medium text-ink mb-2">
                     Bid Due Date (Optional)
                   </label>
                   <input
@@ -822,7 +822,7 @@ export const NewProject: React.FC = () => {
                     id="bidDueDate"
                     value={bidDueDate}
                     onChange={(e) => setBidDueDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                    className="w-full px-4 py-3 rounded-xl border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint"
                     disabled={isProcessing}
                   />
                 </div>
@@ -830,7 +830,7 @@ export const NewProject: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label htmlFor="planSetName" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="planSetName" className="block text-sm font-medium text-ink mb-2">
                     Plan Set Name
                   </label>
                   <input
@@ -838,7 +838,7 @@ export const NewProject: React.FC = () => {
                     id="planSetName"
                     value={planSetName}
                     onChange={(e) => setPlanSetName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                    className="w-full px-4 py-3 rounded-xl border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint"
                     placeholder="e.g. Initial Set"
                     required
                     disabled={isProcessing}
@@ -846,7 +846,7 @@ export const NewProject: React.FC = () => {
                 </div>
 
                 <div>
-                  <label htmlFor="planSetDate" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                  <label htmlFor="planSetDate" className="block text-sm font-medium text-ink mb-2">
                     Plan Set Date
                   </label>
                   <input
@@ -854,7 +854,7 @@ export const NewProject: React.FC = () => {
                     id="planSetDate"
                     value={planSetDate}
                     onChange={(e) => setPlanSetDate(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                    className="w-full px-4 py-3 rounded-xl border border-edge-strong focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none transition-all text-ink placeholder:text-ink-faint"
                     required
                     disabled={isProcessing}
                   />
@@ -862,12 +862,12 @@ export const NewProject: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-ink mb-2">
                   Blueprint PDFs (Optional)
                 </label>
                 <div
                   className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
-                    files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-slate-300 hover:border-accent-400 bg-slate-50 hover:bg-slate-100 cursor-pointer'
+                    files.length > 0 ? 'border-accent-300 bg-accent-50' : 'border-edge-strong hover:border-accent-400 bg-sunken hover:bg-sunken cursor-pointer'
                   }`}
                   onClick={() => !isProcessing && files.length === 0 && fileInputRef.current?.click()}
                   onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
@@ -882,15 +882,15 @@ export const NewProject: React.FC = () => {
                             <div className="flex items-center gap-3 overflow-hidden">
                               <FileText size={20} className="text-accent-500 shrink-0" />
                               <div className="text-left overflow-hidden">
-                                <p className="text-sm font-medium text-slate-900 truncate" title={file.name}>{file.name}</p>
-                                <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                                <p className="text-sm font-medium text-ink truncate" title={file.name}>{file.name}</p>
+                                <p className="text-xs text-ink-soft">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                               </div>
                             </div>
                             {!isProcessing && (
                               <button 
                                 type="button" 
                                 onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors shrink-0"
+                                className="p-1.5 text-ink-faint hover:text-red-500 hover:bg-red-50 rounded-md transition-colors shrink-0"
                                 title="Remove file"
                               >
                                 <Trash2 size={16} />
@@ -911,9 +911,9 @@ export const NewProject: React.FC = () => {
                     </div>
                   ) : (
                     <div className="flex flex-col items-center">
-                      <Upload size={48} className="text-slate-400 mb-3" />
-                      <p className="text-sm font-medium text-slate-900">Click to upload PDFs</p>
-                      <p className="text-xs text-slate-500 mt-1">or drag and drop</p>
+                      <Upload size={48} className="text-ink-faint mb-3" />
+                      <p className="text-sm font-medium text-ink">Click to upload PDFs</p>
+                      <p className="text-xs text-ink-soft mt-1">or drag and drop</p>
                     </div>
                   )}
                 </div>
@@ -940,8 +940,8 @@ export const NewProject: React.FC = () => {
             </div>
 
             {isProcessing && files.length > 0 && (
-              <div className="mt-6 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 p-4">
-                <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium text-slate-700 dark:text-slate-300">
+              <div className="mt-6 rounded-xl border border-edge bg-sunken p-4">
+                <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium text-ink">
                   <span className="flex items-center gap-2 truncate">
                     <Loader2 size={15} className="shrink-0 animate-spin text-accent-600" />
                     {progress.status
@@ -949,12 +949,12 @@ export const NewProject: React.FC = () => {
                       : 'Processing…'}
                   </span>
                   {progress.total > 0 && (
-                    <span className="shrink-0 tabular-nums text-slate-500 dark:text-slate-400">
+                    <span className="shrink-0 tabular-nums text-ink-soft">
                       {progress.current}/{progress.total}
                     </span>
                   )}
                 </div>
-                <div className="relative h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                <div className="relative h-2 w-full overflow-hidden rounded-full bg-sunken">
                   {progress.total > 0 ? (
                     <div
                       className="h-full rounded-full bg-accent-600 transition-[width] duration-300"
@@ -965,17 +965,17 @@ export const NewProject: React.FC = () => {
                   )}
                 </div>
                 {progress.totalFiles > 1 && (
-                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                  <p className="mt-2 text-xs text-ink-soft">
                     File {progress.currentFile} of {progress.totalFiles}
                   </p>
                 )}
               </div>
             )}
 
-            <div className="mt-8 pt-6 border-t border-slate-100 flex flex-wrap justify-end gap-3">
+            <div className="mt-8 pt-6 border-t border-edge flex flex-wrap justify-end gap-3">
               <Link
                 to="/projects"
-                className="px-6 py-3 rounded-xl font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                className="px-6 py-3 rounded-xl font-medium text-ink-soft hover:bg-sunken transition-colors"
               >
                 Cancel
               </Link>

@@ -52,21 +52,21 @@ export const UploadFailuresModal: React.FC<Props> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
-        <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-amber-50 dark:bg-amber-900/20 flex items-start gap-3">
+      <div className="bg-raised rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[85vh]">
+        <div className="p-4 border-b border-edge bg-amber-50 dark:bg-amber-900/20 flex items-start gap-3">
           <AlertTriangle className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" size={22} />
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-slate-800 dark:text-slate-200">
+            <h3 className="font-semibold text-ink">
               Some pages couldn't be imported
             </h3>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mt-0.5">
+            <p className="text-sm text-ink-soft mt-0.5">
               {totalProcessed} of {totalExpected} page{totalExpected === 1 ? '' : 's'} imported successfully.
             </p>
           </div>
           {!isRetrying && (
             <button
               onClick={onClose}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex-shrink-0"
+              className="text-ink-faint hover:text-ink flex-shrink-0"
               aria-label="Close"
             >
               <X size={18} />
@@ -77,15 +77,15 @@ export const UploadFailuresModal: React.FC<Props> = ({
         <div className="p-4 overflow-y-auto flex-1">
           {isRetrying ? (
             <div className="space-y-3">
-              <p className="text-sm text-slate-700 dark:text-slate-300">
+              <p className="text-sm text-ink">
                 Retrying failed pages{retryFileName ? ` from ${retryFileName}` : ''}…
               </p>
               <div>
-                <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400 mb-1">
+                <div className="flex justify-between text-xs text-ink-soft mb-1">
                   <span className="truncate pr-2">{retryStatus || 'preparing'}</span>
                   {retryTotal > 0 && <span className="flex-shrink-0">{retryCurrent} / {retryTotal}</span>}
                 </div>
-                <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div className="h-2 bg-sunken rounded-full overflow-hidden">
                   <div
                     className="h-full bg-accent-500 transition-all"
                     style={{ width: `${progressPct}%` }}
@@ -95,7 +95,7 @@ export const UploadFailuresModal: React.FC<Props> = ({
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-sm text-slate-700 dark:text-slate-300">
+              <p className="text-sm text-ink">
                 {failedCount} {failedCount === 1 ? 'item' : 'items'} failed during upload. You can retry them now or continue without them — you'll still see the pages that imported successfully.
               </p>
               <div className="space-y-2 text-xs">
@@ -105,18 +105,18 @@ export const UploadFailuresModal: React.FC<Props> = ({
                   return (
                     <div
                       key={fileName}
-                      className="border border-slate-200 dark:border-slate-700 rounded-lg p-2.5 bg-slate-50 dark:bg-slate-800/40"
+                      className="border border-edge rounded-lg p-2.5 bg-sunken"
                     >
-                      <div className="font-medium text-slate-700 dark:text-slate-300 truncate" title={fileName}>
+                      <div className="font-medium text-ink truncate" title={fileName}>
                         {fileName}
                       </div>
                       {fileLevel && (
-                        <div className="mt-1 text-slate-500 dark:text-slate-400">
+                        <div className="mt-1 text-ink-soft">
                           Whole file failed: {fileLevel.reason}
                         </div>
                       )}
                       {pageFailures.length > 0 && (
-                        <div className="mt-1 text-slate-500 dark:text-slate-400">
+                        <div className="mt-1 text-ink-soft">
                           Failed page{pageFailures.length === 1 ? '' : 's'}:{' '}
                           {pageFailures.map(p => p.pageNum).join(', ')}
                         </div>
@@ -129,11 +129,11 @@ export const UploadFailuresModal: React.FC<Props> = ({
           )}
         </div>
 
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
+        <div className="p-4 border-t border-edge bg-sunken flex justify-end gap-2">
           <button
             onClick={onClose}
             disabled={isRetrying}
-            className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
+            className="px-4 py-2 text-sm font-medium text-ink-soft hover:bg-hover active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-all"
           >
             Continue without them
           </button>

@@ -943,7 +943,7 @@ export const SpreadsheetEditor: React.FC = () => {
     'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40';
 
   return (
-    <div className="h-screen flex flex-col bg-white dark:bg-slate-900 overflow-hidden">
+    <div className="h-screen flex flex-col bg-raised overflow-hidden">
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -958,10 +958,10 @@ export const SpreadsheetEditor: React.FC = () => {
       />
 
       {/* ── Toolbar ── */}
-      <div className="h-12 flex items-center gap-1 px-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 shrink-0 z-10">
+      <div className="h-12 flex items-center gap-1 px-3 bg-raised border-b border-edge shrink-0 z-10">
         <button
           onClick={() => fileInputRef.current?.click()}
-          className={`${btnBase} bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200`}
+          className={`${btnBase} bg-sunken hover:bg-hover text-ink-soft`}
         >
           <FolderOpen size={16} /> Open
         </button>
@@ -974,7 +974,7 @@ export const SpreadsheetEditor: React.FC = () => {
           onPick={rows => { const r = rows[0]; if (r) void openFileById(r.id); }}
         />
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {collabFileId ? (
           <>
@@ -982,7 +982,7 @@ export const SpreadsheetEditor: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${
                 collabLive && autosaveFailing
                   ? 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30'
-                  : 'text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/60'
+                  : 'text-ink-soft bg-sunken '
               }`}
             >
               {collabJoining ? (
@@ -1021,13 +1021,13 @@ export const SpreadsheetEditor: React.FC = () => {
         <button
           onClick={handleSaveAs}
           disabled={!activeTab || saving}
-          className={`${btnBase} bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200`}
+          className={`${btnBase} bg-raised border border-edge hover:bg-hover text-ink-soft`}
         >
           <Download size={16} /> Save As
         </button>
 
         {loading && (
-          <span className="flex items-center gap-1.5 ml-3 text-sm text-slate-400">
+          <span className="flex items-center gap-1.5 ml-3 text-sm text-ink-faint">
             <Loader2 size={15} className="animate-spin" /> Opening…
           </span>
         )}
@@ -1045,7 +1045,7 @@ export const SpreadsheetEditor: React.FC = () => {
 
       {/* ── File tabs ── */}
       {tabs.length > 0 && (
-        <div className="flex items-center gap-1 px-3 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 overflow-x-auto shrink-0 z-10">
+        <div className="flex items-center gap-1 px-3 py-1.5 bg-raised border-b border-edge overflow-x-auto shrink-0 z-10">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -1053,7 +1053,7 @@ export const SpreadsheetEditor: React.FC = () => {
               className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-sm whitespace-nowrap transition-colors ${
                 tab.id === activeTabId
                   ? 'bg-accent-600 text-white'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  : 'bg-sunken text-ink-soft hover:bg-hover'
               }`}
             >
               <FileSpreadsheet size={13} className="shrink-0" />
@@ -1073,7 +1073,7 @@ export const SpreadsheetEditor: React.FC = () => {
           <button
             onClick={() => fileInputRef.current?.click()}
             title="Open another file"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-sunken shrink-0"
           >
             <Plus size={15} />
           </button>
@@ -1083,7 +1083,7 @@ export const SpreadsheetEditor: React.FC = () => {
       {/* ── Spreadsheet or empty state ── */}
       <div className="flex-1 overflow-hidden relative">
         {collabFileId && collabJoining ? (
-          <div className="h-full flex flex-col items-center justify-center gap-3 text-slate-400 dark:text-slate-500">
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-ink-faint">
             <Loader2 size={32} className="animate-spin" />
             <p className="text-sm">Joining live session…</p>
           </div>
@@ -1101,7 +1101,7 @@ export const SpreadsheetEditor: React.FC = () => {
             showSheetTabs
           />
         ) : (
-          <div className="h-full flex flex-col items-center justify-center gap-5 text-slate-400 dark:text-slate-500">
+          <div className="h-full flex flex-col items-center justify-center gap-5 text-ink-faint">
             <FileSpreadsheet size={60} className="opacity-20" />
             <p className="text-lg font-medium">No file open</p>
             <button

@@ -1606,7 +1606,7 @@ export const PdfEditor: React.FC = () => {
       className={`p-2 rounded-lg transition-colors ${
         activeTool === tool
           ? 'bg-accent-600 text-white shadow-sm'
-          : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+          : 'text-ink-soft hover:bg-hover'
       }`}
     >
       {icon}
@@ -1618,14 +1618,14 @@ export const PdfEditor: React.FC = () => {
   // ── JSX ───────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col bg-slate-100 dark:bg-slate-950 font-sans overflow-hidden" style={{ height: '100dvh' }}>
+    <div className="flex flex-col bg-sunken font-sans overflow-hidden" style={{ height: '100dvh' }}>
       {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) openPdf(f, activeTabId, tabs); e.target.value = ''; }} />
 
       {/* ── Tab Bar ── */}
       {tabs.length > 0 && (
-        <div className="flex items-end gap-0.5 px-2 pt-1 bg-slate-200 dark:bg-slate-900 border-b border-slate-300 dark:border-slate-700 flex-shrink-0 overflow-x-auto no-scrollbar">
+        <div className="flex items-end gap-0.5 px-2 pt-1 bg-sunken border-b border-edge-strong flex-shrink-0 overflow-x-auto no-scrollbar">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             return (
@@ -1633,15 +1633,15 @@ export const PdfEditor: React.FC = () => {
                 key={tab.id}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-sm font-medium cursor-pointer select-none flex-shrink-0 max-w-[200px] border border-b-0 transition-colors ${
                   isActive
-                    ? 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border-slate-300 dark:border-slate-600'
-                    : 'bg-slate-100 dark:bg-slate-850 text-slate-500 dark:text-slate-400 border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                    ? 'bg-raised text-ink border-edge-strong'
+                    : 'bg-sunken text-ink-soft border-transparent hover:bg-sunken '
                 }`}
                 onClick={() => switchTab(tab.id, activeTabId)}
               >
                 <span className="truncate min-w-0">{tab.fileName}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); closeTab(tab.id, activeTabId, tabs); }}
-                  className="flex-shrink-0 p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                  className="flex-shrink-0 p-0.5 rounded hover:bg-sunken text-ink-faint hover:text-ink transition-colors"
                 >
                   <X size={12} />
                 </button>
@@ -1658,17 +1658,17 @@ export const PdfEditor: React.FC = () => {
         onChange={(e) => { const f = e.target.files?.[0]; if (f) importPages(f); e.target.value = ''; }} />
 
       {/* ── Toolbar ── */}
-      <div className="flex items-center gap-1 px-3 py-2 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm flex-shrink-0 flex-wrap">
+      <div className="flex items-center gap-1 px-3 py-2 bg-raised border-b border-edge shadow-sm flex-shrink-0 flex-wrap">
         {/* Sidebar toggle */}
         <button
           onClick={() => setSidebarOpen((v) => !v)}
           title={sidebarOpen ? 'Hide page panel' : 'Show page panel'}
-          className="p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className="p-2 rounded-lg text-ink-soft hover:bg-hover transition-colors"
         >
           {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeft size={16} />}
         </button>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {/* File */}
         <button
@@ -1689,7 +1689,7 @@ export const PdfEditor: React.FC = () => {
           onClick={savePdf}
           disabled={!hasPdf || saving}
           title={currentSource ? 'Save over the original Printout' : 'Save a local copy'}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 dark:bg-slate-600 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-40 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ink text-raised text-sm font-medium hover:opacity-90 disabled:opacity-40 transition-colors"
         >
           <Save size={16} /> {saving ? 'Saving…' : 'Save'}
         </button>
@@ -1697,12 +1697,12 @@ export const PdfEditor: React.FC = () => {
           onClick={saveAsPdf}
           disabled={!hasPdf || saving}
           title="Save a local copy with a new name"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 dark:bg-slate-700 text-white text-sm font-medium hover:bg-slate-600 disabled:opacity-40 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ink text-raised text-sm font-medium hover:opacity-90 disabled:opacity-40 transition-colors"
         >
           <Download size={16} /> Save As
         </button>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {/* Drawing tools */}
         <ToolBtn tool="select"   icon={<MousePointer size={16} />} label="Select / Move" />
@@ -1720,7 +1720,7 @@ export const PdfEditor: React.FC = () => {
           className={`p-2 rounded-lg transition-colors ${
             activeTool === 'image'
               ? 'bg-accent-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+              : 'text-ink-soft hover:bg-hover'
           }`}
         >
           <ImageIcon size={16} />
@@ -1747,7 +1747,7 @@ export const PdfEditor: React.FC = () => {
             className={`flex items-center gap-0.5 p-2 rounded-lg transition-colors ${
               activeTool === 'signature'
                 ? 'bg-accent-600 text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                : 'text-ink-soft hover:bg-hover'
             }`}
           >
             <PenLine size={16} />
@@ -1755,20 +1755,20 @@ export const PdfEditor: React.FC = () => {
           </button>
 
           {showSigMenu && (
-            <div className="absolute top-full left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 min-w-[220px] py-1">
+            <div className="absolute top-full left-0 mt-1 bg-raised border border-edge rounded-xl shadow-xl z-50 min-w-[220px] py-1">
               <button
                 onClick={() => sigInputRef.current?.click()}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:bg-hover transition-colors"
               >
                 <Plus size={14} /> Add Signature
               </button>
               {signatures.length > 0 && (
-                <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+                <div className="border-t border-edge my-1" />
               )}
               {signatures.map((sig) => (
-                <div key={sig.id} className="flex items-center gap-1 px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-700">
+                <div key={sig.id} className="flex items-center gap-1 px-2 py-1 hover:bg-hover">
                   <button
-                    className="flex-1 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 text-left min-w-0"
+                    className="flex-1 flex items-center gap-2 text-sm text-ink-soft text-left min-w-0"
                     onClick={() => {
                       setPendingSig(sig); pendingSigRef.current = sig;
                       setActiveTool('signature'); activeToolRef.current = 'signature';
@@ -1777,13 +1777,13 @@ export const PdfEditor: React.FC = () => {
                   >
                     <img
                       src={sig.dataUrl} alt={sig.name}
-                      className="h-7 w-auto max-w-[80px] object-contain bg-slate-100 dark:bg-slate-600 rounded px-1 flex-shrink-0"
+                      className="h-7 w-auto max-w-[80px] object-contain bg-sunken rounded px-1 flex-shrink-0"
                     />
                     <span className="truncate">{sig.name}</span>
                   </button>
                   <button
                     onClick={() => deleteSig(sig.id)}
-                    className="p-1 text-slate-400 hover:text-red-500 rounded flex-shrink-0"
+                    className="p-1 text-ink-faint hover:text-red-500 rounded flex-shrink-0"
                   >
                     <X size={12} />
                   </button>
@@ -1793,31 +1793,31 @@ export const PdfEditor: React.FC = () => {
           )}
         </div>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {/* Color + stroke */}
         <input
           type="color" value={color} title="Color"
           onChange={(e) => { setColor(e.target.value); colorRef.current = e.target.value; }}
-          className="w-8 h-8 rounded cursor-pointer border border-slate-200 dark:border-slate-600 p-0.5 bg-transparent"
+          className="w-8 h-8 rounded cursor-pointer border border-edge p-0.5 bg-transparent"
         />
         <select
           value={strokeWidth} title="Stroke width"
           onChange={(e) => { const v = Number(e.target.value); setStrokeWidth(v); swRef.current = v; }}
-          className="text-sm px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+          className="text-sm px-2 py-1.5 rounded-lg border border-edge bg-raised text-ink"
         >
           {[1, 2, 3, 5, 8].map((w) => <option key={w} value={w}>{w}px</option>)}
         </select>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {/* Undo / Redo / Delete */}
         <button onClick={undo} disabled={histIdx <= 0} title="Undo (Ctrl+Z)"
-          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors">
+          className="p-2 rounded-lg text-ink-soft hover:bg-hover disabled:opacity-30 transition-colors">
           <Undo2 size={16} />
         </button>
         <button onClick={redo} disabled={histIdx >= history.length - 1} title="Redo (Ctrl+Y)"
-          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors">
+          className="p-2 rounded-lg text-ink-soft hover:bg-hover disabled:opacity-30 transition-colors">
           <Redo2 size={16} />
         </button>
         {selectedId && (
@@ -1846,19 +1846,19 @@ export const PdfEditor: React.FC = () => {
         <button
           title={viewMode === 'scroll' ? 'Switch to single-page view' : 'Switch to scroll view'}
           onClick={() => { setViewMode((m) => m === 'scroll' ? 'single' : 'scroll'); setCurrentPage(0); }}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-ink-soft hover:bg-hover transition-colors"
         >
           {viewMode === 'scroll' ? <BookOpen size={15} /> : <Layers size={15} />}
           <span className="hidden sm:inline">{viewMode === 'scroll' ? 'Single' : 'All Pages'}</span>
         </button>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
+        <div className="w-px h-6 bg-sunken mx-1" />
 
         {/* Zoom controls */}
         <button
           onClick={() => setZoom((z) => clampZoom(Math.round((z - 0.1) * 10) / 10))}
           title="Zoom out (Ctrl+-)"
-          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className="p-2 rounded-lg text-ink-soft hover:bg-hover transition-colors"
         >
           <ZoomOut size={16} />
         </button>
@@ -1866,13 +1866,13 @@ export const PdfEditor: React.FC = () => {
         <div className="relative" ref={zoomMenuRef}>
           <button
             onClick={() => setShowZoomMenu((v) => !v)}
-            className="min-w-[56px] px-2 py-1.5 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-center"
+            className="min-w-[56px] px-2 py-1.5 rounded-lg text-sm font-medium text-ink-soft hover:bg-hover transition-colors text-center"
             title="Zoom level"
           >
             {Math.round(zoom * 100)}%
           </button>
           {showZoomMenu && (
-            <div className="absolute top-full right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
+            <div className="absolute top-full right-0 mt-1 bg-raised border border-edge rounded-xl shadow-xl z-50 py-1 min-w-[140px]">
               {[
                 { label: '50%',  value: 0.5 },
                 { label: '75%',  value: 0.75 },
@@ -1882,21 +1882,21 @@ export const PdfEditor: React.FC = () => {
                 { label: '200%', value: 2 },
               ].map(({ label, value }) => (
                 <button key={value} onClick={() => { applyZoom(value); setShowZoomMenu(false); }}
-                  className={`w-full px-3 py-1.5 text-sm text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-700 ${Math.round(zoom * 100) === Math.round(value * 100) ? 'text-accent-600 dark:text-accent-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}`}>
+                  className={`w-full px-3 py-1.5 text-sm text-left transition-colors hover:bg-hover ${Math.round(zoom * 100) === Math.round(value * 100) ? 'text-accent-600 dark:text-accent-400 font-semibold' : 'text-ink-soft '}`}>
                   {label}
                 </button>
               ))}
-              <div className="border-t border-slate-100 dark:border-slate-700 my-1" />
+              <div className="border-t border-edge my-1" />
               <button onClick={() => { fitWidth(); setShowZoomMenu(false); }}
-                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                className="w-full px-3 py-1.5 text-sm text-left text-ink-soft hover:bg-hover transition-colors">
                 Fit Width
               </button>
               <button onClick={() => { fitHeight(); setShowZoomMenu(false); }}
-                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                className="w-full px-3 py-1.5 text-sm text-left text-ink-soft hover:bg-hover transition-colors">
                 Fit Height
               </button>
               <button onClick={() => { fitPage(); setShowZoomMenu(false); }}
-                className="w-full px-3 py-1.5 text-sm text-left text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+                className="w-full px-3 py-1.5 text-sm text-left text-ink-soft hover:bg-hover transition-colors">
                 Fit Page
               </button>
             </div>
@@ -1906,7 +1906,7 @@ export const PdfEditor: React.FC = () => {
         <button
           onClick={() => setZoom((z) => clampZoom(Math.round((z + 0.1) * 10) / 10))}
           title="Zoom in (Ctrl++)"
-          className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className="p-2 rounded-lg text-ink-soft hover:bg-hover transition-colors"
         >
           <ZoomIn size={16} />
         </button>
@@ -1917,14 +1917,14 @@ export const PdfEditor: React.FC = () => {
 
         {/* ── Page Thumbnail Sidebar ── */}
         {sidebarOpen && (
-          <div className="w-44 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-            <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 space-y-1">
+          <div className="w-44 flex-shrink-0 bg-raised border-r border-edge flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b border-edge flex-shrink-0 space-y-1">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pages</span>
+                <span className="text-xs font-semibold text-ink-soft uppercase tracking-wider">Pages</span>
                 <button
                   title="Import pages from PDF or image"
                   onClick={() => importPageInputRef.current?.click()}
-                  className="p-1 rounded-lg text-slate-400 hover:text-accent-600 dark:hover:text-accent-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                  className="p-1 rounded-lg text-ink-faint hover:text-accent-600 dark:hover:text-accent-400 hover:bg-hover transition-colors"
                 >
                   <Plus size={14} />
                 </button>
@@ -2009,17 +2009,17 @@ export const PdfEditor: React.FC = () => {
                         ? 'border-accent-500'
                         : isDragging
                         ? 'border-accent-300 opacity-40'
-                        : 'border-transparent hover:border-slate-300 dark:hover:border-slate-600'
+                        : 'border-transparent hover:border-edge-strong'
                     }`}
                   >
                     {/* Drag handle */}
                     <div
                       data-drag-handle="true"
                       title="Drag to reorder"
-                      className="absolute top-1 left-1 z-10 p-0.5 bg-white/80 dark:bg-slate-700/80 rounded cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-1 left-1 z-10 p-0.5 bg-raised/80 rounded cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
                       style={{ touchAction: 'none' }}
                     >
-                      <GripVertical size={10} className="text-slate-500 dark:text-slate-300" />
+                      <GripVertical size={10} className="text-ink-soft" />
                     </div>
 
                     {/* Thumbnail (click to navigate) */}
@@ -2043,7 +2043,7 @@ export const PdfEditor: React.FC = () => {
                       <div className={`text-center text-xs py-0.5 ${
                         isActive
                           ? 'text-accent-600 dark:text-accent-400 font-semibold'
-                          : 'text-slate-400 dark:text-slate-500'
+                          : 'text-ink-faint'
                       }`}>
                         {idx + 1}
                       </div>
@@ -2053,7 +2053,7 @@ export const PdfEditor: React.FC = () => {
                     <button
                       title={`Delete page ${idx + 1}`}
                       onClick={(e) => { e.stopPropagation(); deletePage(idx); }}
-                      className="absolute top-1 right-1 z-10 p-0.5 bg-white/80 dark:bg-slate-700/80 rounded text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-1 right-1 z-10 p-0.5 bg-raised/80 rounded text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Trash2 size={10} />
                     </button>
@@ -2068,21 +2068,21 @@ export const PdfEditor: React.FC = () => {
         <div className="flex flex-col flex-1 overflow-hidden">
           {/* Single-page navigation bar */}
           {viewMode === 'single' && hasPdf && (
-            <div className="flex items-center justify-center gap-3 px-4 py-1.5 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
+            <div className="flex items-center justify-center gap-3 px-4 py-1.5 bg-raised border-b border-edge flex-shrink-0">
               <button
                 onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
                 disabled={currentPage === 0}
-                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+                className="p-1.5 rounded-lg text-ink-soft hover:bg-hover disabled:opacity-30 transition-colors"
               >
                 <ChevronLeft size={16} />
               </button>
-              <span className="text-sm font-medium text-slate-600 dark:text-slate-300 min-w-[100px] text-center">
+              <span className="text-sm font-medium text-ink-soft min-w-[100px] text-center">
                 Page {currentPage + 1} of {renderedPages.length}
               </span>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(renderedPages.length - 1, p + 1))}
                 disabled={currentPage === renderedPages.length - 1}
-                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-30 transition-colors"
+                className="p-1.5 rounded-lg text-ink-soft hover:bg-hover disabled:opacity-30 transition-colors"
               >
                 <ChevronRight size={16} />
               </button>
@@ -2090,22 +2090,22 @@ export const PdfEditor: React.FC = () => {
           )}
 
       {/* ── Canvas Area ── */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto flex flex-col items-center py-6 gap-4 bg-slate-300 dark:bg-slate-950">
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto flex flex-col items-center py-6 gap-4 bg-sunken">
         {loading && (
           <div className="flex flex-col items-center gap-3 py-20">
             <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-slate-500 dark:text-slate-400">{loadMsg}</p>
+            <p className="text-sm text-ink-soft">{loadMsg}</p>
           </div>
         )}
 
         {!loading && !hasPdf && (
           <div className="flex flex-col items-center gap-4 py-20 text-center">
-            <div className="w-20 h-20 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-md">
+            <div className="w-20 h-20 bg-raised rounded-2xl flex items-center justify-center shadow-md">
               <FolderOpen size={40} className="text-accent-600 dark:text-accent-400" />
             </div>
             <div>
-              <p className="text-lg font-semibold text-slate-700 dark:text-slate-200">Open a PDF to get started</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Annotate, sign, and export — entirely in your browser</p>
+              <p className="text-lg font-semibold text-ink-soft">Open a PDF to get started</p>
+              <p className="text-sm text-ink-soft mt-1">Annotate, sign, and export — entirely in your browser</p>
             </div>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -2247,7 +2247,7 @@ export const PdfEditor: React.FC = () => {
 
             {/* Page number badge — only in scroll mode (single mode has nav bar) */}
             {viewMode === 'scroll' && renderedPages.length > 1 && (
-              <div className="absolute bottom-2 right-3 text-xs text-slate-500 bg-white/80 dark:bg-slate-900/80 rounded px-1.5 py-0.5 pointer-events-none select-none">
+              <div className="absolute bottom-2 right-3 text-xs text-ink-soft bg-raised/80 rounded px-1.5 py-0.5 pointer-events-none select-none">
                 {pageIndex + 1} / {renderedPages.length}
               </div>
             )}
