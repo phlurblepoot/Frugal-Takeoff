@@ -94,6 +94,11 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onClose }) => 
   // two-pointer pinch-zoom, double-tap toggles 1↔2. Kept in refs rather than
   // state — these fire on every pointermove and don't need re-renders except
   // when they actually change `scale`. ─────────────────────────────────────
+  // Wheel/trackpad zoom is intentionally NOT implemented here — this viewer
+  // is touch-first (field photos, phone/tablet use per the brief), and a bare
+  // wheel listener would also hijack normal page/backdrop scroll intent for
+  // desktop mouse users. Ctrl+wheel zoom is a reasonable candidate for the
+  // ledgered pan/zoom follow-up, not this pass.
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const dragStart = useRef<{ x: number; y: number } | null>(null);
   const pinchStartDist = useRef<number | null>(null);
@@ -197,6 +202,7 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onClose }) => 
           <motion.div
             key={current}
             data-testid="lightbox-frame"
+            data-motion={reducedMotion ? 'instant' : 'spring'}
             initial={entranceMotion.initial}
             animate={entranceMotion.animate}
             transition={entranceMotion.transition}

@@ -115,15 +115,21 @@ describe('Lightbox', () => {
     window.removeEventListener('keydown', parentEscapeListener);
   });
 
-  it('reducedMotion renders instantly (no spring transition on the entrance wrapper)', () => {
+  it('uses the spring entrance by default (not reducedMotion)', () => {
+    render(<Lightbox items={items} index={0} onClose={() => {}} />);
+    expect(screen.getByTestId('lightbox-frame')).toHaveAttribute('data-motion', 'spring');
+  });
+
+  it('reducedMotion renders instantly — no spring entrance on the frame', () => {
     reducedMotion = true;
     render(<Lightbox items={items} index={0} onClose={() => {}} />);
-    const motionEl = screen.getByTestId('lightbox-frame');
-    // motion/react leaves untouched inline styles alone when `initial` is
-    // `false`; the spring path sets a transform via framer's animation
-    // engine on mount. Instant mode should not carry a spring-driven
-    // transform before any animation frame has run.
-    expect(motionEl).toBeInTheDocument();
+    // Behavioral, not just presence: the frame carries which entrance path it
+    // took (data-motion), driven directly by the reducedMotion branch that
+    // picks `entranceMotion` in Lightbox.tsx. jsdom doesn't run framer's
+    // animation engine, so this is the only way to observe from the DOM
+    // which of the two motion configs (spring vs instant) was actually
+    // wired to the frame, without reaching into component internals.
+    expect(screen.getByTestId('lightbox-frame')).toHaveAttribute('data-motion', 'instant');
   });
 
   it('single item still shows a 1 / 1 counter and disables both nav buttons', () => {
