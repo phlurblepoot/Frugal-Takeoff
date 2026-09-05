@@ -2222,10 +2222,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative" onContextMenu={e => e.preventDefault()}>
+    <div ref={containerRef} className="w-full h-full bg-sunken overflow-hidden cursor-crosshair touch-none relative" onContextMenu={e => e.preventDefault()}>
       {contextMenu && (
         <div
-          className="fixed z-[200] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1 min-w-[160px]"
+          className="fixed z-[200] bg-raised rounded-xl shadow-xl border border-edge py-1 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={e => e.stopPropagation()}
         >
@@ -2239,19 +2239,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               </button>
               {onCopy && (
                 <button
-                  className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
                   onClick={() => { onCopy(); setContextMenu(null); }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                   Copy
                 </button>
               )}
-              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+              <div className="h-px bg-edge my-1" />
             </>
           )}
           {onUndo && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
               onClick={() => { onUndo(); setContextMenu(null); }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
@@ -2260,7 +2260,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {onRedo && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
               onClick={() => { onRedo(); setContextMenu(null); }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
@@ -2269,7 +2269,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {onPaste && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2 disabled:opacity-40"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2 disabled:opacity-40"
               onClick={() => { onPaste(); setContextMenu(null); }}
               disabled={!hasCopied}
             >
@@ -2279,9 +2279,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {activePoints.length > 0 && (
             <>
-              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+              <div className="h-px bg-edge my-1" />
               <button
-                className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover"
                 onClick={() => { cancelDrawing(); setContextMenu(null); }}
               >
                 Cancel Drawing
@@ -2291,9 +2291,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         </div>
       )}
       {isSearching && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur border border-slate-200 rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-raised/90 backdrop-blur border border-edge rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
           <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium text-slate-700">Searching...</span>
+          <span className="text-sm font-medium text-ink">Searching...</span>
         </div>
       )}
       {!!sourcePdfUrl && !pdfImage && (
@@ -2314,32 +2314,32 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
-          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
+          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-raised/90 backdrop-blur-sm border border-edge rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
             <button
               onClick={handleZoomOut}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Zoom Out"
             >
               <ZoomOut size={18} />
             </button>
             
-            <div className="px-2 min-w-[60px] text-center text-sm font-semibold text-slate-700 select-none">
+            <div className="px-2 min-w-[60px] text-center text-sm font-semibold text-ink select-none">
               {Math.round(stageScale * 100)}%
             </div>
             
             <button
               onClick={handleZoomIn}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Zoom In"
             >
               <ZoomIn size={18} />
             </button>
             
-            <div className="w-px h-4 bg-slate-200 mx-1" />
+            <div className="w-px h-4 bg-edge mx-1" />
             
             <button
               onClick={handleResetView}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Reset View"
             >
               <RotateCcw size={18} />
@@ -2537,7 +2537,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       }
                     }}
                   >
-                    <div className="flex items-center gap-1 bg-white/95 backdrop-blur border border-slate-200 rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
+                    <div className="flex items-center gap-1 bg-raised/95 backdrop-blur border border-edge rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
                       <button
                         onClick={() => onDeleteMeasurement(selectedMeasurementId)}
                         className="p-2.5 text-red-500 hover:bg-red-50 rounded-full active:scale-90 transition-all"
@@ -2545,10 +2545,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       >
                         <Trash2 size={20} />
                       </button>
-                      <div className="w-px h-5 bg-slate-200 mx-0.5" />
+                      <div className="w-px h-5 bg-edge mx-0.5" />
                       <button
                         onClick={() => onSelectMeasurement(null)}
-                        className="p-2.5 text-slate-500 hover:bg-slate-100 rounded-full active:scale-90 transition-all"
+                        className="p-2.5 text-ink-soft hover:bg-hover rounded-full active:scale-90 transition-all"
                         title="Deselect"
                       >
                         <X size={20} />

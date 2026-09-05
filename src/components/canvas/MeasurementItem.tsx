@@ -61,7 +61,7 @@ export function MeasurementItem({
       ref={rowRef}
       data-testid={testId}
       data-measurement-id={measurement.id}
-      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50 border-transparent'}`}
+      className={`p-3 relative group flex flex-col gap-2 transition-colors cursor-grab active:cursor-grabbing border-l-4 ${selected ? 'bg-accent-100 dark:bg-accent-900/40 border-accent-500 ring-2 ring-accent-400 ring-inset shadow-sm' : 'hover:bg-hover/50 border-transparent'}`}
       onClick={onSelect}
       draggable
       onDragStart={(e) => {
@@ -100,7 +100,7 @@ export function MeasurementItem({
               />
             ) : (
               <span
-                className="text-sm text-slate-700 dark:text-slate-300 break-words whitespace-normal hover:text-accent-600 dark:hover:text-accent-400"
+                className="text-sm text-ink break-words whitespace-normal hover:text-accent-600 dark:hover:text-accent-400"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   setIsEditing(true);
@@ -121,7 +121,7 @@ export function MeasurementItem({
               </Link>
             )}
             {pageName && (!pageId || !projectId) && (
-              <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wide truncate">
+              <span className="text-[10px] text-ink-faint font-medium uppercase tracking-wide truncate">
                 Page: {pageName}
               </span>
             )}
@@ -133,7 +133,7 @@ export function MeasurementItem({
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0 ml-2">
-          <span data-testid="measurement-value" className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-pre-line text-right">
+          <span data-testid="measurement-value" className="text-sm font-semibold text-ink whitespace-pre-line text-right">
             {measurement.type === 'count'
               ? formatMeasurement(1, 'count', scaleConfig, takeoff)
               : (() => {
@@ -159,7 +159,7 @@ export function MeasurementItem({
                 e.stopPropagation();
                 setIsEditing(true);
               }}
-              className="md:hidden p-2 text-slate-400 hover:text-accent-500 active:scale-95 transition-all"
+              className="md:hidden p-2 text-ink-faint hover:text-accent-500 active:scale-95 transition-all"
               title="Rename Measurement"
             >
               <Edit2 size={18} />
@@ -169,7 +169,7 @@ export function MeasurementItem({
                 e.stopPropagation();
                 onDelete();
               }}
-              className="p-2 text-slate-400 hover:text-red-500 can-hover:md:opacity-0 can-hover:md:group-hover:opacity-100 active:scale-95 transition-all"
+              className="p-2 text-ink-faint hover:text-red-500 can-hover:md:opacity-0 can-hover:md:group-hover:opacity-100 active:scale-95 transition-all"
               title="Delete Measurement"
             >
               <Trash2 size={18} />
@@ -183,7 +183,7 @@ export function MeasurementItem({
           {(measurement.segments ?? [])
             .filter(s => s.subtract)
             .map((s, i) => (
-              <div key={i} className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+              <div key={i} className="flex items-center justify-between text-xs text-ink-faint">
                 <span>Cutout {i + 1}</span>
                 <span className="font-medium">
                   −{formatMeasurement(calculatePolygonArea(expandArcPoints(s.points, s.arcMidIndices)), 'area', scaleConfig, takeoff)}
@@ -195,7 +195,7 @@ export function MeasurementItem({
 
       {selected && !isEditing && (
         <div className="flex items-center gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
-          <span className="text-xs text-slate-500 italic">Drag to move to another takeoff</span>
+          <span className="text-xs text-ink-soft italic">Drag to move to another takeoff</span>
           <div className="ml-auto flex items-center gap-3">
             {takeoffType === 'area' && measurement.type === 'length' && (
               <button

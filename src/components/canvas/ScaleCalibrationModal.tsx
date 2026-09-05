@@ -23,22 +23,22 @@ export const ScaleCalibrationModal: React.FC<ScaleCalibrationModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-          <h3 className="font-semibold text-slate-800 dark:text-slate-200">Set Scale</h3>
+      <div className="bg-raised rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
+        <div className="p-4 border-b border-edge bg-sunken">
+          <h3 className="font-semibold text-ink">Set Scale</h3>
         </div>
         <div className="p-6">
-          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+          <p className="text-sm text-ink-soft mb-4">
             Enter the real-world distance for the line you just drew.
             {(scaleUnit === 'ft' || scaleUnit === 'in') && (
-              <span className="block mt-1 text-xs text-slate-500">
+              <span className="block mt-1 text-xs text-ink-soft">
                 You can use fractions and feet/inches (e.g., 3' 4 1/2", 3.5, 4 1/2")
               </span>
             )}
           </p>
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Distance</label>
+              <label className="block text-xs font-medium text-ink-soft mb-1">Distance</label>
               <input
                 data-testid="scale-input"
                 type="text"
@@ -47,16 +47,16 @@ export const ScaleCalibrationModal: React.FC<ScaleCalibrationModalProps> = ({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') onApply();
                 }}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-full border border-edge-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
                 autoFocus
               />
             </div>
             <div className="w-24">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Unit</label>
+              <label className="block text-xs font-medium text-ink-soft mb-1">Unit</label>
               <select
                 value={scaleUnit}
                 onChange={(e) => onScaleUnitChange(e.target.value)}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
+                className="w-full border border-edge-strong rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               >
                 <option value="ft">ft</option>
                 <option value="in">in</option>
@@ -67,10 +67,10 @@ export const ScaleCalibrationModal: React.FC<ScaleCalibrationModalProps> = ({
             </div>
           </div>
         </div>
-        <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-2">
+        <div className="p-4 border-t border-edge bg-sunken flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-lg transition-all"
+            className="px-4 py-2 text-sm font-medium text-ink-soft hover:bg-hover active:scale-95 rounded-lg transition-all"
           >
             Cancel
           </button>

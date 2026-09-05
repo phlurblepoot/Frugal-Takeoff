@@ -40,10 +40,10 @@ const EditModal: React.FC<{
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-96 max-w-[90vw]">
-        <h3 className="text-lg font-semibold mb-4 text-slate-900">{title}</h3>
+      <div className="bg-raised rounded-xl shadow-2xl p-6 w-96 max-w-[90vw]">
+        <h3 className="text-lg font-semibold mb-4 text-ink">{title}</h3>
         <textarea
-          className="w-full h-32 p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-transparent outline-none resize-none mb-4"
+          className="w-full h-32 p-3 border border-edge rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-transparent outline-none resize-none mb-4"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           autoFocus
@@ -51,7 +51,7 @@ const EditModal: React.FC<{
         <div className="flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            className="px-4 py-2 text-ink-soft hover:bg-hover rounded-lg transition-colors"
           >
             Cancel
           </button>
@@ -1484,9 +1484,9 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 overflow-hidden relative">
+    <div className="flex flex-col h-full bg-sunken overflow-hidden relative">
       {/* Toolbar */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 p-1 bg-white rounded-xl shadow-lg border border-slate-200">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 p-1 bg-raised rounded-xl shadow-lg border border-edge">
         {ELEMENT_TYPES.map((tool) => (
           <button
             key={tool.id}
@@ -1498,7 +1498,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
               }
             }}
             className={`p-2 rounded-lg transition-all flex flex-col items-center gap-1 ${
-              currentTool === tool.id ? 'bg-accent-50 text-accent-600' : 'text-slate-600 hover:bg-slate-50'
+              currentTool === tool.id ? 'bg-accent-50 text-accent-600' : 'text-ink-soft hover:bg-hover'
             }`}
             title={tool.label}
           >
@@ -1506,11 +1506,11 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
             <span className="text-[10px] font-medium">{tool.label}</span>
           </button>
         ))}
-        <div className="w-px h-8 bg-slate-200 mx-1" />
+        <div className="w-px h-8 bg-edge mx-1" />
         <button
           onClick={() => setShowGrid(!showGrid)}
           className={`p-2 rounded-lg transition-all ${
-            showGrid ? 'bg-accent-50 text-accent-600' : 'text-slate-600 hover:bg-slate-50'
+            showGrid ? 'bg-accent-50 text-accent-600' : 'text-ink-soft hover:bg-hover'
           }`}
           title="Toggle Grid"
         >
@@ -1519,14 +1519,14 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
         <button
           onClick={deleteSelected}
           disabled={!selectedId}
-          className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 transition-all"
+          className="p-2 rounded-lg text-ink-faint hover:text-red-500 hover:bg-red-50 disabled:opacity-30 transition-all"
         >
           <Trash2 size={18} />
         </button>
       </div>
 
       {/* Canvas Area */}
-      <div className="flex-1 relative bg-white" ref={containerRef}>
+      <div className="flex-1 relative bg-raised" ref={containerRef}>
         <input 
           type="file" 
           ref={fileInputRef} 
@@ -1708,7 +1708,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
             stage.scale({ x: newScale, y: newScale });
             setViewport({ ...viewport, zoom: newScale });
           }}
-          className="p-3 bg-white rounded-full shadow-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all"
+          className="p-3 bg-raised rounded-full shadow-lg border border-edge text-ink-soft hover:bg-hover transition-all"
         >
           <ZoomIn size={20} />
         </button>
@@ -1719,7 +1719,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
             stage.scale({ x: newScale, y: newScale });
             setViewport({ ...viewport, zoom: newScale });
           }}
-          className="p-3 bg-white rounded-full shadow-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all"
+          className="p-3 bg-raised rounded-full shadow-lg border border-edge text-ink-soft hover:bg-hover transition-all"
         >
           <ZoomOut size={20} />
         </button>
@@ -1730,7 +1730,7 @@ export const NotesBoard: React.FC<NotesBoardProps> = ({ projectId, initialNote, 
             stage.scale({ x: 1, y: 1 });
             setViewport({ x: 0, y: 0, zoom: 1 });
           }}
-          className="p-3 bg-white rounded-full shadow-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all"
+          className="p-3 bg-raised rounded-full shadow-lg border border-edge text-ink-soft hover:bg-hover transition-all"
         >
           <Maximize size={20} />
         </button>
