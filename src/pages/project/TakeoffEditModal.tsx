@@ -54,34 +54,34 @@ export function TakeoffEditModal({
   onClose,
 }: TakeoffEditModalProps) {
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="p-6 border-b border-slate-100">
-          <h3 className="text-lg font-semibold text-slate-900">Edit Measurement Takeoff</h3>
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-raised rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-edge">
+          <h3 className="text-lg font-semibold text-ink">Edit Measurement Takeoff</h3>
         </div>
         <div className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Takeoff Name</label>
+            <label className="block text-sm font-medium text-ink mb-1.5">Takeoff Name</label>
             <input
               data-testid="edit-takeoff-name"
               type="text"
               value={editTakeoffName}
               onChange={(e) => setEditTakeoffName(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
               placeholder="e.g. Hardwood Flooring"
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Price Package <span className="text-slate-400 font-normal">(optional)</span>
+            <label className="block text-sm font-medium text-ink mb-1.5">
+              Price Package <span className="text-ink-faint font-normal">(optional)</span>
             </label>
             <input
               type="text"
               list="price-package-options-edit"
               value={editTakeoffPricePackage}
               onChange={(e) => setEditTakeoffPricePackage(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500"
               placeholder="e.g. Flooring Package"
             />
             <datalist id="price-package-options-edit">
@@ -89,37 +89,37 @@ export function TakeoffEditModal({
                 <option key={pkg} value={pkg} />
               ))}
             </datalist>
-            <p className="mt-1 text-xs text-slate-400">Takeoffs with the same package name are grouped together.</p>
+            <p className="mt-1 text-xs text-ink-faint">Takeoffs with the same package name are grouped together.</p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Measurement Type</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Measurement Type</label>
               <input
                 type="text"
                 value={editingTakeoff.type}
                 disabled
-                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-slate-50 text-slate-500 capitalize"
+                className="w-full border border-edge rounded-xl px-4 py-2.5 bg-sunken text-ink-soft capitalize"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Color</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Color</label>
               <div className="flex items-center gap-2">
                 <input
                   type="color"
                   value={editTakeoffColor}
                   onChange={(e) => setEditTakeoffColor(e.target.value)}
-                  className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 p-1"
+                  className="h-11 w-full rounded-lg cursor-pointer border border-edge-strong p-1"
                 />
               </div>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Unit</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Unit</label>
               <select
                 value={editTakeoffUnit}
                 onChange={(e) => setEditTakeoffUnit(e.target.value)}
-                className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               >
                 <option value="">Default (Scale Unit)</option>
                 {editingTakeoff.type === 'length' && (
@@ -146,7 +146,7 @@ export function TakeoffEditModal({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Cost Per Unit ($)</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Cost Per Unit ($)</label>
               <input
                 type="number"
                 min="0"
@@ -154,7 +154,7 @@ export function TakeoffEditModal({
                 disabled={isEditTakeoffAdvanced}
                 value={isEditTakeoffAdvanced ? '' : editTakeoffCostPerUnit}
                 onChange={(e) => setEditTakeoffCostPerUnit(e.target.value === '' ? '' : Number(e.target.value))}
-                className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-slate-50 disabled:text-slate-400"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-sunken disabled:text-ink-faint"
                 placeholder={isEditTakeoffAdvanced ? "Disabled in Advanced" : "0.00"}
               />
             </div>
@@ -167,17 +167,17 @@ export function TakeoffEditModal({
               id="isEditTakeoffAdvanced"
               checked={isEditTakeoffAdvanced}
               onChange={(e) => setIsEditTakeoffAdvanced(e.target.checked)}
-              className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
+              className="w-4 h-4 text-accent-600 rounded border-edge-strong focus:ring-accent-500"
             />
-            <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-slate-700 cursor-pointer">
+            <label htmlFor="isEditTakeoffAdvanced" className="text-sm font-medium text-ink cursor-pointer">
               Advanced Costing (Custom Items)
             </label>
           </div>
 
           {isEditTakeoffAdvanced && (
-            <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+            <div className="space-y-3 p-4 bg-sunken rounded-xl border border-edge">
               <div className="flex justify-between items-center mb-2">
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Cost Items</h4>
+                <h4 className="text-xs font-bold text-ink-soft uppercase tracking-wider">Custom Cost Items</h4>
                 <button
                   onClick={() => setEditTakeoffCustomCosts([...editTakeoffCustomCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: 0 }])}
                   className="text-accent-600 hover:text-accent-700 p-1 rounded-full hover:bg-accent-50 transition-colors"
@@ -188,7 +188,7 @@ export function TakeoffEditModal({
               </div>
 
               {editTakeoffCustomCosts.length === 0 ? (
-                <p className="text-xs text-slate-400 italic text-center py-2">No custom items added. Click + to add.</p>
+                <p className="text-xs text-ink-faint italic text-center py-2">No custom items added. Click + to add.</p>
               ) : (
                 <div className="space-y-3">
                   {editTakeoffCustomCosts.map((item, index) => (
@@ -212,10 +212,10 @@ export function TakeoffEditModal({
             </div>
           )}
         </div>
-        <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+        <div className="p-6 border-t border-edge bg-sunken flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+            className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover rounded-xl transition-colors"
           >
             Cancel
           </button>

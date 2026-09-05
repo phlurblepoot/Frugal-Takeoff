@@ -27,20 +27,20 @@ export function TakeoffDeleteModals({
   return (
     <>
       {showDeleteAllConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900 text-red-600">Delete All Takeoffs</h3>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-raised rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-edge">
+              <h3 className="text-lg font-semibold text-ink text-red-600">Delete All Takeoffs</h3>
             </div>
             <div className="p-6">
-              <p className="text-slate-600">
+              <p className="text-ink-soft">
                 Are you sure you want to delete ALL takeoffs in this project? This will ungroup all measurements. This action is permanent and cannot be undone.
               </p>
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-edge bg-sunken flex justify-end gap-3">
               <button
                 onClick={onCloseDeleteAll}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover rounded-xl transition-colors"
               >
                 Cancel
               </button>
@@ -56,20 +56,20 @@ export function TakeoffDeleteModals({
       )}
 
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[60]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100">
-              <h3 className="text-lg font-semibold text-slate-900">Delete Takeoff</h3>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-raised rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-edge">
+              <h3 className="text-lg font-semibold text-ink">Delete Takeoff</h3>
             </div>
             <div className="p-6">
-              <p className="text-slate-600">
+              <p className="text-ink-soft">
                 Are you sure you want to delete this takeoff? All measurements associated with it will be ungrouped. This action cannot be undone.
               </p>
             </div>
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-6 border-t border-edge bg-sunken flex justify-end gap-3">
               <button
                 onClick={onCloseDelete}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover rounded-xl transition-colors"
               >
                 Cancel
               </button>

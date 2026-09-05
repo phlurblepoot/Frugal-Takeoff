@@ -471,7 +471,9 @@ export const ProjectsPage: React.FC = () => {
                   description={filtering ? 'Try a different search or customer filter.' : TAB_EMPTY[activeTab].description}
                 />
               ) : (
-                renderRows(activeGroup.projects, activeTab)
+                <div key={activeTab} className="anim-tab-in">
+                  {renderRows(activeGroup.projects, activeTab)}
+                </div>
               )}
             </div>
           )}

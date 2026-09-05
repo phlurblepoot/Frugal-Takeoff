@@ -131,27 +131,24 @@ export const CustomerPane: React.FC<{
         </div>
 
         {/* Tabs */}
-        <div className="-mx-4 mt-4 flex overflow-x-auto border-b border-edge px-4 no-scrollbar sm:-mx-6 sm:px-6">
+        <nav aria-label="Customer sections" className="-mx-4 mt-4 flex gap-1 overflow-x-auto px-4 no-scrollbar sm:-mx-6 sm:px-6">
           {customerTabs.map(tab => (
             <button
               key={tab.value}
               data-testid={`customer-tab-${tab.value}`}
               onClick={() => setActiveTab(tab.value)}
-              className={`relative whitespace-nowrap px-4 py-3 text-sm font-medium transition-colors md:px-5 ${
-                activeTab === tab.value ? 'text-accent-600' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+              className={`flex items-center gap-1.5 shrink-0 whitespace-nowrap px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === tab.value ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
               }`}
             >
               {tab.label}
-              {activeTab === tab.value && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-              )}
             </button>
           ))}
-        </div>
+        </nav>
       </div>
 
       {/* Active section */}
-      <div className="flex-1 px-4 py-6 sm:px-6">
+      <div key={activeTab} className="anim-tab-in flex-1 px-4 py-6 sm:px-6">
         {activeTab === 'overview' && (
           <CardGrid page="customer" ctx={{ isAdmin: admin, customerId: customer.id }} key={customer.id} />
         )}

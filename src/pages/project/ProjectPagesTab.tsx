@@ -136,7 +136,7 @@ export function ProjectPagesTab({
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
               <div className="flex-1 w-full max-w-md flex flex-col gap-1">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" size={18} />
                   <input
                     data-testid="page-search"
                     ref={pageSearchInputRef}
@@ -145,7 +145,7 @@ export function ProjectPagesTab({
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Escape' && searchTerm) setSearchTerm(''); }}
-                    className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-xl text-sm dark:text-white dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
+                    className={`w-full pl-10 ${searchTerm ? 'pr-10' : 'pr-4'} py-2.5 bg-raised border border-edge-strong rounded-xl text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm`}
                   />
                   {searchTerm && (
                     <button
@@ -153,14 +153,14 @@ export function ProjectPagesTab({
                       onClick={() => setSearchTerm('')}
                       title="Clear search (Esc)"
                       aria-label="Clear search"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-slate-700 transition-colors"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-ink-faint hover:text-ink hover:bg-hover transition-colors"
                     >
                       <X size={14} />
                     </button>
                   )}
                 </div>
                 {searchTerm && (
-                  <div className="px-1 text-xs text-slate-500 dark:text-slate-400">
+                  <div className="px-1 text-xs text-ink-soft">
                     {filteredPages.length === 0
                       ? `No matches in ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`
                       : `${filteredPages.length} of ${visiblePages.length} page${visiblePages.length === 1 ? '' : 's'}`}
@@ -172,14 +172,14 @@ export function ProjectPagesTab({
                   value={pagesSortMode}
                   onChange={(e) => setPagesSortMode(e.target.value as PagesSortMode)}
                   title="Sort order"
-                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800/50 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
+                  className="text-sm px-3 py-2 rounded-lg border border-edge-strong bg-raised text-ink focus:outline-none focus:ring-2 focus:ring-accent-500 shadow-sm"
                 >
                   <option value="pageNumber">Page number</option>
                   <option value="description">Description</option>
                   <option value="highlightsDesc">Most highlights</option>
                 </select>
                 {/* Grid / list view toggle for the pages tab. Persisted per-user. */}
-                <div className="flex items-center gap-0.5 bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-600 rounded-lg p-0.5 shadow-sm">
+                <div className="flex items-center gap-0.5 bg-raised border border-edge-strong rounded-lg p-0.5 shadow-sm">
                   <button
                     data-testid="view-grid"
                     type="button"
@@ -189,7 +189,7 @@ export function ProjectPagesTab({
                     className={`p-1.5 rounded-md transition-colors ${
                       pagesViewMode === 'grid'
                         ? 'bg-accent-600 text-white'
-                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                        : 'text-ink-soft hover:text-ink hover:bg-hover'
                     }`}
                   >
                     <LayoutGrid size={16} />
@@ -203,7 +203,7 @@ export function ProjectPagesTab({
                     className={`p-1.5 rounded-md transition-colors ${
                       pagesViewMode === 'list'
                         ? 'bg-accent-600 text-white'
-                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 dark:hover:text-slate-200'
+                        : 'text-ink-soft hover:text-ink hover:bg-hover'
                     }`}
                   >
                     <List size={16} />
@@ -219,7 +219,7 @@ export function ProjectPagesTab({
                     className={`flex-1 lg:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 shadow-sm border ${
                       showSuperseded
                         ? 'bg-accent-600 text-white border-accent-600 hover:bg-accent-700'
-                        : 'bg-white dark:bg-slate-800/50 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700'
+                        : 'bg-raised text-ink border-edge-strong hover:bg-hover'
                     }`}
                   >
                     <History size={16} />
@@ -237,7 +237,7 @@ export function ProjectPagesTab({
                     </button>
                     <button
                       onClick={() => setSelectedPageIds(new Set())}
-                      className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                      className="flex-1 lg:flex-none px-4 py-2 bg-sunken text-ink rounded-lg text-sm font-medium hover:bg-hover transition-colors flex items-center justify-center gap-2 shadow-sm"
                     >
                       <X size={16} />
                       Deselect All
@@ -248,7 +248,7 @@ export function ProjectPagesTab({
                   <button
                     onClick={handleOptimizeThumbnails}
                     disabled={isOptimizingThumbnails}
-                    className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                    className="flex-1 lg:flex-none px-4 py-2 bg-sunken text-ink rounded-lg text-sm font-medium hover:bg-hover transition-colors flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
                   >
                     {isOptimizingThumbnails ? (
                       <><Loader2 size={16} className="animate-spin" /> ({optimizeProgress.current}/{optimizeProgress.total})</>
@@ -259,7 +259,7 @@ export function ProjectPagesTab({
                 )}
                 <button
                   onClick={handleOpenNamePages}
-                  className="flex-1 lg:flex-none px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                  className="flex-1 lg:flex-none px-4 py-2 bg-sunken text-ink rounded-lg text-sm font-medium hover:bg-hover transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                   <Edit2 size={16} />
                   Name Pages
@@ -276,12 +276,12 @@ export function ProjectPagesTab({
             </div>
 
             {filteredPages.length === 0 ? (
-              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-12 text-center">
-                <div className="w-16 h-16 bg-slate-50 dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400 dark:text-slate-500">
+              <div className="bg-raised rounded-2xl border border-edge p-12 text-center">
+                <div className="w-16 h-16 bg-sunken rounded-full flex items-center justify-center mx-auto mb-4 text-ink-faint">
                   <FileImage size={32} />
                 </div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">No pages found</h3>
-                <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto">
+                <h3 className="text-lg font-semibold text-ink mb-1">No pages found</h3>
+                <p className="text-ink-soft text-sm max-w-xs mx-auto">
                   {searchTerm ? `No pages match your search "${searchTerm}"` : 'This plan set has no pages yet. Add some to get started.'}
                 </p>
                 {!searchTerm && (
@@ -317,15 +317,15 @@ export function ProjectPagesTab({
                         setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
                       }}
                       data-superseded={isSuperseded ? 'true' : undefined}
-                      className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
+                      className={`bg-raised rounded-xl border overflow-hidden hover:shadow-md transition-all flex items-stretch group ${
                         isSuperseded ? 'opacity-60 hover:opacity-100' : ''
                       } ${
                         isPageSelected
                           ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
-                          : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
+                          : 'border-edge hover:border-accent-300 dark:hover:border-accent-500'
                       }`}
                     >
-                      <div className="relative w-32 h-24 flex-shrink-0 bg-slate-100 dark:bg-slate-700 border-r border-slate-200 dark:border-slate-600 overflow-hidden">
+                      <div className="relative w-32 h-24 flex-shrink-0 bg-sunken border-r border-edge-strong overflow-hidden">
                         <img
                           src={getImageUrl(page.thumbnailId || page.imageId)}
                           alt={page.name}
@@ -346,7 +346,7 @@ export function ProjectPagesTab({
                           className={`absolute top-1.5 left-1.5 w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
                             isPageSelected
                               ? 'bg-accent-600 border-accent-600 opacity-100'
-                              : 'bg-white/80 border-slate-300 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
+                              : 'bg-white/80 border-edge-strong opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
                           }`}
                           title={isPageSelected ? 'Deselect' : 'Select'}
                         >
@@ -377,7 +377,7 @@ export function ProjectPagesTab({
                               type="text"
                               value={editingPageNumber}
                               onChange={(e) => setEditingPageNumber(e.target.value)}
-                              className="sm:w-32 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              className="sm:w-32 border border-edge-strong rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                               placeholder="Number"
                               autoFocus
                               onClick={e => e.stopPropagation()}
@@ -387,7 +387,7 @@ export function ProjectPagesTab({
                               type="text"
                               value={editingPageDescription}
                               onChange={(e) => setEditingPageDescription(e.target.value)}
-                              className="flex-1 border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                              className="flex-1 border border-edge-strong rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                               placeholder="Description"
                               onClick={e => e.stopPropagation()}
                               onKeyDown={e => {
@@ -399,7 +399,7 @@ export function ProjectPagesTab({
                               <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
                                 <Check size={14} /> Save
                               </button>
-                              <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                              <button onClick={handleCancelRenamePage} className="text-ink-faint hover:bg-hover px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
                                 <X size={14} /> Cancel
                               </button>
                             </div>
@@ -408,15 +408,15 @@ export function ProjectPagesTab({
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
-                                <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+                                <h3 className="font-semibold text-ink group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                                   <HighlightedText text={page.name} term={searchTerm} />
                                 </h3>
                                 <PageViewerDots pageId={page.id} />
                               </div>
-                              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                              <p className="text-xs text-ink-soft mt-0.5">
                                 {page.measurements.length} highlights
                                 {page.pageNumber && page.name !== page.pageNumber && (
-                                  <span className="ml-2 text-slate-400">·  {page.pageNumber}</span>
+                                  <span className="ml-2 text-ink-faint">·  {page.pageNumber}</span>
                                 )}
                               </p>
                             </div>
@@ -433,19 +433,19 @@ export function ProjectPagesTab({
                               >
                                 <Star
                                   size={14}
-                                  className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-400 hover:text-amber-500'}
+                                  className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-ink-faint hover:text-amber-500'}
                                 />
                               </button>
                               <button
                                 onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                                className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                                 title="Copy share link"
                               >
                                 <LinkIcon size={14} />
                               </button>
                               <button
                                 onClick={(e) => handleStartRenamePage(e, page)}
-                                className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                                className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                                 title="Rename"
                               >
                                 <Edit2 size={14} />
@@ -454,7 +454,7 @@ export function ProjectPagesTab({
                           </div>
                         )}
                         {showSnippet && (
-                          <div className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-900/40 px-2 py-1 rounded border border-slate-100 dark:border-slate-700 italic line-clamp-1">
+                          <div className="text-xs text-ink-soft bg-sunken/40 px-2 py-1 rounded border border-edge italic line-clamp-1">
                             ...<HighlightedText
                               text={page.extractedText!.substring(Math.max(0, matchIdx - 30), matchIdx + searchTerm.length + 30)}
                               term={searchTerm}
@@ -485,15 +485,15 @@ export function ProjectPagesTab({
                       setPageContextMenu({ pageId: page.id, x: e.clientX, y: e.clientY });
                     }}
                     data-superseded={isSuperseded ? 'true' : undefined}
-                    className={`bg-white dark:bg-slate-800 rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
+                    className={`bg-raised rounded-xl border overflow-hidden hover:shadow-md transition-all flex flex-col group ${
                       isSuperseded ? 'opacity-60 hover:opacity-100' : ''
                     } ${
                       isPageSelected
                         ? 'border-accent-500 shadow-md ring-2 ring-accent-400'
-                        : 'border-slate-200 dark:border-slate-700 hover:border-accent-300 dark:hover:border-accent-500'
+                        : 'border-edge hover:border-accent-300 dark:hover:border-accent-500'
                     }`}
                   >
-                    <div className="h-40 bg-slate-100 dark:bg-slate-700 relative overflow-hidden border-b border-slate-200 dark:border-slate-600">
+                    <div className="h-40 bg-sunken relative overflow-hidden border-b border-edge-strong">
                       <img
                         src={getImageUrl(page.thumbnailId || page.imageId)}
                         alt={page.name}
@@ -514,7 +514,7 @@ export function ProjectPagesTab({
                         className={`absolute top-2 left-2 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
                           isPageSelected
                             ? 'bg-accent-600 border-accent-600 opacity-100'
-                            : 'bg-white/80 border-slate-300 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
+                            : 'bg-white/80 border-edge-strong opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100'
                         }`}
                         title={isPageSelected ? 'Deselect' : 'Select'}
                       >
@@ -532,7 +532,7 @@ export function ProjectPagesTab({
                       >
                         <Star
                           size={16}
-                          className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-slate-500'}
+                          className={isFavorite ? 'text-amber-500 fill-amber-400' : 'text-ink-soft'}
                         />
                       </button>
                       {isSuperseded ? (
@@ -558,25 +558,25 @@ export function ProjectPagesTab({
                         {editingPageId === page.id ? (
                           <div className="flex flex-col gap-2 mb-2" onClick={e => e.preventDefault()}>
                             <div className="flex flex-col gap-1">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase">Number</label>
+                              <label className="text-[10px] font-bold text-ink-faint uppercase">Number</label>
                               <input
                                 type="text"
                                 value={editingPageNumber}
                                 onChange={(e) => setEditingPageNumber(e.target.value)}
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                className="w-full border border-edge-strong rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                                 placeholder="e.g. A-01"
                                 autoFocus
                                 onClick={e => e.stopPropagation()}
                               />
                             </div>
                             <div className="flex flex-col gap-1">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase">Description</label>
+                              <label className="text-[10px] font-bold text-ink-faint uppercase">Description</label>
                               <input
                                 data-testid="page-rename-input"
                                 type="text"
                                 value={editingPageDescription}
                                 onChange={(e) => setEditingPageDescription(e.target.value)}
-                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                className="w-full border border-edge-strong rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                                 placeholder="e.g. Floor Plan"
                                 onClick={e => e.stopPropagation()}
                                 onKeyDown={e => {
@@ -589,14 +589,14 @@ export function ProjectPagesTab({
                               <button onClick={(e) => handleSaveRenamePage(e, page.id)} className="text-green-600 hover:bg-green-50 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
                                 <Check size={14} /> Save
                               </button>
-                              <button onClick={handleCancelRenamePage} className="text-slate-400 hover:bg-slate-100 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                              <button onClick={handleCancelRenamePage} className="text-ink-faint hover:bg-hover px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
                                 <X size={14} /> Cancel
                               </button>
                             </div>
                           </div>
                         ) : (
                           <div className="flex items-center justify-between mb-1">
-                            <h3 className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1 min-w-0">
+                            <h3 className="font-semibold text-ink group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors line-clamp-1 min-w-0">
                               <HighlightedText text={page.name} term={searchTerm} />
                             </h3>
                             {/* Wraps the dots with the action buttons (not the h3) so the
@@ -606,14 +606,14 @@ export function ProjectPagesTab({
                               <div className="flex items-center gap-0.5 opacity-100 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                 <button
                                   onClick={(e) => { e.preventDefault(); handleSharePage(page); }}
-                                  className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                  className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50"
                                   title="Copy share link"
                                 >
                                   <LinkIcon size={14} />
                                 </button>
                                 <button
                                   onClick={(e) => handleStartRenamePage(e, page)}
-                                  className="text-slate-400 hover:text-accent-600 p-1 rounded hover:bg-accent-50"
+                                  className="text-ink-faint hover:text-accent-600 p-1 rounded hover:bg-accent-50"
                                 >
                                   <Edit2 size={14} />
                                 </button>
@@ -621,11 +621,11 @@ export function ProjectPagesTab({
                             </div>
                           </div>
                         )}
-                        <p className="text-sm text-slate-500">
+                        <p className="text-sm text-ink-soft">
                           {page.measurements.length} highlights
                         </p>
                         {searchTerm && page.extractedText && page.extractedText.toLowerCase().includes(searchTerm.toLowerCase()) && !page.name.toLowerCase().includes(searchTerm.toLowerCase()) && (
-                          <div className="mt-2 text-xs text-slate-500 bg-slate-50 p-2 rounded border border-slate-100 line-clamp-2 italic">
+                          <div className="mt-2 text-xs text-ink-soft bg-sunken p-2 rounded border border-edge line-clamp-2 italic">
                             ...<HighlightedText
                               text={page.extractedText.substring(Math.max(0, page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) - 30), page.extractedText.toLowerCase().indexOf(searchTerm.toLowerCase()) + searchTerm.length + 30)}
                               term={searchTerm}
@@ -646,39 +646,39 @@ export function ProjectPagesTab({
               const pageHref = `/project/${project.id}/page/${ctxPage.id}`;
               return (
                 <div
-                  className="fixed z-50 min-w-[180px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl py-1 text-sm"
+                  className="fixed z-50 min-w-[180px] bg-raised border border-edge rounded-lg shadow-xl py-1 text-sm"
                   style={{ left: pageContextMenu.x, top: pageContextMenu.y }}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   <button
                     onClick={() => { setPageContextMenu(null); navigate(pageHref); }}
-                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
                     <Eye size={14} /> Open
                   </button>
                   <button
                     onClick={() => { setPageContextMenu(null); window.open(pageHref, '_blank', 'noopener'); }}
-                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
                     <LinkIcon size={14} /> Open in new tab
                   </button>
-                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <div className="my-1 border-t border-edge" />
                   <button
                     onClick={() => { setPageContextMenu(null); toggleFavorite(ctxPage.id); }}
-                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
                     <Star size={14} className={favoritePageIds.has(ctxPage.id) ? 'text-amber-500 fill-amber-400' : ''} />
                     {favoritePageIds.has(ctxPage.id) ? 'Remove from favorites' : 'Add to favorites'}
                   </button>
                   <button
                     onClick={() => { setPageContextMenu(null); handleSharePage(ctxPage as any); }}
-                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
                     <LinkIcon size={14} /> Copy share link
                   </button>
                   <button
                     onClick={(e) => { setPageContextMenu(null); handleStartRenamePage(e as any, ctxPage); }}
-                    className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                    className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                   >
                     <Edit2 size={14} /> Rename
                   </button>
@@ -688,17 +688,17 @@ export function ProjectPagesTab({
                     if (revs.length < 2) return null;
                     return (
                       <>
-                        <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                        <div className="my-1 border-t border-edge" />
                         <button
                           onClick={() => { setPageContextMenu(null); setShowRevisionsForPageId(ctxPage.id); }}
-                          className="w-full text-left px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                          className="w-full text-left px-3 py-1.5 text-ink hover:bg-hover flex items-center gap-2"
                         >
                           <History size={14} /> Revision history
                         </button>
                       </>
                     );
                   })()}
-                  <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+                  <div className="my-1 border-t border-edge" />
                   <button
                     onClick={() => { setPageContextMenu(null); handleDeletePage(ctxPage); }}
                     className="w-full text-left px-3 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"

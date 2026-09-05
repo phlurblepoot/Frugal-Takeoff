@@ -36,7 +36,7 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(authedPage.getByTestId('customer-pane')).toBeVisible();
 
   // Overview is the default tab (no ?tab= yet).
-  await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
+  await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/glow-accent/);
 
   // The old stat tiles (Bidding/In progress/Outstanding/Open tasks) and their
   // CustomerOverviewTab.tsx are gone — Overview is now the customer card grid
@@ -166,7 +166,7 @@ test('non-admin: no Billing tab, no $ tiles, ?tab=billing falls back to overview
   // must fall back to overview rather than crash or render nothing.
   await page.goto(`/customers/${seeded.customerId}?tab=billing`);
   await expect(page.getByTestId('customer-pane')).toBeVisible();
-  await expect(page.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
+  await expect(page.getByTestId('customer-tab-overview')).toHaveClass(/glow-accent/);
 
   // No Billing tab button at all for a non-admin.
   await expect(page.getByTestId('customer-tab-billing')).toHaveCount(0);
