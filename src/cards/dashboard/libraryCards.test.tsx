@@ -226,14 +226,16 @@ describe('dash-payments', () => {
 });
 
 describe('dash-aging', () => {
-  it('buckets aging_receivable items by age into 0-30/31-60/61+ and sums balanceCents', async () => {
-    const now = Date.now();
-    getDashboardAttention.mockResolvedValue([
-      { type: 'aging_receivable', label: 'Invoice A', sub: '', projectId: 'p1', projectName: 'Acme', itemId: 'i1', date: now - 20 * DAY_MS(), severity: 'amber', balanceCents: 10000 },
-      { type: 'aging_receivable', label: 'Invoice B', sub: '', projectId: 'p2', projectName: 'Beta', itemId: 'i2', date: now - 45 * DAY_MS(), severity: 'amber', balanceCents: 20000 },
-      { type: 'aging_receivable', label: 'Invoice C', sub: '', projectId: 'p3', projectName: 'Gamma', itemId: 'i3', date: now - 90 * DAY_MS(), severity: 'red', balanceCents: 30000 },
-      { type: 'overdue_task', label: 'Task', sub: '', projectId: null, projectName: null, itemId: 't1', date: now, severity: 'red' },
-    ]);
+  // Buckets are rendered straight from dashboardMoney().aging — computed
+  // server-side over EVERY outstanding billed document, not derived from the
+  // attention feed's capped/14-day-floor aging_receivable items. See
+  // server/dashboardStore.ts's dashboardMoney().
+  it('renders the three aging buckets from the money payload', async () => {
+    getDashboardMoney.mockResolvedValue({
+      outstandingCents: 60000, contractTotalCents: 0, billedCents: 0, paidCents: 0, draftPayAppCount: 0,
+      recentPayments: [], trend: [],
+      aging: { current: 10000, days31to60: 20000, days61plus: 30000 },
+    });
     mount('dash-aging', 1);
 
     await waitFor(() => expect(screen.getByTestId('aging-bucket-d0_30')).toHaveTextContent('$100.00'));
@@ -242,7 +244,11 @@ describe('dash-aging', () => {
   });
 
   it('shows the empty state when there are no aging receivables', async () => {
-    getDashboardAttention.mockResolvedValue([]);
+    getDashboardMoney.mockResolvedValue({
+      outstandingCents: 0, contractTotalCents: 0, billedCents: 0, paidCents: 0, draftPayAppCount: 0,
+      recentPayments: [], trend: [],
+      aging: { current: 0, days31to60: 0, days61plus: 0 },
+    });
     mount('dash-aging', 1);
     expect(await screen.findByText('Nothing aging.')).toBeInTheDocument();
   });

@@ -167,4 +167,19 @@ describe('CountUp — normal motion', () => {
 
     expect(observed[observed.length - 1]).toBe(1000);
   });
+
+  // Regression coverage: CountUp used to round every intermediate frame to an
+  // integer internally, so a fractional caller formatter (toFixed(1), used by
+  // dash-my-hours / pj-my-hours) settled on a rounded integer like "3.0"
+  // instead of "2.5". Rounding must live only in the default formatter.
+  it('does not corrupt a fractional value when the caller formats with toFixed', async () => {
+    render(
+      <ThemeProvider>
+        <CountUp value={2.5} format={v => v.toFixed(1)} durationMs={30} />
+      </ThemeProvider>
+    );
+    await waitFor(() => {
+      expect(screen.getByText('2.5')).toBeInTheDocument();
+    });
+  });
 });

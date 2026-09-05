@@ -1917,6 +1917,7 @@ export interface DashboardMoney {
   draftPayAppCount: number;
   recentPayments: { id: string; amount: number; date: number; method: string | null; projectId: string; projectName: string }[];
   trend: { month: string; paidCents: number }[];
+  aging: { current: number; days31to60: number; days61plus: number };
 }
 
 export interface HappeningItem {

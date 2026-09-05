@@ -13,7 +13,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { animate } from 'motion/react';
 import { useTheme } from '../../context/ThemeContext';
 
-const defaultFormat = (v: number): string => v.toLocaleString();
+// Rounding lives only in the default formatter — a caller-supplied formatter
+// (e.g. `v => v.toFixed(1)` for fractional hours) must see the raw
+// interpolated value, not one pre-rounded to an integer by CountUp itself.
+const defaultFormat = (v: number): string => Math.round(v).toLocaleString();
 
 export const CountUp: React.FC<{
   value: number;
@@ -47,7 +50,11 @@ export const CountUp: React.FC<{
     const controls = animate(from, to, {
       duration: durationMs / 1000,
       ease: 'easeOut',
-      onUpdate: (latest: number) => setDisplay(Math.round(latest)),
+      onUpdate: (latest: number) => setDisplay(latest),
+      // Belt-and-suspenders: even though the final onUpdate frame already
+      // lands on `to`, explicitly snap to the exact target on completion so
+      // float drift in the tween can never leave display fractionally off.
+      onComplete: () => setDisplay(to),
     });
 
     // Stops the in-flight animation both on unmount and whenever this effect

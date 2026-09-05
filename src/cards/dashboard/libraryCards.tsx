@@ -13,10 +13,10 @@ import {
   CalendarClock, Plus, ListChecks,
 } from 'lucide-react';
 import {
-  ProjectSummary, OutstandingProposal, TimeEntryLite, DashboardMoney, AttentionItem,
+  ProjectSummary, OutstandingProposal, TimeEntryLite, DashboardMoney,
   DocumentRow,
   getProjectsSummary, getOutstandingProposals, getMyTimeEntries, getDashboardMoney,
-  getDashboardAttention, getDocuments, clockIn,
+  getDocuments, clockIn,
 } from '../../utils/store';
 import { formatMoney } from '../../utils/money';
 import { formatCurrency } from '../../pages/project/proposal/proposalGenerator';
@@ -243,35 +243,24 @@ const PaymentsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width 
 };
 
 // ── dash-aging ────────────────────────────────────────────────────────────
-interface AgingBuckets { d0_30: number; d31_60: number; d61: number }
-
-function agingBuckets(items: AttentionItem[], now: number = Date.now()): AgingBuckets {
-  const buckets: AgingBuckets = { d0_30: 0, d31_60: 0, d61: 0 };
-  for (const item of items) {
-    if (item.type !== 'aging_receivable') continue;
-    const age = Math.floor((now - item.date) / DAY);
-    const amount = item.balanceCents ?? 0;
-    if (age <= 30) buckets.d0_30 += amount;
-    else if (age <= 60) buckets.d31_60 += amount;
-    else buckets.d61 += amount;
-  }
-  return buckets;
-}
-
+// Buckets come straight from the server's dashboardMoney().aging — computed
+// over EVERY outstanding billed document across non-archived projects, not
+// derived from the attention feed's aging_receivable items (which only exist
+// at >=14 days old and are capped at 20 red-first, so receivables could
+// silently vanish from these sums). See server/dashboardStore.ts.
 const AgingCard: React.FC<{ width: CardWidth; ctx: CardContext }> = () => {
-  const [items, setItems] = useState<AttentionItem[] | null>(null);
+  const [aging, setAging] = useState<DashboardMoney['aging'] | null>(null);
 
-  const load = () => { getDashboardAttention().then(setItems).catch(() => setItems([])); };
+  const load = () => { getDashboardMoney().then(d => setAging(d.aging)).catch(() => setAging(null)); };
   useLiveQuery(load, { types: ['invoice', 'payment', 'aiaPayApp', 'project'] });
 
-  const loading = items === null;
-  const receivables = (items ?? []).filter(i => i.type === 'aging_receivable');
-  const buckets = agingBuckets(receivables);
+  const loading = aging === null;
+  const total = aging ? aging.current + aging.days31to60 + aging.days61plus : 0;
 
-  const TILES: { key: keyof AgingBuckets; label: string; tone: string }[] = [
-    { key: 'd0_30', label: '0–30 days', tone: 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-400/10 dark:border-emerald-400/20 dark:text-emerald-300' },
-    { key: 'd31_60', label: '31–60 days', tone: 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-400/10 dark:border-amber-400/20 dark:text-amber-300' },
-    { key: 'd61', label: '61+ days', tone: 'bg-red-50 border-red-200 text-red-700 dark:bg-red-400/10 dark:border-red-400/20 dark:text-red-300' },
+  const TILES: { key: keyof NonNullable<typeof aging>; testId: string; label: string; tone: string }[] = [
+    { key: 'current', testId: 'd0_30', label: '0–30 days', tone: 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-400/10 dark:border-emerald-400/20 dark:text-emerald-300' },
+    { key: 'days31to60', testId: 'd31_60', label: '31–60 days', tone: 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-400/10 dark:border-amber-400/20 dark:text-amber-300' },
+    { key: 'days61plus', testId: 'd61', label: '61+ days', tone: 'bg-red-50 border-red-200 text-red-700 dark:bg-red-400/10 dark:border-red-400/20 dark:text-red-300' },
   ];
 
   return (
@@ -279,15 +268,15 @@ const AgingCard: React.FC<{ width: CardWidth; ctx: CardContext }> = () => {
       title="Aging receivables"
       icon={<Hourglass size={13} />}
       loading={loading}
-      empty={!loading && receivables.length === 0}
+      empty={!loading && total === 0}
       emptyTitle="Nothing aging."
       emptyIllustration="money"
     >
       <div className="grid grid-cols-3 gap-2">
         {TILES.map(t => (
-          <div key={t.key} data-testid={`aging-bucket-${t.key}`} className={`rounded-lg border p-2.5 ${t.tone}`}>
+          <div key={t.key} data-testid={`aging-bucket-${t.testId}`} className={`rounded-lg border p-2.5 ${t.tone}`}>
             <p className="text-[11px] font-medium">{t.label}</p>
-            <p className="text-sm font-bold text-ink">{formatMoney(buckets[t.key])}</p>
+            <p className="text-sm font-bold text-ink">{formatMoney(aging?.[t.key] ?? 0)}</p>
           </div>
         ))}
       </div>

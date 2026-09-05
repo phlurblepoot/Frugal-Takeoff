@@ -30,6 +30,12 @@ export interface DashboardMoney {
   draftPayAppCount: number;
   recentPayments: { id: string; amount: number; date: number; method: string | null; projectId: string; projectName: string }[];
   trend: { month: string; paidCents: number }[];
+  // Aging buckets over EVERY outstanding (balanceCents > 0) billed document
+  // across non-archived projects — not just the ≥14-day-old, top-20-capped
+  // subset that feeds the attention feed's aging_receivable items. Bucketed
+  // the same way as customerStore's per-customer aging (current ≤30d), via
+  // the shared billedDocDateMs normalization.
+  aging: { current: number; days31to60: number; days61plus: number };
 }
 
 // YYYY-MM-DD for today in local time — comparable lexicographically against
@@ -212,6 +218,8 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
   `).all() as { id: string; name: string | null; archived: number }[]).filter(p => !Number(p.archived));
 
   let outstandingCents = 0, contractTotalCents = 0, billedCents = 0, paidCents = 0;
+  let agingCurrentCents = 0, agingDays31to60Cents = 0, agingDays61PlusCents = 0;
+  const nowMs = Date.now();
   for (const p of projRows) {
     // Fetch docs ONCE and hand the same array to billingSummary — avoids a
     // second listBilledDocuments pass (and its computeG702 calls) per project.
@@ -221,6 +229,15 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
       billedCents += doc.totalCents;
       paidCents += doc.paidCents;
       outstandingCents += doc.balanceCents;
+      if (doc.balanceCents > 0) {
+        const docDateMs = billedDocDateMs(doc.date);
+        if (docDateMs != null) {
+          const age = ageDays(docDateMs, nowMs);
+          if (age <= 30) agingCurrentCents += doc.balanceCents;
+          else if (age <= 60) agingDays31to60Cents += doc.balanceCents;
+          else agingDays61PlusCents += doc.balanceCents;
+        }
+      }
     }
   }
 
@@ -242,7 +259,10 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
     }
     const proj = projectId ? (db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId) as { name: string | null } | undefined) : undefined;
     return {
-      id: r.id, amount: r.amount, date: r.date, method: r.method ?? null,
+      // payments.amount is stored as real dollars in the DB — normalize to
+      // integer cents here so the wire contract matches every other money
+      // field (client cards format all of these via formatMoney(cents)).
+      id: r.id, amount: toCents(r.amount), date: r.date, method: r.method ?? null,
       projectId: projectId ?? '', projectName: proj?.name ?? 'Untitled',
     };
   });
@@ -261,7 +281,10 @@ export function dashboardMoney(db: Database.Database): DashboardMoney {
     return { month: key, paidCents: trendByMonth.get(key) ?? 0 };
   });
 
-  return { outstandingCents, contractTotalCents, billedCents, paidCents, draftPayAppCount, recentPayments, trend };
+  return {
+    outstandingCents, contractTotalCents, billedCents, paidCents, draftPayAppCount, recentPayments, trend,
+    aging: { current: agingCurrentCents, days31to60: agingDays31to60Cents, days61plus: agingDays61PlusCents },
+  };
 }
 
 export interface HappeningItem {

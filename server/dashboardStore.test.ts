@@ -197,8 +197,25 @@ describe('dashboardMoney', () => {
     expect(money.recentPayments).toHaveLength(5);
     expect(money.recentPayments[0].projectName).toBe('Proj');
     expect(money.recentPayments[0].projectId).toBe('p1');
-    // most recent (i=0, date closest to now) first
-    expect(money.recentPayments[0].amount).toBe(10);
+    // most recent (i=0, date closest to now) first — amount is on the wire as
+    // integer cents (payments.amount is stored as real dollars in the DB).
+    expect(money.recentPayments[0].amount).toBe(1000);
+  });
+
+  it('buckets aging over EVERY outstanding billed doc, not just >=14-day/top-20 attention items', () => {
+    // Three outstanding invoices at 10/45/90 days old — the 10-day one is
+    // younger than the attention feed's 14-day floor for aging_receivable,
+    // so this proves dashboardMoney's aging is computed independently of
+    // dashboardAttention rather than derived from it.
+    const inv10 = createInvoice(d, 'p1', { number: 'INV-10', date: Date.now() - 10 * DAY, lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });
+    setInvoiceStatus(d, inv10.id, 'sent');
+    const inv45 = createInvoice(d, 'p1', { number: 'INV-45', date: Date.now() - 45 * DAY, lines: [{ description: 'B', qty: 1, unitPrice: 200 }] });
+    setInvoiceStatus(d, inv45.id, 'sent');
+    const inv90 = createInvoice(d, 'p1', { number: 'INV-90', date: Date.now() - 90 * DAY, lines: [{ description: 'C', qty: 1, unitPrice: 300 }] });
+    setInvoiceStatus(d, inv90.id, 'sent');
+
+    const money = dashboardMoney(d);
+    expect(money.aging).toEqual({ current: 10000, days31to60: 20000, days61plus: 30000 });
   });
 });
 
