@@ -1,6 +1,6 @@
 // src/cards/project/libraryCards.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 import { ThemeProvider } from '../../context/ThemeContext';
@@ -247,6 +247,21 @@ describe('pj-photo-strip', () => {
     getDocuments.mockResolvedValue({ rows: [], total: 0 });
     mount('pj-photo-strip', 2);
     expect(await screen.findByText('No issue or punch photos yet.')).toBeInTheDocument();
+  });
+
+  it('clicking a thumb opens the lightbox at that index', async () => {
+    getDocuments.mockResolvedValue({
+      rows: [
+        { id: 'f1', name: 'a.jpg', mime: 'image/jpeg', size: 1, kind: 'issue-photo', createdAt: 2, versionNumber: 1, archived: false, projectId: 'p1', projectName: null, customerId: null, customerName: null, source: null },
+        { id: 'f2', name: 'b.jpg', mime: 'image/jpeg', size: 1, kind: 'punch-photo', createdAt: 1, versionNumber: 1, archived: false, projectId: 'p1', projectName: null, customerId: null, customerName: null, source: null },
+      ], total: 2,
+    });
+    const { container } = mount('pj-photo-strip', 2);
+    await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(2));
+
+    fireEvent.click(container.querySelectorAll('img')[1]);
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
   });
 });
 

@@ -110,6 +110,18 @@ describe('DocumentViewerModal', () => {
     expect(loadPdfDoc).not.toHaveBeenCalled();
   });
 
+  // Nested-modal case: the shared Lightbox is deliberately layered on top of
+  // this Modal rather than folded into it — this proves it actually opens
+  // over an already-open Modal, and that the underlying Modal survives.
+  it('clicking the image opens the app-wide Lightbox on top of this Modal', async () => {
+    renderModal(makeRow({ mime: 'image/png', name: 'site.png' }));
+    const img = await screen.findByAltText('site.png');
+    fireEvent.click(img);
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+    // The DocumentViewerModal dialog is still mounted underneath.
+    expect(screen.getByTestId('doc-viewer-modal')).toBeInTheDocument();
+  });
+
   it('Open in editor closes first, then hands off to openTargetFor', async () => {
     const onClose = vi.fn();
     const onOpenInEditor = vi.fn();

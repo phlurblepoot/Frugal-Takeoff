@@ -14,12 +14,13 @@ import {
   Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, ExternalLink, Link2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { DocumentRow, fetchFileBlob, formatBytes } from '../../utils/store';
+import { DocumentRow, fetchFileBlob, formatBytes, getImageUrl } from '../../utils/store';
 import { Button, Modal, Skeleton, Table, TBody, TD, TR } from '../../components/ui';
 import { CustomDocType, kindLabel } from './docTypes';
 import { MimeIcon } from './MimeIcon';
 import { selectionPolicy } from './documentsPolicy';
 import { PdfDocHandle, loadPdfDoc, previewKindFor, renderPdfPage } from './previewEngine';
+import { Lightbox } from '../../components/Lightbox';
 
 // How much of a spreadsheet the peek shows (spec: "first sheet's leading
 // rows"). Anything larger belongs in the sheets editor.
@@ -117,6 +118,13 @@ export const DocumentViewerModal: React.FC<{
   const archivable = !hideArchive && selectionPolicy([row]).archivable.length > 0;
   const [archiving, setArchiving] = useState(false);
 
+  // Image preview opens the same app-wide Lightbox as every other photo grid
+  // — deliberately layered ON TOP of this Modal rather than folded into it,
+  // so the Escape-ownership rule (Lightbox: capture-phase; Modal: bubble
+  // phase, see components/Lightbox.tsx's header) is exercised for real here:
+  // this is the one place in the app where the two are nested by default.
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
   const handleArchive = async () => {
     setArchiving(true);
     try {
@@ -132,9 +140,10 @@ export const DocumentViewerModal: React.FC<{
     if (kind === 'image') {
       return (
         <img
-          src={`/api/images/${row.id}/raw`}
+          src={getImageUrl(row.id)}
           alt={row.name ?? row.id}
-          className="mx-auto max-h-[65dvh] w-auto max-w-full object-contain"
+          onClick={() => setLightboxOpen(true)}
+          className="mx-auto max-h-[65dvh] w-auto max-w-full cursor-pointer object-contain"
         />
       );
     }
@@ -216,6 +225,7 @@ export const DocumentViewerModal: React.FC<{
   };
 
   return (
+    <>
     <Modal open onClose={onClose} title={row.name ?? row.id} width="xl" footer={
       <>
         {archivable && (
@@ -254,5 +264,13 @@ export const DocumentViewerModal: React.FC<{
     }>
       <div data-testid="doc-viewer-modal">{body()}</div>
     </Modal>
+    {lightboxOpen && kind === 'image' && (
+      <Lightbox
+        items={[{ src: getImageUrl(row.id), caption: row.name ?? undefined }]}
+        index={0}
+        onClose={() => setLightboxOpen(false)}
+      />
+    )}
+    </>
   );
 };

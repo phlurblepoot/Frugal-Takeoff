@@ -166,4 +166,20 @@ describe('PhotoDropCard', () => {
     expect(screen.getByText('No photos.')).toBeInTheDocument();
     expect(h.props.excludeFileIds).toEqual([]);
   });
+
+  it('opens the lightbox at the clicked thumbnail, and a Remove click does not also open it', () => {
+    const { container } = renderCard({ photos: [{ id: 'ph-1', fileId: 'f-1' }, { id: 'ph-2', fileId: 'f-2' }] });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    const thumbs = container.querySelectorAll('img');
+    fireEvent.click(thumbs[1]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('Remove')[0]);
+    expect(onRemove).toHaveBeenCalledWith('f-1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

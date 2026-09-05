@@ -6,12 +6,13 @@
 // owner supplies only what is genuinely per-record — where an upload lands,
 // how a stored file is linked, and how one is removed
 // (spec docs/superpowers/specs/2026-08-29-document-actions-rollout).
-import React from 'react';
+import React, { useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { getImageUrl } from '../../utils/store';
 import { FilePickerUploadConfig } from '../FilePickerModal';
 import { AddFilesButton } from './AddFilesButton';
 import { useAttachFiles } from './useAttachFiles';
+import { Lightbox } from '../Lightbox';
 
 export interface PhotoDropCardProps {
   /** Section heading — 'Photos', or a stage name on punch items/tasks. */
@@ -46,6 +47,7 @@ export const PhotoDropCard: React.FC<PhotoDropCardProps> = ({
     disabledMessage,
     noun: 'photos',
   });
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   return (
     <div
@@ -76,16 +78,28 @@ export const PhotoDropCard: React.FC<PhotoDropCardProps> = ({
         <p className="text-xs text-ink-faint">{emptyText}</p>
       ) : (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-          {photos.map(p => (
+          {photos.map((p, i) => (
             <div key={p.id} className="group relative">
-              <img src={getImageUrl(p.fileId)} alt="" className="h-24 w-full rounded-lg border border-edge object-cover" />
-              <button onClick={() => onRemove(p.fileId)} title="Remove"
+              <img
+                src={getImageUrl(p.fileId)}
+                alt=""
+                onClick={() => setLightboxIndex(i)}
+                className="h-24 w-full cursor-pointer rounded-lg border border-edge object-cover"
+              />
+              <button onClick={(e) => { e.stopPropagation(); onRemove(p.fileId); }} title="Remove"
                 className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                 <Trash2 size={12} />
               </button>
             </div>
           ))}
         </div>
+      )}
+      {lightboxIndex !== null && (
+        <Lightbox
+          items={photos.map(p => ({ src: getImageUrl(p.fileId) }))}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
       )}
     </div>
   );

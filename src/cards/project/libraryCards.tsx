@@ -36,6 +36,7 @@ import { formatMoney } from '../../utils/money';
 import { manCountTotal, weatherLine, formatReportDate } from '../../pages/project/daily/dailyReportForm';
 import { formatMailDate } from '../../pages/mail/mailFormat';
 import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
+import { Lightbox } from '../../components/Lightbox';
 import { ChangeOrderStatusPill } from '../../components/ui/BillingPills';
 import { Button, ProgressBar, StatusPill, PillTone } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -220,6 +221,7 @@ const PunchRingCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }
 // ── pj-photo-strip ───────────────────────────────────────────────────────
 const PhotoStripCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }) => {
   const [docs, setDocs] = useState<DocumentRow[] | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const { projectId } = ctx;
 
   const load = () => {
@@ -241,10 +243,23 @@ const PhotoStripCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx 
       actions={<Link to={`/project/${projectId}/documents`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
     >
       <div className="grid grid-cols-4 gap-2">
-        {photos.map(p => (
-          <img key={p.id} src={getImageUrl(p.id)} alt="" className="aspect-square w-full rounded-lg border border-edge object-cover" />
+        {photos.map((p, i) => (
+          <img
+            key={p.id}
+            src={getImageUrl(p.id)}
+            alt=""
+            onClick={() => setLightboxIndex(i)}
+            className="aspect-square w-full cursor-pointer rounded-lg border border-edge object-cover"
+          />
         ))}
       </div>
+      {lightboxIndex !== null && (
+        <Lightbox
+          items={photos.map(p => ({ src: getImageUrl(p.id) }))}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </CardShell>
   );
 };
