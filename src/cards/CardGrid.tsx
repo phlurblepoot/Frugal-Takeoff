@@ -10,6 +10,7 @@ import type { CardContext, CardDef, CardLayoutEntry, CardPage, CardWidth } from 
 import { cardsForPage } from './registry';
 import { useCardLayout } from './useCardLayout';
 import { MASONRY_GAP_PX, MASONRY_ROW_PX, useMasonrySpan } from './useMasonrySpan';
+import { useReveal } from '../hooks/useReveal';
 
 function computeCols(w1600: boolean, w1024: boolean, w640: boolean): number {
   if (w1600) return 4;
@@ -70,9 +71,17 @@ const CardGridItem: React.FC<{
   onRemove: () => void;
 }> = ({ entry, def, ctx, editing, effectiveWidth, widths, onDragStart, onDragOver, onDrop, onWidthChange, onRemove }) => {
   const { ref: measureRef, span } = useMasonrySpan<HTMLDivElement>();
+  // Scroll reveal on the outer wrapper only (never the inner measured div —
+  // see useMasonrySpan above). Skipped entirely while editing: wiggle and
+  // reveal-in both animate `transform`, and Customize mode means the user is
+  // already looking at every card, not scrolling one into view for the first
+  // time. The ref is simply withheld rather than conditionally calling the
+  // hook, which always runs (rules of hooks).
+  const revealRef = useReveal<HTMLDivElement>();
 
   return (
     <div
+      ref={editing ? undefined : revealRef}
       data-card-id={entry.id}
       draggable={editing}
       onDragStart={onDragStart}

@@ -379,3 +379,38 @@ html.solid-surfaces body { background: var(--surface) !important; }
 }
 .motion-reduce .celebration-confetti-piece { animation: none; opacity: 0; }
 .motion-reduce .celebration-pulse { animation: none; opacity: 0; }
+
+/* ── Scroll reveals (Wave 3 Task 11) ──────────────────────────────────────
+   useReveal adds .reveal-init (opacity:0, only once IntersectionObserver
+   support is confirmed — never a static className, so no-IO environments
+   stay visible by default) then swaps to .reveal-in the first time the
+   element crosses 15% visible, and disconnects. One-shot arrival, not a
+   re-triggerable scroll effect. */
+@keyframes reveal-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reveal-init {
+  opacity: 0;
+}
+.reveal-in {
+  animation: reveal-in 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Reduced motion: content must stay visible outright, not just animate
+   faster (the blanket animation-duration override above only shortens the
+   reveal-in keyframe — it can't undo reveal-init's static opacity:0). */
+.motion-reduce .reveal-init { opacity: 1; }
+.motion-reduce .reveal-in { animation: none; }
+
+/* ── Breathing progress (Wave 3 Task 11, approved mockup "12 · breathing")
+   Slow brightness pulse on a bar/ring's EXISTING glow (glow-bar) for "live"
+   things — a draft pay app, an in-progress upload. Never introduces new
+   glow of its own. */
+@keyframes breathing-pulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.55); }
+}
+.breathing {
+  animation: breathing-pulse 2.4s ease-in-out infinite;
+}
+.motion-reduce .breathing { animation: none; filter: brightness(1); }

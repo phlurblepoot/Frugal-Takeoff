@@ -52,10 +52,10 @@ const FILE = {
   size: 12, createdAt: 50, versionNumber: 1,
 };
 
-const mount = () => render(
+const mount = (contractTotalCents?: number) => render(
   <MemoryRouter>
     <ToastProvider>
-      <AiaPayApplications projectId="p1" />
+      <AiaPayApplications projectId="p1" contractTotalCents={contractTotalCents} />
     </ToastProvider>
   </MemoryRouter>
 );
@@ -105,5 +105,34 @@ describe('AiaPayApplications — Excel status on rows', () => {
     mount();
     fireEvent.click(await screen.findByText('#1'));
     expect(await screen.findByTestId('editor')).toBeInTheDocument();
+  });
+});
+
+describe('AiaPayApplications — draft completion bar (Wave 3 Task 11)', () => {
+  it('shows a labeled bar on draft rows once contractTotalCents is known', async () => {
+    // Both fixture rows are drafts with totalCents 250000; a 1,000,000-cent
+    // contract puts each at 25%.
+    mount(1_000_000);
+    await screen.findByText('#1');
+    expect(screen.getAllByText('25% billed of contract')).toHaveLength(2);
+  });
+
+  it('omits the bar entirely when contractTotalCents is not yet known', async () => {
+    mount(); // no contractTotalCents — e.g. summary still loading, or non-admin
+    await screen.findByText('#1');
+    expect(screen.queryByText(/% billed of contract/)).toBeNull();
+  });
+
+  it('omits the bar for a finalized application even when contractTotalCents is known', async () => {
+    h.getPayApps.mockResolvedValue([app({ status: 'finalized' })]);
+    mount(1_000_000);
+    await screen.findByText('#1');
+    expect(screen.queryByText(/% billed of contract/)).toBeNull();
+  });
+
+  it('does not divide by zero for a zero contract total', async () => {
+    mount(0);
+    await screen.findByText('#1');
+    expect(screen.getAllByText('0% billed of contract')).toHaveLength(2);
   });
 });

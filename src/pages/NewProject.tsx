@@ -961,7 +961,7 @@ export const NewProject: React.FC = () => {
                       style={{ width: `${Math.min(100, Math.round((progress.current / progress.total) * 100))}%` }}
                     />
                   ) : (
-                    <div className="progress-indeterminate absolute inset-y-0 rounded-full bg-accent-600" />
+                    <div className="progress-indeterminate breathing absolute inset-y-0 rounded-full bg-accent-600" />
                   )}
                 </div>
                 {progress.totalFiles > 1 && (

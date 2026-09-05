@@ -163,7 +163,9 @@ export const ProjectBilling: React.FC = () => {
         {projectId && activeTab === 'change-orders' && (
           <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
         )}
-        {projectId && activeTab === 'pay-apps' && <AiaPayApplications projectId={projectId} />}
+        {projectId && activeTab === 'pay-apps' && (
+          <AiaPayApplications projectId={projectId} contractTotalCents={summary?.contractTotalCents} />
+        )}
         {projectId && activeTab === 'invoices' && (
           <InvoicesSection projectId={projectId} onChange={reloadSummary} />
         )}

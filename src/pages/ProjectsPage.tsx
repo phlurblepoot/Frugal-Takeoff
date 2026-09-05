@@ -18,6 +18,7 @@ import {
   Select, Skeleton, StatusPill, normalizeProjectStatus,
 } from '../components/ui';
 import { useLiveQuery } from '../hooks/useLiveQuery';
+import { useReveal } from '../hooks/useReveal';
 
 export type TabId = 'bidding' | 'in_progress' | 'archive';
 
@@ -232,6 +233,20 @@ const ProjectRow: React.FC<{
   );
 };
 
+// Reveals a row-group Card on scroll (Wave 3 Task 11). A plain component
+// instance (not a hook call inline in renderRows) so each mount — including
+// a fresh one when the active-tab section remounts via its `key` — gets its
+// own IntersectionObserver lifecycle. Card is a plain FC (no ref
+// forwarding), so the ref lives on a thin wrapper div instead.
+const RevealCard: React.FC<React.PropsWithChildren<{ className?: string }>> = ({ children, className }) => {
+  const ref = useReveal<HTMLDivElement>();
+  return (
+    <div ref={ref}>
+      <Card className={className}>{children}</Card>
+    </div>
+  );
+};
+
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -364,7 +379,7 @@ export const ProjectsPage: React.FC = () => {
   // `tab` fixes which signal each row shows; the Recently-opened row spans
   // tabs, so its rows are typed by the project itself.
   const renderRows = (projects: ProjectSummary[], tab?: TabId) => (
-    <Card className="overflow-hidden">
+    <RevealCard className="overflow-hidden">
       {projects.map(p => (
         <ProjectRow
           key={p.id}
@@ -379,7 +394,7 @@ export const ProjectsPage: React.FC = () => {
           onDelete={() => handleDeleteClick(p)}
         />
       ))}
-    </Card>
+    </RevealCard>
   );
 
   // The active tab lives in the URL (?stage=), so a deep link survives a

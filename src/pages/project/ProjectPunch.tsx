@@ -18,10 +18,20 @@ import { useProjectOutlet } from './ProjectLayout';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
 import { useItemEmailDefaults } from '../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../utils/itemSend';
+import { useReveal } from '../../hooks/useReveal';
 
 const UNASSIGNED = 'Unassigned';
 
 interface AreaGroup { area: string; label: string; items: PunchListItem[]; }
+
+// Reveals an area-group Card on scroll (Wave 3 Task 11). A dedicated
+// component (not an inline hook call in .map) so each group gets its own
+// IntersectionObserver — hooks can't be called a variable number of times
+// per render.
+const RevealGroup: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+  const ref = useReveal<HTMLDivElement>();
+  return <div ref={ref}>{children}</div>;
+};
 
 export const ProjectPunch: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -215,7 +225,8 @@ export const ProjectPunch: React.FC = () => {
           {groups.map(g => {
             const gDone = g.items.filter(i => i.done).length;
             return (
-              <Card key={g.area}>
+              <RevealGroup key={g.area}>
+              <Card>
                 <CardBody>
                   <div className="mb-2 flex items-center gap-3">
                     <h2 className="shrink-0 text-sm font-semibold text-ink">{g.label}</h2>
@@ -245,6 +256,7 @@ export const ProjectPunch: React.FC = () => {
                   </ul>
                 </CardBody>
               </Card>
+              </RevealGroup>
             );
           })}
         </div>

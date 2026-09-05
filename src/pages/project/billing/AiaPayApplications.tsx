@@ -6,7 +6,7 @@ import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import {
-  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Modal, StatusPill, Skeleton,
+  Button, Card, CardBody, CardHeader, EmptyState, Field, Input, Modal, ProgressBar, StatusPill, Skeleton,
   Table, TBody, TD, TH, THead, TR,
 } from '../../../components/ui';
 import type { PillTone } from '../../../components/ui';
@@ -26,7 +26,18 @@ const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId }) => {
+// Draft rows show a mini "breathing" bar: this application's total-to-date
+// as a share of the WHOLE contract (mirrors the "{pct}% billed of contract"
+// wording already used by the dashboard Money pulse card). That's a
+// proxy for "how much of this draft is filled in" — not a from-scratch
+// completion metric — because the pay-apps LIST endpoint doesn't carry
+// per-line percentComplete/scheduledValueCents (only the detail endpoint,
+// opened per-app in the editor, does). It's the cheapest honest ratio
+// available here, and the label says exactly what it shows.
+const contractSharePct = (app: AiaPayAppListItem, contractTotalCents: number) =>
+  contractTotalCents > 0 ? Math.round((app.totalCents / contractTotalCents) * 100) : 0;
+
+export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCents?: number }> = ({ projectId, contractTotalCents }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [apps, setApps] = useState<AiaPayAppListItem[] | null>(null);
@@ -112,7 +123,19 @@ export const AiaPayApplications: React.FC<{ projectId: string }> = ({ projectId 
                     <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">#{app.number}<EditingChip type="aiaPayApp" id={app.id} />{replyFlags.has(app.id) && <ReplyFlagChip data-testid={`payapp-reply-flag-${app.id}`} />}</span></TD>
                     <TD className="text-ink-soft">{fmtDate(app.periodTo)}</TD>
                     <TD className="text-ink-soft">{fmtDate(app.applicationDate)}</TD>
-                    <TD><StatusPill tone={meta.tone}>{meta.label}</StatusPill></TD>
+                    <TD>
+                      <StatusPill tone={meta.tone}>{meta.label}</StatusPill>
+                      {app.status === 'draft' && contractTotalCents != null && (
+                        <div className="mt-1 w-28">
+                          <ProgressBar
+                            done={app.totalCents}
+                            total={contractTotalCents}
+                            barClassName="breathing"
+                            label={`${contractSharePct(app, contractTotalCents)}% billed of contract`}
+                          />
+                        </div>
+                      )}
+                    </TD>
                     <TD className="text-right tabular-nums text-ink-soft">{formatMoney(app.totalCents)}</TD>
                     <TD className="text-right tabular-nums text-ink-soft">{app.balanceCents == null ? '—' : formatMoney(app.balanceCents)}</TD>
                     <TD onClick={e => e.stopPropagation()}>
