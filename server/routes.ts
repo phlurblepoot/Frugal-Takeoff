@@ -61,6 +61,7 @@ import {
   listCustomers, getCustomer, saveCustomer, deleteCustomer, mergeCustomers, listProjectsForCustomer,
   customerSummaries, customerOverview,
 } from './customerStore';
+import { dashboardAttention, dashboardMoney } from './dashboardStore';
 import { listDocuments, patchDocument, deleteDocument, DocumentFilters, findDocumentBySource, findDocumentsBySource } from './documents';
 import { requestMeta, type BroadcastChange } from './realtime/changeFeed';
 import type { SheetSessionStore } from './realtime/sheetSessions';
@@ -93,6 +94,16 @@ export interface RouteDeps {
 
 export function registerDataRoutes(app: express.Express, deps: RouteDeps): void {
   const { db, dataDir, dbFile, authenticateToken, requireAdmin, verifyToken } = deps;
+
+  // Dashboard aggregates (Wave 2). Literal paths — MUST be registered before
+  // any parameterized sibling so Express doesn't swallow them as ids.
+  app.get('/api/dashboard/attention', authenticateToken, (req: any, res) => {
+    const isAdmin = req.user?.role === 'admin';
+    res.json({ items: dashboardAttention(db, isAdmin) });
+  });
+  app.get('/api/dashboard/money', authenticateToken, requireAdmin, (_req, res) => {
+    res.json(dashboardMoney(db));
+  });
 
   // ── Projects ──────────────────────────────────────────────────────────────
 
