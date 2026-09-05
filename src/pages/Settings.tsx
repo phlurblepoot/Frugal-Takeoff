@@ -22,6 +22,19 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.13.0',
+    date: 'September 5, 2026',
+    changes: [
+      'Dashboard, every project, and every customer page are now built from customizable cards instead of a fixed layout: hit "⚙ Customize" to drag cards into a new order, resize any card from 1 to 3 columns wide, remove ones you don\'t need, and add others from a library of 39 — Reset to default puts a page back the way it started. Your layout is saved per person and follows you to any device you sign in on.',
+      'New default Dashboard: "⚡ Needs your attention" surfaces overdue invoices, aging receivables, stalled proposals and the like as one prioritized feed with a link straight to the item, "Money pulse" gives an animated at-a-glance read on what\'s outstanding and what\'s recently moved, plus "On deck" for upcoming deadlines and "Team activity" for what everyone\'s been doing.',
+      'New default project page: a "Financial progress" band tracks contract value against billed and paid, "Open items" rolls up outstanding tasks/RFIs/issues/punch items in one place, and "Recent happenings" merges activity and mail into a single project timeline.',
+      'New default customer page: "Financials" shows contract-to-date and outstanding balance with an aging breakdown (current / 31-60 days / 61+ days), alongside "Their projects," "Correspondence," and a "Needs attention" card for that customer specifically.',
+      'Key figures now animate in with a quick count-up instead of appearing instantly, and several cards carry a small sparkline trend alongside the number.',
+      'Pages and lists that have nothing in them yet now show a small illustration instead of a bare "No items" message.',
+      'The customer list and the customer detail pane now scroll independently, so a long project or activity list on the right no longer scrolls the customer list on the left out of view.',
+    ],
+  },
+  {
     version: '2.12.0',
     date: 'September 4, 2026',
     changes: [
