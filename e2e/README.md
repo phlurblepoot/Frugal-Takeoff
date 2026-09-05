@@ -106,8 +106,13 @@ npx playwright install chromium
   row gets a Reply chip, the editor's banner shows the quote-stripped text, and
   Use-as-response records it (`status: answered`, `responseSource: 'email'`)
   while Dismiss drops it and leaves the RFI Sent.
+- **Collaboration cursors** (`collab-canvas-cursor.spec.ts`) — two
+  independently-authenticated browser contexts on the same canvas prove that
+  one context's mouse movement produces a live, moving remote-cursor Konva
+  Group on the other's canvas, end-to-end over the real socket + Konva
+  pipeline (the lerp/idle math itself is unit-tested separately).
 
 ## What's intentionally NOT covered
 
 Favorites, page/takeoff context menus, multi-select, revisions / compare,
-collaboration cursors, the full add-pages upload flow, and retry-failed.
+the full add-pages upload flow, and retry-failed.

@@ -23,6 +23,21 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.14.0',
+    date: 'September 5, 2026',
+    changes: [
+      'Every remaining screen has been brought onto the new glass/token look — Settings, Users, Templates, share pages, Time Keeping, and every project section, plus the canvas toolbar/sidebars/modals — including dark-mode fixes for a handful of dialogs that had stayed light-only until now.',
+      'Switching tabs anywhere in the app (Settings, a project\'s sections, and more) now animates the tab indicator and content into place instead of jumping.',
+      'The ⌘K command palette has a glossier feel with springy transitions and grouped results that cascade in, remembers your recent picks so they surface first, and its "?" shortcut overlay has been expanded to cover far more of the app\'s shortcuts.',
+      'Photos now open in a springy full-screen lightbox with swipe/arrow navigation everywhere photos appear — Issues, Punch List, Daily Reports, RFIs, Change Orders, Tasks, and Proposals.',
+      'Small celebration moments: confetti when a bid is won, a soft glow pulse when a payment lands or a document is finalized.',
+      'Cards and sections gently reveal as you scroll to them, live progress bars have a subtle breathing animation, and scrollable rails get a fade at the edge to hint there\'s more.',
+      'Collaborator cursors on the canvas now glide smoothly between positions instead of jumping frame to frame, with cleaner name tags.',
+      'Dashboard/project/customer cards can now be reordered with a touch long-press (not just drag on desktop) and resized by dragging their edge; the "Open tasks" card is back and available on customer pages; and cards linked to a mail thread now open straight into it.',
+      'Fixed: Time Keeping\'s week view now starts on Monday everywhere, matching the rest of the app\'s date handling.',
+    ],
+  },
+  {
     version: '2.13.1',
     date: 'September 5, 2026',
     changes: [

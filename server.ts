@@ -817,7 +817,7 @@ async function startServer() {
     res.status(500).json({ error: "Internal server error" });
   });
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
