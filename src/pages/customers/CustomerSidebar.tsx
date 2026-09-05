@@ -48,7 +48,7 @@ export const CustomerSidebar: React.FC<{
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-testid="customer-sidebar-list">
         {loading ? (
           <div className="space-y-2 p-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
