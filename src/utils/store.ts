@@ -4,7 +4,7 @@ import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerato
 import { calculateTakeoffTotalCost } from './math';
 import { CLIENT_SESSION_ID } from './clientSession';
 import type { ItemSendPayload } from './itemSend';
-import type { SendResult } from '../pages/mail/types';
+import type { SendResult, ProjectThreadRow } from '../pages/mail/types';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -1888,4 +1888,65 @@ export const computeSovSeedFromEstimate = (project: Project): { description: str
     .map(([description, dollars]) => ({ description, scheduledValueCents: Math.round(dollars * 100) }))
     .filter(g => g.scheduledValueCents > 0)
     .sort((a, b) => a.description.localeCompare(b.description));
+};
+
+// ── Wave 2: card system fetchers ─────────────────────────────────────────────
+// Types below mirror server/dashboardStore.ts's exported interfaces verbatim.
+
+export interface AttentionItem {
+  type: 'overdue_task' | 'bid_due' | 'aging_receivable' | 'stale_rfi' | 'draft_payapp';
+  label: string;
+  sub: string;
+  projectId: string | null;
+  projectName: string | null;
+  itemId: string;
+  date: number;
+  severity: 'red' | 'amber';
+  balanceCents?: number;
+}
+
+export interface DashboardMoney {
+  outstandingCents: number;
+  contractTotalCents: number;
+  billedCents: number;
+  paidCents: number;
+  draftPayAppCount: number;
+  recentPayments: { id: string; amount: number; date: number; method: string | null; projectId: string; projectName: string }[];
+  trend: { month: string; paidCents: number }[];
+}
+
+export interface HappeningItem {
+  kind: 'activity' | 'mail';
+  id: string;
+  type?: string;
+  message: string;
+  username?: string | null;
+  createdAt: number;
+}
+
+export const getDashboardAttention = async (): Promise<AttentionItem[]> => {
+  const res = await fetchWithRetry('/api/dashboard/attention', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).items;
+};
+
+export const getDashboardMoney = async (): Promise<DashboardMoney> => {
+  const res = await fetchWithRetry('/api/dashboard/money', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getProjectHappenings = async (projectId: string, limit = 12): Promise<HappeningItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/happenings?limit=${limit}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).items;
+};
+
+// Same response shape as the project-scoped mail thread fetcher
+// (mailApi.projectThreads) — this is the customerId-filtered alternative of
+// the same GET /api/mail/project-threads endpoint.
+export const getCustomerThreads = async (customerId: string): Promise<ProjectThreadRow[]> => {
+  const res = await fetchWithRetry(`/api/mail/project-threads?customerId=${encodeURIComponent(customerId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
 };
