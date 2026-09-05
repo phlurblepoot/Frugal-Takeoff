@@ -34,6 +34,7 @@ import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
 import { FollowPill } from './components/FollowPill';
 import { ThemeWipe } from './components/shell/ThemeWipe';
+import { CelebrationOverlay } from './components/motion/Celebration';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -58,6 +59,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
               <AppShell appName={appName}>
                 <FollowPill />
                 <ThemeWipe />
+                <CelebrationOverlay />
                 <NotesOverlay />
                 <PageTransition>
                   <Outlet context={{ appName, logoUrl }} />

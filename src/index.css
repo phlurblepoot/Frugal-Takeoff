@@ -333,3 +333,49 @@ html.solid-surfaces body { background: var(--surface) !important; }
   transition: --wipe-r 0.6s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .theme-wipe-overlay.wipe-go { --wipe-r: 160vmax; }
+
+/* Celebration moments (Wave 3 Task 10): confetti burst on bid-won, soft
+   green pulse on payment/pay-app finalize. Fixed + pointer-events-none so
+   there is zero layout impact; z-[9000] sits below Toast's z-[10000] so
+   success toasts always read on top of the burst. */
+@keyframes celebration-confetti-fly {
+  0%   { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--r)); opacity: 0; }
+}
+.celebration-confetti {
+  position: fixed;
+  left: var(--confetti-x);
+  top: var(--confetti-y);
+  z-index: 9000;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+.celebration-confetti-piece {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  animation: celebration-confetti-fly 0.9s ease-out forwards;
+}
+@keyframes celebration-pulse-glow {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+  40%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4); }
+}
+.celebration-pulse {
+  position: fixed;
+  left: var(--pulse-x);
+  top: var(--pulse-y);
+  z-index: 9000;
+  pointer-events: none;
+  width: 300px;
+  height: 300px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, color-mix(in oklab, #10b981 55%, transparent) 0%, transparent 70%);
+  animation: celebration-pulse-glow 0.7s ease-out forwards;
+}
+.motion-reduce .celebration-confetti-piece { animation: none; opacity: 0; }
+.motion-reduce .celebration-pulse { animation: none; opacity: 0; }

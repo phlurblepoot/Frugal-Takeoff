@@ -33,7 +33,7 @@ export const ProjectStageControl: React.FC<{
   // so picking that stage is a no-op instead of a redundant write.
   const current = status ? normalizeProjectStatus(status) : undefined;
 
-  const pick = async (next: string) => {
+  const pick = async (next: string, e?: React.MouseEvent) => {
     setOpen(false);
     if (next === current || saving) return;
     setSaving(true);
@@ -42,6 +42,18 @@ export const ProjectStageControl: React.FC<{
       // fallback for legacy projects missing the field (server 409s if stale).
       const r = await patchProject(projectId, { version: version ?? 1, status: next });
       onChanged(r.version, r.status);
+      // Bid won: this is the one lifecycle transition worth celebrating.
+      // Never fires the other direction (in_progress -> bidding).
+      if (current === 'bidding' && next === 'in_progress') {
+        const rect = (e?.currentTarget as HTMLElement | undefined)?.getBoundingClientRect();
+        window.dispatchEvent(new CustomEvent('celebrate', {
+          detail: {
+            variant: 'confetti',
+            x: rect ? rect.left + rect.width / 2 : undefined,
+            y: rect ? rect.top + rect.height / 2 : undefined,
+          },
+        }));
+      }
       toast(`Stage set to ${PROJECT_STATUS_META[next]?.label ?? next}`, { type: 'success' });
     } catch (e) {
       if (e instanceof ConflictError) {
@@ -71,7 +83,7 @@ export const ProjectStageControl: React.FC<{
           {STAGE_OPTIONS.map(s => (
             <button
               key={s}
-              onClick={() => pick(s)}
+              onClick={(e) => pick(s, e)}
               className={`w-full px-3 py-1.5 text-left text-sm transition-colors hover:bg-hover ${
                 s === current ? 'font-medium text-ink' : 'text-ink-soft'
               }`}

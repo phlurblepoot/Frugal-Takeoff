@@ -197,6 +197,7 @@ export const AiaPayAppEditor: React.FC<{
     if (!data) return;
     try {
       await setPayApp(payAppId, { status: 'finalized' });
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse' } }));
       toast('Pay application finalized', { type: 'success' });
       load();
       onSaved();

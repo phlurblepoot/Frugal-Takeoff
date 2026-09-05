@@ -37,6 +37,31 @@ describe('ProjectStageControl', () => {
     expect(patchProject).toHaveBeenCalledWith('p1', { version: 3, status: 'in_progress' });
   });
 
+  it('dispatches a confetti celebration when a bid is won (bidding -> in_progress)', async () => {
+    patchProject.mockResolvedValue({ version: 4, status: 'in_progress' });
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderControl(vi.fn(), 'bidding');
+    fireEvent.click(screen.getByTitle('Change project stage'));
+    fireEvent.click(screen.getByRole('button', { name: 'In Progress' }));
+    await waitFor(() => expect(patchProject).toHaveBeenCalled());
+    const celebrateCall = dispatchSpy.mock.calls.find(([evt]) => (evt as CustomEvent).type === 'celebrate');
+    expect(celebrateCall).toBeDefined();
+    expect((celebrateCall![0] as CustomEvent).detail.variant).toBe('confetti');
+    dispatchSpy.mockRestore();
+  });
+
+  it('does not dispatch a celebration on the reverse transition (in_progress -> bidding)', async () => {
+    patchProject.mockResolvedValue({ version: 4, status: 'bidding' });
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    renderControl(vi.fn(), 'in_progress');
+    fireEvent.click(screen.getByTitle('Change project stage'));
+    fireEvent.click(screen.getByRole('button', { name: 'Bidding' }));
+    await waitFor(() => expect(patchProject).toHaveBeenCalled());
+    const celebrateCall = dispatchSpy.mock.calls.find(([evt]) => (evt as CustomEvent).type === 'celebrate');
+    expect(celebrateCall).toBeUndefined();
+    dispatchSpy.mockRestore();
+  });
+
   it('treats a legacy status as the stage it collapses to', () => {
     renderControl(vi.fn(), 'awarded');
     // The pill reads the collapsed stage, and re-picking it is a no-op write.
