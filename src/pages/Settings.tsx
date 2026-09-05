@@ -956,16 +956,18 @@ const PreferencesTab: React.FC = () => {
                 Frees GPU memory when idle. 0 = keep loaded.
               </p>
             </div>
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={aiIdleMinutes}
-              onChange={e => setAiIdleMinutes(e.target.value)}
-              onBlur={handleAiIdleBlur}
-              disabled={!aiStatus?.available}
-              className="w-24 py-1.5"
-            />
+            <div className="w-24 shrink-0">
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={aiIdleMinutes}
+                onChange={e => setAiIdleMinutes(e.target.value)}
+                onBlur={handleAiIdleBlur}
+                disabled={!aiStatus?.available}
+                className="py-1.5"
+              />
+            </div>
           </div>
         </div>
       </div>
