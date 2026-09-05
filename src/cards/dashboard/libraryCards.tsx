@@ -80,6 +80,7 @@ const ProjectHealthCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ w
       loading={loading}
       empty={!loading && active.length === 0}
       emptyTitle="No active projects."
+      emptyIllustration="checklist"
       flush
     >
       <ul className="divide-y divide-edge">
@@ -146,6 +147,7 @@ const ProposalsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width
       loading={loading}
       empty={!loading && visible.length === 0}
       emptyTitle="No proposals awaiting a response."
+      emptyIllustration="blueprint"
       flush
     >
       <ul className="divide-y divide-edge">
@@ -218,6 +220,7 @@ const PaymentsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width 
       loading={loading}
       empty={!loading && visible.length === 0}
       emptyTitle="No recent payments."
+      emptyIllustration="money"
       flush
     >
       <ul className="divide-y divide-edge">
@@ -278,6 +281,7 @@ const AgingCard: React.FC<{ width: CardWidth; ctx: CardContext }> = () => {
       loading={loading}
       empty={!loading && receivables.length === 0}
       emptyTitle="Nothing aging."
+      emptyIllustration="money"
     >
       <div className="grid grid-cols-3 gap-2">
         {TILES.map(t => (
@@ -344,6 +348,7 @@ const RecentDocsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ widt
       loading={loading}
       empty={!loading && visible.length === 0}
       emptyTitle="No documents yet."
+      emptyIllustration="blueprint"
       flush
     >
       <ul className="divide-y divide-edge">
@@ -386,6 +391,7 @@ const BidDeadlinesCard: React.FC<{ width: CardWidth; ctx: CardContext }> = () =>
       loading={loading}
       empty={!loading && upcoming.length === 0}
       emptyTitle="No upcoming deadlines."
+      emptyIllustration="checklist"
       flush
     >
       <ul className="divide-y divide-edge">

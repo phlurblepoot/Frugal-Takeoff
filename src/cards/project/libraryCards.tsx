@@ -140,7 +140,7 @@ const PayAppNudgeCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
   return (
     <CardShell
       title="Pay app nudge" icon={<Wallet size={13} />} loading={loading}
-      empty={!loading && !draft} emptyTitle="No draft pay apps"
+      empty={!loading && !draft} emptyTitle="No draft pay apps" emptyIllustration="money"
     >
       {draft && (
         <Link
@@ -256,7 +256,7 @@ const PhotoStripCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx 
   return (
     <CardShell
       title="Recent photos" icon={<ImageIcon size={13} />} loading={loading}
-      empty={!loading && photos.length === 0} emptyTitle="No issue or punch photos yet."
+      empty={!loading && photos.length === 0} emptyTitle="No issue or punch photos yet." emptyIllustration="photos"
       actions={<Link to={`/project/${projectId}/documents`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
     >
       <div className="grid grid-cols-4 gap-2">
@@ -295,7 +295,7 @@ const ChangeOrdersCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ct
   return (
     <CardShell
       title="Change orders" icon={<FileSignature size={13} />} loading={loading}
-      empty={!loading && (cos ?? []).length === 0} emptyTitle="No change orders yet."
+      empty={!loading && (cos ?? []).length === 0} emptyTitle="No change orders yet." emptyIllustration="money"
       actions={<Link to={`/project/${projectId}/billing`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
     >
       {cos && cos.length > 0 && (
@@ -351,7 +351,7 @@ const DailyLatestCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
   return (
     <CardShell
       title="Latest daily report" icon={<CloudSun size={13} />} loading={loading}
-      empty={!loading && !latest} emptyTitle="No daily reports yet."
+      empty={!loading && !latest} emptyTitle="No daily reports yet." emptyIllustration="blueprint"
       actions={<Link to={`/project/${projectId}/daily-reports`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
     >
       {latest && (
@@ -401,7 +401,7 @@ const MailThreadsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx
   return (
     <CardShell
       title="Mail" icon={<Mail size={13} />} loading={loading}
-      empty={!loading && visible.length === 0} emptyTitle="No email threads linked to this project."
+      empty={!loading && visible.length === 0} emptyTitle="No email threads linked to this project." emptyIllustration="inbox"
       actions={<Link to={`/project/${projectId}/mail`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
       flush
     >
@@ -547,7 +547,7 @@ const ProposalStatusCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ 
   return (
     <CardShell
       title="Proposal" icon={<FileSignature size={13} />} loading={loading}
-      empty={!loading && !latest} emptyTitle="No proposals yet."
+      empty={!loading && !latest} emptyTitle="No proposals yet." emptyIllustration="blueprint"
       actions={latest ? <Link to={`/project/${projectId}/proposal/${latest.id}`} className="text-xs font-medium text-accent-600 hover:underline">Open</Link> : undefined}
     >
       {latest && (
@@ -585,7 +585,7 @@ const DocsShortcutsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ c
   return (
     <CardShell
       title="Documents" icon={<FolderOpen size={13} />} loading={loading}
-      empty={!loading && visible.length === 0} emptyTitle="No documents yet."
+      empty={!loading && visible.length === 0} emptyTitle="No documents yet." emptyIllustration="blueprint"
       actions={<Link to={`/project/${projectId}/documents`} className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
       flush
     >

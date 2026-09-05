@@ -34,4 +34,23 @@ describe('CardShell', () => {
     expect(screen.queryByText('hello world')).not.toBeInTheDocument();
     expect(screen.getByText('Nothing needs attention')).toBeInTheDocument();
   });
+
+  it('renders the EmptyArt illustration matching emptyIllustration when empty', () => {
+    const { container } = render(
+      <CardShell title="Mail" empty emptyIllustration="inbox">
+        <div>hello world</div>
+      </CardShell>
+    );
+    const svg = container.querySelector('svg[data-kind="inbox"]');
+    expect(svg).toBeInTheDocument();
+  });
+
+  it('defaults the empty illustration to "clear" when emptyIllustration is unset', () => {
+    const { container } = render(
+      <CardShell title="Attention" empty emptyTitle="Nothing here">
+        <div>hello world</div>
+      </CardShell>
+    );
+    expect(container.querySelector('svg[data-kind="clear"]')).toBeInTheDocument();
+  });
 });

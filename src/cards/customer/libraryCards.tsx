@@ -74,6 +74,7 @@ const PaymentsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx })
     <CardShell
       title="Payments" icon={<Receipt size={13} />} loading={loading}
       empty={!loading && rows.length === 0} emptyTitle="No payments recorded yet." flush
+      emptyIllustration="money"
     >
       <ul className="divide-y divide-edge">
         {rows.map((row, i) => {
@@ -157,6 +158,7 @@ const TasksCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width, ct
       title="Tasks" icon={<CheckSquare size={13} />} loading={loading}
       actions={<ViewAllLink to={`/tasks?customerId=${customerId}`}>View all</ViewAllLink>}
       empty={!loading && items.length === 0} emptyTitle="No upcoming tasks." flush
+      emptyIllustration="checklist"
     >
       <ul className="divide-y divide-edge">
         {items.map(t => {
@@ -204,6 +206,7 @@ const NotesCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }) =>
       title="Notes" icon={<StickyNote size={13} />} loading={loading}
       actions={<ViewAllLink to={`/customers/${customerId}?tab=settings`}>Edit</ViewAllLink>}
       empty={!loading && !notes} emptyTitle="No notes yet."
+      emptyIllustration="checklist"
     >
       {notes && <p className="whitespace-pre-wrap text-sm text-ink">{notes}</p>}
     </CardShell>

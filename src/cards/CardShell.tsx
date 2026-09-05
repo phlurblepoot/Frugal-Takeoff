@@ -3,14 +3,14 @@
 import React from 'react';
 import { useSoftZoom } from '../hooks/useSoftZoom';
 import { Skeleton } from '../components/ui';
+import { EmptyArt } from '../components/illustrations/EmptyArt';
 import type { EmptyKind } from './types';
 
-// Interim empty-state body: title only, in the EmptyState icon-circle style
-// but without an illustration graphic — Task 12's EmptyArt wires real art per
-// EmptyKind. Kept private; CardShell owns rendering it.
-const CardEmpty: React.FC<{ title?: string; illustration?: EmptyKind }> = ({ title }) => (
+// Empty-state body: illustration + optional title. Kept private; CardShell
+// owns rendering it.
+const CardEmpty: React.FC<{ title?: string; illustration?: EmptyKind }> = ({ title, illustration }) => (
   <div className="flex h-full flex-col items-center justify-center px-4 py-6 text-center">
-    <div className="mb-3 size-10 rounded-full bg-sunken" aria-hidden="true" />
+    <EmptyArt kind={illustration ?? 'clear'} className="mb-2 h-16" />
     {title && <p className="text-sm font-medium text-ink-faint">{title}</p>}
   </div>
 );
@@ -22,7 +22,7 @@ export const CardShell: React.FC<{
   loading?: boolean;              // -> body replaced by 2 Skeleton rows
   empty?: boolean;                // -> body replaced by <CardEmpty>
   emptyTitle?: string;
-  emptyIllustration?: EmptyKind;  // Task 12 wires real art; until then icon circle
+  emptyIllustration?: EmptyKind;  // defaults to 'clear' when empty and unset
   flush?: boolean;                // p-0 body for row lists
   children: React.ReactNode;
 }> = ({ title, icon, actions, loading, empty, emptyTitle, emptyIllustration, flush, children }) => {

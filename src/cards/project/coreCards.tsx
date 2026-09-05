@@ -202,6 +202,7 @@ const HappeningsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx 
       loading={loading}
       empty={!loading && list.length === 0}
       emptyTitle="Nothing happening yet."
+      emptyIllustration="clear"
       flush
     >
       <ul className="divide-y divide-edge">

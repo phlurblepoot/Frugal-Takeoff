@@ -93,6 +93,7 @@ const AttentionCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width
       loading={loading}
       empty={!loading && list.length === 0}
       emptyTitle="Nothing needs you — enjoy it."
+      emptyIllustration="clear"
       flush
     >
       <ul className="divide-y divide-edge">
@@ -189,6 +190,7 @@ const DeckCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width }) =
       loading={loading}
       empty={empty}
       emptyTitle="Nothing on deck."
+      emptyIllustration="checklist"
       flush
     >
       <div>
@@ -251,6 +253,7 @@ const ActivityCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx })
       loading={loading}
       empty={!loading && list.length === 0}
       emptyTitle="No activity yet."
+      emptyIllustration="clear"
       flush
     >
       <ul className="divide-y divide-edge">

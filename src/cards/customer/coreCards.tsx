@@ -141,6 +141,7 @@ const ProjectsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx })
     <CardShell
       title="Their projects" icon={<FolderKanban size={13} />} loading={loading}
       empty={!loading && projects.length === 0} emptyTitle="No projects yet." flush
+      emptyIllustration="checklist"
     >
       <ul className="divide-y divide-edge">
         {projects.map(p => (
@@ -186,6 +187,7 @@ const CorrespondenceCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ 
     <CardShell
       title="Correspondence" icon={<Mail size={13} />} loading={loading}
       empty={!loading && visible.length === 0} emptyTitle="No email threads linked to this customer." flush
+      emptyIllustration="inbox"
     >
       <ul className="divide-y divide-edge">
         {visible.map(row => (
@@ -266,6 +268,7 @@ const AttentionCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }
     <CardShell
       title="Needs attention" icon={<AlertTriangle size={13} />} loading={loading}
       empty={!loading && attention.length === 0} emptyTitle="Nothing needs attention" flush
+      emptyIllustration="clear"
     >
       <ul className="divide-y divide-edge">
         {attention.map((item, i) => (
