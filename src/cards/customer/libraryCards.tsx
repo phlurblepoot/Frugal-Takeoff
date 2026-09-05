@@ -6,7 +6,7 @@
 // import lives there and not in registry.tsx.
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Receipt, ClipboardList, CheckSquare, StickyNote } from 'lucide-react';
+import { Receipt, ClipboardList, CheckSquare, StickyNote, ListTodo } from 'lucide-react';
 import {
   CustomerOverview, ProjectSummary, TaskListItem,
   getCustomerOverview, getProjectsSummary, getTasks,
@@ -136,6 +136,43 @@ const OpenItemsCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }
   );
 };
 
+// ── cu-open-tasks ────────────────────────────────────────────────────────
+// Restores the task-count tile the old (pre-card-system) Overview tab had —
+// a product note carried over from Wave 2 (Nathan noticed the count was
+// gone). Reads overview.taskCounts, which the server already computes
+// (customerStore.ts) — no new endpoint needed.
+const OpenTasksTile: React.FC<{ label: string; value: number; alert?: boolean }> = ({ label, value, alert }) => (
+  <div className="rounded-lg border border-edge p-3 text-center">
+    <div className={`text-xl font-bold ${alert && value > 0 ? 'text-red-600 dark:text-red-400' : 'text-ink'}`}>{value}</div>
+    <div className="text-[11px] text-ink-faint">{label}</div>
+  </div>
+);
+
+const OpenTasksCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ ctx }) => {
+  const [overview, setOverview] = useState<CustomerOverview | null>(null);
+  const { customerId } = ctx;
+
+  const load = () => {
+    if (!customerId) return;
+    getCustomerOverview(customerId).then(setOverview).catch(() => setOverview(null));
+  };
+  useLiveQuery(load, { types: ['task'] });
+
+  if (!customerId) return null;
+
+  const loading = overview === null;
+  const counts = overview?.taskCounts ?? { open: 0, overdue: 0 };
+
+  return (
+    <CardShell title="Open tasks" icon={<ListTodo size={13} />} loading={loading}>
+      <div className="grid grid-cols-2 gap-3">
+        <OpenTasksTile label="Open" value={counts.open} />
+        <OpenTasksTile label="Overdue" value={counts.overdue} alert />
+      </div>
+    </CardShell>
+  );
+};
+
 // ── cu-tasks ─────────────────────────────────────────────────────────────
 const TasksCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ width, ctx }) => {
   const [tasks, setTasks] = useState<TaskListItem[] | null>(null);
@@ -221,6 +258,10 @@ registerCards([
   {
     id: 'cu-open-items', title: 'Open items', icon: ClipboardList, page: 'customer',
     widths: [1, 2], defaultWidth: 1, Component: OpenItemsCard,
+  },
+  {
+    id: 'cu-open-tasks', title: 'Open tasks', icon: ListTodo, page: 'customer',
+    widths: [1], defaultWidth: 1, Component: OpenTasksCard,
   },
   {
     id: 'cu-tasks', title: 'Tasks', icon: CheckSquare, page: 'customer',

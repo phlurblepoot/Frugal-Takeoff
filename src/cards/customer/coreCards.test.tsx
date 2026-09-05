@@ -197,6 +197,11 @@ describe('cu-correspondence', () => {
     expect(screen.getByTestId('cu-mail-reply-t2')).toBeInTheDocument();
     expect(screen.queryByTestId('cu-mail-reply-t1')).not.toBeInTheDocument();
     expect(screen.queryByTestId('cu-mail-reply-t3')).not.toBeInTheDocument();
+
+    // Wave 3 Task 13: rows and the header's "View all" link fall back to the
+    // global /mail page — there's no per-customer thread route.
+    expect(screen.getByText('Newest').closest('a')).toHaveAttribute('href', '/mail');
+    expect(screen.getByRole('link', { name: 'View all' })).toHaveAttribute('href', '/mail');
   });
 
   it('does NOT flag a reply when inbound predates the earliest link (link-date floor, not bare lastInbound>lastOutbound)', async () => {

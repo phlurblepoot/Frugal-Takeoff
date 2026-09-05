@@ -65,6 +65,8 @@ describe('customer libraryCards registration', () => {
     expect(defFor('cu-payments')).toMatchObject({ page: 'customer', widths: [1, 2], defaultWidth: 1, adminOnly: true });
     expect(defFor('cu-open-items')).toMatchObject({ page: 'customer', widths: [1, 2], defaultWidth: 1 });
     expect(defFor('cu-open-items').adminOnly).toBeFalsy();
+    expect(defFor('cu-open-tasks')).toMatchObject({ page: 'customer', widths: [1], defaultWidth: 1 });
+    expect(defFor('cu-open-tasks').adminOnly).toBeFalsy();
     expect(defFor('cu-tasks')).toMatchObject({ page: 'customer', widths: [1, 2], defaultWidth: 1 });
     expect(defFor('cu-tasks').adminOnly).toBeFalsy();
     expect(defFor('cu-notes')).toMatchObject({ page: 'customer', widths: [1, 2], defaultWidth: 1 });
@@ -161,6 +163,35 @@ describe('cu-open-items', () => {
 
   it('renders nothing when ctx has no customerId', () => {
     const { container } = mount('cu-open-items', 1, { isAdmin: true });
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('cu-open-tasks', () => {
+  it('renders the open/overdue task-count tiles from overview.taskCounts', async () => {
+    getCustomerOverview.mockResolvedValue({
+      customer: baseCustomer, projects: [], attention: [], taskCounts: { open: 5, overdue: 2 },
+    });
+    mount('cu-open-tasks', 1);
+
+    expect(await screen.findByText('5')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('Open')).toBeInTheDocument();
+    expect(screen.getByText('Overdue')).toBeInTheDocument();
+  });
+
+  it('renders zero tiles (not the empty state) when nothing is open or overdue', async () => {
+    getCustomerOverview.mockResolvedValue({
+      customer: baseCustomer, projects: [], attention: [], taskCounts: { open: 0, overdue: 0 },
+    });
+    mount('cu-open-tasks', 1);
+
+    await screen.findByText('Open');
+    expect(screen.getAllByText('0')).toHaveLength(2);
+  });
+
+  it('renders nothing when ctx has no customerId', () => {
+    const { container } = mount('cu-open-tasks', 1, { isAdmin: true });
     expect(container).toBeEmptyDOMElement();
   });
 });

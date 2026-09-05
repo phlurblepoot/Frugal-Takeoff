@@ -1,7 +1,7 @@
 // src/cards/CardGrid.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
-import type { CardDef, CardLayout } from './types';
+import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
+import type { CardDef, CardLayout, CardLayoutEntry } from './types';
 
 const getUserPreferences = vi.fn(async (): Promise<Record<string, string>> => ({}));
 const saveUserPreferences = vi.fn(async (_p: Record<string, string>): Promise<void> => {});
@@ -11,7 +11,7 @@ vi.mock('../utils/store', async () => {
   return { ...actual, getUserPreferences, saveUserPreferences };
 });
 
-const { CardGrid } = await import('./CardGrid');
+const { CardGrid, reorderBefore, snapResizeWidth } = await import('./CardGrid');
 const { CARD_REGISTRY, registerCards, DEFAULT_LAYOUTS } = await import('./registry');
 
 // Three throwaway cards covering the width spectrum (brief: [1,2,3]/[1]/[1,2],
@@ -275,5 +275,270 @@ describe('CardGrid', () => {
     } finally {
       if (descriptor) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', descriptor);
     }
+  });
+});
+
+// ── Pure logic (Wave 3 Task 13) ───────────────────────────────────────────
+describe('reorderBefore (pure)', () => {
+  const cards: CardLayoutEntry[] = [{ id: 'a', width: 1 }, { id: 'b', width: 1 }, { id: 'c', width: 1 }];
+
+  it('moves the dragged card to just before the target', () => {
+    expect(reorderBefore('a', 'c', cards)).toEqual([
+      { id: 'b', width: 1 }, { id: 'a', width: 1 }, { id: 'c', width: 1 },
+    ]);
+  });
+
+  it('is a no-op (same array reference) when dragged and target are the same card', () => {
+    expect(reorderBefore('a', 'a', cards)).toBe(cards);
+  });
+
+  it('appends at the end when the target id is not found (e.g. removed mid-drag)', () => {
+    expect(reorderBefore('a', 'missing', cards)).toEqual([
+      { id: 'b', width: 1 }, { id: 'c', width: 1 }, { id: 'a', width: 1 },
+    ]);
+  });
+
+  it('returns the original array reference unchanged when the dragged id is not found', () => {
+    expect(reorderBefore('missing', 'b', cards)).toBe(cards);
+  });
+
+  it('does not mutate the input array', () => {
+    const copy = [...cards];
+    reorderBefore('a', 'c', cards);
+    expect(cards).toEqual(copy);
+  });
+});
+
+describe('snapResizeWidth (pure)', () => {
+  it('rounds the pointer offset to the nearest column and returns it directly when supported', () => {
+    expect(snapResizeWidth(150, 0, 92, [1, 2, 3])).toBe(2); // 150/92 ≈ 1.63 -> round 2
+  });
+
+  it('clamps a raw column count below 1 up to the minimum', () => {
+    expect(snapResizeWidth(-500, 0, 92, [1, 2, 3])).toBe(1);
+  });
+
+  it('snaps to the nearest supported width when the exact column count is unsupported (ties favor the smaller)', () => {
+    // raw = round(180/92) = 2, but only [1, 3] are supported — both are 1 away.
+    expect(snapResizeWidth(180, 0, 92, [1, 3])).toBe(1);
+  });
+
+  it('clamps a huge pointer offset to the maximum supported width', () => {
+    expect(snapResizeWidth(10_000, 0, 92, [1, 2, 3])).toBe(3);
+  });
+
+  it('accounts for the card being offset from the grid origin (cardLeft)', () => {
+    // Same raw math as the first case, just shifted: (250-100)/92 ≈ 1.63 -> 2.
+    expect(snapResizeWidth(250, 100, 92, [1, 2, 3])).toBe(2);
+  });
+});
+
+// ── Touch reorder (Wave 3 Task 13) ────────────────────────────────────────
+// jsdom emulation limits: there is no real hit-testing, so document.
+// elementFromPoint (unimplemented in jsdom) is stubbed per-test to report
+// whichever wrapper the scenario wants the pointer "over"; pointer geometry
+// (clientX/clientY) is carried by the event but never actually reflects
+// on-screen layout, so these tests exercise the state machine (armed timing,
+// tolerance-cancel, drop-before-target) rather than pixel-accurate hit
+// tracking — the e2e touch-reorder spec covers the real thing.
+describe('CardGrid touch reorder', () => {
+  const originalMaxTouchPoints = navigator.maxTouchPoints;
+  const originalElementFromPoint = document.elementFromPoint;
+
+  function mockTouchDevice() {
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: 5, configurable: true });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: originalMaxTouchPoints, configurable: true });
+    document.elementFromPoint = originalElementFromPoint;
+    vi.useRealTimers();
+  });
+
+  it('long-press arms move mode (lift class after ~500ms, not before), and drop-before-target persists', async () => {
+    localStorage.setItem('token', 'tok');
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+    const c = grid.querySelector('[data-card-id="card-c"]') as HTMLElement;
+    document.elementFromPoint = vi.fn(() => c);
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    // Not armed yet at t=0 — no lift class, and the grid isn't scroll-locked.
+    expect(a.className).not.toContain('scale-105');
+    expect(grid.style.touchAction).not.toBe('none');
+
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(a.className).toContain('scale-105');
+    expect(a.className).toContain('shadow-2xl');
+    expect(grid.style.touchAction).toBe('none');
+    vi.useRealTimers();
+
+    fireEvent.pointerMove(window, { clientX: 12, clientY: 12 });
+    fireEvent.pointerUp(window);
+
+    expect(wrapperIds()).toEqual(['card-b', 'card-a', 'card-c']);
+    expect(a.className).not.toContain('scale-105');
+    expect(grid.style.touchAction).not.toBe('none');
+    await waitFor(() => {
+      expect(saveUserPreferences).toHaveBeenCalledWith({
+        'cards-dashboard': JSON.stringify({
+          version: 1,
+          cards: [{ id: 'card-b', width: 1 }, { id: 'card-a', width: 1 }, { id: 'card-c', width: 1 }],
+        }),
+      });
+    });
+  });
+
+  it('a move past tolerance before the long-press fires cancels the gesture as a scroll, not a reorder', () => {
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }, { id: 'card-c', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    fireEvent.pointerMove(window, { clientX: 50, clientY: 10 }); // past the 10px tolerance
+    act(() => { vi.advanceTimersByTime(500); });
+
+    expect(a.className).not.toContain('scale-105');
+    expect(wrapperIds()).toEqual(['card-a', 'card-b', 'card-c']);
+  });
+
+  it('is inert for a mouse pointer even on a touch-capable device', () => {
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(500); });
+
+    expect(a.className).not.toContain('scale-105');
+  });
+
+  it('is inert outside Customize mode', () => {
+    mockTouchDevice();
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }, { id: 'card-b', width: 1 }] });
+    mount();
+    // Not editing.
+
+    const grid = screen.getByTestId('card-grid');
+    const a = grid.querySelector('[data-card-id="card-a"]') as HTMLElement;
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
+    act(() => { vi.advanceTimersByTime(500); });
+
+    expect(a.className).not.toContain('scale-105');
+  });
+
+  // NOTE on jsdom emulation limits: `isTouchDevice()`'s `'ontouchstart' in
+  // window` check is always true under jsdom (it defines the IDL handler
+  // property unconditionally, unlike a real non-touch browser), so a
+  // "resolves false" case can't be exercised here — the mouse-pointerType
+  // test above already covers the meaningful non-touch-input path, and real
+  // device detection is exercised by the e2e touch-reorder spec.
+});
+
+// ── Desktop edge resize (Wave 3 Task 13) ──────────────────────────────────
+describe('CardGrid edge resize', () => {
+  const originalGBCR = Element.prototype.getBoundingClientRect;
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalGBCR;
+  });
+
+  // Stubs getBoundingClientRect for the grid container and any card wrapper
+  // named in `cardLefts`, keyed by data-card-id — jsdom never lays anything
+  // out for real, so the resize handler's geometry reads need a fake.
+  function stubGeometry(cardLefts: Record<string, number>, gridWidth: number) {
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const blank = { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) };
+      if (this.getAttribute?.('data-testid') === 'card-grid') {
+        return { ...blank, left: 0, right: gridWidth, width: gridWidth } as DOMRect;
+      }
+      const cardId = this.getAttribute?.('data-card-id');
+      if (cardId && cardId in cardLefts) {
+        const left = cardLefts[cardId];
+        return { ...blank, left, right: left, x: left } as DOMRect;
+      }
+      return blank as DOMRect;
+    };
+  }
+
+  it('drag preview snaps to the nearest supported width and persists on release, without persisting mid-drag', async () => {
+    localStorage.setItem('token', 'tok');
+    // cols=3 (mockCols3 default from beforeEach); card-a supports [1, 2, 3].
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+    stubGeometry({ 'card-a': 0 }, 300); // colWidth = (300 - 2*12) / 3 = 92
+
+    const handle = screen.getByTestId('card-resize-card-a');
+    fireEvent.pointerDown(handle, { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: 150 }); // round(150/92) = 2
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:2');
+    expect(saveUserPreferences).not.toHaveBeenCalled();
+
+    fireEvent.pointerUp(window);
+    await waitFor(() => {
+      expect(saveUserPreferences).toHaveBeenCalledWith({
+        'cards-dashboard': JSON.stringify({ version: 1, cards: [{ id: 'card-a', width: 2 }] }),
+      });
+    });
+
+    // Further movement after release is not a resize.
+    fireEvent.pointerMove(window, { clientX: 1000 });
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:2');
+  });
+
+  it('keyboard arrows step through supported widths, clamped at both ends', () => {
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+
+    const handle = screen.getByTestId('card-resize-card-a');
+    expect(handle).toHaveAttribute('aria-valuenow', '1');
+    expect(handle).toHaveAttribute('aria-valuemin', '1');
+    expect(handle).toHaveAttribute('aria-valuemax', '3');
+
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:2');
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:3');
+    fireEvent.keyDown(handle, { key: 'ArrowRight' }); // clamped at max
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:3');
+
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:2');
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' });
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' }); // clamped at min
+    expect(screen.getByTestId('body-card-a')).toHaveTextContent('a:1');
+  });
+
+  it('renders no resize handle for a card with only one supported width', () => {
+    seed({ version: 1, cards: [{ id: 'card-b', width: 1 }] }); // card-b: widths=[1]
+    mount();
+    fireEvent.click(screen.getByTestId('cards-customize'));
+    expect(screen.queryByTestId('card-resize-card-b')).toBeNull();
+  });
+
+  it('resize handle is absent outside Customize mode', () => {
+    seed({ version: 1, cards: [{ id: 'card-a', width: 1 }] });
+    mount();
+    expect(screen.queryByTestId('card-resize-card-a')).toBeNull();
   });
 });

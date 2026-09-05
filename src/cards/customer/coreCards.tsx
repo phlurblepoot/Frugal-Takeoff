@@ -174,17 +174,20 @@ const CorrespondenceCard: React.FC<{ width: CardWidth; ctx: CardContext }> = ({ 
   return (
     <CardShell
       title="Correspondence" icon={<Mail size={13} />} loading={loading}
+      actions={<Link to="/mail" className="text-xs font-medium text-accent-600 hover:underline">View all</Link>}
       empty={!loading && visible.length === 0} emptyTitle="No email threads linked to this customer." flush
       emptyIllustration="inbox"
     >
       <ul className="divide-y divide-edge">
         {visible.map(row => (
-          <li key={row.threadKey} className="flex items-center justify-between gap-3 px-4 py-2">
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-ink">{row.subjectSnapshot || '(no subject)'}</span>
-              <span className="block truncate text-xs text-ink-faint">{timeAgo(new Date(row.lastActivity).getTime())}</span>
-            </span>
-            {threadNeedsReply(row) && <ReplyFlagChip data-testid={`cu-mail-reply-${row.threadKey}`} />}
+          <li key={row.threadKey}>
+            <Link to="/mail" className="flex items-center justify-between gap-3 px-4 py-2 transition-colors hover:bg-hover">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-ink">{row.subjectSnapshot || '(no subject)'}</span>
+                <span className="block truncate text-xs text-ink-faint">{timeAgo(new Date(row.lastActivity).getTime())}</span>
+              </span>
+              {threadNeedsReply(row) && <ReplyFlagChip data-testid={`cu-mail-reply-${row.threadKey}`} />}
+            </Link>
           </li>
         ))}
       </ul>

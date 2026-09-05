@@ -12,6 +12,42 @@ import { useCardLayout } from './useCardLayout';
 import { MASONRY_GAP_PX, MASONRY_ROW_PX, useMasonrySpan } from './useMasonrySpan';
 import { useReveal } from '../hooks/useReveal';
 
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE = 10;
+
+function isTouchDevice(): boolean {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+// Pure reorder logic shared by both the desktop HTML5 drag path and the
+// touch long-press path (Wave 3 Task 13, closing the spec §5.1 debt): moves
+// `draggedId` out of `cards` and reinserts it immediately before `targetId`
+// (or at the end if the target isn't found — e.g. it was removed mid-drag).
+export function reorderBefore(draggedId: string, targetId: string, cards: CardLayoutEntry[]): CardLayoutEntry[] {
+  if (draggedId === targetId) return cards;
+  const next = [...cards];
+  const fromIndex = next.findIndex(c => c.id === draggedId);
+  if (fromIndex === -1) return cards;
+  const [moved] = next.splice(fromIndex, 1);
+  const toIndex = next.findIndex(c => c.id === targetId);
+  // Reorder-before-target: the dragged card lands just ahead of whatever
+  // it was dropped on.
+  if (toIndex === -1) next.push(moved);
+  else next.splice(toIndex, 0, moved);
+  return next;
+}
+
+// Pure snap math for the desktop edge-drag resize handle (Wave 3 Task 13):
+// converts a pointer's absolute X into a supported CardWidth by measuring
+// how many column-widths past the card's left edge the pointer has
+// traveled, rounding to the nearest whole column, then snapping to whichever
+// width the card actually supports (cards don't support every integer —
+// e.g. widths=[1, 3] has no "2").
+export function snapResizeWidth(pointerX: number, cardLeft: number, colWidth: number, widths: CardWidth[]): CardWidth {
+  const raw = Math.max(1, Math.round((pointerX - cardLeft) / colWidth));
+  return widths.reduce((best, w) => (Math.abs(w - raw) < Math.abs(best - raw) ? w : best), widths[0]);
+}
+
 function computeCols(w1600: boolean, w1024: boolean, w640: boolean): number {
   if (w1600) return 4;
   if (w1024) return 3;
@@ -54,9 +90,9 @@ function useColumnCount(): number {
 
 // One grid item: owns the masonry-span measurement (a hook, so each card
 // needs its own component instance rather than being called inline from a
-// .map). Editing decorations (wiggle, drag handlers, width/remove overlay)
-// live on the outer wrapper exactly as before; only the card body itself
-// moves into the inner measured div.
+// .map). Editing decorations (wiggle, drag handlers, width/remove overlay,
+// resize handle) live on the outer wrapper exactly as before; only the card
+// body itself moves into the inner measured div.
 const CardGridItem: React.FC<{
   entry: CardLayoutEntry;
   def: CardDef;
@@ -64,12 +100,19 @@ const CardGridItem: React.FC<{
   editing: boolean;
   effectiveWidth: CardWidth;
   widths: CardWidth[];
+  armed: boolean;
   onDragStart: () => void;
   onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onCardPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
   onWidthChange: (w: CardWidth) => void;
   onRemove: () => void;
-}> = ({ entry, def, ctx, editing, effectiveWidth, widths, onDragStart, onDragOver, onDrop, onWidthChange, onRemove }) => {
+  onResizeStart: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onResizeKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+}> = ({
+  entry, def, ctx, editing, effectiveWidth, widths, armed,
+  onDragStart, onDragOver, onDrop, onCardPointerDown, onWidthChange, onRemove, onResizeStart, onResizeKeyDown,
+}) => {
   const { ref: measureRef, span } = useMasonrySpan<HTMLDivElement>();
   // Scroll reveal on the outer wrapper only (never the inner measured div —
   // see useMasonrySpan above). Skipped entirely while editing: wiggle and
@@ -87,8 +130,17 @@ const CardGridItem: React.FC<{
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDrop={onDrop}
+      onPointerDown={onCardPointerDown}
       className={
-        'relative' + (editing ? ' animate-[card-wiggle_.4s_ease-in-out_infinite_alternate]' : '')
+        'relative' +
+        (editing && !armed ? ' animate-[card-wiggle_.4s_ease-in-out_infinite_alternate]' : '') +
+        // Touch long-press lift (Wave 3 Task 13): scale + shadow on the
+        // OUTER wrapper only — never on the measureRef div below, which
+        // useMasonrySpan observes for its height. `transition` is a plain
+        // CSS transition, so reduced motion is handled for free by the
+        // global `.motion-reduce *` rule (zeroes transition-duration) rather
+        // than needing a special case here.
+        (armed ? ' z-20 scale-105 shadow-2xl transition duration-150' : '')
       }
       style={{
         gridColumn: `span ${effectiveWidth}`,
@@ -123,6 +175,26 @@ const CardGridItem: React.FC<{
           </button>
         </div>
       )}
+      {editing && widths.length > 1 && (
+        // Desktop edge resize (Wave 3 Task 13): a real separator so keyboard
+        // users get ←/→ parity with the drag, mirroring MailPage.tsx's pane
+        // handles. stopPropagation keeps a pointerdown here from also
+        // bubbling into onCardPointerDown above and arming a touch-reorder
+        // gesture on the same interaction.
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-label={`Resize ${def.title}`}
+          aria-orientation="vertical"
+          aria-valuenow={entry.width}
+          aria-valuemin={widths[0]}
+          aria-valuemax={widths[widths.length - 1]}
+          data-testid={`card-resize-${entry.id}`}
+          onPointerDown={e => { e.stopPropagation(); onResizeStart(e); }}
+          onKeyDown={onResizeKeyDown}
+          className="absolute inset-y-0 right-0 z-10 hidden w-1.5 cursor-col-resize bg-transparent transition-colors hover:bg-accent-500/40 focus-visible:bg-accent-500/60 focus-visible:outline-none lg:block"
+        />
+      )}
       <div ref={measureRef}>
         <def.Component width={effectiveWidth} ctx={ctx} />
       </div>
@@ -138,6 +210,7 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
   // dataTransfer) so drop handling doesn't depend on jsdom/browser
   // dataTransfer support.
   const dragId = useRef<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const available = cardsForPage(page, ctx);
   const byId = new Map(available.map(def => [def.id, def]));
@@ -154,6 +227,154 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
 
   const addCard = (id: string, defaultWidth: CardWidth) => {
     setLayout({ ...layout, cards: [...layout.cards, { id, width: defaultWidth }] });
+  };
+
+  // ── Touch reorder (Wave 3 Task 13, closes spec §5.1 debt) ───────────────
+  // Long-press (~500ms, longPressTimerRef idiom mirrored from
+  // DocumentsTable.tsx's touch context-menu) arms "move mode" on a card:
+  // `gestureId` is set immediately on pointerdown, `armed` flips true once
+  // the timer fires. A single pair of window-bound pointermove/up listeners
+  // — started once per gesture via the effect below — does double duty:
+  // before armed, a move past tolerance cancels the gesture as a scroll;
+  // once armed, it tracks which card wrapper the finger is over via
+  // elementFromPoint, and pointerup drops before that target using the same
+  // reorderBefore() the desktop HTML5 drag path uses.
+  const touchDevice = useState(isTouchDevice)[0];
+  const [gestureId, setGestureId] = useState<string | null>(null);
+  const [armed, setArmed] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverIdRef = useRef<string | null>(null);
+  // Mirrors state read inside the window-listener closures below, which are
+  // created once per gesture (effect dep [gestureId]) and would otherwise
+  // see stale `armed`/`layout` values from the moment the gesture started.
+  const armedRef = useRef(false);
+  armedRef.current = armed;
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+  useEffect(() => () => cancelLongPress(), []);
+
+  const handleCardPointerDown = (id: string) => (e: React.PointerEvent) => {
+    if (!editing || !touchDevice || e.pointerType !== 'touch') return;
+    pressStartRef.current = { x: e.clientX, y: e.clientY };
+    setArmed(false);
+    setGestureId(id);
+    cancelLongPress();
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      setArmed(true);
+    }, LONG_PRESS_MS);
+  };
+
+  useEffect(() => {
+    if (!gestureId) return;
+    const onMove = (e: PointerEvent) => {
+      if (!armedRef.current) {
+        const start = pressStartRef.current;
+        if (
+          start &&
+          (Math.abs(e.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE ||
+            Math.abs(e.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE)
+        ) {
+          // Moved too far before the long-press fired — this is a scroll,
+          // not a reorder gesture.
+          cancelLongPress();
+          setGestureId(null);
+        }
+        return;
+      }
+      e.preventDefault();
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const wrapper = (el as HTMLElement | null)?.closest('[data-card-id]');
+      hoverIdRef.current = wrapper?.getAttribute('data-card-id') ?? null;
+    };
+    const onUp = () => {
+      cancelLongPress();
+      if (armedRef.current) {
+        const targetId = hoverIdRef.current;
+        if (targetId && targetId !== gestureId) {
+          setLayout({ ...layoutRef.current, cards: reorderBefore(gestureId, targetId, layoutRef.current.cards) });
+        }
+      }
+      hoverIdRef.current = null;
+      setGestureId(null);
+      setArmed(false);
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gestureId]);
+
+  // ── Desktop edge resize (Wave 3 Task 13) ────────────────────────────────
+  // Dragging a card's right-edge handle previews a snapped width live (via
+  // `resize`/`previewWidth`) and persists it through the same setLayout path
+  // the [1][2][3] buttons use, on release. Window-bound pointer events +
+  // a ref mirroring the in-flight preview width, mirroring MailPage.tsx's
+  // pane-resize pattern (widthsRef anti-stale-closure).
+  const [resize, setResize] = useState<{ id: string; cardLeft: number; colWidth: number; widths: CardWidth[] } | null>(null);
+  const [previewWidth, setPreviewWidth] = useState<CardWidth | null>(null);
+  const previewWidthRef = useRef<CardWidth | null>(null);
+
+  useEffect(() => {
+    if (!resize) return;
+    const onMove = (e: PointerEvent) => {
+      const w = snapResizeWidth(e.clientX, resize.cardLeft, resize.colWidth, resize.widths);
+      previewWidthRef.current = w;
+      setPreviewWidth(w);
+    };
+    const onUp = () => {
+      if (previewWidthRef.current != null) {
+        updateEntry(resize.id, { width: previewWidthRef.current });
+      }
+      previewWidthRef.current = null;
+      setResize(null);
+      setPreviewWidth(null);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resize]);
+
+  const handleResizeStart = (entry: CardLayoutEntry, widths: CardWidth[]) => (e: React.PointerEvent) => {
+    if (!editing) return;
+    e.preventDefault();
+    const wrapper = (e.currentTarget as HTMLElement).closest('[data-card-id]') as HTMLElement | null;
+    const gridEl = gridRef.current;
+    if (!wrapper || !gridEl) return;
+    const gridRect = gridEl.getBoundingClientRect();
+    const cardRect = wrapper.getBoundingClientRect();
+    const colWidth = (gridRect.width - (cols - 1) * MASONRY_GAP_PX) / cols;
+    previewWidthRef.current = entry.width;
+    setPreviewWidth(entry.width);
+    setResize({ id: entry.id, cardLeft: cardRect.left, colWidth, widths });
+  };
+
+  const handleResizeKeyDown = (entry: CardLayoutEntry, widths: CardWidth[]) => (e: React.KeyboardEvent) => {
+    const dir = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const idx = widths.indexOf(entry.width);
+    const nextIdx = Math.min(widths.length - 1, Math.max(0, idx + dir));
+    updateEntry(entry.id, { width: widths[nextIdx] });
   };
 
   // Native drag events bubble regardless of a wrapper's own `draggable`
@@ -177,18 +398,7 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
     const draggedId = dragId.current;
     dragId.current = null;
     if (!draggedId || draggedId === targetId) return;
-
-    const cards = [...layout.cards];
-    const fromIndex = cards.findIndex(c => c.id === draggedId);
-    if (fromIndex === -1) return;
-    const [moved] = cards.splice(fromIndex, 1);
-    const toIndex = cards.findIndex(c => c.id === targetId);
-    // Reorder-before-target: the dragged card lands just ahead of whatever
-    // it was dropped on.
-    if (toIndex === -1) cards.push(moved);
-    else cards.splice(toIndex, 0, moved);
-
-    setLayout({ ...layout, cards });
+    setLayout({ ...layout, cards: reorderBefore(draggedId, targetId, layout.cards) });
   };
 
   return (
@@ -215,6 +425,7 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
       </div>
 
       <div
+        ref={gridRef}
         data-testid="card-grid"
         className="grid"
         style={{
@@ -231,13 +442,17 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
           gridAutoFlow: 'dense',
           columnGap: MASONRY_GAP_PX,
           rowGap: 0,
+          // Scroll suppression while a touch-reorder gesture is armed only —
+          // before arming, a finger drag is an ordinary scroll.
+          touchAction: armed ? 'none' : undefined,
         }}
       >
         {layout.cards.map(entry => {
           const def = byId.get(entry.id);
           if (!def) return null;
-          const effectiveWidth = Math.min(entry.width, cols) as CardWidth;
           const widths = [...def.widths].sort((a, b) => a - b);
+          const liveWidth = resize?.id === entry.id && previewWidth != null ? previewWidth : entry.width;
+          const effectiveWidth = Math.min(liveWidth, cols) as CardWidth;
 
           return (
             <CardGridItem
@@ -248,11 +463,15 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
               editing={editing}
               effectiveWidth={effectiveWidth}
               widths={widths}
+              armed={armed && gestureId === entry.id}
               onDragStart={handleDragStart(entry.id)}
               onDragOver={handleDragOver}
               onDrop={handleDrop(entry.id)}
+              onCardPointerDown={handleCardPointerDown(entry.id)}
               onWidthChange={w => updateEntry(entry.id, { width: w })}
               onRemove={() => removeCard(entry.id)}
+              onResizeStart={handleResizeStart(entry, widths)}
+              onResizeKeyDown={handleResizeKeyDown(entry, widths)}
             />
           );
         })}
