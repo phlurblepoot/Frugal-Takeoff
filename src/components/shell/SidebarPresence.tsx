@@ -10,9 +10,13 @@ import { useCollaboration } from '../../context/CollaborationContext';
 import { groupSessionsByUser, describeLocation } from '../../utils/presence';
 import { getProjectsSummary } from '../../utils/store';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
+import { useTheme } from '../../context/ThemeContext';
+import { useSoftZoom } from '../../hooks/useSoftZoom';
 
 export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) => {
   const { sessions, mySessionId, followedSessionId, setFollowedSessionId, updateUser } = useCollaboration();
+  const { reducedMotion } = useTheme();
+  const softZoomRef = useSoftZoom<HTMLButtonElement>();
   const [open, setOpen] = useState(false);
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
   const [color, setColor] = useState(() => localStorage.getItem('userColor') || '#6366f1');
@@ -61,10 +65,11 @@ export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) =
   return (
     <>
       <button
+        ref={softZoomRef}
         data-testid="sidebar-presence"
         onClick={() => setOpen(o => !o)}
         title={!expanded ? `${count} online` : undefined}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-ink-soft hover:bg-hover hover:text-ink transition-colors"
+        className="soft-zoom w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-ink-soft hover:bg-hover hover:text-ink transition-colors"
       >
         <span className="flex shrink-0 -space-x-2">
           {groups.slice(0, 3).map(g => (
@@ -88,10 +93,10 @@ export const SidebarPresence: React.FC<{ expanded: boolean }> = ({ expanded }) =
               <div className="fixed inset-0 z-[80]" onClick={() => setOpen(false)} />
               <motion.div
                 data-testid="presence-popover"
-                initial={{ opacity: 0, y: 8, scale: 0.97 }}
+                initial={reducedMotion ? false : { opacity: 0, y: 8, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.97 }}
-                transition={{ duration: 0.15 }}
+                exit={reducedMotion ? { opacity: 1 } : { opacity: 0, y: 8, scale: 0.97 }}
+                transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
                 className={`fixed bottom-24 z-[81] w-72 rounded-2xl border border-edge glass-panel shadow-xl overflow-hidden ${expanded ? 'left-2' : 'left-16'}`}
               >
                 <p className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">

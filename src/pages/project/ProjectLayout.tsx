@@ -63,7 +63,13 @@ export const ProjectLayout: React.FC = () => {
           {projectId && <ProjectTabBar projectId={projectId} isAdmin={isAdmin} />}
         </div>
       )}
-      <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />
+      {isCanvas ? (
+        <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />
+      ) : (
+        <div key={location.pathname} className="anim-tab-in">
+          <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />
+        </div>
+      )}
     </>
   );
 };

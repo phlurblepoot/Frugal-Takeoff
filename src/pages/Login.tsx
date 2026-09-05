@@ -2,9 +2,13 @@ import React, { useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { Lock, User, Loader2, FolderOpen } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useTheme } from '../context/ThemeContext';
+import { useSoftZoom } from '../hooks/useSoftZoom';
 
 export const Login: React.FC = () => {
   const { appName } = useOutletContext<{ appName: string; logoUrl: string }>();
+  const { reducedMotion } = useTheme();
+  const softZoomRef = useSoftZoom<HTMLDivElement>();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -46,10 +50,11 @@ export const Login: React.FC = () => {
   return (
     <div className="min-h-screen overflow-y-auto flex items-center justify-center p-4">
       <motion.div
-        initial={{ opacity: 0, y: 28, scale: 0.96 }}
+        ref={softZoomRef}
+        initial={reducedMotion ? false : { opacity: 0, y: 28, scale: 0.96 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-        className="glass-panel rounded-2xl border border-edge shadow-2xl w-full max-w-md"
+        className="glass-panel soft-zoom rounded-2xl border border-edge shadow-2xl w-full max-w-md"
       >
         <div className="p-8">
           {/* Branding */}

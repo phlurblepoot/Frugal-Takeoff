@@ -132,6 +132,11 @@ html.dark[data-daypart='evening'] body {
   background-attachment: fixed;
 }
 
+/* Solid Surfaces must flatten the scene no matter which daypart rule above
+   would otherwise win on specificity (fix C1) — placed last and !important
+   so it beats every combination, including html.dark[data-daypart=…] body. */
+html.solid-surfaces body { background: var(--surface) !important; }
+
 /* ── Glass scrollbars (rehaul spec §7.2) ─────────────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 24%, transparent) transparent; }
 *::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -164,6 +169,7 @@ html.dark[data-daypart='evening'] body {
   }
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .glass-panel { background: var(--raised); }
+    body { background: var(--surface); }
   }
 
   /* Soft fade at the top/bottom edges of scroll areas. */
@@ -177,9 +183,9 @@ html.dark[data-daypart='evening'] body {
 }
 @media (prefers-reduced-transparency: reduce) {
   .glass-panel { background: var(--raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body { background: var(--surface); }
 }
 .solid-surfaces .glass-panel { background: var(--raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
-.solid-surfaces body, html.solid-surfaces body { background: var(--surface); }
 
 /* ── Mobile / touch helpers (Phase 8) ─────────────────────────────────────
    no-scrollbar: hide the scrollbar on overflow-x-auto tab/toolbar rows.

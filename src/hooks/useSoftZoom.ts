@@ -22,6 +22,9 @@ export function useSoftZoom<T extends HTMLElement>() {
       el.style.setProperty('--soft-zoom', String(s));
     };
     apply();
+    // jsdom (test env) has no ResizeObserver — the initial apply() above still
+    // sets a sane scale, we just skip live re-measurement on resize.
+    if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     return () => ro.disconnect();
