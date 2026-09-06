@@ -313,6 +313,24 @@ describe('upsert-by-source uploads', () => {
     }
   });
 
+  // One email holds many peer attachments and the save modal ALWAYS sends a
+  // user-picked kind ('document', 'photo', custom:*) — none of which are
+  // multi-instance — so the second attachment used to land as a VERSION of the
+  // first. The mailMessage source link is provenance, not identity.
+  it('never upserts a mailMessage source, whatever kind was picked', () => {
+    for (const kind of ['document', 'photo', 'spreadsheet', 'other', 'custom:abc', 'email-attachment']) {
+      const src = { kind, sourceType: 'mailMessage', sourceId: 'msg-1' };
+      putBuffer(db, dir, `${kind}-1`, Buffer.from('a'), 'application/pdf', src);
+      const second = putBuffer(db, dir, `${kind}-2`, Buffer.from('b'), 'image/jpeg', src);
+      expect(second, `${kind} must not upsert`).toMatchObject({ id: `${kind}-2`, versioned: false, versionNumber: 1 });
+    }
+    // Every one is its own live document; nothing was archived as history.
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE parentFileId IS NOT NULL').get()).toEqual({ c: 0 });
+    expect((db.prepare(
+      "SELECT COUNT(*) c FROM files WHERE sourceType = 'mailMessage' AND sourceId = 'msg-1' AND parentFileId IS NULL"
+    ).get() as { c: number }).c).toBe(12);
+  });
+
   it('un-archives the document it versions', () => {
     putBuffer(db, dir, 'gen1', Buffer.from('v1'), 'application/pdf', SOURCE);
     setFileFlags(db, 'gen1', { archived: true });

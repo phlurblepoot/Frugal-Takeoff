@@ -4,6 +4,7 @@
 // what gets uploaded (including for files dropped onto the page), and a partial
 // failure leaves exactly the failures behind, so pressing Upload again retries
 // instead of duplicating the rows that already landed.
+import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { UploadDocumentsModal } from './UploadDocumentsModal';
@@ -147,5 +148,144 @@ describe('UploadDocumentsModal', () => {
 
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'document' } });
     expect(screen.getByLabelText('Project')).toBeEnabled();
+  });
+});
+
+describe('UploadDocumentsModal — remote items (mail attachments)', () => {
+  const remoteItems = [
+    { id: 'att1', name: 'invoice.pdf', size: 2048, mime: 'application/pdf' },
+    { id: 'att2', name: 'site.jpg', size: 1048576, mime: 'image/jpeg' },
+  ];
+
+  const renderRemote = (onUploadRemote = vi.fn().mockResolvedValue({ ok: 2, total: 2 })) => {
+    render(
+      <ToastProvider>
+        <UploadDocumentsModal
+          open
+          onClose={() => {}}
+          onUploaded={() => {}}
+          projects={[project]}
+          customers={[customer]}
+          customTypes={[]}
+          remoteItems={remoteItems}
+          onUploadRemote={onUploadRemote}
+        />
+      </ToastProvider>
+    );
+    return onUploadRemote;
+  };
+
+  it('seeds chips from remoteItems showing name + size, with no dropzone', () => {
+    renderRemote();
+    expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+    expect(screen.getByText('2.0 KB')).toBeInTheDocument();
+    expect(screen.getByText('site.jpg')).toBeInTheDocument();
+    expect(screen.getByText('1.0 MB')).toBeInTheDocument();
+    expect(screen.queryByText('Drag files here or click to browse')).not.toBeInTheDocument();
+    expect(screen.queryByText('+ Add more files')).not.toBeInTheDocument();
+  });
+
+  it('titles the modal and shows the mailbox-fetch footnote in remote mode', () => {
+    renderRemote();
+    expect(screen.getByText('Save attachments to Documents')).toBeInTheDocument();
+    expect(screen.getByText('Files are fetched from your mailbox only when you confirm.')).toBeInTheDocument();
+  });
+
+  it('shows a Save N file(s) button instead of Upload', () => {
+    renderRemote();
+    expect(screen.getByRole('button', { name: 'Save 2 files' })).toBeInTheDocument();
+  });
+
+  it('removing a chip and confirming calls onUploadRemote with only the remaining item + chosen kind/project', async () => {
+    const onUploadRemote = renderRemote();
+    fireEvent.click(screen.getByLabelText('Remove invoice.pdf'));
+    expect(screen.queryByText('invoice.pdf')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'photo' } });
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'proj1' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 file' }));
+    await waitFor(() => expect(onUploadRemote).toHaveBeenCalledTimes(1));
+    expect(onUploadRemote).toHaveBeenCalledWith([
+      { id: 'att2', name: 'site.jpg', kind: 'photo', projectId: 'proj1', customerId: 'cust1' },
+    ]);
+  });
+
+  it('does not call saveBinaryFile in remote mode', async () => {
+    const onUploadRemote = renderRemote();
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 files' }));
+    await waitFor(() => expect(onUploadRemote).toHaveBeenCalledTimes(1));
+    expect(saveBinaryFile).not.toHaveBeenCalled();
+  });
+
+  it('re-seeds entries to a narrower remoteItems array while staying open (partial-failure retry), keeping prior kind/project selections', async () => {
+    let currentRemoteItems = remoteItems;
+    const Wrapper: React.FC = () => {
+      const [items, setItems] = React.useState(currentRemoteItems);
+      const onUploadRemote = vi.fn().mockImplementation(async () => {
+        setItems([remoteItems[1]]); // only att2 remains, as if att1 succeeded
+        return { ok: 1, total: 2 };
+      });
+      (Wrapper as any).onUploadRemote = onUploadRemote;
+      return (
+        <ToastProvider>
+          <UploadDocumentsModal
+            open
+            onClose={() => {}}
+            onUploaded={() => {}}
+            projects={[project]}
+            customers={[customer]}
+            customTypes={[]}
+            remoteItems={items}
+            onUploadRemote={onUploadRemote}
+          />
+        </ToastProvider>
+      );
+    };
+    render(<Wrapper />);
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'photo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 files' }));
+
+    await waitFor(() => expect(screen.queryByText('invoice.pdf')).not.toBeInTheDocument());
+    expect(screen.getByText('site.jpg')).toBeInTheDocument();
+    // The Type selection made before the retry-narrowing is preserved.
+    expect((screen.getByLabelText('Type') as HTMLSelectElement).value).toBe('photo');
+  });
+
+  it('preserves a manually-overridden per-file kind through a partial-failure retry-narrowing re-seed', async () => {
+    // invoice.pdf's MIME-based guess is 'document' (kindFromMime), so
+    // overriding it to 'other' differs from what a fresh guess would produce —
+    // if the re-seed recomputed the guess instead of carrying the pick
+    // forward, this would revert to 'document'.
+    const Wrapper: React.FC = () => {
+      const [items, setItems] = React.useState(remoteItems);
+      const onUploadRemote = vi.fn().mockImplementation(async () => {
+        setItems([remoteItems[0]]); // only invoice.pdf survives, as if site.jpg succeeded
+        return { ok: 1, total: 2 };
+      });
+      return (
+        <ToastProvider>
+          <UploadDocumentsModal
+            open
+            onClose={() => {}}
+            onUploaded={() => {}}
+            projects={[project]}
+            customers={[customer]}
+            customTypes={[]}
+            remoteItems={items}
+            onUploadRemote={onUploadRemote}
+          />
+        </ToastProvider>
+      );
+    };
+    render(<Wrapper />);
+    fireEvent.click(screen.getByLabelText('Set type per file'));
+    fireEvent.change(screen.getByLabelText('Type for invoice.pdf'), { target: { value: 'other' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 files' }));
+
+    await waitFor(() => expect(screen.queryByText('site.jpg')).not.toBeInTheDocument());
+    expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+    expect((screen.getByLabelText('Type for invoice.pdf') as HTMLSelectElement).value).toBe('other');
   });
 });

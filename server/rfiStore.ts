@@ -5,6 +5,10 @@ import crypto from 'crypto';
 export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
+/** Nothing to accept — the RFI exists, its pending reply does not (already
+ *  accepted or dismissed, possibly by someone else a moment ago). A conflict,
+ *  not bad input, so the routes can answer 409 rather than 400. */
+export class NoPendingReplyError extends ValidationError {}
 
 export const RFI_STATUSES = ['open', 'sent', 'answered', 'closed'] as const;
 
@@ -21,16 +25,27 @@ function photoCount(db: Database.Database, rfiId: string): number {
   return (db.prepare('SELECT COUNT(*) c FROM rfi_photos WHERE rfiId = ?').get(rfiId) as any).c;
 }
 
+export interface RfiPendingReply {
+  threadKey: string; accountId: string; mailMessageId: string; messageIdHeader: string | null;
+  from: { addr: string; name?: string }; date: string; text: string;
+  attachments: Array<{ attId: string; name: string; mime: string; size: number }>; receivedAt: string;
+}
+
+function withPendingReply<T extends { pendingReplyJson?: string | null }>(row: T): Omit<T, 'pendingReplyJson'> & { pendingReply: RfiPendingReply | null } {
+  const { pendingReplyJson, ...rest } = row;
+  return { ...rest, pendingReply: pendingReplyJson ? JSON.parse(pendingReplyJson) : null };
+}
+
 export function getRfi(db: Database.Database, id: string): any | null {
   const row = db.prepare('SELECT * FROM rfis WHERE id = ?').get(id) as any;
   if (!row) return null;
   const photos = db.prepare('SELECT id, fileId, sortOrder FROM rfi_photos WHERE rfiId = ? ORDER BY sortOrder, createdAt').all(id);
-  return { ...row, photos };
+  return { ...withPendingReply(row), photos };
 }
 
 export function listRfis(db: Database.Database, projectId: string): any[] {
   const rows = db.prepare('SELECT * FROM rfis WHERE projectId = ? ORDER BY createdAt DESC, rowid DESC').all(projectId) as any[];
-  return rows.map(r => ({ ...r, photoCount: photoCount(db, r.id) }));
+  return rows.map(r => ({ ...withPendingReply(r), photoCount: photoCount(db, r.id) }));
 }
 
 export function createRfi(db: Database.Database, projectId: string, input: RfiInput): { id: string; number: number } {
@@ -154,4 +169,52 @@ export function setRfiResponse(db: Database.Database, id: string, input: { fileI
   });
   tx();
   return { status: nextStatus };
+}
+
+// Stashes an inbound email as a candidate reply for review, rather than
+// auto-answering the RFI. Only accepted while the RFI is 'sent' — once it's
+// answered/closed a later reply shouldn't silently overwrite the recorded
+// response. Each call replaces any prior pending reply (last inbound wins).
+//
+// version bumps (so live listeners refresh) but updatedAt does NOT — an email
+// merely arriving must not flip the generated-PDF "up to date" freshness chip
+// the way an actual edit to the RFI would (Nathan's ruling). Only accepting
+// the reply into the recorded response (acceptPendingReply → setRfiResponse)
+// is a real content change and bumps updatedAt.
+export function setPendingReply(db: Database.Database, id: string, reply: RfiPendingReply): boolean {
+  const row = db.prepare('SELECT status FROM rfis WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!row) throw new NotFoundError('RFI not found');
+  if (row.status !== 'sent') return false;
+  db.prepare('UPDATE rfis SET pendingReplyJson = ?, version = version + 1 WHERE id = ?')
+    .run(JSON.stringify(reply), id);
+  return true;
+}
+
+// Promotes the pending email reply into the recorded response, using the same
+// answered-transition semantics as setRfiResponse. Text defaults to the
+// pending reply's own text when the caller doesn't supply an override.
+export function acceptPendingReply(db: Database.Database, id: string, input: { text?: string; fileId?: string }): { status: string } {
+  const row = db.prepare('SELECT pendingReplyJson FROM rfis WHERE id = ?').get(id) as { pendingReplyJson: string | null } | undefined;
+  if (!row) throw new NotFoundError('RFI not found');
+  const pending: RfiPendingReply | null = row.pendingReplyJson ? JSON.parse(row.pendingReplyJson) : null;
+  if (!pending) throw new NoPendingReplyError('No pending reply to accept');
+  const hasText = typeof input.text === 'string' && input.text.trim() !== '';
+  const hasFile = typeof input.fileId === 'string' && input.fileId.trim() !== '';
+  const text = hasText ? input.text : pending.text;
+  let result: { status: string } = { status: '' };
+  const tx = db.transaction(() => {
+    result = setRfiResponse(db, id, { text, fileId: hasFile ? input.fileId : undefined });
+    db.prepare('UPDATE rfis SET responseSource = ?, responseMessageIdHeader = ?, pendingReplyJson = NULL, version = version + 1, updatedAt = ? WHERE id = ?')
+      .run('email', pending.messageIdHeader, Date.now(), id);
+  });
+  tx();
+  return result;
+}
+
+// Same freshness reasoning as setPendingReply: dismissing an unwanted email
+// is not a content edit, so version bumps but updatedAt is left alone.
+export function dismissPendingReply(db: Database.Database, id: string): void {
+  const row = db.prepare('SELECT id FROM rfis WHERE id = ?').get(id);
+  if (!row) throw new NotFoundError('RFI not found');
+  db.prepare('UPDATE rfis SET pendingReplyJson = NULL, version = version + 1 WHERE id = ?').run(id);
 }

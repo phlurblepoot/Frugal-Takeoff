@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   getRfis: vi.fn(),
   getRfi: vi.fn(),
   getDocumentsBySource: vi.fn(),
+  // Which RFI ids useReplyFlags reports as flagged — controlled per test.
+  replyFlags: new Set<string>(),
 }));
 
 vi.mock('../../context/CollaborationContext', () => ({
@@ -21,6 +23,9 @@ vi.mock('../../utils/store', async (importOriginal) => ({
 }));
 vi.mock('./ProjectLayout', () => ({
   useProjectOutlet: () => ({ summary: { name: 'P1', contractor: '' } }),
+}));
+vi.mock('../../hooks/useReplyFlags', () => ({
+  useReplyFlags: () => h.replyFlags,
 }));
 vi.mock('../documents/DocumentViewerModal', () => ({
   DocumentViewerModal: ({ row, onClose }: any) => (
@@ -86,9 +91,9 @@ const listRow = (over: Record<string, any> = {}) => ({
 
 const FILE = { id: 'f1', name: 'RFI-001.pdf', mime: 'application/pdf', size: 12, createdAt: 50, versionNumber: 1 };
 
-const mount = () =>
+const mount = (initialEntry = '/project/p1/rfis') =>
   render(
-    <MemoryRouter initialEntries={['/project/p1/rfis']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes><Route path="/project/:projectId/rfis" element={<ProjectRfis />} /></Routes>
     </MemoryRouter>
   );
@@ -99,6 +104,7 @@ describe('ProjectRfis — PDF status on rows', () => {
     h.getRfis.mockResolvedValue([listRow(), listRow({ id: 'r2', number: 2, title: 'Lintel size' })]);
     h.getDocumentsBySource.mockResolvedValue({ r1: FILE, r2: null });
     h.getRfi.mockResolvedValue(null);
+    h.replyFlags = new Set<string>();
   });
 
   it('shows a chip and an Open button only for the RFI that has a PDF', async () => {
@@ -112,6 +118,13 @@ describe('ProjectRfis — PDF status on rows', () => {
     await waitFor(() => expect(screen.getByText('PDF up to date')).toBeInTheDocument());
     expect(screen.queryByText('No PDF yet')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Open PDF' })).toHaveLength(1);
+  });
+
+  it('?open= opens that RFI\'s editor (CreateFromThreadMenu convention) and strips the param', async () => {
+    h.getRfi.mockResolvedValue({ ...listRow(), photos: [] });
+    mount('/project/p1/rfis?open=r1');
+    await screen.findByTestId('editor');
+    expect(h.getRfi).toHaveBeenCalledWith('r1');
   });
 
   it('marks the chip out of date when the RFI changed after the PDF was made', async () => {
@@ -152,5 +165,76 @@ describe('ProjectRfis — PDF status on rows', () => {
     h.getRfi.mockResolvedValue({ ...listRow({ version: 2 }), photos: [] });
     await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
     expect(mounts.count).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inbound email replies (mail client Plan 4): a row whose RFI has an emailed
+// answer waiting for review says so, so the list is the place you notice it.
+
+describe('ProjectRfis — pending reply chip', () => {
+  const PENDING = {
+    threadKey: 'thr-1', accountId: 'acct-1', mailMessageId: 'msg-1', messageIdHeader: 'm1@teg.com',
+    from: { addr: 'gc@teg.com', name: 'Mike Ruiz' }, date: '2026-08-28T10:00:00.000Z',
+    text: 'Corridor is 9 ft.', attachments: [], receivedAt: '2026-08-28T10:00:05.000Z',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getDocumentsBySource.mockResolvedValue({});
+    h.getRfi.mockResolvedValue(null);
+    h.replyFlags = new Set<string>();
+  });
+
+  it('flags only the sent RFI that has a reply waiting', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent', pendingReply: PENDING }),
+      listRow({ id: 'r2', number: 2, title: 'Lintel size', status: 'sent' }),
+    ]);
+    mount();
+
+    const chips = await screen.findAllByText('Reply');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveAttribute('title', 'Email reply waiting for review');
+  });
+
+  // The status is the authority: a pendingReply row can outlive an
+  // out-of-band status change, and a chip on an answered RFI is a lie.
+  it('drops the chip once the RFI has moved past sent', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'answered', pendingReply: PENDING }),
+    ]);
+    mount();
+    await screen.findByText('Header detail');
+    expect(screen.queryByText('Reply')).toBeNull();
+  });
+
+  // Both signals (pendingReply and the generic mail-thread reply flag) can be
+  // true for the same RFI at once — the row must still show exactly one chip.
+  it('does not double-chip an RFI that has both a pendingReply and a reply flag', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent', pendingReply: PENDING }),
+    ]);
+    h.replyFlags = new Set(['r1']);
+    mount();
+
+    const chips = await screen.findAllByText('Reply');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveAttribute('title', 'Email reply waiting for review');
+  });
+
+  // No pendingReply (say, the row hasn't refreshed that field yet, or the
+  // reply came in outside the pendingReply flow) but the generic reply-flags
+  // endpoint says the linked thread got a reply — the plain flag chip covers it.
+  it('shows the plain reply-flag chip when flagged but there is no pendingReply', async () => {
+    h.getRfis.mockResolvedValue([
+      listRow({ id: 'r1', number: 1, title: 'Header detail', status: 'sent' }),
+    ]);
+    h.replyFlags = new Set(['r1']);
+    mount();
+
+    const chip = await screen.findByTestId('rfi-reply-flag-r1');
+    expect(chip).toHaveTextContent('Reply');
+    expect(chip).toHaveAttribute('title', 'The linked email thread has a new reply');
   });
 });

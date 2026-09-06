@@ -63,6 +63,11 @@ export const SYSTEM_KINDS = [
 export const MULTI_INSTANCE_KINDS = [
   'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
   'rfi-photo', 'proposal-photo', 'plan-source', 'daily-report-photo',
+  // Several attachments saved from one email message share a source triple
+  // (sourceType='mailMessage', sourceId=<messageId>) — spec §3.2. The kind
+  // alone only covers the default; CONTAINER_SOURCE_TYPES below is what makes
+  // a user-picked kind ('document', 'photo', custom:*) behave the same way.
+  'email-attachment',
 ] as const;
 
 // Kinds a person can pick in the upload popup — the only ones a file may be
@@ -146,12 +151,24 @@ function upsertRow(
   );
 }
 
+// Source types whose id is a CONTAINER of peer documents rather than the
+// identity of one document. An email message holds many attachments, and a
+// person saving them picks a type for each ("document", "photo", a custom
+// type) — so several of them legitimately share the whole
+// (sourceType, sourceId, kind) triple without being versions of each other.
+// The link exists for provenance ("this came out of that email"), never for
+// identity, so these never upsert-by-source no matter which kind was picked.
+// Contrast an invoice, whose (invoice, <id>, 'invoice') triple names exactly
+// one document that regenerating should version.
+const CONTAINER_SOURCE_TYPES = ['mailMessage'] as const;
+
 // The live document standing for (sourceType, sourceId, kind), if any. Only
 // live rows qualify: version history hangs off a parentFileId and must never
 // be picked up as an upsert target. Multi-instance kinds never match — an
 // entity's second photo is another photo, not a new version of the first.
 function findLiveBySource(db: Database.Database, opts: PutOpts): string | null {
   if (!opts.sourceType || !opts.sourceId || !opts.kind) return null;
+  if ((CONTAINER_SOURCE_TYPES as readonly string[]).includes(opts.sourceType)) return null;
   if ((MULTI_INSTANCE_KINDS as readonly string[]).includes(opts.kind)) return null;
   const row = db.prepare(`
     SELECT id FROM files

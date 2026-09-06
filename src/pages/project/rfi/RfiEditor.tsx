@@ -1,16 +1,20 @@
 // src/pages/project/rfi/RfiEditor.tsx
-import React, { useEffect, useState } from 'react';
-import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, sendRfi, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, fetchFileBlob } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Rfi, saveRfi, getRfi, setRfiStatus, addRfiPhoto, removeRfiPhoto, setRfiResponse, acceptRfiPendingReply, sendRfi, getSettings, fetchFileBlob } from '../../../utils/store';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { RfiStatusPill, RFI_STATUS_META } from '../../../components/ui/RfiStatusPill';
+import { PendingReplyBanner } from './PendingReplyBanner';
+import { useMailAccounts } from '../../mail/useMailAccounts';
+import { useItemThreadLinks } from '../../../hooks/useItemThreadLinks';
 import { buildRfiPdf } from './rfiPdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
 
@@ -34,6 +38,32 @@ export const RfiEditor: React.FC<{
   const [responseNeededBy, setResponseNeededBy] = useState(rfi.responseNeededBy ?? '');
   const [responseDraft, setResponseDraft] = useState(rfi.responseText ?? '');
   const [saving, setSaving] = useState(false);
+  // Set when the draft below came from the emailed reply: the same Save then
+  // routes to the accept endpoint, so accepting the reply and editing its text
+  // stay one action (and the pending reply is never left behind).
+  const [acceptFromEmail, setAcceptFromEmail] = useState(false);
+  const navigate = useNavigate();
+
+  // An emailed reply waiting for review. Gated on the status as well as the
+  // row: a pendingReply can outlive an out-of-band status change.
+  const pending = rfi.status === 'sent' ? rfi.pendingReply ?? null : null;
+
+  // Can THIS user open the conversation? pendingReply.accountId is the
+  // receiving user's mailbox, and the mail routes 403/404 for anyone else. The
+  // cheap exact answer is "do I own that mailbox"; useItemThreadLinks.myThread
+  // (GET /api/mail/resolve-thread) is the fallback for a thread that also sits
+  // in another of my mailboxes, or under a different threadKey there.
+  const { accounts } = useMailAccounts({ enabled: !!pending });
+  const threads = useItemThreadLinks(pending ? 'rfi' : undefined, pending ? rfi.id : undefined);
+  const ownedAccountId = pending && accounts.some(a => a.id === pending.accountId) ? pending.accountId : null;
+  const threadAccountId = ownedAccountId
+    ?? (pending && threads.myThread?.threadKey === pending.threadKey ? threads.myThread.accountId : null);
+  const openPendingThread = () => {
+    if (!pending || !threadAccountId) return;
+    // `_` is the mail page's "no folder filter" — a link records the thread,
+    // not the folder it was filed in.
+    navigate(`/mail/${encodeURIComponent(threadAccountId)}/_/${encodeURIComponent(pending.threadKey)}`);
+  };
 
   const padded = String(rfi.number).padStart(3, '0');
   // One name for the stored document and the email attachment — they upsert
@@ -65,44 +95,7 @@ export const RfiEditor: React.FC<{
   });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getSmtpSettings().catch(() => ({})),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('rfi', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('rfi', projectId);
 
   const dropPhoto = async (fileId: string) => {
     try { await removeRfiPhoto(rfi.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
@@ -120,9 +113,34 @@ export const RfiEditor: React.FC<{
     } catch { toast('Failed to attach response', { type: 'error' }); }
   };
 
+  // One writer for the response text so every path (this button, the main
+  // Save) agrees on WHICH endpoint records it: accepting the emailed reply also
+  // clears the pending row and stamps the response as email-sourced, so a
+  // plain setRfiResponse here would leave the banner up over a recorded answer.
+  const persistResponseText = async (text: string) => {
+    if (!acceptFromEmail) { await setRfiResponse(rfi.id, { text }); return; }
+    try {
+      await acceptRfiPendingReply(rfi.id, { text });
+    } catch (e) {
+      if (!(e instanceof Error && e.name === 'NoPendingReplyError')) throw e;
+      // Someone else accepted or dismissed the reply while this draft was open.
+      // The text on screen is still what the user means to record, and there is
+      // no pending row left to clear — so record it the ordinary way rather
+      // than making them retype it into a failed save.
+      toast('That email reply was already handled — saving your text as the response', { type: 'warning' });
+      await setRfiResponse(rfi.id, { text });
+    }
+    setAcceptFromEmail(false);
+  };
+
   const saveResponseText = async () => {
-    try { await setRfiResponse(rfi.id, { text: responseDraft.trim() }); toast('Response saved', { type: 'success' }); onSaved(); }
-    catch { toast('Failed to save response', { type: 'error' }); }
+    try { await persistResponseText(responseDraft.trim()); toast('Response saved', { type: 'success' }); onSaved(); }
+    catch {
+      toast('Failed to save response', { type: 'error' });
+      // Refresh the record without remounting: the typed draft is the only copy
+      // of the user's work, and a re-key would reinitialise it from the server.
+      onSaved({ keepMounted: true });
+    }
   };
   const downloadResponseFile = async () => {
     if (!rfi.responseFileId) return;
@@ -186,6 +204,9 @@ export const RfiEditor: React.FC<{
     // tell a refused save from a successful one.
     if (!title.trim()) { toast('A title is required', { type: 'warning' }); throw new Error('A title is required'); }
     setSaving(true);
+    // Set when the response text could not be stored: the draft is then the
+    // only copy of it, so the refresh below must not re-key this editor.
+    let keepDraft = false;
     try {
       await saveRfi(rfi.id, {
         ...rfi,
@@ -195,12 +216,21 @@ export const RfiEditor: React.FC<{
       // Save also persists a typed-but-unsaved response, so switching status,
       // uploading a photo, etc. right after Save never loses the draft.
       if (responseDirty && responseDraft.trim()) {
-        await setRfiResponse(rfi.id, { text: responseDraft.trim() });
+        try {
+          await persistResponseText(responseDraft.trim());
+        } catch {
+          // The RFI itself saved — only the response write failed. Calling the
+          // whole thing a failure would send the user back to redo work that is
+          // already stored, so report the part that didn't land and keep the
+          // draft on screen.
+          toast('The RFI saved, but the response text did not', { type: 'warning' });
+          keepDraft = true;
+        }
       }
       toast('RFI saved', { type: 'success' });
       // A "Keep mine" save adopted a foreign version number; only a remount
       // clears it, otherwise the next save would post a stale version.
-      onSaved({ keepMounted: opts?.keepMounted === true && collab.keepMineVersion === null });
+      onSaved({ keepMounted: (opts?.keepMounted === true || keepDraft) && collab.keepMineVersion === null });
     } catch (e) {
       toast(e instanceof Error && e.name === 'ConflictError' ? 'RFI changed elsewhere — reopen it' : 'Save failed', { type: 'error' });
       throw e;
@@ -237,6 +267,7 @@ export const RfiEditor: React.FC<{
             updatedAt={rfi.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send RFI',
                 defaultTo: emailDefaults.defaultTo || undefined,
@@ -247,13 +278,11 @@ export const RfiEditor: React.FC<{
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },
-              sendFn: async (fileId, m) => {
-                await sendRfi(rfi.id, {
-                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                  fileId, attachmentFileIds: m.attachmentFileIds,
-                });
+              sendFn: async (fileId, req) => {
+                const result = await sendRfi(rfi.id, { ...itemSendPayload(req), fileId });
                 // The send stamps the RFI 'sent' server-side.
                 onSaved({ keepMounted: true });
+                return result;
               },
             }}
           />
@@ -263,6 +292,30 @@ export const RfiEditor: React.FC<{
       </>}
     >
       <EditPresenceBanner state={collab} />
+      {pending && (
+        <PendingReplyBanner
+          rfi={rfi}
+          projectId={projectId}
+          canOpenThread={!!threadAccountId}
+          // Narrower than canOpenThread on purpose: the attachment save reads
+          // the message out of pendingReply.accountId specifically, so the
+          // thread-link fallback mailbox above does not qualify.
+          ownsMailbox={!!ownedAccountId}
+          onOpenThread={openPendingThread}
+          onUseAsResponse={text => { setResponseDraft(text); setAcceptFromEmail(true); }}
+          // The draft only counts as "this reply's text" once Use as response
+          // put it there — otherwise the banner would attribute a hand-typed
+          // note to the email.
+          draftText={acceptFromEmail ? responseDraft : null}
+          // keepMounted: both refreshes only change fields this editor reads
+          // from props (pendingReply, responseFileId, status) — remounting
+          // would throw away anything typed into the form first.
+          onDismissed={() => onSaved({ keepMounted: true })}
+          // The banner accepted on our behalf (text + file in one call), so the
+          // pending row is gone and this editor must stop trying to accept.
+          onAccepted={() => { setAcceptFromEmail(false); onSaved({ keepMounted: true }); }}
+        />
+      )}
       <div className="mb-3 flex items-center gap-2">
         <button onClick={cycleStatus} title="Click to advance status"><RfiStatusPill status={rfi.status} /></button>
         <span className="text-xs text-ink-faint">{Object.values(RFI_STATUS_META).map(m => m.label).join(' → ')}</span>

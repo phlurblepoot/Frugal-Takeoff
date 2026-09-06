@@ -81,9 +81,9 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
   navigate,
 }) => {
   return (
-          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-            <div className="p-4 md:p-6 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50 dark:bg-slate-800/50">
-              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Takeoffs Inventory</h2>
+          <div className="bg-raised rounded-xl border border-edge overflow-hidden shadow-sm">
+            <div className="p-4 md:p-6 border-b border-edge flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-sunken/50">
+              <h2 className="text-xl font-bold text-ink">Takeoffs Inventory</h2>
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 {selectedTakeoffIds.size > 0 && (
                   <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -92,7 +92,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       value={highlightQuality}
                       onChange={e => setHighlightQuality(e.target.value as HighlightQuality)}
                       title="Blueprint print quality"
-                      className="text-xs px-2 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 dark:text-white focus:ring-1 focus:ring-accent-500 outline-none transition-colors"
+                      className="text-xs px-2 py-2 rounded-lg border border-edge-strong bg-raised text-ink focus:ring-1 focus:ring-accent-500 outline-none transition-colors"
                     >
                       {(Object.entries(HIGHLIGHT_QUALITY_PRESETS) as [HighlightQuality, { label: string }][]).map(([k, v]) => (
                         <option key={k} value={k}>{v.label}</option>
@@ -133,7 +133,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                   {project.takeoffs.length > 0 && (
                     <button
                       onClick={() => setShowDeleteAllConfirm(true)}
-                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                      className="p-2 text-ink-faint hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
                       title="Delete All Takeoffs"
                     >
                       <Trash2 size={20} />
@@ -154,11 +154,11 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
             <div className="hidden md:block overflow-x-auto">
               <table data-testid="takeoffs-table" className="w-full border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 dark:bg-slate-800 text-left text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest border-b border-slate-200 dark:border-slate-700">
+                  <tr className="bg-sunken text-left text-[10px] font-bold text-ink-soft uppercase tracking-widest border-b border-edge">
                     <th className="px-6 py-4 w-10">
                       <input
                         type="checkbox"
-                        className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                        className="rounded border-edge-strong text-accent-600 focus:ring-accent-500"
                         checked={selectedTakeoffIds.size === project.takeoffs.length && project.takeoffs.length > 0}
                         onChange={(e) => {
                           if (e.target.checked) {
@@ -177,7 +177,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                     <th className="px-6 py-4 w-24"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                <tbody className="divide-y divide-edge">
                   {(() => {
                     const totals = getTakeoffTotals();
                     const packageOrder: string[] = [];
@@ -199,11 +199,11 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       const costDetails = calculateTakeoffCostDetails(takeoff, takeoff.totalRealValue);
                       return (
                         <React.Fragment key={takeoff.id}>
-                          <tr data-testid="takeoff-row" className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                          <tr data-testid="takeoff-row" className="hover:bg-hover transition-colors group border-l-4" style={{ borderLeftColor: takeoff.color }}>
                             <td className="px-6 py-4">
                               <input
                                 type="checkbox"
-                                className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                                className="rounded border-edge-strong text-accent-600 focus:ring-accent-500"
                                 checked={selectedTakeoffIds.has(takeoff.id)}
                                 onChange={() => toggleTakeoffSelection(takeoff.id)}
                               />
@@ -211,23 +211,23 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleTakeoffExpanded(takeoff.id)}>
                                 <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
-                                  <ChevronRight size={16} className="text-slate-400" />
+                                  <ChevronRight size={16} className="text-ink-faint" />
                                 </div>
                                 <div className="w-4 h-4 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                                <span className="font-semibold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
+                                <span className="font-semibold text-ink">{takeoff.name}</span>
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 capitalize font-medium">
+                            <td className="px-6 py-4 text-sm text-ink-soft capitalize font-medium">
                               {takeoff.type}
                             </td>
-                            <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-slate-100">
+                            <td className="px-6 py-4 text-right font-bold text-ink">
                               {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                             </td>
-                            <td className="px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
+                            <td className="px-6 py-4 text-right text-sm text-ink-soft font-medium">
                               {takeoff.isAdvancedCost ? (
                                 <div className="flex flex-col items-end">
                                   <span className="text-accent-600 dark:text-accent-400 font-bold">${(totalCost / (takeoff.totalRealValue || 1)).toFixed(2)}</span>
-                                  <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
+                                  <span className="text-[10px] text-ink-faint uppercase">Avg / Unit</span>
                                 </div>
                               ) : (
                                 takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
@@ -238,7 +238,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                 <span>{totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}</span>
                                 {takeoff.isAdvancedCost && costDetails.map((d, i) => (
                                   d.quantity !== undefined && d.quantity > 0 && (
-                                    <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                                    <span key={i} className="text-[10px] text-ink-soft font-normal">
                                       {d.quantity.toFixed(2)} {d.quantityUnit || 'units'} of {d.name}
                                     </span>
                                   )
@@ -250,7 +250,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                 <button
                                   data-testid="btn-edit-takeoff"
                                   onClick={() => handleEditTakeoff(takeoff)}
-                                  className="text-slate-400 hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
+                                  className="text-ink-faint hover:text-accent-600 p-2 rounded-lg hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors"
                                   title="Edit Takeoff"
                                 >
                                   <Edit2 size={16} />
@@ -258,7 +258,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                 <button
                                   data-testid="btn-delete-takeoff"
                                   onClick={() => handleDeleteTakeoff(takeoff.id)}
-                                  className="text-slate-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+                                  className="text-ink-faint hover:text-red-600 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
                                   title="Delete Takeoff"
                                 >
                                   <Trash2 size={16} />
@@ -268,8 +268,8 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                           </tr>
                           {expandedTakeoffs[takeoff.id] && (
                             <tr>
-                              <td colSpan={11} className="px-0 py-0 bg-slate-50/30 dark:bg-slate-800/30">
-                                <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-slate-100 dark:divide-slate-700">
+                              <td colSpan={11} className="px-0 py-0 bg-sunken/30">
+                                <div className="border-l-4 border-accent-500/20 ml-6 my-2 divide-y divide-edge">
                                   {(() => {
                                     return takeoff.pageBreakdown.map(pb => {
                                       const pageKey = `${takeoff.id}__${pb.pageId}`;
@@ -278,16 +278,16 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                       const pageCostDetails = allocateSubsetDetails(takeoff, pb.realValue);
                                       return (
                                         <div key={pb.pageId}>
-                                          <div className="py-3 pl-8 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start hover:bg-white dark:hover:bg-slate-800 transition-colors">
+                                          <div className="py-3 pl-8 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start hover:bg-hover transition-colors">
                                             <div className="flex items-center gap-2 min-w-0">
                                               <button
                                                 type="button"
                                                 onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
-                                                className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+                                                className="p-0.5 rounded hover:bg-hover"
                                                 title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
                                               >
                                                 <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
-                                                  <ChevronRight size={14} className="text-slate-400" />
+                                                  <ChevronRight size={14} className="text-ink-faint" />
                                                 </div>
                                               </button>
                                               <Link
@@ -295,18 +295,18 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                                 state={{ pageIds: takeoff.pageBreakdown.map(p => p.pageId) }}
                                                 className="text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 font-semibold flex items-center gap-2 min-w-0"
                                               >
-                                                <FileImage size={14} className="text-slate-400 shrink-0" />
+                                                <FileImage size={14} className="text-ink-faint shrink-0" />
                                                 <span className="truncate">{pb.pageName}</span>
                                               </Link>
                                             </div>
-                                            <div className="text-right text-sm font-bold text-slate-700 dark:text-slate-300">
+                                            <div className="text-right text-sm font-bold text-ink">
                                               {pb.realValue > 0 ? formatRealValue(pb.realValue, takeoff.type as 'length' | 'area' | 'count', pb.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                                             </div>
-                                            <div className="text-right text-sm text-slate-600 dark:text-slate-400 font-medium">
+                                            <div className="text-right text-sm text-ink-soft font-medium">
                                               {takeoff.isAdvancedCost ? (
                                                 <div className="flex flex-col items-end">
                                                   <span className="text-accent-600 dark:text-accent-400 font-semibold">${(pageTotalCost / (pb.realValue || 1)).toFixed(2)}</span>
-                                                  <span className="text-[10px] text-slate-400 uppercase">Avg / Unit</span>
+                                                  <span className="text-[10px] text-ink-faint uppercase">Avg / Unit</span>
                                                 </div>
                                               ) : (
                                                 takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
@@ -318,7 +318,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                                   {pageTotalCost > 0 ? `$${roundUpTo100(pageTotalCost).toLocaleString()}` : '-'}
                                                 </span>
                                                 {takeoff.isAdvancedCost && pageCostDetails.map((d, i) => (
-                                                  <span key={i} className="text-[10px] text-slate-500 dark:text-slate-400 font-normal">
+                                                  <span key={i} className="text-[10px] text-ink-soft font-normal">
                                                     {d.quantity !== undefined && d.quantity > 0
                                                       ? `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} of ${d.name}`
                                                       : `${d.name}: $${(d.costValue || 0).toFixed(2)}`}
@@ -328,21 +328,21 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                             </div>
                                           </div>
                                           {isPageExpanded && (
-                                            <div className="bg-white/60 dark:bg-slate-900/40 border-t border-slate-100 dark:border-slate-700/60 divide-y divide-slate-100/80 dark:divide-slate-700/60">
+                                            <div className="bg-raised/60 border-t border-edge divide-y divide-edge">
                                               {pb.measurements.map(meas => {
                                                 const measTotalCost = allocateSubsetCost(takeoff, meas.realValue);
                                                 const measCostDetails = allocateSubsetDetails(takeoff, meas.realValue);
                                                 return (
                                                   <div key={meas.id} className="py-2 pl-16 pr-6 grid grid-cols-[minmax(0,1fr)_140px_140px_180px] gap-4 items-start text-xs">
-                                                    <span className="text-slate-600 dark:text-slate-300 truncate">{meas.name || 'Measurement'}</span>
-                                                    <div className="text-right font-semibold text-slate-700 dark:text-slate-300">
+                                                    <span className="text-ink-soft truncate">{meas.name || 'Measurement'}</span>
+                                                    <div className="text-right font-semibold text-ink">
                                                       {meas.realValue > 0 ? formatRealValue(meas.realValue, takeoff.type as 'length' | 'area' | 'count', meas.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                                                     </div>
-                                                    <div className="text-right text-slate-600 dark:text-slate-400 font-medium">
+                                                    <div className="text-right text-ink-soft font-medium">
                                                       {takeoff.isAdvancedCost ? (
                                                         <div className="flex flex-col items-end">
                                                           <span className="text-accent-600 dark:text-accent-400 font-semibold">${(measTotalCost / (meas.realValue || 1)).toFixed(2)}</span>
-                                                          <span className="text-[9px] text-slate-400 uppercase">Avg / Unit</span>
+                                                          <span className="text-[9px] text-ink-faint uppercase">Avg / Unit</span>
                                                         </div>
                                                       ) : (
                                                         takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
@@ -354,7 +354,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                                           {measTotalCost > 0 ? `$${roundUpTo100(measTotalCost).toLocaleString()}` : '-'}
                                                         </span>
                                                         {takeoff.isAdvancedCost && measCostDetails.map((d, i) => (
-                                                          <span key={i} className="text-[9px] text-slate-500 dark:text-slate-400 font-normal">
+                                                          <span key={i} className="text-[9px] text-ink-soft font-normal">
                                                             {d.quantity !== undefined && d.quantity > 0
                                                               ? `${d.quantity.toFixed(2)} ${d.quantityUnit || 'units'} of ${d.name}`
                                                               : `${d.name}: $${(d.costValue || 0).toFixed(2)}`}
@@ -366,7 +366,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                                 );
                                               })}
                                               {pb.measurements.length === 0 && (
-                                                <div className="py-2 pl-16 text-xs text-slate-400 italic">No measurements.</div>
+                                                <div className="py-2 pl-16 text-xs text-ink-faint italic">No measurements.</div>
                                               )}
                                             </div>
                                           )}
@@ -375,7 +375,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                     });
                                   })()}
                                   {takeoff.pageBreakdown.length === 0 && (
-                                    <div className="py-4 pl-8 text-sm text-slate-400 dark:text-slate-500 italic">No measurements found for this takeoff.</div>
+                                    <div className="py-4 pl-8 text-sm text-ink-faint italic">No measurements found for this takeoff.</div>
                                   )}
                                 </div>
                               </td>
@@ -388,9 +388,9 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       <>
                         {packageOrder.map(pkg => (
                           <React.Fragment key={`pkg-${pkg}`}>
-                            <tr className="bg-slate-50/70 dark:bg-slate-800/70">
+                            <tr className="bg-sunken/70">
                               <td colSpan={7} className="px-6 py-2">
-                                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                                <span className="text-[10px] font-bold text-ink-soft uppercase tracking-widest">{pkg}</span>
                               </td>
                             </tr>
                             {packageMap[pkg].map(renderRow)}
@@ -405,7 +405,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
             </div>
 
             {/* Mobile Takeoff Cards */}
-            <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-700">
+            <div className="md:hidden divide-y divide-edge">
               {(() => {
                 const totals = getTakeoffTotals();
                 const packageOrder: string[] = [];
@@ -425,30 +425,30 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                 const renderCard = (takeoff: typeof totals[0]) => {
                   const totalCost = calculateTakeoffTotalCost(takeoff, takeoff.totalRealValue);
                   return (
-                    <div data-testid="takeoff-row" key={takeoff.id} className="p-4 bg-white dark:bg-slate-900 border-l-4" style={{ borderLeftColor: takeoff.color }}>
+                    <div data-testid="takeoff-row" key={takeoff.id} className="p-4 bg-raised border-l-4" style={{ borderLeftColor: takeoff.color }}>
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <input
                             type="checkbox"
-                            className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                            className="rounded border-edge-strong text-accent-600 focus:ring-accent-500"
                             checked={selectedTakeoffIds.has(takeoff.id)}
                             onChange={() => toggleTakeoffSelection(takeoff.id)}
                           />
                           <div className="w-3 h-3 rounded-full shadow-sm shrink-0" style={{ backgroundColor: takeoff.color }} />
-                          <span className="font-bold text-slate-900 dark:text-slate-100">{takeoff.name}</span>
+                          <span className="font-bold text-ink">{takeoff.name}</span>
                         </div>
                         <div className="flex items-center gap-1">
                           <button
                             data-testid="btn-edit-takeoff"
                             onClick={() => handleEditTakeoff(takeoff)}
-                            className="p-1.5 text-slate-400 hover:text-accent-600"
+                            className="p-1.5 text-ink-faint hover:text-accent-600"
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
                             data-testid="btn-delete-takeoff"
                             onClick={() => handleDeleteTakeoff(takeoff.id)}
-                            className="p-1.5 text-slate-400 hover:text-red-600"
+                            className="p-1.5 text-ink-faint hover:text-red-600"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -456,15 +456,15 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                       </div>
 
                       <div className="grid grid-cols-2 gap-y-2 text-sm mb-3">
-                        <div className="text-slate-500 dark:text-slate-400">Type</div>
-                        <div className="text-slate-900 dark:text-slate-100 font-medium capitalize text-right">{takeoff.type}</div>
+                        <div className="text-ink-soft">Type</div>
+                        <div className="text-ink font-medium capitalize text-right">{takeoff.type}</div>
 
-                        <div className="text-slate-500 dark:text-slate-400">Quantity</div>
-                        <div className="text-slate-900 dark:text-slate-100 font-bold text-right">
+                        <div className="text-ink-soft">Quantity</div>
+                        <div className="text-ink font-bold text-right">
                           {takeoff.totalRealValue > 0 ? formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', takeoff.unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                         </div>
 
-                        <div className="text-slate-500 dark:text-slate-400">Total Cost</div>
+                        <div className="text-ink-soft">Total Cost</div>
                         <div className="text-accent-600 dark:text-accent-400 font-bold text-right">
                           {totalCost > 0 ? `$${roundUpTo100(totalCost).toLocaleString()}` : '-'}
                         </div>
@@ -472,7 +472,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
 
                       <button
                         onClick={() => toggleTakeoffExpanded(takeoff.id)}
-                        className="w-full py-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2"
+                        className="w-full py-2 bg-sunken rounded-lg text-xs font-semibold text-ink-soft flex items-center justify-center gap-2"
                       >
                         {expandedTakeoffs[takeoff.id] ? 'Hide' : 'Show'} Page Breakdown
                         <div className={`transition-transform duration-200 ${expandedTakeoffs[takeoff.id] ? 'rotate-90' : ''}`}>
@@ -487,31 +487,31 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                           return (
                             <div className={`grid grid-cols-3 gap-2 ${small ? 'text-[10px]' : 'text-[11px]'}`}>
                               <div>
-                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Qty</div>
-                                <div className="font-bold text-slate-700 dark:text-slate-200">
+                                <div className="text-ink-soft uppercase tracking-wide">Qty</div>
+                                <div className="font-bold text-ink">
                                   {subsetValue > 0 ? formatRealValue(subsetValue, takeoff.type as 'length' | 'area' | 'count', unit?.replace('sq ', '') || 'ft', takeoff, false) : '-'}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Unit Cost</div>
-                                <div className="font-semibold text-slate-700 dark:text-slate-200">
+                                <div className="text-ink-soft uppercase tracking-wide">Unit Cost</div>
+                                <div className="font-semibold text-ink">
                                   {takeoff.isAdvancedCost ? (
-                                    <span className="text-accent-600 dark:text-accent-400">${(subsetCost / (subsetValue || 1)).toFixed(2)}<span className="text-[9px] text-slate-400 ml-0.5">avg</span></span>
+                                    <span className="text-accent-600 dark:text-accent-400">${(subsetCost / (subsetValue || 1)).toFixed(2)}<span className="text-[9px] text-ink-faint ml-0.5">avg</span></span>
                                   ) : (
                                     takeoff.costPerUnit ? `$${takeoff.costPerUnit.toFixed(2)}` : '-'
                                   )}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-slate-500 dark:text-slate-400 uppercase tracking-wide">Total</div>
+                                <div className="text-ink-soft uppercase tracking-wide">Total</div>
                                 <div className="font-bold text-accent-600 dark:text-accent-400">
                                   {subsetCost > 0 ? `$${roundUpTo100(subsetCost).toLocaleString()}` : '-'}
                                 </div>
                               </div>
                               {takeoff.isAdvancedCost && subsetDetails.length > 0 && (
-                                <div className="col-span-3 mt-1 pt-1 border-t border-slate-100 dark:border-slate-700/60 space-y-0.5">
+                                <div className="col-span-3 mt-1 pt-1 border-t border-edge space-y-0.5">
                                   {subsetDetails.map((d, i) => (
-                                    <div key={i} className="flex justify-between text-[9px] text-slate-500 dark:text-slate-400">
+                                    <div key={i} className="flex justify-between text-[9px] text-ink-soft">
                                       <span className="truncate">{d.name}</span>
                                       <span className="shrink-0 ml-2">
                                         {d.quantity !== undefined && d.quantity > 0
@@ -526,7 +526,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                           );
                         };
                         return (
-                          <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+                          <div className="mt-3 pt-3 border-t border-edge divide-y divide-edge">
                             {takeoff.pageBreakdown.map(pb => {
                               const pageKey = `${takeoff.id}__${pb.pageId}`;
                               const isPageExpanded = !!expandedTakeoffPages[pageKey];
@@ -536,11 +536,11 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                     <button
                                       type="button"
                                       onClick={() => toggleTakeoffPageExpanded(takeoff.id, pb.pageId)}
-                                      className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
+                                      className="p-0.5 rounded hover:bg-hover"
                                       title={isPageExpanded ? 'Hide measurements' : 'Show measurements'}
                                     >
                                       <div className={`transition-transform duration-200 ${isPageExpanded ? 'rotate-90' : ''}`}>
-                                        <ChevronRight size={12} className="text-slate-400" />
+                                        <ChevronRight size={12} className="text-ink-faint" />
                                       </div>
                                     </button>
                                     <Link
@@ -552,17 +552,17 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                                   </div>
                                   {renderStats(pb.realValue, pb.unit, false)}
                                   {isPageExpanded && (
-                                    <div className="mt-2 ml-5 pl-3 border-l border-slate-200 dark:border-slate-700 space-y-2">
+                                    <div className="mt-2 ml-5 pl-3 border-l border-edge space-y-2">
                                       {pb.measurements.map(meas => (
                                         <div key={meas.id}>
-                                          <div className="text-[11px] text-slate-600 dark:text-slate-300 font-medium truncate mb-1">
+                                          <div className="text-[11px] text-ink-soft font-medium truncate mb-1">
                                             {meas.name || 'Measurement'}
                                           </div>
                                           {renderStats(meas.realValue, meas.unit, true)}
                                         </div>
                                       ))}
                                       {pb.measurements.length === 0 && (
-                                        <div className="text-[11px] text-slate-400 italic">No measurements.</div>
+                                        <div className="text-[11px] text-ink-faint italic">No measurements.</div>
                                       )}
                                     </div>
                                   )}
@@ -579,8 +579,8 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
                   <>
                     {packageOrder.map(pkg => (
                       <React.Fragment key={`pkg-${pkg}`}>
-                        <div className="px-4 py-2 bg-slate-50 dark:bg-slate-800/70">
-                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                        <div className="px-4 py-2 bg-sunken/70">
+                          <span className="text-[10px] font-bold text-ink-soft uppercase tracking-widest">{pkg}</span>
                         </div>
                         {packageMap[pkg].map(renderCard)}
                       </React.Fragment>
@@ -592,7 +592,7 @@ export const ProjectTakeoffsTab: React.FC<ProjectTakeoffsTabProps> = ({
             </div>
 
             {project.takeoffs.length === 0 && (
-              <div className="px-6 py-12 text-center text-slate-500">
+              <div className="px-6 py-12 text-center text-ink-soft">
                 No takeoffs created yet. <button onClick={() => setShowTakeoffModal(true)} className="text-accent-600 dark:text-accent-400 font-bold hover:underline">Create one</button> to start estimating.
               </div>
             )}

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import fsSync from 'fs';
 import os from 'os';
 import path from 'path';
@@ -7,6 +7,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { getDataUrlString } from './files';
 import { readFileContent } from './fileStore';
+import { loadMailCrypto } from './mail/crypto';
 
 const tmpDir = () => fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-ml-'));
 
@@ -922,6 +923,107 @@ describe('migration 30 — updatedAt columns', () => {
       expect(columnNames(db, t), `missing updatedAt on ${t}`).toContain('updatedAt');
     }
     expect((db.prepare('SELECT updatedAt FROM invoices WHERE id = ?').get('i1') as any).updatedAt).toBe(12345);
+    db.close();
+  });
+});
+
+describe('migration 31 mail-client', () => {
+  const setup = () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 30));
+    return { db, dir };
+  };
+  it('creates the mail tables and rfis columns', () => {
+    const { db, dir } = setup();
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    const tables = tableNames(db);
+    for (const t of ['mail_accounts', 'mail_folders', 'mail_messages', 'mail_threads', 'mail_thread_links', 'mail_thread_reply_state']) {
+      expect(tables, `missing ${t}`).toContain(t);
+    }
+    for (const c of ['pendingReplyJson', 'responseSource', 'responseMessageIdHeader']) {
+      expect(columnNames(db, 'rfis')).toContain(c);
+    }
+    db.close();
+  });
+  it('migrates smtp.* prefs into a sealed imap account and deletes the prefs', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
+    for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.port': '465', 'smtp.secure': 'true',
+      'smtp.username': 'nate@example.com', 'smtp.password': 'hunter2', 'smtp.fromName': 'Nate', 'smtp.fromAddress': 'Nate@EXAMPLE.com', 'theme': 'dark' })) ins.run('u9', k, v);
+    const crypto = loadMailCrypto(dir, {} as any);
+    runMigrations(db, dir, migrations, { mailCrypto: crypto });
+    const acct = db.prepare('SELECT * FROM mail_accounts WHERE userId = ?').get('u9') as any;
+    expect(acct.provider).toBe('imap');
+    expect(acct.emailAddress).toBe('nate@example.com');
+    expect(acct.displayName).toBe('Nate');
+    expect(acct.status).toBe('needs_review');
+    expect(acct.isDefault).toBe(1);
+    expect(acct.authBlob).not.toContain('hunter2');
+    expect(crypto.open<any>(acct.authBlob)).toMatchObject({ smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true, imapHost: 'smtp.example.com', imapPort: 993, imapSecure: true, username: 'nate@example.com', password: 'hunter2' });
+    const left = db.prepare("SELECT key FROM user_preferences WHERE userId='u9'").all().map((r: any) => r.key);
+    expect(left).toEqual(['theme']);
+    db.close();
+  });
+  it('warns and keeps the prefs for a half-filled smtp config with no address to send as', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    const ins = db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
+    // host + password but no fromAddress and no username: nothing to use as the from-address.
+    for (const [k, v] of Object.entries({ 'smtp.host': 'smtp.example.com', 'smtp.password': 'hunter2' })) ins.run('u9', k, v);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    expect(warn.mock.calls.flat().join(' ')).toContain('[migration 31] user u9: smtp.host set but no fromAddress/username — left untouched');
+    warn.mockRestore();
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
+    expect(db.prepare("SELECT key FROM user_preferences WHERE userId='u9' ORDER BY key").all().map((r: any) => r.key))
+      .toEqual(['smtp.host', 'smtp.password']);
+    db.close();
+  });
+  it('ignores smtp prefs left behind by a deleted user', () => {
+    const { db, dir } = setup();
+    // No users row for 'ghost' — a stale preference must not create an orphan account.
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('ghost', 'smtp.host', 'h');
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('ghost', 'smtp.fromAddress', 'g@x.com');
+    runMigrations(db, dir, migrations, { mailCrypto: loadMailCrypto(dir, {} as any) });
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
+    db.close();
+  });
+  it('skips the transform (keeps prefs) when no crypto is supplied', () => {
+    const { db, dir } = setup();
+    db.prepare(`INSERT INTO users (id, username, password, role) VALUES ('u9','nate','x','admin')`).run();
+    db.prepare('INSERT INTO user_preferences (userId, key, value) VALUES (?,?,?)').run('u9', 'smtp.host', 'h');
+    runMigrations(db, dir, migrations);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_accounts').get()).toEqual({ c: 0 });
+    expect(db.prepare("SELECT COUNT(*) c FROM user_preferences WHERE key LIKE 'smtp.%'").get()).toEqual({ c: 1 });
+    db.close();
+  });
+});
+
+describe('migration 33: invoice-notes', () => {
+  it('adds notes (nullable) to invoices, and re-runs as a no-op', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations.filter(m => m.version <= 32));
+    expect(columnNames(db, 'invoices')).not.toContain('notes');
+
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
+    db.prepare('INSERT INTO invoices (id, projectId, number, status, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run('i1', 'p1', '1', 'draft', 1);
+
+    runMigrations(db, tmpDir(), migrations);
+
+    expect(columnNames(db, 'invoices')).toContain('notes');
+    const row = db.prepare('SELECT notes FROM invoices WHERE id = ?').get('i1') as any;
+    expect(row.notes).toBeNull();
+
+    // Idempotent: replaying up() must not throw (duplicate column) or reset data.
+    db.prepare('UPDATE invoices SET notes = ? WHERE id = ?').run('Called re: change in scope', 'i1');
+    const mig33 = migrations.find(m => m.version === 33)!;
+    expect(() => mig33.up({ db, dataDir: tmpDir() })).not.toThrow();
+    const after = db.prepare('SELECT notes FROM invoices WHERE id = ?').get('i1') as any;
+    expect(after.notes).toBe('Called re: change in scope');
+
     db.close();
   });
 });

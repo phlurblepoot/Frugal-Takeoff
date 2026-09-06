@@ -1,14 +1,14 @@
 // src/pages/project/billing/InvoiceEditor.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendInvoice } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
+import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, sendInvoice } from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
-import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR } from '../../../components/ui';
+import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { buildInvoicePdf } from './invoicePdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
@@ -47,6 +47,7 @@ export const InvoiceEditor: React.FC<{
   const { toast } = useToast();
   const [number, setNumber] = useState(invoice.number ?? '');
   const [terms, setTerms] = useState(invoice.terms ?? '');
+  const [notes, setNotes] = useState(invoice.notes ?? '');
   const [date, setDate] = useState(invoice.date ? new Date(invoice.date).toISOString().slice(0, 10) : '');
   const [lines, setLines] = useState<InvoiceLine[]>(invoice.lines.length ? invoice.lines : []);
   const [saving, setSaving] = useState(false);
@@ -55,6 +56,7 @@ export const InvoiceEditor: React.FC<{
   const dirty =
     number !== (invoice.number ?? '') ||
     terms !== (invoice.terms ?? '') ||
+    notes !== (invoice.notes ?? '') ||
     date !== initialDate ||
     lineContentKey(lines) !== lineContentKey(invoice.lines);
 
@@ -66,44 +68,7 @@ export const InvoiceEditor: React.FC<{
   });
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getSmtpSettings().catch(() => ({})),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('invoice', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('invoice', projectId);
 
   // One name for the stored document and the email attachment — they upsert
   // onto the same document row, so a differing name would flip the stored name
@@ -130,6 +95,7 @@ export const InvoiceEditor: React.FC<{
         ...(collab.keepMineVersion !== null ? { version: collab.keepMineVersion } : {}),
         number: number || null,
         terms: terms || null,
+        notes: notes || null,
         date: date ? new Date(date).getTime() : null,
         lines: lines.map(l => ({ description: l.description, qty: Number(l.qty) || 0, unitPrice: Number(l.unitPrice) || 0 })),
       });
@@ -216,6 +182,7 @@ export const InvoiceEditor: React.FC<{
             updatedAt={invoice.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send invoice',
                 defaultTo: emailDefaults.defaultTo || undefined,
@@ -226,13 +193,11 @@ export const InvoiceEditor: React.FC<{
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },
-              sendFn: async (fileId, m) => {
-                await sendInvoice(invoice.id, {
-                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                  fileId, attachmentFileIds: m.attachmentFileIds,
-                });
+              sendFn: async (fileId, req) => {
+                const result = await sendInvoice(invoice.id, { ...itemSendPayload(req), fileId });
                 // The send stamps the invoice 'sent' server-side.
                 onSaved({ keepMounted: true });
+                return result;
               },
             }}
           />
@@ -246,6 +211,18 @@ export const InvoiceEditor: React.FC<{
         <Field label="Number" htmlFor="inv-num"><Input id="inv-num" value={number} onChange={e => setNumber(e.target.value)} /></Field>
         <Field label="Date" htmlFor="inv-date"><Input id="inv-date" type="date" value={date} onChange={e => setDate(e.target.value)} /></Field>
         <Field label="Terms" htmlFor="inv-terms"><Input id="inv-terms" value={terms} onChange={e => setTerms(e.target.value)} placeholder="Net 30" /></Field>
+      </div>
+
+      <div className="mt-4">
+        <Field label="Notes (internal)" htmlFor="inv-notes">
+          <Textarea
+            id="inv-notes"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            placeholder="Internal notes — not shown on the invoice PDF"
+          />
+        </Field>
       </div>
 
       <div className="mt-4">

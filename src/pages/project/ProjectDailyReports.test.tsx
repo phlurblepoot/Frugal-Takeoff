@@ -17,6 +17,9 @@ const { fakeSocket, getDailyReports, getDailyReport, getDocumentsBySource } = vi
 vi.mock('../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: fakeSocket, sessions: [], mySessionId: 'sock-1' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getDailyReports, getDailyReport, getDocumentsBySource,
@@ -90,6 +93,9 @@ const FILE = { id: 'f1', name: 'DailyReport-2026-08-26.pdf', mime: 'application/
 
 describe('ProjectDailyReports — report status on rows', () => {
   beforeEach(() => {
+    // These tests exercise the table, so force the List view — calendar is
+    // the default but the table's row-level behavior is what's under test here.
+    localStorage.setItem('dailyReports:view', 'list');
     getDailyReports.mockReset();
     getDailyReport.mockReset();
     getDocumentsBySource.mockReset();
@@ -150,5 +156,41 @@ describe('ProjectDailyReports — report status on rows', () => {
     getDailyReport.mockResolvedValue({ ...listRow({ version: 2 }), photos: [] });
     await act(async () => { fireEvent.click(screen.getByTestId('save-plain')); });
     expect(mounts.count).toBe(2);
+  });
+});
+
+describe('ProjectDailyReports — calendar/list view toggle', () => {
+  beforeEach(() => {
+    getDailyReports.mockReset();
+    getDailyReport.mockReset();
+    getDocumentsBySource.mockReset();
+    for (const k of Object.keys(fakeSocket.handlers)) delete fakeSocket.handlers[k];
+    getDailyReports.mockResolvedValue([listRow()]);
+    getDocumentsBySource.mockResolvedValue({ dr1: null });
+    getDailyReport.mockResolvedValue(null);
+    localStorage.clear();
+  });
+
+  it('defaults to the calendar view', async () => {
+    mount();
+    expect(await screen.findByTestId('daily-calendar')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('toggling to List shows the table and persists the choice', async () => {
+    mount();
+    await screen.findByTestId('daily-calendar');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'List' }));
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(screen.queryByTestId('daily-calendar')).not.toBeInTheDocument();
+    expect(localStorage.getItem('dailyReports:view')).toBe('list');
+  });
+
+  it('a new mount respects a previously stored List preference', async () => {
+    localStorage.setItem('dailyReports:view', 'list');
+    mount();
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(screen.queryByTestId('daily-calendar')).not.toBeInTheDocument();
   });
 });

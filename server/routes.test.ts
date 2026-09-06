@@ -10,8 +10,17 @@ import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import { createProject, loadProject } from './projectStore';
+import { markRfiSent, setPendingReply, type RfiPendingReply } from './rfiStore';
 import { registerDataRoutes, registerEmailRoutes } from './routes';
 import { SheetSessionStore } from './realtime/sheetSessions';
+import { MailCrypto } from './mail/crypto';
+import * as accounts from './mail/accountStore';
+import type { FakeMailProvider } from './mail/providers/fake';
+import { getFakeProvider, resetFakes } from './mail/providers/fakeRegistry';
+import { upsertFolders } from './mail/sync/engine';
+import { stageUpload } from './mail/uploads';
+import type { MailContext } from './mail/context';
+import type { EntityChangedEvent } from './realtime/changeFeed';
 
 let db: Database.Database;
 let dir: string;
@@ -26,7 +35,9 @@ const PROJECT = {
 beforeEach(() => {
   dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-rt-'));
   db = openDb(':memory:');
-  runMigrations(db, dir, migrations);
+  // migration 31's smtp→mail-account transform is a no-op without a crypto box,
+  // and warns when it skips — hand it one so migrations run clean and quiet.
+  runMigrations(db, dir, migrations, { mailCrypto: new MailCrypto(Buffer.alloc(32, 7)) });
   app = express();
   app.use(express.json({ limit: '50mb' }));
   registerDataRoutes(app, {
@@ -1043,6 +1054,104 @@ describe('rfi routes', () => {
   });
 });
 
+describe('rfi pending-reply routes', () => {
+  let broadcasts: EntityChangedEvent[];
+  // RFIs are field work: the accept/dismiss routes must work for a non-admin,
+  // so this app's stub user is a member and requireAdmin refuses outright.
+  let memberApp: express.Express;
+
+  const PENDING: RfiPendingReply = {
+    threadKey: 'rfi-thread@bb.com', accountId: 'acct-1', mailMessageId: 'mm1', messageIdHeader: 'm1@teg.com',
+    from: { addr: 'gc@teg.com', name: 'Mike' }, date: '2026-08-28T10:00:00.000Z', text: 'Corridor is 9ft',
+    attachments: [{ attId: 'a1', name: 'sketch.pdf', mime: 'application/pdf', size: 9 }], receivedAt: '2026-08-28T10:00:01.000Z',
+  };
+
+  beforeEach(async () => {
+    broadcasts = [];
+    memberApp = express();
+    memberApp.use(express.json({ limit: '50mb' }));
+    registerDataRoutes(memberApp, {
+      db,
+      dataDir: dir,
+      dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'member' }; next(); },
+      requireAdmin: (_req: any, res: any) => res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: ev => { broadcasts.push(ev); },
+    });
+    await request(app).post('/api/projects').send(PROJECT); // id p1
+  });
+
+  const stageReply = async (): Promise<string> => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Corridor height?' })).body.id;
+    markRfiSent(db, id);
+    setPendingReply(db, id, PENDING);
+    return id;
+  };
+
+  it('accept promotes the emailed reply, logs the activity and clears the pending reply', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, status: 'answered' });
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.status).toBe('answered');
+    expect(after.responseText).toBe('Corridor is 9ft');
+    expect(after.responseSource).toBe('email');
+    expect(after.responseMessageIdHeader).toBe('m1@teg.com');
+    expect(after.answeredAt).toBeTruthy();
+    expect(after.pendingReply).toBeNull();
+    expect((db.prepare(`SELECT message FROM activity WHERE type = 'rfi_answered'`).all() as any[]).map(r => r.message)).toEqual(['RFI RFI-001 answered via email']);
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ type: 'rfi', id, projectId: 'p1', version: after.version, action: 'updated', byUserId: 'u1' });
+  });
+
+  it('accept honours edited text and a response file', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({ text: 'Corridor is 9\'-0" per RFI reply', fileId: 'file-1' });
+    expect(res.status).toBe(200);
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.responseText).toBe('Corridor is 9\'-0" per RFI reply');
+    expect(after.responseFileId).toBe('file-1');
+    expect(after.pendingReply).toBeNull();
+  });
+
+  it('dismiss clears the pending reply and leaves the RFI unanswered', async () => {
+    const id = await stageReply();
+    const res = await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    const after = (await request(app).get(`/api/rfis/${id}`)).body;
+    expect(after.pendingReply).toBeNull();
+    expect(after.status).toBe('sent');
+    expect(after.responseText ?? null).toBeNull();
+    expect(db.prepare(`SELECT COUNT(*) c FROM activity WHERE type = 'rfi_answered'`).get()).toEqual({ c: 0 });
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({ type: 'rfi', id, projectId: 'p1', version: after.version, action: 'updated', byUserId: 'u1' });
+  });
+
+  it('409 when nothing is pending, 404 for an unknown RFI', async () => {
+    const id = (await request(app).post('/api/projects/p1/rfis').send({ title: 'No reply yet' })).body.id;
+    const accept = await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({});
+    const dismiss = await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({});
+    expect(accept.status).toBe(409);
+    expect(dismiss.status).toBe(409);
+    // Both routes carry the same marker: the client uses it to tell "someone
+    // else already handled this" from a request that simply failed.
+    expect(accept.body.code).toBe('no_pending_reply');
+    expect(dismiss.body.code).toBe('no_pending_reply');
+    expect((await request(memberApp).post('/api/rfis/nope/pending-reply/accept').send({})).status).toBe(404);
+    expect((await request(memberApp).post('/api/rfis/nope/pending-reply/dismiss').send({})).status).toBe(404);
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('a dismissed reply cannot then be accepted', async () => {
+    const id = await stageReply();
+    await request(memberApp).post(`/api/rfis/${id}/pending-reply/dismiss`).send({}).expect(200);
+    expect((await request(memberApp).post(`/api/rfis/${id}/pending-reply/accept`).send({})).status).toBe(409);
+  });
+});
+
 describe('punch routes', () => {
   let userApp: express.Express;
 
@@ -1215,31 +1324,40 @@ describe('users-list + task routes (auth-only, not admin-gated)', () => {
 });
 
 describe('email send routes', () => {
-  // Records every mailOptions passed to the stubbed transporter.
-  let sent: any[];
-  // When true, buildTransporter returns null → SMTP-absent no-op path.
-  let smtpAbsent: boolean;
+  // The item send routes now go through server/mail/sendService, so the transport
+  // under test is a FakeMailProvider bound to a real mail account for u1 —
+  // provider.sent replaces the old nodemailer transporter stub.
   let emailApp: express.Express;
+  let ctx: MailContext;
+  let acct: accounts.MailAccountRow;
+  let provider: FakeMailProvider;
+  let broadcasts: EntityChangedEvent[];
+  const mailCrypto = new MailCrypto(Buffer.alloc(32, 7));
 
   const buildEmailApp = (role: 'admin' | 'member', userId = 'u1') => {
     const a = express();
     a.use(express.json({ limit: '50mb' }));
     registerEmailRoutes(a, {
       db,
-      dataDir: dir,
       authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role }; next(); },
       requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
-      buildTransporter: (_userId: string) => smtpAbsent ? null : ({ sendMail: async (opts: any) => { sent.push(opts); return { messageId: 'stub' }; }, verify: async () => true } as any),
-      // From header now comes from the SENDING user's per-user SMTP config.
-      getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
       broadcastChange: () => {},
+      mailCtx: ctx,
     });
     return a;
   };
 
   beforeEach(async () => {
-    sent = [];
-    smtpAbsent = false;
+    resetFakes();
+    // mail_accounts.userId is a real FK — the send routes' stub user must exist.
+    db.prepare("INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1', 'u1', 'x', 'admin')").run();
+    broadcasts = [];
+    ctx = { db, dataDir: dir, crypto: mailCrypto, providerFactory: a => getFakeProvider(a.id), broadcastChange: ev => { broadcasts.push(ev); } };
+    acct = accounts.createAccount(db, mailCrypto, {
+      userId: 'u1', provider: 'fake', emailAddress: 'noreply@example.com', displayName: 'Frugal', auth: { refreshToken: 'r' },
+    });
+    provider = getFakeProvider(acct.id);
+    upsertFolders(db, acct.id, provider.folders);
     emailApp = buildEmailApp('admin');
     // emailApp only has the email routes; create the project + files via the data-routes app (shared db).
     await request(app).post('/api/projects').send(PROJECT);
@@ -1252,55 +1370,8 @@ describe('email send routes', () => {
   const makeInvoice = async () =>
     (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-1', lines: [{ description: 'Work', qty: 1, unitPrice: 100 }] })).body.id;
 
-  // Per-user SMTP config save/read/isolation: these exercise the REAL
-  // user_preferences-backed getUserSmtp (not the From-header stub used elsewhere),
-  // so each app gets a real reader scoped to its own userId.
-  const buildRealSmtpApp = (userId: string) => {
-    const getUserSmtp = (uid: string): Record<string, string> => {
-      const rows = db.prepare("SELECT key, value FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").all(uid) as { key: string; value: string }[];
-      const cfg: Record<string, string> = {};
-      rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
-      return cfg;
-    };
-    const a = express();
-    a.use(express.json({ limit: '50mb' }));
-    registerEmailRoutes(a, {
-      db,
-      dataDir: dir,
-      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: userId, role: 'member' }; next(); },
-      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
-      buildTransporter: (uid: string) => { const c = getUserSmtp(uid); return (c.host && c.username) ? ({ verify: async () => true } as any) : null; },
-      getUserSmtp,
-      broadcastChange: () => {},
-    });
-    return a;
-  };
-
-  it('smtp save: coerces boolean/number values to strings; reads back per-user', async () => {
-    // The client sends `secure` as a boolean and `port` as a number; SQLite can
-    // only bind strings/numbers/null, so the route must coerce before binding.
-    const u1App = buildRealSmtpApp('smtp-u1');
-    const res = await request(u1App).post('/api/email/smtp').send({
-      host: 'smtp.example.com', port: 465, secure: true, username: 'u', password: 'p',
-    });
-    expect(res.status).toBe(200);
-    const saved = (await request(u1App).get('/api/email/smtp')).body;
-    expect(saved.secure).toBe('true');
-    expect(saved.port).toBe('465');
-    expect(saved.host).toBe('smtp.example.com');
-  });
-
-  it('smtp save: is isolated per-user — a second user does not see the first user\'s config', async () => {
-    const u1App = buildRealSmtpApp('iso-u1');
-    const u2App = buildRealSmtpApp('iso-u2');
-    await request(u1App).post('/api/email/smtp').send({ host: 'u1.smtp', username: 'u1', password: 'p1' });
-    // u2 has saved nothing → empty config, never u1's
-    expect((await request(u2App).get('/api/email/smtp')).body).toEqual({});
-    // u2 saves its own; the two stay distinct
-    await request(u2App).post('/api/email/smtp').send({ host: 'u2.smtp', username: 'u2', password: 'p2' });
-    expect((await request(u1App).get('/api/email/smtp')).body.host).toBe('u1.smtp');
-    expect((await request(u2App).get('/api/email/smtp')).body.host).toBe('u2.smtp');
-  });
+  const addrs = (list: { addr: string }[]) => list.map(a => a.addr);
+  const names = (list: { name: string }[]) => list.map(a => a.name);
 
   it('invoice send: accepts cc/bcc/subject/body + multiple attachments; forwards them; marks sent', async () => {
     const id = await makeInvoice();
@@ -1316,34 +1387,40 @@ describe('email send routes', () => {
       attachmentFileIds: ['extra1', 'extra2'],
     });
     expect(res.status).toBe(200);
-    expect(sent).toHaveLength(1);
-    const m = sent[0];
-    expect(m.to).toBe('client@example.com');
-    expect(m.cc).toBe('cc@example.com');   // trimmed
-    expect(m.bcc).toBe('bcc@example.com');
+    expect(res.body).toMatchObject({ success: true, accountId: acct.id, effectsSkipped: [] });
+    expect(res.body.threadKey).toBeTruthy();
+    expect(provider.sent).toHaveLength(1);
+    const m = provider.sent[0];
+    expect(addrs(m.to)).toEqual(['client@example.com']);
+    expect(addrs(m.cc)).toEqual(['cc@example.com']);   // trimmed
+    expect(addrs(m.bcc)).toEqual(['bcc@example.com']);
     expect(m.subject).toBe('Custom Subject');
     expect(m.text).toBe('Custom body text');
-    expect(m.from).toContain('noreply@example.com');
+    expect(m.html).toBe('<p>Custom body text</p>');
+    expect(m.from).toEqual({ addr: 'noreply@example.com', name: 'Frugal' });
     // primary + two extras, named from metadata
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
+    expect(names(m.attachments)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
     expect(m.attachments[0].content.toString()).toBe('PDFPRIMARY');
-    expect(m.attachments[1].contentType).toBe('application/pdf');
-    expect(m.attachments[2].contentType).toBe('image/jpeg');
-    // status side-effect fired
+    expect(m.attachments[1].mime).toBe('application/pdf');
+    expect(m.attachments[2].mime).toBe('image/jpeg');
+    // status side-effect fired (inside sendService → applySendEffects)
     const after = (await request(app).get(`/api/invoices/${id}`)).body;
     expect(after.status).toBe('sent');
     expect(after.updatedAt).toBeGreaterThan(before);
+    // and the thread is linked back to the invoice
+    expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'invoice', itemId: id }]);
   });
 
-  it('invoice send: omits cc/bcc when blank; falls back to default subject/body; single attachment', async () => {
+  it('invoice send: blank cc/bcc parse to empty lists; falls back to default subject/body; single attachment', async () => {
     const id = await makeInvoice();
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({
       to: 'client@example.com', cc: '   ', bcc: '', subject: '   ', body: undefined, fileId: 'primary',
     });
     expect(res.status).toBe(200);
-    const m = sent[0];
-    expect('cc' in m).toBe(false);
-    expect('bcc' in m).toBe(false);
+    const m = provider.sent[0];
+    expect(m.cc).toEqual([]);
+    expect(m.bcc).toEqual([]);
     expect(m.subject).toBe('Invoice INV-1');
     expect(m.text).toBe('Please find the attached invoice.');
     expect(m.attachments).toHaveLength(1);
@@ -1352,7 +1429,16 @@ describe('email send routes', () => {
   it('invoice send: legacy "message" still works as the body alias', async () => {
     const id = await makeInvoice();
     await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', message: 'legacy body' });
-    expect(sent[0].text).toBe('legacy body');
+    expect(provider.sent[0].text).toBe('legacy body');
+  });
+
+  it('invoice send: an explicit html body is used verbatim; plain text is escaped', async () => {
+    const id = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', html: '<p>Hi <b>there</b></p>' });
+    expect(provider.sent[0].html).toBe('<p>Hi <b>there</b></p>');
+    const id2 = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary', body: 'a < b & c\nsecond line' });
+    expect(provider.sent[1].html).toBe('<p>a &lt; b &amp; c<br>second line</p>');
   });
 
   it('invoice send: unresolved attachment ids are skipped silently', async () => {
@@ -1360,7 +1446,7 @@ describe('email send routes', () => {
     await request(emailApp).post(`/api/invoices/${id}/send`).send({
       to: 'a@b.com', fileId: 'primary', attachmentFileIds: ['extra1', 'does-not-exist', 'extra2'],
     });
-    expect(sent[0].attachments.map((a: any) => a.filename)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
+    expect(names(provider.sent[0].attachments)).toEqual(['INV-1.pdf', 'Spec.pdf', 'Photo.jpg']);
   });
 
   it('invoice send: requires to + fileId', async () => {
@@ -1369,19 +1455,101 @@ describe('email send routes', () => {
     expect((await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com' })).status).toBe(400);
   });
 
+  it('invoice send: a `to` with no parseable address is refused with 400', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'not an address', fileId: 'primary' });
+    expect(res.status).toBe(400);
+    expect(provider.sent).toHaveLength(0);
+  });
+
+  it('invoice send: accountId picks a specific account; another user\'s is not reachable', async () => {
+    const id = await makeInvoice();
+    const second = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'second@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, second.id, getFakeProvider(second.id).folders);
+    const ok = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: second.id });
+    expect(ok.status).toBe(200);
+    expect(ok.body.accountId).toBe(second.id);
+    expect(getFakeProvider(second.id).sent).toHaveLength(1);
+    expect(provider.sent).toHaveLength(0);   // the default account was not used
+    // an account owned by someone else is invisible
+    db.prepare("INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u2', 'u2', 'x', 'admin')").run();
+    const theirs = accounts.createAccount(db, mailCrypto, { userId: 'u2', provider: 'fake', emailAddress: 'them@example.com', auth: { refreshToken: 'r' } });
+    const id2 = await makeInvoice();
+    const denied = await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: theirs.id });
+    expect(denied.status).toBe(409);
+    expect(getFakeProvider(theirs.id).sent).toHaveLength(0);
+  });
+
+  it('invoice send: broadcasts carry the sender\'s x-session-id', async () => {
+    const id = await makeInvoice();
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`)
+      .set('x-session-id', 's1').send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    // the item's own change event ...
+    const invoiceEv = broadcasts.find(b => b.type === 'invoice' && b.id === id);
+    expect(invoiceEv).toMatchObject({ byUserId: 'u1', bySessionId: 's1' });
+    // ... and the mail thread the sent copy created
+    expect(broadcasts.find(b => b.type === 'mailThread')).toMatchObject({ bySessionId: 's1' });
+    // no header → no session attribution (every viewer refetches)
+    broadcasts.length = 0;
+    const id2 = await makeInvoice();
+    await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(broadcasts.find(b => b.type === 'invoice')?.bySessionId).toBeUndefined();
+  });
+
+  it('invoice send: an unusable default account is skipped for a usable one', async () => {
+    const id = await makeInvoice();
+    // acct is the default; park it in needs_review the way migration 31 leaves
+    // a converted SMTP config, then add a healthy second account.
+    accounts.updateAccount(db, acct.id, { status: 'needs_review' });
+    const good = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, good.id, getFakeProvider(good.id).folders);
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    expect(res.body.accountId).toBe(good.id);
+    expect(provider.sent).toHaveLength(0);
+    // with no usable account at all, the send is refused rather than silently
+    // going out through the broken default
+    accounts.updateAccount(db, good.id, { status: 'auth_error' });
+    const id2 = await makeInvoice();
+    const denied = await request(emailApp).post(`/api/invoices/${id2}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(denied.status).toBe(409);
+    expect(denied.body.error).toMatch(/No usable mail account/);
+  });
+
+  it('invoice send: an explicitly chosen but unusable account is refused, not swapped', async () => {
+    const id = await makeInvoice();
+    accounts.updateAccount(db, acct.id, { status: 'auth_error' });
+    const good = accounts.createAccount(db, mailCrypto, { userId: 'u1', provider: 'fake', emailAddress: 'good@example.com', auth: { refreshToken: 'r' } });
+    upsertFolders(db, good.id, getFakeProvider(good.id).folders);
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary', accountId: acct.id });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/auth error/);
+    expect(getFakeProvider(good.id).sent).toHaveLength(0);
+  });
+
   it('invoice send: non-admin gets 403', async () => {
     const id = await makeInvoice();
     const memberApp = buildEmailApp('member');
     expect((await request(memberApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(403);
   });
 
-  it('SMTP-absent: send throws "SMTP not configured" → 500, no side-effect', async () => {
+  it('no mail account: send is refused with 409 and no side-effect', async () => {
     const id = await makeInvoice();
-    smtpAbsent = true;
+    accounts.deleteAccount(db, acct.id);
     const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
-    expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/SMTP not configured/);
-    expect(sent).toHaveLength(0);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/No usable mail account/);
+    expect(provider.sent).toHaveLength(0);
+    expect((await request(app).get(`/api/invoices/${id}`)).body.status).not.toBe('sent');
+  });
+
+  it('a provider failure is a 502 that leaks no provider text, and fires no side-effect', async () => {
+    const id = await makeInvoice();
+    provider.failNextWith(new Error('imap.secret-host.internal refused: bad password'));
+    const res = await request(emailApp).post(`/api/invoices/${id}/send`).send({ to: 'a@b.com', fileId: 'primary' });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('Mail provider request failed');
     expect((await request(app).get(`/api/invoices/${id}`)).body.status).not.toBe('sent');
   });
 
@@ -1391,10 +1559,10 @@ describe('email send routes', () => {
       to: 'gc@example.com', cc: 'pm@example.com', fileId: 'primary', attachmentFileIds: ['extra1'],
     });
     expect(res.status).toBe(200);
-    const m = sent[0];
+    const m = provider.sent[0];
     expect(m.subject).toBe('Change Order Request CO-9');
-    expect(m.cc).toBe('pm@example.com');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['CO-CO-9.pdf', 'Spec.pdf']);
+    expect(addrs(m.cc)).toEqual(['pm@example.com']);
+    expect(names(m.attachments)).toEqual(['CO-CO-9.pdf', 'Spec.pdf']);
     expect((await request(app).get(`/api/change-orders/${co.id}`)).body.status).toBe('sent');
     // non-admin blocked
     const memberApp = buildEmailApp('member');
@@ -1408,10 +1576,21 @@ describe('email send routes', () => {
       to: 'gc@example.com', bcc: 'log@example.com', fileId: 'primary', attachmentFileIds: ['extra2'],
     });
     expect(res.status).toBe(200);
-    const m = sent[0];
+    const m = provider.sent[0];
     expect(m.subject).toBe('Issue ISS-001 — Crack');
-    expect(m.bcc).toBe('log@example.com');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['ISS-001.pdf', 'Photo.jpg']);
+    expect(addrs(m.bcc)).toEqual(['log@example.com']);
+    expect(names(m.attachments)).toEqual(['ISS-001.pdf', 'Photo.jpg']);
+  });
+
+  it('punch send: any authenticated user; links the thread to the project', async () => {
+    const memberApp = buildEmailApp('member');
+    const res = await request(memberApp).post('/api/projects/p1/send-punch').send({ to: 'gc@example.com', fileId: 'primary' });
+    expect(res.status).toBe(200);
+    expect(provider.sent[0].subject).toBe('Punch List Report');
+    expect(names(provider.sent[0].attachments)).toEqual(['punch-list.pdf']);
+    expect(db.prepare('SELECT itemType, itemId FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'punch', itemId: 'p1' }]);
+    expect(db.prepare(`SELECT type FROM activity WHERE type = 'punch_sent'`).all()).toHaveLength(1);
   });
 
   it('rfi send: authenticated non-admin allowed; default RFI subject/name; cc/bcc + extras', async () => {
@@ -1421,10 +1600,23 @@ describe('email send routes', () => {
       to: 'gc@example.com', bcc: 'log@example.com', fileId: 'primary', attachmentFileIds: ['extra2'],
     });
     expect(res.status).toBe(200);
-    const m = sent[0];
+    const m = provider.sent[0];
     expect(m.subject).toBe('RFI RFI-001 — Ceiling height');
-    expect(m.bcc).toBe('log@example.com');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Photo.jpg']);
+    expect(addrs(m.bcc)).toEqual(['log@example.com']);
+    expect(names(m.attachments)).toEqual(['RFI-001.pdf', 'Photo.jpg']);
+  });
+
+  // The composer's "Attach file" stages the bytes before the send, exactly as
+  // it does for a plain mail — an item send has to carry them through or the
+  // user's attachment disappears silently between Send and the mailbox.
+  it('rfi send: staged uploadIds ride along with the generated document', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceiling height' })).body;
+    const { uploadId } = stageUpload(dir, 'Sketch.png', 'image/png', Buffer.from('PNGBYTES'));
+    const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({
+      to: 'gc@example.com', fileId: 'primary', attachmentFileIds: ['extra1'], uploadIds: [uploadId],
+    });
+    expect(res.status).toBe(200);
+    expect(names(provider.sent[0].attachments)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Sketch.png']);
   });
 
   it('rfi send: requires to + fileId; 404 for unknown rfi', async () => {
@@ -1446,22 +1638,44 @@ describe('email send routes', () => {
       attachmentFileIds: ['extra1', 'extra2'],
     });
     expect(res.status).toBe(200);
-    const m = sent[0];
-    expect(m.to).toBe('client@example.com');
-    expect(m.cc).toBe('cc@example.com');
-    expect(m.bcc).toBe('bcc@example.com');
+    const m = provider.sent[0];
+    expect(addrs(m.to)).toEqual(['client@example.com']);
+    expect(addrs(m.cc)).toEqual(['cc@example.com']);
+    expect(addrs(m.bcc)).toEqual(['bcc@example.com']);
     expect(m.subject).toBe('Custom Subject');
     expect(m.text).toBe('Custom body text');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Photo.jpg']);
+    expect(names(m.attachments)).toEqual(['RFI-001.pdf', 'Spec.pdf', 'Photo.jpg']);
+  });
+
+  it('POST /api/rfis/:id/send sends via the mail account, links the thread, marks sent', async () => {
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'Ceilings' })).body;
+    const res = await request(emailApp).post(`/api/rfis/${rfi.id}/send`)
+      .send({ to: 'gc@teg.com', fileId: 'primary', subject: 'RFI-001', body: 'See attached' });
+    expect(res.status).toBe(200);
+    expect(res.body.threadKey).toBeTruthy();
+    expect(res.body.accountId).toBe(acct.id);
+    expect(provider.sent[0].attachments[0].name).toBe('RFI-001.pdf');
+    expect((await request(app).get(`/api/rfis/${rfi.id}`)).body.status).toBe('sent');
+    expect(db.prepare('SELECT itemType FROM mail_thread_links WHERE threadKey = ?').all(res.body.threadKey))
+      .toEqual([{ itemType: 'rfi' }]);
+    // the sent copy is indexed locally so it shows up in the mail UI
+    expect(db.prepare('SELECT sentFromApp FROM mail_messages WHERE id = ?').get(res.body.messageId))
+      .toEqual({ sentFromApp: 1 });
+  });
+
+  it('POST /api/rfis/:id/send with no mail account → 409', async () => {
+    accounts.deleteAccount(db, acct.id);
+    const rfi = (await request(app).post('/api/projects/p1/rfis').send({ title: 'x' })).body;
+    expect((await request(emailApp).post(`/api/rfis/${rfi.id}/send`).send({ to: 'a@b.com', fileId: 'primary' })).status).toBe(409);
   });
 
   it('daily report send: default subject + date-only filename when jobName is blank', async () => {
     const dr = (await request(app).post('/api/projects/p1/daily-reports').send({ reportDate: '2026-08-20' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
-    const m = sent[0];
+    const m = provider.sent[0];
     expect(m.subject).toBe('Daily Report — 2026-08-20');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-2026-08-20.pdf']);
+    expect(names(m.attachments)).toEqual(['DailyReport-2026-08-20.pdf']);
   });
 
   it('daily report send: sanitizes jobName into the attachment filename', async () => {
@@ -1469,9 +1683,9 @@ describe('email send routes', () => {
       .send({ reportDate: '2026-08-20', jobName: 'Dania Beach: "Unit 4"' })).body;
     const res = await request(emailApp).post(`/api/daily-reports/${dr.id}/send`).send({ to: 'gc@example.com', fileId: 'primary' });
     expect(res.status).toBe(200);
-    const m = sent[0];
+    const m = provider.sent[0];
     expect(m.subject).toBe('Daily Report — 2026-08-20 — Dania Beach: "Unit 4"');
-    expect(m.attachments.map((a: any) => a.filename)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
+    expect(names(m.attachments)).toEqual(['DailyReport-Dania-Beach-Unit-4-2026-08-20.pdf']);
   });
 
   it('rfi send: marks rfi sent with sentAt set after send', async () => {
@@ -1485,22 +1699,6 @@ describe('email send routes', () => {
   });
 
   describe('POST /api/proposals/:id/send', () => {
-    let failingEmailApp: express.Express;
-    beforeEach(() => {
-      const a = express();
-      a.use(express.json({ limit: '50mb' }));
-      registerEmailRoutes(a, {
-        db,
-        dataDir: dir,
-        authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
-        requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
-        buildTransporter: (_userId: string) => ({ sendMail: async () => { throw new Error('smtp down'); } } as any),
-        getUserSmtp: (_userId: string) => ({ fromAddress: 'noreply@example.com', fromName: 'Frugal' }),
-        broadcastChange: () => {},
-      });
-      failingEmailApp = a;
-    });
-
     it('sends the proposal PDF, marks sent with sentTo, logs proposal_sent, 409s a second send', async () => {
       const c = await request(app).post('/api/projects/p1/proposals').send({});
       const up = await request(app).post('/api/files/gen?projectId=p1&kind=proposal&name=Proposal.pdf&sourceType=proposal&sourceId=' + c.body.id)
@@ -1508,8 +1706,9 @@ describe('email send routes', () => {
       await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
       const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', cc: 'me@x.com', subject: 'Our proposal', body: 'hi', fileId: up.body.fileId });
       expect(res.status).toBe(200);
-      expect(sent[0].to).toBe('gc@x.com');
-      expect(sent[0].attachments[0].filename).toMatch(/\.pdf$/);
+      expect(res.body.version).toBeGreaterThan(0);
+      expect(addrs(provider.sent[0].to)).toEqual(['gc@x.com']);
+      expect(provider.sent[0].attachments[0].name).toMatch(/\.pdf$/);
       const row = db.prepare('SELECT status, sentTo FROM proposals WHERE id = ?').get(c.body.id) as any;
       expect(row.status).toBe('sent');
       expect(JSON.parse(row.sentTo)).toEqual({ to: 'gc@x.com', cc: 'me@x.com', subject: 'Our proposal' });
@@ -1527,10 +1726,9 @@ describe('email send routes', () => {
       const up = await request(app).post(`/api/files/gen-named?projectId=p1&kind=proposal&name=${encodeURIComponent(name)}&sourceType=proposal&sourceId=${c.body.id}`)
         .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
       await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
-      sent.length = 0;
       const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
       expect(res.status).toBe(200);
-      expect(sent[0].attachments[0].filename).toBe(`${name}.pdf`);
+      expect(provider.sent[0].attachments[0].name).toBe(`${name}.pdf`);
     });
 
     it('keeps an extension the stored name already has', async () => {
@@ -1538,17 +1736,17 @@ describe('email send routes', () => {
       const up = await request(app).post(`/api/files/gen-ext?projectId=p1&kind=proposal&name=Bid.pdf&sourceType=proposal&sourceId=${c.body.id}`)
         .set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
       await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
-      sent.length = 0;
       await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
-      expect(sent[0].attachments[0].filename).toBe('Bid.pdf');
+      expect(provider.sent[0].attachments[0].name).toBe('Bid.pdf');
     });
 
-    it('does not mark sent when SMTP fails', async () => {
+    it('does not mark sent when the provider rejects the message', async () => {
       const c = await request(app).post('/api/projects/p1/proposals').send({});
       const up = await request(app).post('/api/files/gen2?projectId=p1&kind=proposal&name=P.pdf').set('Content-Type', 'application/pdf').send(Buffer.from('%PDF'));
       await request(app).post(`/api/proposals/${c.body.id}/file`).send({ fileId: up.body.fileId });
-      const res = await request(failingEmailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
-      expect(res.status).toBe(500);
+      provider.failNextWith(new Error('mailbox unavailable'));
+      const res = await request(emailApp).post(`/api/proposals/${c.body.id}/send`).send({ to: 'gc@x.com', subject: 's', fileId: up.body.fileId });
+      expect(res.status).toBe(502);
       expect((db.prepare('SELECT status FROM proposals WHERE id = ?').get(c.body.id) as any).status).toBe('draft');
     });
   });

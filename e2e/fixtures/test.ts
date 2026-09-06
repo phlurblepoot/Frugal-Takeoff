@@ -1,6 +1,7 @@
 import { test as base, expect, request as apiRequest, type Page } from '@playwright/test';
 import {
   login,
+  loginAsNewUser,
   seedProjectWithPage,
   seedProjectWithVectorPage,
   seedProjectWithVectorPages,
@@ -54,6 +55,7 @@ export const test = base.extend<Fixtures>({
 export {
   expect,
   login,
+  loginAsNewUser,
   seedProjectWithPage,
   seedProjectWithVectorPage,
   seedProjectWithVectorPages,

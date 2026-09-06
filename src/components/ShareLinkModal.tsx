@@ -66,36 +66,36 @@ export const ShareProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             aria-label="Share link"
           >
             <motion.div
-              className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden"
+              className="w-full max-w-sm bg-raised rounded-2xl shadow-xl border border-edge overflow-hidden"
               initial={{ opacity: 0, scale: 0.95, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 12 }}
               transition={{ duration: 0.18 }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <div className="p-6 border-b border-edge flex items-center justify-between">
+                <h2 className="text-lg font-bold text-ink flex items-center gap-2">
                   <LinkIcon size={18} className="text-accent-600" />
                   {target.title || 'Share link'}
                 </h2>
-                <button onClick={close} aria-label="Close" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all">
+                <button onClick={close} aria-label="Close" className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-hover transition-all">
                   <X size={18} />
                 </button>
               </div>
               <div className="p-6 flex flex-col items-center gap-4">
-                <div className="w-44 h-44 max-w-full aspect-square flex items-center justify-center rounded-xl bg-white p-2 border border-slate-200 dark:border-slate-600">
+                <div className="w-44 h-44 max-w-full aspect-square flex items-center justify-center rounded-xl bg-white p-2 border border-edge">
                   {qrDataUrl
                     ? <img src={qrDataUrl} alt="QR code linking to the shared resource" className="w-full h-full" />
                     : <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-600" />}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 text-center">Scan with a phone camera to open on another device.</p>
+                <p className="text-xs text-ink-soft text-center">Scan with a phone camera to open on another device.</p>
                 <div className="w-full flex items-center gap-2">
                   <input
                     readOnly
                     value={target.url}
                     onFocus={(e) => e.currentTarget.select()}
                     aria-label="Share URL"
-                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-900/50 dark:text-white text-sm font-mono truncate"
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-edge-strong bg-raised text-ink text-sm font-mono truncate"
                   />
                   <button
                     onClick={handleCopy}

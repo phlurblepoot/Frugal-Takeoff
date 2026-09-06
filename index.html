@@ -21,7 +21,13 @@
         scales.forEach(function (s) {
           el.style.setProperty('--color-accent-' + s[0], 'oklch(' + s[1] + ' ' + s[2] + ' ' + h + ')');
         });
+        el.style.setProperty('--accent-h', String(h));
         if (m === 'reduced') el.classList.add('motion-reduce');
+        if (localStorage.getItem('theme-surfaces') === 'solid') el.classList.add('solid-surfaces');
+        if (localStorage.getItem('theme-ambience') !== 'off') {
+          var hr = new Date().getHours();
+          el.dataset.daypart = (hr >= 5 && hr <= 10) ? 'morning' : (hr >= 11 && hr <= 16) ? 'midday' : 'evening';
+        }
       })();
     </script>
   </head>

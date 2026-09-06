@@ -19,6 +19,9 @@ describe('TaskStatusPill', () => {
   });
   it('falls back to slate for unknown statuses (prototype-safe)', () => {
     render(<TaskStatusPill status="constructor" />);
-    expect(screen.getByText('constructor').className).toContain('slate');
+    // StatusPill's 'slate' tone NAME is unchanged; its classes were retokened
+    // to bg-sunken/text-ink-soft (Wave 3 token migration), so assert on the
+    // token class rather than the literal string "slate".
+    expect(screen.getByText('constructor').className).toContain('bg-sunken');
   });
 });

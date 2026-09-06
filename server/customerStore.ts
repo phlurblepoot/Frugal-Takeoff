@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { Customer, CustomerRoleEmails } from '../src/types';
 import { billingSummary, listBilledDocuments, projectOutstandingCents } from './billingStore';
 import { normalizeProjectStatus } from './projectStore';
+import { billedDocDateMs } from './dashboardStore';
 
 export function createCustomerTables(db: Database.Database): void {
   db.exec(`
@@ -86,7 +87,7 @@ function todayStr(): string {
 }
 
 function daysBetween(fromMs: number, toMs: number): number {
-  return Math.max(0, Math.round((toMs - fromMs) / 86400000));
+  return Math.max(0, Math.floor((toMs - fromMs) / 86400000));
 }
 
 interface ProjectRollupRow {
@@ -239,6 +240,12 @@ export function customerOverview(db: Database.Database, customerId: string, incl
     // loop below so they can never drift from the combined figures above.
     let contractBilledCents = 0, contractPaidCents = 0, contractOutstandingCents = 0;
     let invoicesInvoicedCents = 0, invoicesPaidCents = 0, invoicesOutstandingCents = 0;
+    // Aging buckets: every outstanding (balanceCents > 0) ledger doc, bucketed
+    // by age of its billed date — invoice epoch `date` or pay-app
+    // `applicationDate` ('YYYY-MM-DD'), both normalized via billedDocDateMs
+    // (shared with dashboardStore's aging_receivable attention item so the
+    // two never disagree on what counts as "aging").
+    let agingCurrentCents = 0, agingDays31to60Cents = 0, agingDays61PlusCents = 0;
     const ledger: any[] = [];
     const activeProjects = projRows.filter(p => !Number(p.archived));
 
@@ -285,12 +292,21 @@ export function customerOverview(db: Database.Database, customerId: string, incl
           };
           if (doc.kind === 'invoice' && typeof doc.date === 'number') item.ageDays = daysBetween(doc.date, now);
           attention.push(item);
+
+          const docDateMs = billedDocDateMs(doc.date);
+          if (docDateMs != null) {
+            const age = daysBetween(docDateMs, now);
+            if (age <= 30) agingCurrentCents += doc.balanceCents;
+            else if (age <= 60) agingDays31to60Cents += doc.balanceCents;
+            else agingDays61PlusCents += doc.balanceCents;
+          }
         }
       }
     }
 
     billing = {
       contractTotalCents, invoicedCents, paidCents, outstandingCents, ledger,
+      aging: { current: agingCurrentCents, days31to60: agingDays31to60Cents, days61plus: agingDays61PlusCents },
       contract: {
         billedCents: contractBilledCents, paidCents: contractPaidCents,
         outstandingCents: contractOutstandingCents,

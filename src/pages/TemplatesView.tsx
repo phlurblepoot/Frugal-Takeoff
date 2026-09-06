@@ -4,6 +4,7 @@ import { TakeoffTemplate, MeasurementType, CustomCost, CostType } from '../types
 import { getTemplates, saveTemplate, deleteTemplate } from '../utils/store';
 import { v4 as uuidv4 } from 'uuid';
 import { evaluateMathExpression, UNIT_LABELS } from '../utils/math';
+import { Card } from '../components/ui';
 
 const CustomCostRow: React.FC<{
   item: any;
@@ -13,7 +14,7 @@ const CustomCostRow: React.FC<{
   onRemove: (index: number) => void;
 }> = ({ item, index, unitLabel, onChange, onRemove }) => {
   return (
-    <div className="flex flex-col gap-2 p-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm">
+    <Card className="flex flex-col gap-2 p-3">
       <div className="flex gap-2 items-center">
         <select
           value={item.type || 'unit'}
@@ -21,7 +22,7 @@ const CustomCostRow: React.FC<{
             const type = e.target.value as CostType;
             onChange(index, { ...item, type });
           }}
-          className="text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 font-medium dark:bg-slate-800/50 dark:border-slate-600 dark:text-white"
+          className="text-xs border border-edge-strong rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken font-medium text-ink"
         >
           <option value="flat">Flat Cost</option>
           <option value="yield">Cost by Yield</option>
@@ -34,12 +35,12 @@ const CustomCostRow: React.FC<{
             value={item.name}
             onChange={(e) => onChange(index, { ...item, name: e.target.value })}
             placeholder="Item Name (e.g. Labor, Waste)"
-            className="w-full text-xs border border-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+            className="w-full text-xs border border-edge-strong rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink placeholder:text-ink-faint"
           />
         </div>
         <button
           onClick={() => onRemove(index)}
-          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+          className="p-1.5 text-ink-faint hover:text-red-500 transition-colors"
         >
           <Trash2 size={14} />
         </button>
@@ -48,9 +49,9 @@ const CustomCostRow: React.FC<{
       <div className="flex gap-3 items-center pl-1">
         {(!item.type || item.type === 'unit') && (
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Cost per {unitLabel}</span>
+            <span className="text-[10px] font-bold text-ink-faint uppercase">Cost per {unitLabel}</span>
             <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-xs">$</span>
               <input
                 type="text"
                 value={item.costPerUnit || ''}
@@ -61,7 +62,7 @@ const CustomCostRow: React.FC<{
                     if (result !== null) onChange(index, { ...item, costPerUnit: result.toString() });
                   }
                 }}
-                className="w-24 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                className="w-24 pl-5 pr-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
                 placeholder="0.00"
               />
             </div>
@@ -70,9 +71,9 @@ const CustomCostRow: React.FC<{
 
         {item.type === 'flat' && (
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Flat Cost</span>
+            <span className="text-[10px] font-bold text-ink-faint uppercase">Flat Cost</span>
             <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-xs">$</span>
               <input
                 type="text"
                 value={item.cost || ''}
@@ -83,7 +84,7 @@ const CustomCostRow: React.FC<{
                     if (result !== null) onChange(index, { ...item, cost: result.toString() });
                   }
                 }}
-                className="w-24 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                className="w-24 pl-5 pr-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
                 placeholder="0.00"
               />
             </div>
@@ -93,9 +94,9 @@ const CustomCostRow: React.FC<{
         {item.type === 'yield' && (
           <>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Cost</span>
               <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-xs">$</span>
                 <input
                   type="text"
                   value={item.cost || ''}
@@ -106,13 +107,13 @@ const CustomCostRow: React.FC<{
                       if (result !== null) onChange(index, { ...item, cost: result.toString() });
                     }
                   }}
-                  className="w-20 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                  className="w-20 pl-5 pr-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
                   placeholder="0.00"
                 />
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield (per {unitLabel})</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Yield (per {unitLabel})</span>
               <input
                 type="text"
                 value={item.yield || ''}
@@ -123,18 +124,18 @@ const CustomCostRow: React.FC<{
                     if (result !== null) onChange(index, { ...item, yield: result.toString() });
                   }
                 }}
-                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                className="w-20 px-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink"
                 placeholder="1.0"
               />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Unit</span>
               <input
                 type="text"
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. bags"
-                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                className="w-20 px-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
               />
             </div>
           </>
@@ -143,9 +144,9 @@ const CustomCostRow: React.FC<{
         {item.type === 'amount_per_units' && (
           <>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Amount</span>
               <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">$</span>
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-xs">$</span>
                 <input
                   type="text"
                   value={item.amount || ''}
@@ -156,13 +157,13 @@ const CustomCostRow: React.FC<{
                       if (result !== null) onChange(index, { ...item, amount: result.toString() });
                     }
                   }}
-                  className="w-20 pl-5 pr-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                  className="w-20 pl-5 pr-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
                   placeholder="0.00"
                 />
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Per</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Per</span>
               <input
                 type="text"
                 value={item.perUnits || ''}
@@ -173,25 +174,25 @@ const CustomCostRow: React.FC<{
                     if (result !== null) onChange(index, { ...item, perUnits: result.toString() });
                   }
                 }}
-                className="w-16 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                className="w-16 px-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
                 placeholder="1"
               />
-              <span className="text-[10px] font-bold text-slate-400 uppercase">{unitLabel}s</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">{unitLabel}s</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Unit</span>
               <input
                 type="text"
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. bags"
-                className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-accent-500 outline-none"
+                className="w-20 px-2 py-1 text-xs border border-edge-strong rounded-lg focus:ring-2 focus:ring-accent-500 outline-none bg-raised text-ink placeholder:text-ink-faint"
               />
             </div>
           </>
         )}
       </div>
-    </div>
+    </Card>
   );
 };
 
@@ -312,8 +313,8 @@ export const TemplatesView: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-white">Takeoff Templates</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Pre-defined takeoff types for quick project setup</p>
+          <h2 className="text-xl font-semibold text-ink">Takeoff Templates</h2>
+          <p className="text-sm text-ink-soft">Pre-defined takeoff types for quick project setup</p>
         </div>
         <button
           onClick={handleCreateClick}
@@ -329,10 +330,10 @@ export const TemplatesView: React.FC = () => {
           <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : templates.length === 0 ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center shadow-sm">
-          <Layout size={48} className="mx-auto text-slate-300 mb-4" />
-          <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-2">No templates yet</h3>
-          <p className="text-slate-500 dark:text-slate-400 mb-6">Create templates to reuse takeoff settings across projects.</p>
+        <Card className="p-12 text-center">
+          <Layout size={48} className="mx-auto text-ink-faint mb-4" />
+          <h3 className="text-lg font-medium text-ink mb-2">No templates yet</h3>
+          <p className="text-ink-soft mb-6">Create templates to reuse takeoff settings across projects.</p>
           <button
             onClick={handleCreateClick}
             className="inline-flex items-center gap-2 bg-accent-50 dark:bg-accent-900/20 text-accent-700 dark:text-accent-400 hover:bg-accent-100 dark:hover:bg-accent-900/20 px-4 py-2 rounded-lg font-medium transition-colors"
@@ -340,85 +341,85 @@ export const TemplatesView: React.FC = () => {
             <Plus size={18} />
             Create Template
           </button>
-        </div>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {templates.map(template => (
-            <div key={template.id} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm hover:border-accent-300 transition-colors group">
+            <Card key={template.id} className="p-4 hover:border-accent-300 transition-colors group">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
-                  <div 
-                    className="w-4 h-4 rounded-full shadow-inner" 
+                  <div
+                    className="w-4 h-4 rounded-full shadow-inner"
                     style={{ backgroundColor: template.color }}
                   />
-                  <h3 className="font-semibold text-slate-900 dark:text-white">{template.name}</h3>
+                  <h3 className="font-semibold text-ink">{template.name}</h3>
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
+                  <button
                     onClick={() => handleEditClick(template)}
-                    className="p-1.5 text-slate-400 hover:text-accent-600 hover:bg-accent-50 rounded-lg transition-colors"
+                    className="p-1.5 text-ink-faint hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-900/20 rounded-lg transition-colors"
                   >
                     <Edit2 size={14} />
                   </button>
-                  <button 
+                  <button
                     onClick={() => handleDelete(template.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    className="p-1.5 text-ink-faint hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                   >
                     <Trash2 size={14} />
                   </button>
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-y-2 text-xs">
-                <div className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <div className="text-ink-soft flex items-center gap-1">
                   {getTypeIcon(template.type)}
                   <span className="capitalize">{template.type}</span>
                 </div>
-                <div className="text-slate-900 dark:text-white font-medium text-right">
+                <div className="text-ink font-medium text-right">
                   {template.unit || 'Default'}
                 </div>
-                <div className="text-slate-500 dark:text-slate-400">Cost/Unit</div>
-                <div className="text-slate-900 dark:text-white font-medium text-right">
-                  {template.isAdvancedCost && template.customCosts 
+                <div className="text-ink-soft">Cost/Unit</div>
+                <div className="text-ink font-medium text-right">
+                  {template.isAdvancedCost && template.customCosts
                     ? `$${template.customCosts.reduce((sum, c) => sum + (c.costPerUnit || 0), 0).toFixed(2)}`
                     : template.costPerUnit ? `$${template.costPerUnit.toFixed(2)}` : '-'}
                 </div>
               </div>
 
               {template.isAdvancedCost && template.customCosts && template.customCosts.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700">
-                  <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase mb-1">Custom Costs</div>
+                <div className="mt-3 pt-3 border-t border-edge">
+                  <div className="text-[10px] font-bold text-ink-faint uppercase mb-1">Custom Costs</div>
                   <div className="space-y-1">
                     {template.customCosts.map(c => (
                       <div key={c.id} className="flex justify-between text-[10px]">
-                        <span className="text-slate-600 dark:text-slate-400 truncate mr-2">{c.name}</span>
-                        <span className="text-slate-900 dark:text-white font-medium">${c.costPerUnit.toFixed(2)}</span>
+                        <span className="text-ink-soft truncate mr-2">{c.name}</span>
+                        <span className="text-ink font-medium">${c.costPerUnit.toFixed(2)}</span>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-            </div>
+            </Card>
           ))}
         </div>
       )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Delete Template</h3>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <Card className="shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-edge">
+              <h3 className="text-lg font-semibold text-ink">Delete Template</h3>
             </div>
             <div className="p-6">
-              <p className="text-slate-600 dark:text-slate-400">
+              <p className="text-ink-soft">
                 Are you sure you want to delete this template? This action cannot be undone.
               </p>
             </div>
-            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex justify-end gap-3">
+            <div className="p-6 border-t border-edge bg-sunken flex justify-end gap-3">
               <button
                 onClick={() => { setShowDeleteConfirm(false); setTemplateToDelete(null); }}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover rounded-xl transition-colors"
               >
                 Cancel
               </button>
@@ -429,37 +430,37 @@ export const TemplatesView: React.FC = () => {
                 Delete Template
               </button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <Card className="shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-6 border-b border-edge">
+              <h3 className="text-lg font-semibold text-ink">
                 {editingTemplate ? 'Edit Template' : 'Create Template'}
               </h3>
             </div>
             <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Template Name</label>
+                <label className="block text-sm font-medium text-ink mb-1.5">Template Name</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                  className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink placeholder:text-ink-faint"
                   placeholder="e.g. Hardwood Flooring"
                   autoFocus
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Measurement Type</label>
+                  <label className="block text-sm font-medium text-ink mb-1.5">Measurement Type</label>
                   <select
                     value={type}
                     onChange={(e) => setType(e.target.value as MeasurementType)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800/50 dark:border-slate-600 dark:text-white"
+                    className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
                   >
                     <option value="length">Length</option>
                     <option value="area">Area</option>
@@ -467,24 +468,24 @@ export const TemplatesView: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Color</label>
+                  <label className="block text-sm font-medium text-ink mb-1.5">Color</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="color"
                       value={color}
                       onChange={(e) => setColor(e.target.value)}
-                      className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-1"
+                      className="h-11 w-full rounded-lg cursor-pointer border border-edge-strong p-1"
                     />
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Unit</label>
+                  <label className="block text-sm font-medium text-ink mb-1.5">Unit</label>
                   <select
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800/50 dark:border-slate-600 dark:text-white"
+                    className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
                   >
                     <option value="">Default (Scale Unit)</option>
                     {type === 'length' && (
@@ -511,7 +512,7 @@ export const TemplatesView: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cost Per Unit ($)</label>
+                  <label className="block text-sm font-medium text-ink mb-1.5">Cost Per Unit ($)</label>
                   <input
                     type="text"
                     disabled={isAdvancedCost}
@@ -523,7 +524,7 @@ export const TemplatesView: React.FC = () => {
                         if (result !== null) setCostPerUnit(result.toString());
                       }
                     }}
-                    className="w-full border border-slate-300 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-slate-50 disabled:text-slate-400 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500"
+                    className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:bg-sunken disabled:text-ink-faint bg-raised text-ink placeholder:text-ink-faint"
                     placeholder={isAdvancedCost ? "Disabled in Advanced" : "0.00 or =95*40%"}
                   />
                 </div>
@@ -535,17 +536,17 @@ export const TemplatesView: React.FC = () => {
                   id="isAdvancedCost"
                   checked={isAdvancedCost}
                   onChange={(e) => setIsAdvancedCost(e.target.checked)}
-                  className="w-4 h-4 text-accent-600 rounded border-slate-300 focus:ring-accent-500"
+                  className="w-4 h-4 text-accent-600 rounded border-edge-strong focus:ring-accent-500"
                 />
-                <label htmlFor="isAdvancedCost" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
+                <label htmlFor="isAdvancedCost" className="text-sm font-medium text-ink cursor-pointer">
                   Advanced Costing (Custom Items)
                 </label>
               </div>
 
               {isAdvancedCost && (
-                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
+                <div className="mt-4 pt-4 border-t border-edge">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Advanced Costing</h4>
+                    <h4 className="text-xs font-bold text-ink-faint uppercase tracking-wider">Advanced Costing</h4>
                     <button
                       onClick={() => setCustomCosts([...customCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
                       className="text-[10px] flex items-center gap-1 text-accent-600 hover:text-accent-700 font-bold uppercase tracking-tight"
@@ -575,10 +576,10 @@ export const TemplatesView: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex justify-end gap-3">
+            <div className="p-6 border-t border-edge bg-sunken flex justify-end gap-3">
               <button
                 onClick={() => setShowModal(false)}
-                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover rounded-xl transition-colors"
               >
                 Cancel
               </button>
@@ -590,7 +591,7 @@ export const TemplatesView: React.FC = () => {
                 {editingTemplate ? 'Save Changes' : 'Create Template'}
               </button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
     </div>

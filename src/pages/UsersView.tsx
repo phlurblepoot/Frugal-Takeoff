@@ -4,6 +4,7 @@ import { getAuthHeaders } from '../utils/store';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useLiveQuery } from '../hooks/useLiveQuery';
+import { Card, Table, THead, TBody, TR, TH, TD } from '../components/ui';
 
 interface UserData {
   id: string;
@@ -122,9 +123,9 @@ export const UsersView: React.FC = () => {
   }
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-      <div className="p-6 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
-        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Add New User</h2>
+    <Card className="overflow-hidden">
+      <div className="p-6 border-b border-edge bg-sunken">
+        <h2 className="text-lg font-bold text-ink mb-4">Add New User</h2>
 
         {error && (
           <div className="bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400 p-3 rounded-lg mb-4 text-sm font-medium border border-red-100 dark:border-red-900">
@@ -134,33 +135,33 @@ export const UsersView: React.FC = () => {
 
         <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Username</label>
+            <label className="block text-sm font-medium text-ink mb-1">Username</label>
             <input
               type="text"
               value={newUsername}
               onChange={e => setNewUsername(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-edge-strong bg-raised text-ink placeholder:text-ink-faint focus:ring-2 focus:ring-accent-500 outline-none"
               placeholder="e.g. jdoe"
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Password</label>
+            <label className="block text-sm font-medium text-ink mb-1">Password</label>
             <input
               type="password"
               value={newPassword}
               onChange={e => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-edge-strong bg-raised text-ink placeholder:text-ink-faint focus:ring-2 focus:ring-accent-500 outline-none"
               placeholder="Enter password"
               required
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Role</label>
+            <label className="block text-sm font-medium text-ink mb-1">Role</label>
             <select
               value={newRole}
               onChange={e => setNewRole(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-accent-500 outline-none"
+              className="w-full px-3 py-2 rounded-lg border border-edge-strong bg-raised text-ink focus:ring-2 focus:ring-accent-500 outline-none"
             >
               <option value="user">User</option>
               <option value="admin">Admin</option>
@@ -177,65 +178,63 @@ export const UsersView: React.FC = () => {
         </form>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
-              <th className="px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Username</th>
-              <th className="px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Role</th>
-              <th className="px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-            {users.length === 0 ? (
-              <tr>
-                <td colSpan={3} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
-                  No users found.
-                </td>
-              </tr>
-            ) : (
-              users.map((user) => (
-                <tr key={user.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group">
-                  <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                    <User size={16} className="text-slate-400 dark:text-slate-500" />
-                    {user.username}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      {user.role === 'admin' && (
-                        <Shield size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
-                      )}
-                      <select
-                        value={user.role}
-                        disabled={user.id === currentUserId}
-                        onChange={e => handleRoleChange(user.id, user.role, e.target.value)}
-                        title={user.id === currentUserId ? "You can't change your own role" : 'Change role'}
-                        className={`px-2.5 py-1 rounded-lg border text-xs font-medium outline-none focus:ring-2 focus:ring-accent-500 ${
-                          user.role === 'admin'
-                            ? 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                            : 'border-accent-200 dark:border-accent-800 bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
-                        } disabled:opacity-60 disabled:cursor-not-allowed dark:[color-scheme:dark]`}
-                      >
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
-                      </select>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => handleDeleteUser(user.id)}
-                      className="text-slate-400 dark:text-slate-500 hover:text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
-                      title="Delete User"
+      <Table>
+        <THead>
+          <TR>
+            <TH>Username</TH>
+            <TH>Role</TH>
+            <TH className="text-right">Actions</TH>
+          </TR>
+        </THead>
+        <TBody>
+          {users.length === 0 ? (
+            <TR>
+              <TD colSpan={3} className="text-center py-8 text-ink-soft">
+                No users found.
+              </TD>
+            </TR>
+          ) : (
+            users.map((user) => (
+              <TR key={user.id} className="group">
+                <TD className="font-medium text-ink flex items-center gap-2">
+                  <User size={16} className="text-ink-faint" />
+                  {user.username}
+                </TD>
+                <TD>
+                  <div className="flex items-center gap-2">
+                    {user.role === 'admin' && (
+                      <Shield size={14} className="text-purple-600 dark:text-purple-400 shrink-0" />
+                    )}
+                    <select
+                      value={user.role}
+                      disabled={user.id === currentUserId}
+                      onChange={e => handleRoleChange(user.id, user.role, e.target.value)}
+                      title={user.id === currentUserId ? "You can't change your own role" : 'Change role'}
+                      className={`px-2.5 py-1 rounded-lg border text-xs font-medium outline-none focus:ring-2 focus:ring-accent-500 ${
+                        user.role === 'admin'
+                          ? 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                          : 'border-accent-200 dark:border-accent-800 bg-accent-50 dark:bg-accent-900/30 text-accent-700 dark:text-accent-300'
+                      } disabled:opacity-60 disabled:cursor-not-allowed dark:[color-scheme:dark]`}
                     >
-                      <Trash2 size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                </TD>
+                <TD className="text-right">
+                  <button
+                    onClick={() => handleDeleteUser(user.id)}
+                    className="text-ink-faint hover:text-red-500 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
+                    title="Delete User"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </TD>
+              </TR>
+            ))
+          )}
+        </TBody>
+      </Table>
+    </Card>
   );
 };

@@ -286,7 +286,10 @@ test('project Documents nav lands on the global page pre-filtered to that projec
   const seeded = await seedCustomerWithPortfolio(request, apiToken.token);
 
   await authedPage.goto(`/project/${seeded.inProgressProjectId}`);
-  await authedPage.getByRole('link', { name: 'Documents' }).click();
+  // Project sections render as buttons in the horizontal tab bar (rehaul
+  // spec §4, ProjectTabBar.tsx), not links — scope to the "Project sections"
+  // nav landmark since the global sidebar has its own "Documents" button too.
+  await authedPage.getByRole('navigation', { name: 'Project sections' }).getByRole('button', { name: 'Documents' }).click();
 
   await expect(authedPage).toHaveURL(new RegExp(`/documents\\?projectIds=${seeded.inProgressProjectId}$`));
   // A single selected project shows its own name as the dropdown summary

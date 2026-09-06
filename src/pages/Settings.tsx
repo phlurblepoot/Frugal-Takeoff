@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
-import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, XCircle, Eye, EyeOff, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X } from 'lucide-react';
+import { Globe, Image as ImageIcon, Users, History, User, Palette, Sun, Moon, Check, Zap, ZapOff, Save, Link, Mail, Trash2, RefreshCw, CheckCircle, HardDrive, Sparkles, FileSpreadsheet, Lock, Loader2, Layout, Tag, Plus, Pencil, X, Sunrise, Layers } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { getSettings, saveSettings, getSmtpSettings, saveSmtpSettings, testSmtpConnection, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getUserPreferences, saveUserPreferences, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
-import { SmtpSettings } from '../types';
+import { getSettings, saveSettings, getStorageStats, formatBytes, StorageStats, getStorageOrphans, cleanupStorageOrphans, saveBinaryFile, getAuthHeaders, getDocumentTypes, saveDocumentTypes, getDocuments, CustomDocType } from '../utils/store';
 import { UsersView } from './UsersView';
+import { MailAccountsTab } from './settings/MailAccountsTab';
 import { TemplatesView } from './TemplatesView';
 import { useTheme, AccentKey } from '../context/ThemeContext';
 import { getAiStatus, aiAutoNameEnabled, setAiAutoNameEnabled, type AiStatus } from '../utils/aiSheets';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { Field, Input } from '../components/ui';
 
 // ── Changelog data ────────────────────────────────────────────────────────────
 
@@ -20,6 +22,95 @@ interface ChangelogEntry {
 }
 
 const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: '3.0.0',
+    date: 'September 5, 2026',
+    changes: [
+      'Takeoff Pro 3.0 — this release caps the full UI rehaul (v2.12–v2.14): ambient accent-derived theming, frosted-glass surfaces, springy motion, and customizable card-based dashboard, project, and customer pages are now the standard experience throughout the app.',
+      'Daily Reports is now a calendar: days with a report are highlighted in your accent color, tapping a highlighted day opens that report, and tapping an empty day starts one for that date — a toggle switches back to the classic list view (your choice is remembered).',
+      'Weekly hour totals (Dashboard, project Time, Time Keeping) now follow a Sunday-to-Saturday week, matching the time sheet calendar.',
+      'Fixed: adding photos from a phone now opens the photo picker (with the camera available as a source) instead of jumping straight into the camera — everywhere photos can be added (Issues, Punch, Daily Reports, RFIs, Change Orders, Tasks).',
+    ],
+  },
+  {
+    version: '2.14.0',
+    date: 'September 5, 2026',
+    changes: [
+      'Every remaining screen has been brought onto the new glass/token look — Settings, Users, Templates, share pages, Time Keeping, and every project section, plus the canvas toolbar/sidebars/modals — including dark-mode fixes for a handful of dialogs that had stayed light-only until now.',
+      'Switching tabs anywhere in the app (Settings, a project\'s sections, and more) now animates the tab indicator and content into place instead of jumping.',
+      'The ⌘K command palette has a glossier feel with springy transitions and grouped results that cascade in, remembers your recent picks so they surface first, and its "?" shortcut overlay has been expanded to cover far more of the app\'s shortcuts.',
+      'Photos now open in a springy full-screen lightbox with swipe/arrow navigation everywhere photos appear — Issues, Punch List, Daily Reports, RFIs, Change Orders, Tasks, and Proposals.',
+      'Small celebration moments: confetti when a bid is won, a soft glow pulse when a payment lands or a document is finalized.',
+      'Cards and sections gently reveal as you scroll to them, live progress bars have a subtle breathing animation, and scrollable rails get a fade at the edge to hint there\'s more.',
+      'Collaborator cursors on the canvas now glide smoothly between positions instead of jumping frame to frame, with cleaner name tags.',
+      'Dashboard/project/customer cards can now be reordered with a touch long-press (not just drag on desktop) and resized by dragging their edge; the "Open tasks" card is back and available on customer pages; and cards linked to a mail thread now open straight into it.',
+      'Fixed: Time Keeping\'s week view now starts on Monday everywhere, matching the rest of the app\'s date handling.',
+    ],
+  },
+  {
+    version: '2.13.1',
+    date: 'September 5, 2026',
+    changes: [
+      'Dashboard/project/customer cards now pack tightly: a tall card no longer stretches its whole row and strands empty space beside shorter neighbors, and narrower cards fill leftover gaps automatically instead of always starting a fresh row.',
+    ],
+  },
+  {
+    version: '2.13.0',
+    date: 'September 5, 2026',
+    changes: [
+      'Dashboard, every project, and every customer page are now built from customizable cards instead of a fixed layout: hit "⚙ Customize" to drag cards into a new order, resize any card from 1 to 3 columns wide, remove ones you don\'t need, and add others from a library of 39 — Reset to default puts a page back the way it started. Your layout is saved per person and follows you to any device you sign in on.',
+      'New default Dashboard: "⚡ Needs your attention" surfaces overdue invoices, aging receivables, stalled proposals and the like as one prioritized feed with a link straight to the item, "Money pulse" gives an animated at-a-glance read on what\'s outstanding and what\'s recently moved, plus "On deck" for upcoming deadlines and "Team activity" for what everyone\'s been doing.',
+      'New default project page: a "Financial progress" band tracks contract value against billed and paid, "Open items" rolls up outstanding tasks/RFIs/issues/punch items in one place, and "Recent happenings" merges activity and mail into a single project timeline.',
+      'New default customer page: "Financials" shows contract-to-date and outstanding balance with an aging breakdown (current / 31-60 days / 61+ days), alongside "Their projects," "Correspondence," and a "Needs attention" card for that customer specifically.',
+      'Key figures now animate in with a quick count-up instead of appearing instantly, and several cards carry a small sparkline trend alongside the number.',
+      'Pages and lists that have nothing in them yet now show a small illustration instead of a bare "No items" message.',
+      'The customer list and the customer detail pane now scroll independently, so a long project or activity list on the right no longer scrolls the customer list on the left out of view.',
+    ],
+  },
+  {
+    version: '2.12.0',
+    date: 'September 4, 2026',
+    changes: [
+      'New look throughout the app: an ambient background scene derives its colors from your accent color, and cards, panels, and modals now sit on a soft frosted-glass surface instead of flat panels.',
+      'Smoother motion everywhere: moving between pages plays a gentle springy transition, and switching tabs within a page animates in place instead of jumping.',
+      'Hover effects on cards and buttons now grow subtly in place, tuned so they never overlap into neighboring elements no matter the screen size.',
+      'The sidebar and a project\'s section tabs are now permanently in view and no longer swap out or hide depending on where you are — one consistent global sidebar, with the project\'s sections in a horizontal tab bar at the top.',
+      'Who else is online now shows right in the sidebar in place of the old floating bubble — click it to open the presence list and Follow a teammate for a live view of what they\'re doing.',
+      'The Login screen has been rebuilt with the same ambient glass look as the rest of the app, and a batch of leftover legacy glass/theme styling was cleaned out behind the scenes.',
+      'New preferences: a time-of-day ambience toggle that shifts the ambient scene\'s mood through the day (morning/midday/evening, matching your clock while it\'s on), and a "solid surfaces" toggle for anyone who\'d rather have opaque panels than the glass effect — the app also falls back to solid surfaces automatically when your browser can\'t do the glass blur or you\'ve asked for reduced transparency.',
+      'Scrollbars, the fade edge on scrollable panels, and sidebar icons now pick up the glass/accent styling, with icons reacting subtly on hover.',
+      'Switching between light and dark mode now plays a short cinematic wipe animation out from the toggle button instead of switching instantly.',
+    ],
+  },
+  {
+    version: '2.11.0',
+    date: 'September 3, 2026',
+    changes: [
+      'A mail thread can now be linked straight to a project, a customer, or a specific item — "+ Link" in the conversation opens a picker (Customer / Project / drill into a Task, RFI, Issue, Invoice, Change Order, Pay App, Proposal, Daily Report, or Punch List) and the link shows up everywhere as a real label ("RFI-012", "INV-104") instead of just the item type. Unlink your own links any time; admins can unlink anyone\'s.',
+      '"Create ▾" on a conversation turns it straight into a Task, RFI, or Issue — the new item is pre-filled with the thread\'s subject and the latest message\'s text, linked back to the conversation automatically, and opens right in its editor.',
+      'Opening a linked conversation now works for everyone on the job, not just whoever\'s mailbox it lives in: if it\'s not in your own mail, you get a read-only reference card (subject, participants, date, and what it\'s linked to) instead of a dead end.',
+      'A "Reply" indicator now shows up anywhere a sent document is tracked — invoices, change orders, proposals, issues, RFIs, daily reports, pay applications, and tasks — whenever a reply has come in on its thread since you last sent something on it.',
+      'Projects gained a Mail tab: every email conversation linked to that project or one of its items, in one list, with who\'s in it, what it\'s linked to, and a reply indicator — no more hunting through a mailbox to find where a thread went.',
+      'Editing an IMAP mail account now starts from what\'s already saved (host, port, username) instead of a blank form.',
+      'Fixed: a reply landing on an RFI\'s thread no longer flips its document to "PDF out of date" — arriving mail isn\'t a change to the record.',
+      'Fixed: switching threads, folders, or mailboxes while a reply is still being typed now asks before discarding it.',
+      'The mail conversation list now scrolls smoothly in very large folders (150+ threads) by only keeping the visible rows on screen.',
+    ],
+  },
+  {
+    version: '2.10.0',
+    date: 'August 30, 2026',
+    changes: [
+      'Email now lives in the app. Each person connects their own mailbox — Google Workspace, Microsoft 365, or any IMAP/SMTP host — and the server keeps it indexed in the background, so new mail shows up within seconds on Microsoft and IMAP, and within about half a minute on Gmail.',
+      'New Mail tab: a full mailbox inside the app — folders down the left, conversations in the middle, the thread on the right. Read, star, archive, move and trash mail; search across a mailbox; and write with formatting, attachments (uploaded or picked from Documents), reply, reply-all and forward. A message you are part-way through saves itself as a draft, and threads that came from a project record are chipped with what they belong to.',
+      'Any attachment on a message can be filed straight into Documents with \'Save to Documents…\' — pick the document type and the project it belongs to, and it lands in the list like any other file.',
+      'Settings → Mail is where mailboxes live: connect Google Workspace or Microsoft 365 with a Connect button (no password stored) or fill in any IMAP/SMTP host, give each account its own signature, pick which one sends by default, and remove ones you no longer use.',
+      'Sending from proposals, invoices, change orders, issue reports, RFIs, daily reports, punch lists and pay applications now goes out through your own connected mailbox, in the same composer as the rest of the app — so the recipient sees it from you, and it lands in your Sent. Once a document has been emailed, its editor shows a \'Sent · Open thread\' chip that jumps to the conversation, replies and all.',
+      'Gmail can now deliver mail in real time instead of waiting for the next check: an admin creates a Google Cloud Pub/Sub topic and points it at the app (Settings → Mail → Server setup guide has the exact steps and URL). It is optional — Gmail keeps checking on a timer either way — and Microsoft and IMAP accounts already arrive instantly.',
+      'Note for self-hosters: your old SMTP settings have been migrated into a mail account that starts as "Needs review", and nothing sends until you activate it — open Settings → Mail, confirm the IMAP host and password, and test the connection. Google and Microsoft sign-in also needs a one-time server setup by an admin (see docs/mail-setup.md). This update includes a data-transforming migration (31) plus an additive index (32) — back up before pulling, and keep the new data/mail.key file with your data directory.',
+      'RFIs now watch for a reply: when an email comes in on the thread of an RFI you sent, it shows up as a banner on that RFI (and a chip in the RFI list) offering to use it as the response, attachment and all — nothing is recorded automatically, so a reply that isn\'t actually the answer can just be dismissed.',
+    ],
+  },
   {
     version: '2.9.0',
     date: 'August 29, 2026',
@@ -601,7 +692,7 @@ function accentSwatchColor(hue: number) {
 }
 
 const PreferencesTab: React.FC = () => {
-  const { mode, accentColor, customAccentHex, reducedMotion, toggleMode, setAccentColor, setCustomAccent, setReducedMotion } = useTheme();
+  const { mode, accentColor, customAccentHex, reducedMotion, timeAmbience, solidSurfaces, toggleMode, setAccentColor, setCustomAccent, setReducedMotion, setTimeAmbience, setSolidSurfaces } = useTheme();
   const { toast } = useToast();
 
   const [currentPassword, setCurrentPassword] = useState('');
@@ -677,14 +768,12 @@ const PreferencesTab: React.FC = () => {
     }
   };
 
-  const pwInputCls = 'w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none';
-
   return (
     <div className="space-y-6">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Appearance</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Control how the application looks and feels.</p>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Appearance</h2>
+          <p className="text-sm text-ink-soft">Control how the application looks and feels.</p>
         </div>
         <div className="p-6 space-y-6">
           {/* Dark Mode */}
@@ -708,13 +797,13 @@ const PreferencesTab: React.FC = () => {
                 </AnimatePresence>
               </div>
               <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Dark Mode</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Switch between light and dark interface</p>
+                <p className="text-sm font-semibold text-ink">Dark Mode</p>
+                <p className="text-xs text-ink-soft mt-0.5">Switch between light and dark interface</p>
               </div>
             </div>
             <button
               role="switch" aria-checked={mode === 'dark'} onClick={toggleMode}
-              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${mode === 'dark' ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised ${mode === 'dark' ? 'bg-accent-600' : 'bg-edge-strong'}`}
             >
               <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
                 className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${mode === 'dark' ? 'left-6' : 'left-0.5'}`} />
@@ -728,25 +817,65 @@ const PreferencesTab: React.FC = () => {
                 {reducedMotion ? <ZapOff size={16} /> : <Zap size={16} />}
               </div>
               <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Reduce Motion</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Minimize animations for accessibility or performance</p>
+                <p className="text-sm font-semibold text-ink">Reduce Motion</p>
+                <p className="text-xs text-ink-soft mt-0.5">Minimize animations for accessibility or performance</p>
               </div>
             </div>
             <button
               role="switch" aria-checked={reducedMotion} onClick={() => setReducedMotion(!reducedMotion)}
-              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${reducedMotion ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised ${reducedMotion ? 'bg-accent-600' : 'bg-edge-strong'}`}
             >
               <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
                 className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${reducedMotion ? 'left-6' : 'left-0.5'}`} />
             </button>
           </div>
+
+          {/* Time-of-day ambience */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-accent-100 dark:bg-accent-900/40 flex items-center justify-center text-accent-600 dark:text-accent-400 shrink-0">
+                <Sunrise size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-ink">Time-of-day ambience</p>
+                <p className="text-xs text-ink-soft mt-0.5">Background scene warms and cools with the clock (always in your accent's hues)</p>
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={timeAmbience} onClick={() => setTimeAmbience(!timeAmbience)}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised ${timeAmbience ? 'bg-accent-600' : 'bg-edge-strong'}`}
+            >
+              <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${timeAmbience ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
+
+          {/* Solid surfaces */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-accent-100 dark:bg-accent-900/40 flex items-center justify-center text-accent-600 dark:text-accent-400 shrink-0">
+                <Layers size={16} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-ink">Solid surfaces</p>
+                <p className="text-xs text-ink-soft mt-0.5">Replace translucent glass panels with solid ones (better on low-power devices)</p>
+              </div>
+            </div>
+            <button
+              role="switch" aria-checked={solidSurfaces} onClick={() => setSolidSurfaces(!solidSurfaces)}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised ${solidSurfaces ? 'bg-accent-600' : 'bg-edge-strong'}`}
+            >
+              <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
+                className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${solidSurfaces ? 'left-6' : 'left-0.5'}`} />
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Accent Colour</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Applied to buttons, active states, and interactive elements.</p>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Accent Colour</h2>
+          <p className="text-sm text-ink-soft">Applied to buttons, active states, and interactive elements.</p>
         </div>
         <div className="p-6">
           <div className="flex items-center gap-3 flex-wrap">
@@ -757,7 +886,7 @@ const PreferencesTab: React.FC = () => {
                 title={preset.label}
                 aria-label={preset.label}
                 aria-pressed={accentColor === preset.key}
-                className="relative w-9 h-9 rounded-full transition-transform hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+                className="relative w-9 h-9 rounded-full transition-transform hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-raised"
                 style={{ background: accentSwatchColor(preset.hue) } as React.CSSProperties}
               >
                 <AnimatePresence>
@@ -778,7 +907,7 @@ const PreferencesTab: React.FC = () => {
             <label
               title="Custom colour"
               aria-label="Custom accent colour"
-              className="relative w-9 h-9 rounded-full cursor-pointer transition-transform hover:scale-110 active:scale-95 focus-within:ring-2 focus-within:ring-offset-2 dark:focus-within:ring-offset-slate-800"
+              className="relative w-9 h-9 rounded-full cursor-pointer transition-transform hover:scale-110 active:scale-95 focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-raised"
               style={{ background: customAccentHex } as React.CSSProperties}
             >
               <input
@@ -801,9 +930,9 @@ const PreferencesTab: React.FC = () => {
               </AnimatePresence>
             </label>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-4">
+          <p className="text-xs text-ink-soft mt-4">
             Current:{' '}
-            <span className="font-medium text-slate-700 dark:text-slate-300 capitalize">
+            <span className="font-medium text-ink capitalize">
               {accentColor === 'custom' ? customAccentHex : accentColor}
             </span>
           </p>
@@ -811,12 +940,12 @@ const PreferencesTab: React.FC = () => {
       </div>
 
       {/* AI Sheet Reading */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink flex items-center gap-2">
             <Sparkles size={18} /> AI Sheet Reading
           </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-sm text-ink-soft mt-1">
             {aiStatus?.state === 'ready'
               ? `Local model ready: ${aiStatus.model} (${aiStatus.device}).`
               : aiStatus?.state === 'loading'
@@ -829,8 +958,8 @@ const PreferencesTab: React.FC = () => {
         <div className="p-6 space-y-6">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-slate-900 dark:text-white">Enable AI sheet reading</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              <p className="text-sm font-medium text-ink">Enable AI sheet reading</p>
+              <p className="text-xs text-ink-soft mt-0.5">
                 Renders page images for AI and shows the AI Scan button on the naming screen. Nothing runs until you click AI Scan.
               </p>
             </div>
@@ -840,78 +969,74 @@ const PreferencesTab: React.FC = () => {
               aria-checked={autoName}
               disabled={!aiStatus?.available}
               onClick={() => { const next = !autoName; setAutoName(next); setAiAutoNameEnabled(next); }}
-              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed ${autoName && aiStatus?.available ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+              className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised disabled:opacity-50 disabled:cursor-not-allowed ${autoName && aiStatus?.available ? 'bg-accent-600' : 'bg-edge-strong'}`}
             >
               <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-all ${autoName && aiStatus?.available ? 'left-6' : 'left-0.5'}`} />
             </button>
           </div>
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
-              <p className="text-sm font-medium text-slate-900 dark:text-white">Unload model after (minutes idle)</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              <p className="text-sm font-medium text-ink">Unload model after (minutes idle)</p>
+              <p className="text-xs text-ink-soft mt-0.5">
                 Frees GPU memory when idle. 0 = keep loaded.
               </p>
             </div>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={aiIdleMinutes}
-              onChange={e => setAiIdleMinutes(e.target.value)}
-              onBlur={handleAiIdleBlur}
-              disabled={!aiStatus?.available}
-              className="w-24 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white text-sm focus:ring-2 focus:ring-accent-500 outline-none disabled:opacity-50"
-            />
+            <div className="w-24 shrink-0">
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={aiIdleMinutes}
+                onChange={e => setAiIdleMinutes(e.target.value)}
+                onBlur={handleAiIdleBlur}
+                disabled={!aiStatus?.available}
+                className="py-1.5"
+              />
+            </div>
           </div>
         </div>
       </div>
 
       {/* Change Password */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink flex items-center gap-2">
             <Lock size={18} className="text-accent-600 dark:text-accent-400" />
             Change Password
           </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Update the password you use to sign in.</p>
+          <p className="text-sm text-ink-soft">Update the password you use to sign in.</p>
         </div>
         <form onSubmit={handleChangePassword} className="p-6 space-y-4 max-w-md">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Current password</label>
-            <input
+          <Field label="Current password">
+            <Input
               type="password"
               value={currentPassword}
               onChange={e => setCurrentPassword(e.target.value)}
-              className={pwInputCls}
               placeholder="Enter current password"
               autoComplete="current-password"
               required
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">New password</label>
-            <input
+          </Field>
+          <Field label="New password">
+            <Input
               type="password"
               value={newPassword}
               onChange={e => setNewPassword(e.target.value)}
-              className={pwInputCls}
               placeholder="At least 6 characters"
               autoComplete="new-password"
               required
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Confirm new password</label>
-            <input
+          </Field>
+          <Field label="Confirm new password">
+            <Input
               type="password"
               value={confirmPassword}
               onChange={e => setConfirmPassword(e.target.value)}
-              className={pwInputCls}
               placeholder="Re-enter new password"
               autoComplete="new-password"
               required
             />
-          </div>
+          </Field>
           <button
             type="submit"
             disabled={savingPassword || !currentPassword || !newPassword || !confirmPassword}
@@ -926,167 +1051,17 @@ const PreferencesTab: React.FC = () => {
   );
 };
 
-// ── Email tab ─────────────────────────────────────────────────────────────────
-
-const inputCls = 'w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 focus:ring-2 focus:ring-accent-500 outline-none transition-all';
-const labelCls = 'block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider';
-
-const EmailTab: React.FC = () => {
-  const { toast } = useToast();
-  const [smtp, setSmtp] = useState<Partial<SmtpSettings>>({});
-  const [smtpSaving, setSmtpSaving] = useState(false);
-  const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
-  const [smtpTestMsg, setSmtpTestMsg] = useState('');
-  const [showSmtpPass, setShowSmtpPass] = useState(false);
-  const [alwaysCc, setAlwaysCc] = useState('');
-  const [alwaysCcSaving, setAlwaysCcSaving] = useState(false);
-
-  const [loading, setLoading] = useState(true);
-
-  const fetchAll = useCallback(async () => {
-    try {
-      const [smtpData, prefs] = await Promise.all([getSmtpSettings(), getUserPreferences()]);
-      setSmtp(smtpData);
-      setAlwaysCc(prefs['emailAlwaysCc'] ?? '');
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const handleSmtpSave = async () => {
-    setSmtpSaving(true);
-    try { await saveSmtpSettings(smtp as Record<string, string>); toast('SMTP settings saved.', { type: 'success' }); }
-    catch { toast('Failed to save SMTP settings.', { type: 'error' }); }
-    finally { setSmtpSaving(false); }
-  };
-
-  const handleSmtpTest = async () => {
-    setSmtpTestStatus('testing');
-    setSmtpTestMsg('');
-    try {
-      await saveSmtpSettings(smtp as Record<string, string>);
-      await testSmtpConnection();
-      setSmtpTestStatus('ok');
-      setSmtpTestMsg('Connection successful!');
-    } catch (e: any) {
-      setSmtpTestStatus('error');
-      setSmtpTestMsg(e.message || 'Connection failed');
-    }
-  };
-
-  const handleAlwaysCcSave = async () => {
-    setAlwaysCcSaving(true);
-    try {
-      await saveUserPreferences({ emailAlwaysCc: alwaysCc });
-      toast('Always CC saved.', { type: 'success' });
-    } catch { toast('Failed to save Always CC.', { type: 'error' }); }
-    finally { setAlwaysCcSaving(false); }
-  };
-
-  if (loading) return <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" /></div>;
-
-  return (
-    <div className="space-y-6">
-      {/* Always CC */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Always CC</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These addresses are added to CC on every template you send.</p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div>
-            <label className={labelCls}>Always CC addresses</label>
-            <input
-              className={inputCls}
-              value={alwaysCc}
-              onChange={e => setAlwaysCc(e.target.value)}
-              placeholder="e.g. boss@company.com, records@company.com"
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">Separate multiple addresses with a comma or semicolon.</p>
-          </div>
-          <div className="flex items-center gap-3 pt-2">
-            <button onClick={handleAlwaysCcSave} disabled={alwaysCcSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
-              <Save size={16} /> {alwaysCcSaving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* SMTP */}
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2"><Mail size={20} className="text-accent-600" /> Outbound Email (SMTP)</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">These are your personal outgoing email settings. Emails you send (proposals, invoices, issues, change orders) go out through this account. Works with any email provider — use an app-specific password for Gmail or Outlook.</p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-2">
-                <label className={labelCls}>SMTP Server</label>
-                <input className={inputCls} value={smtp.host || ''} onChange={e => setSmtp(s => ({ ...s, host: e.target.value }))} placeholder="smtp.gmail.com" />
-              </div>
-              <div>
-                <label className={labelCls}>Port</label>
-                <input className={inputCls} type="number" value={smtp.port || ''} onChange={e => setSmtp(s => ({ ...s, port: parseInt(e.target.value) || undefined }))} placeholder="587" />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>Username / Email</label>
-              <input className={inputCls} value={smtp.username || ''} onChange={e => setSmtp(s => ({ ...s, username: e.target.value }))} placeholder="you@example.com" />
-            </div>
-            <div>
-              <label className={labelCls}>Password / App Password</label>
-              <div className="relative">
-                <input className={inputCls + ' pr-12'} type={showSmtpPass ? 'text' : 'password'} value={smtp.password || ''} onChange={e => setSmtp(s => ({ ...s, password: e.target.value }))} placeholder="••••••••" />
-                <button type="button" onClick={() => setShowSmtpPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                  {showSmtpPass ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>From Name</label>
-              <input className={inputCls} value={smtp.fromName || ''} onChange={e => setSmtp(s => ({ ...s, fromName: e.target.value }))} placeholder="Acme Estimating" />
-            </div>
-            <div>
-              <label className={labelCls}>From Address</label>
-              <input className={inputCls} value={smtp.fromAddress || ''} onChange={e => setSmtp(s => ({ ...s, fromAddress: e.target.value }))} placeholder="estimates@acme.com" />
-            </div>
-            <div className="flex items-end">
-              <button type="button" onClick={() => setSmtp(s => ({ ...s, secure: !s.secure }))}
-                className={`px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${smtp.secure ? 'bg-accent-600 text-white border-accent-600' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600'}`}>
-                {smtp.secure ? 'SSL/TLS (port 465)' : 'STARTTLS (port 587)'}
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 pt-2">
-            <button onClick={handleSmtpSave} disabled={smtpSaving} className="px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all disabled:opacity-50 flex items-center gap-2">
-              <Save size={16} /> {smtpSaving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={handleSmtpTest} disabled={smtpTestStatus === 'testing'} className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2">
-              {smtpTestStatus === 'testing' ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />} Test Connection
-            </button>
-            {smtpTestStatus === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400"><CheckCircle size={15} /> {smtpTestMsg}</span>}
-            {smtpTestStatus === 'error' && <span className="flex items-center gap-1.5 text-sm text-red-600 dark:text-red-400"><XCircle size={15} /> {smtpTestMsg}</span>}
-          </div>
-        </div>
-      </div>
-
-    </div>
-  );
-};
-
 // ── Changelog tab ─────────────────────────────────────────────────────────────
 
 const ChangelogTab: React.FC = () => (
   <div className="space-y-6">
     {CHANGELOG.map((entry, i) => (
-      <div key={entry.version} className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3">
+      <div key={entry.version} className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge flex items-center gap-3">
           <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300">
             v{entry.version}
           </span>
-          <span className="text-sm text-slate-500 dark:text-slate-400">{entry.date}</span>
+          <span className="text-sm text-ink-soft">{entry.date}</span>
           {i === 0 && (
             <span className="ml-auto inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
               Latest
@@ -1096,7 +1071,7 @@ const ChangelogTab: React.FC = () => (
         <div className="p-6">
           <ul className="space-y-2">
             {entry.changes.map((change, j) => (
-              <li key={j} className="flex items-start gap-3 text-sm text-slate-700 dark:text-slate-300">
+              <li key={j} className="flex items-start gap-3 text-sm text-ink">
                 <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-500 shrink-0" />
                 {change}
               </li>
@@ -1164,7 +1139,7 @@ const StorageTab: React.FC = () => {
 
   if (error || !stats) {
     return (
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm p-6">
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm p-6">
         <p className="text-sm text-red-500">{error || 'No data available.'}</p>
         <button onClick={load} className="mt-4 px-4 py-2 rounded-xl bg-accent-600 text-white text-sm font-medium hover:bg-accent-700 transition-all flex items-center gap-2">
           <RefreshCw size={16} /> Retry
@@ -1185,42 +1160,42 @@ const StorageTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge flex items-center justify-between">
           <div className="flex items-center gap-3">
             <HardDrive className="text-accent-600" size={22} />
             <div>
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white">Storage Usage</h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400">How much disk space the application's data occupies.</p>
+              <h2 className="text-lg font-bold text-ink">Storage Usage</h2>
+              <p className="text-sm text-ink-soft">How much disk space the application's data occupies.</p>
             </div>
           </div>
-          <button onClick={load} title="Refresh" className="p-2 rounded-lg text-slate-400 hover:text-accent-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">
+          <button onClick={load} title="Refresh" className="p-2 rounded-lg text-ink-faint hover:text-accent-600 hover:bg-hover transition-all">
             <RefreshCw size={18} />
           </button>
         </div>
         <div className="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
-            <div className="text-2xl font-bold text-slate-900 dark:text-white">{formatBytes(stats.databaseBytes)}</div>
-            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Database on disk</div>
+          <div className="rounded-xl bg-sunken/50 p-4">
+            <div className="text-2xl font-bold text-ink">{formatBytes(stats.databaseBytes)}</div>
+            <div className="text-xs uppercase tracking-wider text-ink-soft mt-1">Database on disk</div>
           </div>
-          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
-            <div className="text-2xl font-bold text-slate-900 dark:text-white">{stats.projectCount.toLocaleString()}</div>
-            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Projects</div>
+          <div className="rounded-xl bg-sunken/50 p-4">
+            <div className="text-2xl font-bold text-ink">{stats.projectCount.toLocaleString()}</div>
+            <div className="text-xs uppercase tracking-wider text-ink-soft mt-1">Projects</div>
           </div>
-          <div className="rounded-xl bg-slate-50 dark:bg-slate-900/50 p-4">
-            <div className="text-2xl font-bold text-slate-900 dark:text-white">{stats.imageCount.toLocaleString()}</div>
-            <div className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mt-1">Stored files</div>
+          <div className="rounded-xl bg-sunken/50 p-4">
+            <div className="text-2xl font-bold text-ink">{stats.imageCount.toLocaleString()}</div>
+            <div className="text-xs uppercase tracking-wider text-ink-soft mt-1">Stored files</div>
           </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Breakdown by Type</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Content size stored in each part of the database.</p>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Breakdown by Type</h2>
+          <p className="text-sm text-ink-soft">Content size stored in each part of the database.</p>
         </div>
         <div className="p-6 space-y-4">
-          <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+          <div className="flex h-3 w-full overflow-hidden rounded-full bg-sunken">
             {categories.map(c => {
               const bytes = stats.breakdown[c.key];
               if (!bytes) return null;
@@ -1231,8 +1206,8 @@ const StorageTab: React.FC = () => {
             {categories.map(c => (
               <div key={c.key} className="flex items-center gap-3 text-sm">
                 <span className={`w-2.5 h-2.5 rounded-full ${c.color} shrink-0`} />
-                <span className="text-slate-600 dark:text-slate-300">{c.label}</span>
-                <span className="ml-auto font-medium text-slate-900 dark:text-white">{formatBytes(stats.breakdown[c.key])}</span>
+                <span className="text-ink-soft">{c.label}</span>
+                <span className="ml-auto font-medium text-ink">{formatBytes(stats.breakdown[c.key])}</span>
               </div>
             ))}
           </div>
@@ -1240,20 +1215,20 @@ const StorageTab: React.FC = () => {
       </div>
 
       {orphans && (
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+        <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-edge">
+            <h2 className="text-lg font-bold text-ink flex items-center gap-2">
               <Sparkles size={18} className="text-accent-600" /> Reclaim Space
             </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Unreferenced files left behind by failed uploads or deleted pages and plan-set revisions.</p>
+            <p className="text-sm text-ink-soft">Unreferenced files left behind by failed uploads or deleted pages and plan-set revisions.</p>
           </div>
           <div className="p-6 flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="flex-1">
               {orphans.count === 0 ? (
-                <p className="text-sm text-slate-600 dark:text-slate-300">No orphaned files — storage is clean.</p>
+                <p className="text-sm text-ink-soft">No orphaned files — storage is clean.</p>
               ) : (
-                <p className="text-sm text-slate-600 dark:text-slate-300">
-                  <span className="font-bold text-slate-900 dark:text-white">{orphans.count.toLocaleString()}</span> orphaned file{orphans.count === 1 ? '' : 's'} taking up <span className="font-bold text-slate-900 dark:text-white">{formatBytes(orphans.bytes)}</span>.
+                <p className="text-sm text-ink-soft">
+                  <span className="font-bold text-ink">{orphans.count.toLocaleString()}</span> orphaned file{orphans.count === 1 ? '' : 's'} taking up <span className="font-bold text-ink">{formatBytes(orphans.bytes)}</span>.
                 </p>
               )}
             </div>
@@ -1269,23 +1244,23 @@ const StorageTab: React.FC = () => {
         </div>
       )}
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Usage by Project</h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Projects ranked by total space used, including their files.</p>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink">Usage by Project</h2>
+          <p className="text-sm text-ink-soft">Projects ranked by total space used, including their files.</p>
         </div>
         <div className="p-6">
           {stats.projects.length === 0 ? (
-            <p className="text-sm text-slate-500 dark:text-slate-400">No projects yet.</p>
+            <p className="text-sm text-ink-soft">No projects yet.</p>
           ) : (
             <div className="space-y-3">
               {stats.projects.map(p => (
                 <div key={p.id} className="space-y-1">
                   <div className="flex items-center justify-between gap-4 text-sm">
-                    <span className="truncate text-slate-700 dark:text-slate-300">{p.name}</span>
-                    <span className="font-medium text-slate-900 dark:text-white whitespace-nowrap">{formatBytes(p.totalBytes)}</span>
+                    <span className="truncate text-ink">{p.name}</span>
+                    <span className="font-medium text-ink whitespace-nowrap">{formatBytes(p.totalBytes)}</span>
                   </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                  <div className="h-1.5 w-full rounded-full bg-sunken overflow-hidden">
                     <div className="h-full rounded-full bg-accent-500" style={{ width: `${(p.totalBytes / maxProject) * 100}%` }} />
                   </div>
                 </div>
@@ -1454,12 +1429,12 @@ const AiaTemplateTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h2 className="text-lg font-bold text-ink flex items-center gap-2">
             <FileSpreadsheet size={20} className="text-accent-600" /> AIA Export Template
           </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-sm text-ink-soft mt-1">
             Upload your AIA G702/G703 .xlsx and map each value to the cell it should fill. Leave a cell blank to skip it. When no template is set, the app generates a standard G702/G703.
           </p>
         </div>
@@ -1467,7 +1442,7 @@ const AiaTemplateTab: React.FC = () => {
           <div className="flex items-center gap-4 flex-wrap">
             <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={handleUpload} className="hidden" id="aia-template-upload" />
             <label htmlFor="aia-template-upload"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer transition-all shadow-sm">
+              className="inline-flex items-center gap-2 px-4 py-2 bg-raised border border-edge rounded-lg text-sm font-medium text-ink hover:bg-hover cursor-pointer transition-all shadow-sm">
               <FileSpreadsheet size={16} /> {templateFileId ? 'Replace Template' : 'Upload .xlsx Template'}
             </label>
             {templateFileId ? (
@@ -1480,54 +1455,59 @@ const AiaTemplateTab: React.FC = () => {
                 </button>
               </>
             ) : (
-              <span className="text-sm text-slate-500 dark:text-slate-400">No template configured — using the standard generated export.</span>
+              <span className="text-sm text-ink-soft">No template configured — using the standard generated export.</span>
             )}
           </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">G702 — Sheet & Cell Mapping</h3>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h3 className="text-base font-bold text-ink">G702 — Sheet & Cell Mapping</h3>
         </div>
         <div className="p-6 space-y-4">
           <div className="max-w-xs">
-            <label className={labelCls}>G702 sheet name</label>
-            <input className={inputCls} value={mapping.g702Sheet} onChange={e => setMapping(m => ({ ...m, g702Sheet: e.target.value }))} placeholder="G702 or 1" />
+            <Field label="G702 sheet name">
+              <Input value={mapping.g702Sheet} onChange={e => setMapping(m => ({ ...m, g702Sheet: e.target.value }))} placeholder="G702 or 1" />
+            </Field>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {G702_CELL_FIELDS.map(f => (
               <div key={f.key}>
-                <label className={labelCls}>{f.label}</label>
-                <input className={inputCls} value={mapping.cells[f.key] || ''} onChange={e => setCell(f.key, e.target.value)} placeholder="e.g. F20" />
+                <Field label={f.label}>
+                  <Input value={mapping.cells[f.key] || ''} onChange={e => setCell(f.key, e.target.value)} placeholder="e.g. F20" />
+                </Field>
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h3 className="text-base font-bold text-slate-900 dark:text-white">G703 — Continuation Sheet Mapping</h3>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Each schedule-of-values line writes into a row, starting at the start row. Provide the column letter for each value.</p>
+      <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h3 className="text-base font-bold text-ink">G703 — Continuation Sheet Mapping</h3>
+          <p className="text-sm text-ink-soft mt-1">Each schedule-of-values line writes into a row, starting at the start row. Provide the column letter for each value.</p>
         </div>
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
             <div>
-              <label className={labelCls}>G703 sheet name</label>
-              <input className={inputCls} value={mapping.g703Sheet} onChange={e => setMapping(m => ({ ...m, g703Sheet: e.target.value }))} placeholder="G703 or 1" />
+              <Field label="G703 sheet name">
+                <Input value={mapping.g703Sheet} onChange={e => setMapping(m => ({ ...m, g703Sheet: e.target.value }))} placeholder="G703 or 1" />
+              </Field>
             </div>
             <div>
-              <label className={labelCls}>First data row</label>
-              <input className={inputCls} type="number" min={1} value={mapping.g703StartRow}
-                onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
+              <Field label="First data row">
+                <Input type="number" min={1} value={mapping.g703StartRow}
+                  onChange={e => setMapping(m => ({ ...m, g703StartRow: parseInt(e.target.value) || 1 }))} placeholder="2" />
+              </Field>
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
             {G703_COL_FIELDS.map(f => (
               <div key={f.key}>
-                <label className={labelCls}>{f.label}</label>
-                <input className={inputCls} value={mapping.g703Cols[f.key] || ''} onChange={e => setCol(f.key, e.target.value)} placeholder="e.g. C" />
+                <Field label={f.label}>
+                  <Input value={mapping.g703Cols[f.key] || ''} onChange={e => setCol(f.key, e.target.value)} placeholder="e.g. C" />
+                </Field>
               </div>
             ))}
           </div>
@@ -1643,12 +1623,12 @@ const DocumentTypesCard: React.FC = () => {
   };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-      <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-        <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+    <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+      <div className="p-6 border-b border-edge">
+        <h2 className="text-lg font-bold text-ink flex items-center gap-2">
           <Tag size={20} className="text-accent-600" /> Document Types
         </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+        <p className="text-sm text-ink-soft mt-1">
           Custom types available in the upload popup, the Documents page type filter, and a direct upload's "Change type" action. Built-in types (Invoice, RFI, Punch Report, etc.) are fixed and don't appear here.
         </p>
       </div>
@@ -1656,15 +1636,14 @@ const DocumentTypesCard: React.FC = () => {
         {loading ? (
           <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-600" />
         ) : types.length === 0 ? (
-          <p className="text-sm text-slate-500 dark:text-slate-400">No custom types yet.</p>
+          <p className="text-sm text-ink-soft">No custom types yet.</p>
         ) : (
           <ul className="space-y-2">
             {types.map(t => (
-              <li key={t.id} className="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5">
+              <li key={t.id} className="flex items-center gap-3 rounded-xl border border-edge px-4 py-2.5">
                 {editingId === t.id ? (
                   <>
-                    <input
-                      className={inputCls}
+                    <Input
                       value={editLabel}
                       onChange={e => setEditLabel(e.target.value)}
                       autoFocus
@@ -1675,16 +1654,16 @@ const DocumentTypesCard: React.FC = () => {
                       {busyId === t.id ? 'Saving…' : 'Save'}
                     </button>
                     <button onClick={cancelRename} title="Cancel"
-                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      className="shrink-0 p-1.5 rounded-md text-ink-faint hover:text-ink-soft hover:bg-hover">
                       <X size={14} />
                     </button>
                   </>
                 ) : (
                   <>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900 dark:text-white">{t.label}</span>
-                    <span className="shrink-0 font-mono text-xs text-slate-400 dark:text-slate-500">custom:{t.id}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{t.label}</span>
+                    <span className="shrink-0 font-mono text-xs text-ink-faint">custom:{t.id}</span>
                     <button onClick={() => startRename(t)} title="Rename"
-                      className="shrink-0 p-1.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700">
+                      className="shrink-0 p-1.5 rounded-md text-ink-faint hover:text-ink-soft hover:bg-hover">
                       <Pencil size={14} />
                     </button>
                     <button onClick={() => handleDelete(t)} disabled={busyId === t.id} title="Delete"
@@ -1697,9 +1676,8 @@ const DocumentTypesCard: React.FC = () => {
             ))}
           </ul>
         )}
-        <div className="flex items-center gap-2 border-t border-slate-100 dark:border-slate-700 pt-4">
-          <input
-            className={inputCls}
+        <div className="flex items-center gap-2 border-t border-edge pt-4">
+          <Input
             placeholder="e.g. Warranty"
             value={newLabel}
             onChange={e => setNewLabel(e.target.value)}
@@ -1717,7 +1695,16 @@ const DocumentTypesCard: React.FC = () => {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-type TabId = 'preferences' | 'takeoff-templates' | 'general' | 'email' | 'storage' | 'users' | 'aia-template' | 'changelog';
+// Kept as a value so a ?tab= param can be validated against it before it is
+// trusted to select a tab.
+const TAB_IDS = [
+  'preferences', 'takeoff-templates', 'general', 'mail', 'storage', 'users', 'aia-template', 'changelog',
+] as const;
+type TabId = (typeof TAB_IDS)[number];
+const isTabId = (v: string | null): v is TabId => !!v && (TAB_IDS as readonly string[]).includes(v);
+// Kept alongside TAB_IDS so the two-way ?tab= derivation below can validate
+// an admin-only tab without waiting on the tabs array built later in render.
+const ADMIN_ONLY_TAB_IDS = new Set<TabId>(['general', 'storage', 'aia-template', 'users']);
 
 export const Settings: React.FC = () => {
   const { toast } = useToast();
@@ -1734,8 +1721,43 @@ export const Settings: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('preferences');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Two-way ?tab= persistence (CustomerPane.tsx pattern): activeTab is derived
+  // from the URL instead of mirrored into state, so a reload or the back
+  // button lands back on the same tab. An invalid/missing param, or one
+  // naming an admin-only tab while not an admin, falls back to the default.
+  const tabParam = searchParams.get('tab');
+  const activeTab: TabId = isTabId(tabParam) && (!ADMIN_ONLY_TAB_IDS.has(tabParam) || isAdmin)
+    ? tabParam
+    : 'preferences';
+  const setActiveTab = (tab: TabId) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tab);
+      return next;
+    }, { replace: true });
+  };
+
+  // The mail OAuth callback lands here as `/settings?tab=mail&connected=<id>`
+  // or `&error=<message>` (server/mail/routes.ts). Read once on mount: the
+  // result is a toast, so re-running it on every param change would repeat it,
+  // and `connected`/`error` are cleared straight afterwards so a reload — or a
+  // shared URL — never replays a stale outcome.
+  useEffect(() => {
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    if (connected) toast('Mail account connected', { type: 'success' });
+    if (error) toast(error, { type: 'error' });
+    if (connected || error) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('connected');
+      next.delete('error');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     try {
@@ -1786,7 +1808,7 @@ export const Settings: React.FC = () => {
     { id: 'preferences', label: 'User Preferences', icon: <User size={18} /> },
     { id: 'takeoff-templates', label: 'Takeoff Templates', icon: <Layout size={18} /> },
     { id: 'general',     label: 'General Settings', icon: <Globe size={18} />,   adminOnly: true },
-    { id: 'email',       label: 'Email',             icon: <Mail size={18} /> },
+    { id: 'mail',        label: 'Mail',              icon: <Mail size={18} /> },
     { id: 'storage',     label: 'Storage',           icon: <HardDrive size={18} />, adminOnly: true },
     { id: 'aia-template', label: 'AIA Template',     icon: <FileSpreadsheet size={18} />, adminOnly: true },
     { id: 'users',       label: 'User Management',  icon: <Users size={18} />,   adminOnly: true },
@@ -1796,19 +1818,18 @@ export const Settings: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-600" />
       </div>
     );
   }
 
-
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
+    <div>
+      <header className="bg-raised border-b border-edge sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <h1 className="text-xl font-bold text-ink flex items-center gap-2">
               <Palette className="text-accent-600" size={24} />
               Settings
             </h1>
@@ -1837,8 +1858,8 @@ export const Settings: React.FC = () => {
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all whitespace-nowrap shrink-0 md:w-full ${
                     activeTab === tab.id
-                      ? 'bg-accent-600 text-white shadow-md'
-                      : 'text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 hover:shadow-sm'
+                      ? 'glow-accent text-white'
+                      : 'text-ink-soft hover:bg-hover hover:text-ink'
                   }`}
                 >
                   {tab.icon}
@@ -1850,39 +1871,36 @@ export const Settings: React.FC = () => {
 
           {/* Content */}
           <div className="flex-1">
+          <div key={activeTab} className="anim-tab-in">
             {activeTab === 'preferences' && <PreferencesTab />}
 
             {activeTab === 'takeoff-templates' && <TemplatesView />}
 
             {activeTab === 'general' && isAdmin && (
               <div className="space-y-6">
-                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Application Branding</h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Customize how the application appears to users.</p>
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink">Application Branding</h2>
+                    <p className="text-sm text-ink-soft">Customize how the application appears to users.</p>
                   </div>
                   <div className="p-6 space-y-6">
-                    <div>
-                      <label className={labelCls}>Application Name</label>
-                      <input type="text" value={serverSettings.appName}
+                    <Field label="Application Name" hint="Updates the name shown in the navigation bar and browser tab title.">
+                      <Input type="text" value={serverSettings.appName}
                         onChange={e => setServerSettings({ ...serverSettings, appName: e.target.value })}
-                        className={inputCls} placeholder="e.g. My Custom Takeoff" />
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
-                        Updates the name shown in the navigation bar and browser tab title.
-                      </p>
-                    </div>
+                        placeholder="e.g. My Custom Takeoff" />
+                    </Field>
                     <div>
-                      <label className={labelCls}>Application Logo</label>
+                      <label className="block text-sm font-bold text-ink mb-2 uppercase tracking-wider">Application Logo</label>
                       <div className="flex items-start gap-6">
-                        <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0">
+                        <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-edge bg-sunken flex items-center justify-center overflow-hidden shrink-0">
                           {serverSettings.logoUrl
                             ? <img src={serverSettings.logoUrl} alt="Logo Preview" className="max-w-full max-h-full object-contain" />
-                            : <ImageIcon className="text-slate-300 dark:text-slate-600" size={32} />}
+                            : <ImageIcon className="text-ink-faint" size={32} />}
                         </div>
                         <div className="flex-1">
                           <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" id="logo-upload" />
                           <label htmlFor="logo-upload"
-                            className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 cursor-pointer transition-all shadow-sm">
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-raised border border-edge rounded-lg text-sm font-medium text-ink hover:bg-hover cursor-pointer transition-all shadow-sm">
                             <ImageIcon size={16} /> Upload New Logo
                           </label>
                           {serverSettings.logoUrl && (
@@ -1891,7 +1909,7 @@ export const Settings: React.FC = () => {
                               Remove
                             </button>
                           )}
-                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          <p className="mt-2 text-xs text-ink-soft">
                             Recommended: Square or horizontal logo, transparent background. Max 2MB.
                           </p>
                         </div>
@@ -1900,10 +1918,10 @@ export const Settings: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Contractor Information</h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Shown on proposal PDFs generated from projects.</p>
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink">Contractor Information</h2>
+                    <p className="text-sm text-ink-soft">Shown on proposal PDFs generated from projects.</p>
                   </div>
                   <div className="p-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -1913,50 +1931,48 @@ export const Settings: React.FC = () => {
                         { key: 'companyEmail',   label: 'Email',        type: 'email', placeholder: 'e.g. info@acme.com' },
                         { key: 'companyAddress', label: 'Address',      type: 'text',  placeholder: 'e.g. 123 Main St, Springfield, IL' },
                       ].map(field => (
-                        <div key={field.key}>
-                          <label className={labelCls}>{field.label}</label>
-                          <input
+                        <Field key={field.key} label={field.label}>
+                          <Input
                             type={field.type}
                             value={serverSettings[field.key] || ''}
                             onChange={e => setServerSettings({ ...serverSettings, [field.key]: e.target.value })}
-                            className={inputCls}
                             placeholder={field.placeholder}
                           />
-                        </div>
+                        </Field>
                       ))}
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">Document Branding</h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Controls the branded header and footer on generated documents (proposals, invoices, change orders, issues, punch lists).</p>
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink">Document Branding</h2>
+                    <p className="text-sm text-ink-soft">Controls the branded header and footer on generated documents (proposals, invoices, change orders, issues, punch lists).</p>
                   </div>
                   <div className="p-6 space-y-6">
                     <div>
-                      <label htmlFor="company-brand-color" className={labelCls}>Document Brand Colour</label>
+                      <label htmlFor="company-brand-color" className="block text-sm font-bold text-ink mb-2 uppercase tracking-wider">Document Brand Colour</label>
                       <div className="flex items-center gap-3">
                         <input
                           id="company-brand-color"
                           type="color"
                           value={serverSettings.companyBrandColor || '#99CB38'}
                           onChange={e => setServerSettings({ ...serverSettings, companyBrandColor: e.target.value })}
-                          className="w-12 h-10 rounded-lg border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer shrink-0"
+                          className="w-12 h-10 rounded-lg border border-edge-strong bg-transparent cursor-pointer shrink-0"
                           aria-describedby="company-brand-color-hint"
                         />
-                        <span className="font-mono text-sm text-slate-700 dark:text-slate-300 uppercase">
+                        <span className="font-mono text-sm text-ink uppercase">
                           {serverSettings.companyBrandColor || '#99CB38'}
                         </span>
                       </div>
-                      <p id="company-brand-color-hint" className="mt-2 text-xs text-slate-500 dark:text-slate-400 italic">
+                      <p id="company-brand-color-hint" className="mt-2 text-xs text-ink-soft italic">
                         Used for the header/footer accents on generated documents (proposals, invoices, etc.).
                       </p>
                     </div>
                     <div className="flex items-center justify-between gap-4">
                       <div>
-                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Invert Logo on Documents</p>
-                        <p id="invert-logo-hint" className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        <p className="text-sm font-semibold text-ink">Invert Logo on Documents</p>
+                        <p id="invert-logo-hint" className="text-xs text-ink-soft mt-0.5">
                           Turn on if your logo is dark — it will be shown in white on the dark document header.
                         </p>
                       </div>
@@ -1967,7 +1983,7 @@ export const Settings: React.FC = () => {
                         aria-label="Invert logo on documents"
                         aria-describedby="invert-logo-hint"
                         onClick={() => setServerSettings({ ...serverSettings, invertLogoOnDocuments: serverSettings.invertLogoOnDocuments === 'true' ? 'false' : 'true' })}
-                        className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${serverSettings.invertLogoOnDocuments === 'true' ? 'bg-accent-600' : 'bg-slate-200 dark:bg-slate-700'}`}
+                        className={`relative shrink-0 w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 focus:ring-offset-raised ${serverSettings.invertLogoOnDocuments === 'true' ? 'bg-accent-600' : 'bg-edge-strong'}`}
                       >
                         <motion.div layout transition={{ type: 'spring', stiffness: 700, damping: 35 }}
                           className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm ${serverSettings.invertLogoOnDocuments === 'true' ? 'left-6' : 'left-0.5'}`} />
@@ -1978,23 +1994,23 @@ export const Settings: React.FC = () => {
 
                 <DocumentTypesCard />
 
-                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-edge">
+                    <h2 className="text-lg font-bold text-ink flex items-center gap-2">
                       <Link size={20} className="text-accent-600" /> Sharing
                     </h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">Configure the public URL used when generating share links for printouts and project pages.</p>
+                    <p className="text-sm text-ink-soft">Configure the public URL used when generating share links for printouts and project pages.</p>
                   </div>
                   <div className="p-6">
-                    <label className={labelCls}>Public Host URL</label>
-                    <input
-                      type="url"
-                      value={serverSettings.publicHost || ''}
-                      onChange={e => setServerSettings({ ...serverSettings, publicHost: e.target.value })}
-                      className={inputCls}
-                      placeholder="e.g. https://takeoff.mydomain.com"
-                    />
-                    <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    <Field label="Public Host URL">
+                      <Input
+                        type="url"
+                        value={serverSettings.publicHost || ''}
+                        onChange={e => setServerSettings({ ...serverSettings, publicHost: e.target.value })}
+                        placeholder="e.g. https://takeoff.mydomain.com"
+                      />
+                    </Field>
+                    <p className="mt-2 text-xs text-ink-soft">
                       Used to build share links (e.g. <span className="font-mono">https://takeoff.mydomain.com/share/…</span>). If left blank, the app's current origin is used instead.
                     </p>
                   </div>
@@ -2002,19 +2018,20 @@ export const Settings: React.FC = () => {
               </div>
             )}
 
-            {activeTab === 'email' && <EmailTab />}
+            {activeTab === 'mail' && <MailAccountsTab isAdmin={isAdmin} />}
 
             {activeTab === 'storage' && isAdmin && <StorageTab />}
 
             {activeTab === 'aia-template' && isAdmin && <AiaTemplateTab />}
 
             {activeTab === 'users' && isAdmin && (
-              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden p-6">
+              <div className="bg-raised rounded-2xl border border-edge shadow-sm overflow-hidden p-6">
                 <UsersView />
               </div>
             )}
 
             {activeTab === 'changelog' && <ChangelogTab />}
+          </div>
           </div>
         </div>
       </main>

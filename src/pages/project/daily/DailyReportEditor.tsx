@@ -4,16 +4,15 @@ import { CloudSun, Plus, Trash2 } from 'lucide-react';
 import {
   DailyReport, ManCountLine, DateTakenError,
   saveDailyReport, getDailyReport, addDailyReportPhoto, removeDailyReportPhoto, getDailyWeather,
-  getSettings, getSmtpSettings, getAlwaysCc, getCustomer, getProject,
-  fetchFileBlob, sendDailyReport,
+  getSettings, fetchFileBlob, sendDailyReport,
 } from '../../../utils/store';
-import { Customer } from '../../../types';
-import { resolveRecipient } from '../../../utils/recipients';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
 import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
 import { formatReportDate, manCountTotal, normalizeManCounts } from './dailyReportForm';
 import { buildDailyReportPdf, dailyReportFileName } from './dailyReportPdf';
@@ -69,44 +68,7 @@ export const DailyReportEditor: React.FC<{
   // recipients.ts has no 'dailyReport' template role — its TemplateType is a
   // fixed union, so we use the closest general fallback ('rfi', which maps to
   // the 'pm' role) rather than widen the union for one caller.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getSmtpSettings().catch(() => ({})),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('rfi', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('rfi', projectId);
 
   const fetchWeather = async (opts?: { silent?: boolean }) => {
     setFetchingWeather(true);
@@ -251,6 +213,7 @@ export const DailyReportEditor: React.FC<{
             updatedAt={report.updatedAt}
             size="sm"
             send={{
+              blockedReason: emailDefaults.sendBlockedReason,
               composer: {
                 title: 'Send daily report',
                 defaultTo: emailDefaults.defaultTo || undefined,
@@ -261,12 +224,10 @@ export const DailyReportEditor: React.FC<{
                 headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                 defaultHeaderEmail: emailDefaults.companyEmail || undefined,
               },
-              sendFn: async (fileId, m) => {
-                await sendDailyReport(report.id, {
-                  to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                  fileId, attachmentFileIds: m.attachmentFileIds,
-                });
+              sendFn: async (fileId, req) => {
+                const result = await sendDailyReport(report.id, { ...itemSendPayload(req), fileId });
                 onSaved({ keepMounted: true });
+                return result;
               },
             }}
           />

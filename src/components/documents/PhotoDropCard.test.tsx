@@ -83,9 +83,12 @@ describe('PhotoDropCard', () => {
       excludeFileIds: ['f-1'],
       upload: {
         kind: 'issue-photo', projectId: 'p1', sourceType: 'issue', sourceId: 'iss-1',
-        accept: 'image/*', capture: 'environment',
+        accept: 'image/*',
       },
     });
+    // No capture default: on a phone this opens the native photo picker
+    // (camera available as a source) instead of jumping straight to the camera.
+    expect(h.props.upload.capture).toBeUndefined();
   });
 
   it('links every picked row and then reloads the record', async () => {
@@ -165,5 +168,21 @@ describe('PhotoDropCard', () => {
     renderCard({ photos: [] });
     expect(screen.getByText('No photos.')).toBeInTheDocument();
     expect(h.props.excludeFileIds).toEqual([]);
+  });
+
+  it('opens the lightbox at the clicked thumbnail, and a Remove click does not also open it', () => {
+    const { container } = renderCard({ photos: [{ id: 'ph-1', fileId: 'f-1' }, { id: 'ph-2', fileId: 'f-2' }] });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    const thumbs = container.querySelectorAll('img');
+    fireEvent.click(thumbs[1]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('Remove')[0]);
+    expect(onRemove).toHaveBeenCalledWith('f-1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

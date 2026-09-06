@@ -26,6 +26,16 @@ export default defineConfig({
     url: 'http://localhost:3000',
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
+    env: {
+      // MAIL_FAKE_PROVIDER=1: mounts the test-only /api/mail/_test/seed and
+      // /inject routes (server/mail/routes.ts) and routes every mail account
+      // through the in-memory fake provider — e2e/fixtures/mail.ts talks to
+      // these instead of a live IMAP/OAuth mailbox.
+      MAIL_FAKE_PROVIDER: '1',
+      // The OAuth connect flow (and its redirect-URI display) needs a public
+      // origin to build against; matches the `url` above.
+      APP_PUBLIC_URL: 'http://localhost:3000',
+    },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });

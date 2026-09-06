@@ -11,6 +11,9 @@ import type { ProposalSummary } from '../../../utils/store';
 vi.mock('../../../hooks/useLiveQuery', () => ({
   useLiveQuery: (load: () => void) => { React.useEffect(() => { load(); }, []); }, // eslint-disable-line react-hooks/exhaustive-deps
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../../../utils/store', async (orig) => ({
   ...(await orig<typeof import('../../../utils/store')>()),
   getProposals: vi.fn(async () => rows),

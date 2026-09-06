@@ -16,9 +16,9 @@ export const ShareView: React.FC = () => {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-950">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-3">
-          <p className="text-lg font-semibold text-slate-700 dark:text-slate-300">{error}</p>
+          <p className="text-lg font-semibold text-ink-soft">{error}</p>
         </div>
       </div>
     );
@@ -26,7 +26,7 @@ export const ShareView: React.FC = () => {
 
   if (!info) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-950">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -36,11 +36,11 @@ export const ShareView: React.FC = () => {
   if (info.type === 'pages' && info.count) {
     const pages = Array.from({ length: info.count }, (_, i) => i);
     return (
-      <div className="min-h-screen flex flex-col bg-slate-100 dark:bg-slate-950">
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm">
+      <div className="min-h-screen flex flex-col">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-3 glass-panel border-b border-edge">
           <div>
-            <h1 className="font-semibold text-slate-800 dark:text-slate-200 truncate">{info.name}</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{info.count} page{info.count !== 1 ? 's' : ''}</p>
+            <h1 className="font-semibold text-ink truncate">{info.name}</h1>
+            <p className="text-xs text-ink-soft">{info.count} page{info.count !== 1 ? 's' : ''}</p>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 max-w-5xl mx-auto w-full">
@@ -58,9 +58,9 @@ export const ShareView: React.FC = () => {
     ? `${info.name}.pdf`
     : info.name;
   return (
-    <div className="min-h-screen flex flex-col bg-slate-100 dark:bg-slate-950">
-      <div className="flex items-center justify-between px-6 py-3 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm">
-        <h1 className="font-semibold text-slate-800 dark:text-slate-200 truncate">{info.name}</h1>
+    <div className="min-h-screen flex flex-col">
+      <div className="flex items-center justify-between px-6 py-3 glass-panel border-b border-edge">
+        <h1 className="font-semibold text-ink truncate">{info.name}</h1>
         <a
           href={fileUrl}
           download={downloadName}
@@ -82,7 +82,7 @@ export const ShareView: React.FC = () => {
               className="flex flex-col items-center justify-center gap-4 p-8 text-center"
               style={{ minHeight: 'calc(100vh - 57px)' }}
             >
-              <p className="text-slate-600 dark:text-slate-300">
+              <p className="text-ink-soft">
                 Your browser can't preview this PDF inline.
               </p>
               <a
@@ -127,11 +127,11 @@ const PageCard: React.FC<PageCardProps> = ({ shareId, index }) => {
     : meta?.name ?? `Page ${index + 1}`;
 
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-      <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-        <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">{label}</span>
+    <div className="rounded-2xl shadow-lg overflow-hidden border border-edge bg-raised">
+      <div className="px-5 py-3 border-b border-edge bg-sunken">
+        <span className="text-sm font-semibold text-ink-soft">{label}</span>
       </div>
-      <div className="flex items-center justify-center bg-slate-50 dark:bg-slate-800/30 p-2">
+      <div className="flex items-center justify-center bg-sunken p-2">
         <img
           src={imgUrl}
           alt={label}

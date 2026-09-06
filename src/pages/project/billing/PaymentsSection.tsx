@@ -48,6 +48,7 @@ export const PaymentsSection: React.FC<{ projectId: string; onChange?: () => voi
         method,
         note: note || undefined,
       });
+      window.dispatchEvent(new CustomEvent('celebrate', { detail: { variant: 'pulse' } }));
       toast('Payment recorded', { type: 'success' });
       setTarget(''); setAmount(''); setDate(''); setMethod('check'); setNote('');
       reload();

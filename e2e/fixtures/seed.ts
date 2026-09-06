@@ -43,6 +43,37 @@ export async function login(request: APIRequestContext): Promise<LoginResult> {
   return body;
 }
 
+/**
+ * Create a genuinely distinct second user (via the admin-only POST /api/users
+ * route, using an already-authenticated admin token) and log in as them.
+ * Needed for realtime specs that must prove cross-account behavior (e.g.
+ * Follow, which is deliberately gated off for two sessions of the SAME
+ * account) — openAuthedContext alone only gives two sockets sharing one JWT.
+ * Throws if user creation or the subsequent login fails.
+ */
+export async function loginAsNewUser(
+  request: APIRequestContext, adminToken: string, opts: { role?: 'admin' | 'user' } = {},
+): Promise<LoginResult> {
+  const username = `e2e-${randomUUID().slice(0, 8)}`;
+  const password = 'e2e-password-1234';
+  const createRes = await request.post('/api/users', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data: { username, password, role: opts.role ?? 'user' },
+  });
+  if (!createRes.ok()) {
+    throw new Error(`user creation failed: ${createRes.status()} ${await createRes.text()}`);
+  }
+  const res = await request.post('/api/auth/login', { data: { username, password } });
+  if (!res.ok()) {
+    throw new Error(`login as new user failed: ${res.status()} ${await res.text()}`);
+  }
+  const body = (await res.json()) as LoginResult;
+  if (!body.token || !body.user) {
+    throw new Error(`login response missing token/user: ${JSON.stringify(body)}`);
+  }
+  return body;
+}
+
 export interface SeedResult {
   projectId: string;
   pageId: string;

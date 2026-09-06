@@ -1,29 +1,22 @@
-import { test, expect, login, seedProjectWithPage } from './fixtures/test';
+import { test, expect, login, loginAsNewUser, seedProjectWithPage } from './fixtures/test';
 import { openAuthedContext } from './fixtures/collab';
 
 // WS3 acceptance proof: app-wide session-scoped Follow (spec §5 + CollaborationContext
 // lines ~159-182) — following a session auto-navigates you to wherever it goes, Stop
 // halts that, and any manual navigation of your own clears it silently.
 //
-// Both contexts authenticate as the SAME seeded admin (openAuthedContext, same idiom
-// as collab-presence.spec.ts) — two independent socket connections/sessions for one
-// user. That's deliberate: Follow is keyed on sessionId (CollaborationContext's
-// `followedUserId` state is misleadingly named — see WS3 self-review notes — but it
-// truly stores a sessionId), so two sessions of the same account already exercise the
-// session-scoped semantics without needing a second real user account (no e2e helper
-// for that exists).
-//
-// IMPORTANT ROUTING DECISION: UserPresenceOverlay (the bottom-right popover) groups
-// sessions by userId (src/utils/presence.ts groupSessionsByUser) and only renders a
-// Follow checkbox for a group where `!isMe` — see UserPresenceOverlay.test.tsx
-// ("shows the user's own second session under a 'You' row without a follow
-// checkbox"). Since both contexts here share one userId, that checkbox is
-// deliberately absent in the popover. CanvasView's own "Other Users" sidebar list
-// (src/pages/CanvasView.tsx ~1733-1791), however, filters by sessionId only and
-// offers Follow regardless of whose account it is — that's the one surface a
-// same-account second session can actually be followed from, so scenarios 2-4 open
-// Follow there. Scenario 1 (the session-list/device-label proof) uses the popover,
-// exactly as it's the one surface meant to show the "You" grouping.
+// Presence now lives ONLY in the sidebar's SidebarPresence popover (Task 6, UI rehaul
+// Wave 1) — the old floating bubble and CanvasView's own "Other Users" tool-pane block
+// are both gone. SidebarPresence groups sessions by userId (src/utils/presence.ts
+// groupSessionsByUser) and only renders a Follow checkbox for a *single-session,
+// different-account* group — same rule the old floating popover enforced (see
+// SidebarPresence.test.tsx). CanvasView's deleted pane used to offer Follow purely by
+// sessionId (ignoring account), which is how the old version of this spec exercised
+// Follow using two sockets on the SAME admin login; that workaround no longer has a
+// UI surface, so this spec now uses a genuinely separate second account
+// (loginAsNewUser, via the admin-only POST /api/users route) for the two "actually
+// follow and navigate" scenarios, and keeps the same-account pairing only for the
+// no-checkbox proof below.
 //
 // SESSION CONTINUITY: once A is following B, B must navigate via in-app clicks, NOT
 // `page.goto` — a full navigation tears down B's socket (a fresh reload gets a brand
@@ -32,15 +25,10 @@ import { openAuthedContext } from './fixtures/collab';
 // A's own navigations are safe to do as `page.goto` throughout, since A is the
 // follower, not the followed.
 test.describe('app-wide session-scoped Follow', () => {
-  test('session list, follow-navigation, Stop, and manual-nav-clears-follow', async ({ browser, request }) => {
-    // Four scenarios, two contexts, several full-page reloads (each re-establishing
-    // a socket) plus a 3s bounded wait for the Stop negative assertion — comfortably
-    // over the 30s default under load. Same idiom as printout-email-large.spec.ts.
-    test.setTimeout(60_000);
+  test('same-account session list shows no follow checkbox', async ({ browser, request }) => {
     const { token, user } = await login(request);
     const seeded = await seedProjectWithPage(request, token);
     const projectPath = `/project/${seeded.projectId}/takeoff`;
-    const canvasPath = `/project/${seeded.projectId}/page/${seeded.pageId}`;
 
     const a = await openAuthedContext(browser, token, user);
     const b = await openAuthedContext(browser, token, user);
@@ -49,45 +37,68 @@ test.describe('app-wide session-scoped Follow', () => {
       await a.page.goto(projectPath);
       await b.page.goto(projectPath);
 
-      // ── Scenario 1: session list shows B's device under a "You" row, and
-      // offers no Follow checkbox there (own-session gate — see routing note above).
-      const presence = a.page.locator('div.fixed.bottom-6.right-6.z-50');
-      await presence.locator('button').click();
-      await expect(presence.getByText('Active Users')).toBeVisible();
-      await expect(presence.getByText('You')).toBeVisible();
+      // Session list shows BOTH A's own session and B's device line MERGED
+      // into one self ("you") row (same admin JWT -> same userId), and
+      // offers no Follow checkbox there (own-account gate). Assert by count,
+      // not mere presence: A's own session alone would already satisfy a
+      // single /Chrome/ match, so this only proves B showed up too if there
+      // are two lines.
+      await a.page.getByTestId('sidebar-presence').click();
+      const presence = a.page.getByTestId('presence-popover');
+      await expect(presence.getByText(/Online now/i)).toBeVisible();
+      await expect(presence.getByText(/\(you\)/)).toHaveCount(1);
       // headless Chromium on Linux -> deviceLabel() (server/realtime/deviceLabel.ts)
-      // produces "Linux · Chrome".
-      await expect(presence.getByText(/Chrome/)).toBeVisible();
+      // produces "Linux · Chrome" for both A and B.
+      await expect(presence.locator('p', { hasText: /Chrome/ })).toHaveCount(2);
       await expect(presence.getByRole('checkbox')).toHaveCount(0);
+    } finally {
+      await a.context.close().catch(() => {});
+      await b.context.close().catch(() => {});
+    }
+  });
 
-      // Open CanvasView's left tools panel — it starts closed (isLeftSidebarOpen
-      // defaults to false) — to reach the "Other Users" Follow checkbox.
-      await a.page.goto(canvasPath);
-      await a.page.locator('button.right-0.translate-x-full').click();
-      const followCheckbox = a.page.getByLabel('Follow');
+  test('cross-account follow-navigation, Stop, and manual-nav-clears-follow', async ({ browser, request }) => {
+    // Two contexts, several full-page reloads (each re-establishing a socket)
+    // plus a 3s bounded wait for the Stop negative assertion — comfortably
+    // over the 30s default under load. Same idiom as printout-email-large.spec.ts.
+    test.setTimeout(60_000);
+    const admin = await login(request);
+    // Admin role: the Billing tab this scenario navigates B through is
+    // admin-only (ProjectTabBar), and this test isn't about role gating.
+    const second = await loginAsNewUser(request, admin.token, { role: 'admin' });
+    const seeded = await seedProjectWithPage(request, admin.token);
+    const projectPath = `/project/${seeded.projectId}/takeoff`;
+
+    // A (admin) follows B (the separate second account).
+    const a = await openAuthedContext(browser, admin.token, admin.user);
+    const b = await openAuthedContext(browser, second.token, second.user);
+
+    try {
+      await a.page.goto(projectPath);
+      await b.page.goto(projectPath);
+
+      await a.page.getByTestId('sidebar-presence').click();
+      const presence = a.page.getByTestId('presence-popover');
+      await expect(presence.getByText(/Online now/i)).toBeVisible();
+      const followCheckbox = presence.getByRole('checkbox', { name: /Follow/i });
       await expect(followCheckbox).toBeVisible();
 
-      // ── Scenario 2: follow B. B is already on the Takeoff tab — a
-      // different path from A's canvas page — so checking Follow immediately
-      // syncs A there too (CollaborationContext navigates to the followed
-      // session's CURRENT path on follow, not just its future moves; see
-      // lines ~161-170). That unmounts CanvasView, and the checkbox with it,
-      // so assert the sync via A's URL/pill rather than the checkbox's
-      // checked state (which races the navigation and is gone by the time
-      // we'd read it). Use `.click()`, not `.check()` — `.check()` waits to
-      // confirm the box reads checked post-click, but the click itself
-      // unmounts the checkbox (navigation away), so that confirmation would
-      // spin against a detached node until the test times out.
+      // ── Scenario 1: follow B. B is on the Takeoff tab already — same path
+      // as A — so no immediate sync-navigation races the checkbox here.
       await followCheckbox.click();
-      await expect(a.page).toHaveURL(new RegExp(`/project/${seeded.projectId}/takeoff$`), { timeout: 15_000 });
       await expect(a.page.getByText(/Following/)).toBeVisible();
+      // The popover's full-screen backdrop (z-[80]) would otherwise intercept
+      // clicks on the rest of the page (FollowPill's Stop, nav buttons) —
+      // close it now that the checkbox has been actioned.
+      await a.page.keyboard.press('Escape');
+      await expect(presence).not.toBeVisible();
 
       // B then moves (in-app) to Billing — A should follow live too.
       await b.page.getByRole('button', { name: 'Billing' }).click();
       await expect(a.page).toHaveURL(/\/billing$/, { timeout: 15_000 });
       await expect(a.page.getByText(/Following/)).toBeVisible();
 
-      // ── Scenario 3: Stop halts further auto-navigation.
+      // ── Scenario 2: Stop halts further auto-navigation.
       await a.page.getByRole('button', { name: 'Stop' }).click();
       await expect(a.page.getByText(/Following/)).toHaveCount(0);
 
@@ -97,18 +108,19 @@ test.describe('app-wide session-scoped Follow', () => {
       await a.page.waitForTimeout(3_000);
       await expect(a.page).toHaveURL(/\/billing$/);
 
-      // ── Scenario 4: re-follow, then A's OWN manual navigation clears the pill.
-      // B is still on the Takeoff tab (from scenario 3), a different path from
-      // A's canvas page, so — as in scenario 2 — the follow click itself
-      // triggers an immediate sync-navigation that unmounts the checkbox;
-      // `.click()` (not `.check()`) avoids waiting on the now-detached node.
-      await a.page.goto(canvasPath);
-      await a.page.locator('button.right-0.translate-x-full').click();
-      await a.page.getByLabel('Follow').click();
+      // ── Scenario 3: re-follow, then A's OWN manual navigation clears the pill.
+      // B is still on the Takeoff tab, a different path from A's Billing tab,
+      // so checking Follow again immediately syncs A there too — assert via
+      // URL/pill rather than the checkbox's checked state (the click itself
+      // unmounts the popover's content as A navigates away).
+      await a.page.getByTestId('sidebar-presence').click();
+      await presence.getByRole('checkbox', { name: /Follow/i }).click();
       await expect(a.page).toHaveURL(new RegExp(`/project/${seeded.projectId}/takeoff$`), { timeout: 15_000 });
       await expect(a.page.getByText(/Following/)).toBeVisible();
+      await a.page.keyboard.press('Escape');
+      await expect(presence).not.toBeVisible();
 
-      await a.page.getByRole('button', { name: 'All Projects' }).click();
+      await a.page.getByRole('button', { name: 'Projects' }).click();
       await expect(a.page.getByText(/Following/)).toHaveCount(0);
     } finally {
       await a.context.close().catch(() => {});

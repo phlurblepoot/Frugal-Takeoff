@@ -37,10 +37,10 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: 0.16 }}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden max-h-[85vh] flex flex-col"
+        className="w-full max-w-lg bg-raised rounded-2xl shadow-xl border border-edge overflow-hidden max-h-[85vh] flex flex-col"
       >
-        <div className="p-5 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between shrink-0">
-          <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2 min-w-0">
+        <div className="p-5 border-b border-edge flex items-center justify-between shrink-0">
+          <h2 className="text-lg font-bold text-ink flex items-center gap-2 min-w-0">
             <History size={18} className="text-accent-600 shrink-0" /> <span className="truncate">Revisions of {sheetNo}</span>
           </h2>
           <div className="flex items-center gap-2 shrink-0">
@@ -49,7 +49,7 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
                 <GitCompare size={15} /> Compare
               </button>
             )}
-            <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700">
+            <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-ink-faint hover:text-ink hover:bg-hover">
               <X size={18} />
             </button>
           </div>
@@ -59,14 +59,14 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
             const revNumber = revs.length - i;
             const isCurrent = p.id === latestId;
             return (
-              <div key={p.id} className={`rounded-xl border p-3 flex items-center gap-3 ${isCurrent ? 'border-accent-300 dark:border-accent-700 bg-accent-50/50 dark:bg-accent-900/20' : 'border-slate-200 dark:border-slate-700'}`}>
-                <span className="shrink-0 w-9 h-9 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold flex items-center justify-center">R{revNumber}</span>
+              <div key={p.id} className={`rounded-xl border p-3 flex items-center gap-3 ${isCurrent ? 'border-accent-300 dark:border-accent-700 bg-accent-50/50 dark:bg-accent-900/20' : 'border-edge'}`}>
+                <span className="shrink-0 w-9 h-9 rounded-lg bg-sunken text-ink-soft text-xs font-bold flex items-center justify-center">R{revNumber}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-slate-900 dark:text-white truncate">{setLabel(project, p)}</span>
+                    <span className="text-sm font-medium text-ink truncate">{setLabel(project, p)}</span>
                     {isCurrent && <span className="text-[10px] uppercase tracking-wider font-bold rounded-full px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">Current</span>}
                   </div>
-                  <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                  <div className="text-xs text-ink-faint flex items-center gap-1 mt-0.5">
                     <Ruler size={12} /> {p.measurements.length} measurement{p.measurements.length === 1 ? '' : 's'}
                   </div>
                 </div>
@@ -74,7 +74,7 @@ export const PlanSetRevisions: React.FC<Props> = ({ project, pageId, onClose, on
                   onClick={() => onOpenPage(p.id)}
                   title={isCurrent ? 'Open this revision' : 'View this revision (read-only)'}
                   aria-label={isCurrent ? 'Open this revision' : 'View this revision (read-only)'}
-                  className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-soft hover:text-accent-600 hover:bg-hover"
                 >
                   <ExternalLink size={15} /> {isCurrent ? 'Open' : 'View'}
                 </button>

@@ -32,7 +32,7 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getDocumentBySource: h.getDocumentBySource,
   getDocumentsBySource: vi.fn(async () => ({})),
   getSettings: vi.fn(async () => ({})),
-  getSmtpSettings: vi.fn(async () => ({})),
+  getMailAccounts: vi.fn(async () => [{ id: 'a1', provider: 'fake', emailAddress: 'me@bigbear.test', displayName: null, isDefault: 1, status: 'ok', unreadCount: 0 }]),
   getAlwaysCc: vi.fn(async () => ''),
   getProject: vi.fn(async () => null),
   getCustomer: vi.fn(async () => undefined),
@@ -47,14 +47,17 @@ vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
   DocumentViewerModal: () => <div data-testid="viewer" />,
 }));
 
-vi.mock('../../../components/EmailComposer', () => ({
-  EmailComposer: ({ open, onSend, onClose }: any) =>
+// The bar's own composer is the shared mail composer now; the stub resolves a
+// SendRequest exactly as the real one does once the user hits Send.
+vi.mock('../../../pages/mail/compose/MailComposer', async (orig) => ({
+  ...(await orig<typeof import('../../../pages/mail/compose/MailComposer')>()),
+  MailComposer: ({ open, onSend, onClose }: any) =>
     open ? (
       <div data-testid="composer">
         <button
           data-testid="composer-send"
           onClick={() => {
-            void onSend({ to: 'client@example.com', subject: 's', body: 'b', attachmentFileIds: [] })
+            void onSend({ to: [{ addr: 'client@example.com' }], subject: 's', html: '<p>b</p>', attachments: [] })
               .then(() => onClose())
               .catch(() => {});
           }}
@@ -65,12 +68,23 @@ vi.mock('../../../components/EmailComposer', () => ({
     ) : null,
 }));
 
+// The document bar loads the user's mailboxes (for the composer's From select)
+// and the item's mail thread links (for the Sent chip). Neither is under test
+// here; an empty mailbox list is the honest default.
+vi.mock('../../../utils/mailApi', () => ({
+  mailApi: {
+    accounts: vi.fn(async () => []),
+    links: vi.fn(async () => []),
+    thread: vi.fn(async () => { throw new Error('not found'); }),
+  },
+}));
+
 import { ToastProvider } from '../../../components/Toast';
 import { InvoiceEditor } from './InvoiceEditor';
 
 const invoice = (over: Partial<Invoice> = {}): Invoice => ({
   id: 'inv-1', projectId: 'p1', number: 'INV-1', date: null, status: 'draft',
-  terms: null, version: 2, createdAt: 1, updatedAt: 10,
+  terms: null, notes: null, version: 2, createdAt: 1, updatedAt: 10,
   lines: [{ description: 'work', qty: 1, unitPrice: 100 }],
   payments: [], totalCents: 10000, paidCents: 0, balanceCents: 10000,
   ...over,
@@ -179,5 +193,34 @@ describe('InvoiceEditor — document actions', () => {
     await waitFor(() => expect(h.sendInvoice).toHaveBeenCalledTimes(1));
     expect(h.sendInvoice.mock.calls[0][0]).toBe('inv-1');
     expect(h.sendInvoice.mock.calls[0][1]).toMatchObject({ to: 'client@example.com', fileId: 'file-9' });
+  });
+});
+
+describe('InvoiceEditor — internal notes', () => {
+  it('renders the loaded notes, edits as plain text (never as HTML), and saves them', async () => {
+    mount(invoice({ notes: 'Called about scope' }));
+    const notesField = (await screen.findByLabelText('Notes (internal)')) as HTMLTextAreaElement;
+    expect(notesField.tagName).toBe('TEXTAREA');
+    expect(notesField.value).toBe('Called about scope');
+
+    fireEvent.change(notesField, { target: { value: 'Left a voicemail <b>urgent</b>' } });
+    expect(notesField.value).toBe('Left a voicemail <b>urgent</b>');
+    // A plain controlled <textarea> — the markup is text content, never parsed
+    // as HTML, so no <b> element is ever created from it.
+    expect(document.querySelector('b')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save invoice' }));
+    await waitFor(() => expect(h.saveInvoice).toHaveBeenCalledTimes(1));
+    expect(h.saveInvoice.mock.calls[0][1]).toMatchObject({ notes: 'Left a voicemail <b>urgent</b>' });
+  });
+
+  it('saves notes as null when cleared', async () => {
+    mount(invoice({ notes: 'existing note' }));
+    const notesField = await screen.findByLabelText('Notes (internal)');
+
+    fireEvent.change(notesField, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save invoice' }));
+    await waitFor(() => expect(h.saveInvoice).toHaveBeenCalledTimes(1));
+    expect(h.saveInvoice.mock.calls[0][1]).toMatchObject({ notes: null });
   });
 });

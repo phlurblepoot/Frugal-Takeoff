@@ -11,4 +11,20 @@ services:
     environment:
       - NODE_ENV=production
       - STORAGE_PATH=/app/data
+      # ── Mail client (docs/mail-setup.md) ─────────────────────────────────
+      # All optional. Without them mail still works as IMAP-only, poll-only.
+      # The public HTTPS origin. OAuth redirect URIs and the Microsoft Graph
+      # webhook URL are built from it; unset, Connect returns 503 and Microsoft
+      # accounts poll instead of receiving push.
+      # - APP_PUBLIC_URL=https://takeoff.example.com
+      # 32 bytes as hex (64 chars) or base64, sealing stored mail credentials.
+      # Unset, the server generates /app/data/mail.key (0600) on first start —
+      # back that file up with the data directory.
+      # - MAIL_SECRET_KEY=
+      # - GOOGLE_OAUTH_CLIENT_ID=
+      # - GOOGLE_OAUTH_CLIENT_SECRET=
+      # - MS_OAUTH_CLIENT_ID=
+      # - MS_OAUTH_CLIENT_SECRET=
+      # Directory (tenant) ID for a single-tenant registration; default common.
+      # - MS_OAUTH_TENANT=common
     restart: unless-stopped

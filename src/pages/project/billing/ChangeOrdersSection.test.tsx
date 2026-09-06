@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: null, sessions: [], mySessionId: 'me' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 
 vi.mock('../ProjectLayout', () => ({
   useProjectOutlet: () => ({ summary: { name: 'Big Job', contractor: null, address: null } }),
@@ -66,9 +69,9 @@ const row = (over: Partial<ChangeOrderListItem> = {}): ChangeOrderListItem => ({
 
 const FILE = { id: 'f2', name: 'CO-001.pdf', mime: 'application/pdf', size: 12, createdAt: 50, versionNumber: 1 };
 
-const mount = () =>
+const mount = (initialEntry = '/') =>
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <ToastProvider>
         <ChangeOrdersSection projectId="p1" />
       </ToastProvider>
@@ -103,6 +106,20 @@ describe('ChangeOrdersSection — PDF status on rows', () => {
     expect(await screen.findByTestId('viewer')).toBeInTheDocument();
     expect(screen.getByText('CO-001.pdf')).toBeInTheDocument();
     expect(h.getChangeOrder).not.toHaveBeenCalled();
+  });
+
+  it('?open= opens that change order\'s editor (CreateFromThreadMenu convention) and strips the param', async () => {
+    h.getChangeOrder.mockResolvedValue({ ...row(), lines: [], photos: [], lumpSumCents: 0 });
+    mount('/?open=co-1');
+    await screen.findByTestId('editor');
+    expect(h.getChangeOrder).toHaveBeenCalledWith('co-1');
+  });
+
+  it('?open= with a stale id fails gracefully (toast, no editor)', async () => {
+    h.getChangeOrder.mockRejectedValue(new Error('not found'));
+    mount('/?open=nope');
+    await screen.findByText('Extra wall');
+    expect(screen.queryByTestId('editor')).toBeNull();
   });
 });
 

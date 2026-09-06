@@ -1711,7 +1711,7 @@ export const ProjectView: React.FC = () => {
   };
 
   const getDueDateColor = () => {
-    if (!project || project.submitted || !project.bidDueDate) return 'text-slate-500';
+    if (!project || project.submitted || !project.bidDueDate) return 'text-ink-soft';
     
     const now = Date.now();
     const diff = project.bidDueDate - now;
@@ -1721,7 +1721,7 @@ export const ProjectView: React.FC = () => {
     if (days <= 3) return 'text-red-600 font-bold';
     if (days <= 14) return 'text-amber-600 font-bold';
     
-    return 'text-slate-500';
+    return 'text-ink-soft';
   };
 
   // Pages that are visible at the current plan-set selection after
@@ -1804,7 +1804,7 @@ export const ProjectView: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
+      <div className="min-h-screen p-4 md:p-8 font-sans">
         <div className="max-w-7xl mx-auto space-y-6">
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-9 w-2/3 max-w-md" />
@@ -1818,7 +1818,7 @@ export const ProjectView: React.FC = () => {
             <Skeleton className="h-4 w-40" />
             <Skeleton className="h-4 w-40" />
           </div>
-          <div className="flex gap-6 border-b border-slate-200 dark:border-slate-700 pb-px">
+          <div className="flex gap-6 border-b border-edge pb-px">
             <Skeleton className="h-8 w-16" />
             <Skeleton className="h-8 w-20" />
             <Skeleton className="h-8 w-20" />
@@ -1836,30 +1836,30 @@ export const ProjectView: React.FC = () => {
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
+    <div className="min-h-screen p-4 md:p-8 font-sans">
 
       {/* ── PDF generation progress overlay ── */}
       {(isPrinting || isExportingExcel) && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-xs mx-4 flex flex-col items-center gap-5">
+          <div className="bg-raised rounded-2xl shadow-2xl p-8 w-full max-w-xs mx-4 flex flex-col items-center gap-5">
             <Loader2 size={44} className="text-accent-600 animate-spin" />
             <div className="text-center space-y-2">
-              <p className="font-semibold text-slate-800 dark:text-slate-100 text-base">
+              <p className="font-semibold text-ink text-base">
                 {isPrinting
                   ? 'Generating PDF…'
                   : 'Exporting to Excel…'}
               </p>
               {progressMessage && (
-                <p className="text-sm text-slate-500 dark:text-slate-400">{progressMessage}</p>
+                <p className="text-sm text-ink-soft">{progressMessage}</p>
               )}
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">This may take a moment for large documents</p>
+              <p className="text-xs text-ink-faint mt-1">This may take a moment for large documents</p>
             </div>
           </div>
         </div>
       )}
 
       <div className="max-w-5xl mx-auto">
-        <Link to="/projects" className="inline-flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
+        <Link to="/projects" className="inline-flex items-center gap-2 text-ink-soft hover:text-ink mb-4 md:mb-6 transition-colors font-medium text-sm md:text-base">
           <ArrowLeft size={18} />
           Back to Projects
         </Link>
@@ -1867,11 +1867,11 @@ export const ProjectView: React.FC = () => {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 md:mb-8 gap-4 md:gap-6">
           <div className="w-full">
             <div className="flex items-center gap-3">
-              <h1 className="text-xl md:text-3xl font-bold text-slate-900 dark:text-white break-words leading-tight">{project.name}</h1>
+              <h1 className="text-xl md:text-3xl font-bold text-ink break-words leading-tight">{project.name}</h1>
               {isAdmin && (
                 <button
                   onClick={() => navigate(`/project/${projectId}/settings`)}
-                  className="p-1.5 text-slate-400 hover:text-accent-600 transition-all rounded-lg hover:bg-accent-50 flex-shrink-0"
+                  className="p-1.5 text-ink-faint hover:text-accent-600 transition-all rounded-lg hover:bg-accent-50 flex-shrink-0"
                   title="Project settings"
                   aria-label="Project settings"
                 >
@@ -1889,33 +1889,33 @@ export const ProjectView: React.FC = () => {
             <div className="flex flex-wrap gap-2 mt-3 md:mt-4">
               <button
                 onClick={() => projectId && openNotes(projectId)}
-                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-raised text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
               >
                 <StickyNote size={14} />
                 Notes Board
               </button>
               <button
                 onClick={() => navigate(`/tasks?projectId=${projectId}`)}
-                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-white text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
+                className="px-3 py-1 rounded-full text-[10px] md:text-xs font-bold uppercase tracking-wider transition-all border bg-raised text-accent-600 border-accent-200 hover:border-accent-400 hover:bg-accent-50 flex items-center gap-1.5 shadow-sm"
               >
                 <ListChecks size={14} />
                 Tasks
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-slate-500 dark:text-slate-400">
-              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
-                <Calendar size={14} className="text-slate-400 flex-shrink-0" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center gap-3 md:gap-4 mt-4 text-xs md:text-sm text-ink-soft">
+              <div className="flex items-center gap-2 bg-raised/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
+                <Calendar size={14} className="text-ink-faint flex-shrink-0" />
                 <span className="truncate">Created {new Date(project.createdAt).toLocaleDateString()}</span>
               </div>
               
-              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
-                <Building2 size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-raised/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
+                <Building2 size={14} className="text-ink-faint flex-shrink-0" />
                 <span className="truncate">{project.contractor || 'No contractor'}</span>
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
-                <MapPin size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-raised/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
+                <MapPin size={14} className="text-ink-faint flex-shrink-0" />
                 {project.address ? (
                   <a
                     href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(project.address)}`}
@@ -1930,8 +1930,8 @@ export const ProjectView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
-                <Clock size={14} className="text-slate-400 flex-shrink-0" />
+              <div className="flex items-center gap-2 bg-raised/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0">
+                <Clock size={14} className="text-ink-faint flex-shrink-0" />
                 <span className={`${getDueDateColor()} truncate`}>
                   Due: {project.bidDueDate ? new Date(project.bidDueDate).toLocaleDateString() : 'Not set'}
                 </span>
@@ -1939,10 +1939,10 @@ export const ProjectView: React.FC = () => {
 
               {projectStorage && (
                 <div
-                  className="flex items-center gap-2 bg-white/50 dark:bg-slate-700/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0"
+                  className="flex items-center gap-2 bg-raised/50 p-2 rounded-lg lg:bg-transparent lg:dark:bg-transparent lg:p-0"
                   title={`${formatBytes(projectStorage.imageBytes)} in ${projectStorage.imageCount} file${projectStorage.imageCount === 1 ? '' : 's'}, ${formatBytes(projectStorage.dataBytes)} project data, ${formatBytes(projectStorage.noteBytes)} notes`}
                 >
-                  <HardDrive size={14} className="text-slate-400 flex-shrink-0" />
+                  <HardDrive size={14} className="text-ink-faint flex-shrink-0" />
                   <span className="truncate">{formatBytes(projectStorage.totalBytes)} stored</span>
                 </div>
               )}
@@ -1950,13 +1950,13 @@ export const ProjectView: React.FC = () => {
           </div>
           {project.planSets && project.planSets.length > 0 && (
             <div className="flex flex-col items-stretch md:items-end gap-1.5 w-full md:w-auto mt-2 md:mt-0">
-              <div className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-sm w-full md:w-auto">
+              <div className="flex items-center gap-2 bg-raised border border-edge rounded-lg px-3 py-2 shadow-sm w-full md:w-auto">
                 <Layers size={15} className="text-accent-600 shrink-0" />
-                <span className="text-xs md:text-sm text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">Plan Set:</span>
+                <span className="text-xs md:text-sm text-ink-soft font-medium whitespace-nowrap">Plan Set:</span>
                 <select
                   value={selectedPlanSetId}
                   onChange={(e) => setSelectedPlanSetId(e.target.value)}
-                  className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-slate-700 dark:text-slate-300 outline-none w-full md:min-w-[160px]"
+                  className="bg-transparent dark:bg-transparent text-xs md:text-sm font-medium text-ink outline-none w-full md:min-w-[160px]"
                 >
                   <option value="">Current (all sets)</option>
                   {orderedPlanSets(project).slice().reverse().map(ps => (
@@ -1969,12 +1969,12 @@ export const ProjectView: React.FC = () => {
                   onClick={() => setShowManagePlanSets(true)}
                   aria-label="Manage plan sets"
                   title="Manage plan sets"
-                  className="shrink-0 p-1 rounded-md text-slate-400 hover:text-accent-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                  className="shrink-0 p-1 rounded-md text-ink-faint hover:text-accent-600 hover:bg-hover transition-colors"
                 >
                   <Settings size={15} />
                 </button>
               </div>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500 px-1">
+              <div className="flex items-center gap-2 text-[11px] text-ink-faint px-1">
                 {selectedPlanSetId ? (() => {
                   const s = summarizePlanSet(project, selectedPlanSetId);
                   return <span>Viewing as of this set · {s.newCount} new, {s.revisedCount} revised{s.total ? ` (${s.total} sheets reissued)` : ''}</span>;
@@ -2000,49 +2000,43 @@ export const ProjectView: React.FC = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-200 dark:border-slate-700 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+        <nav aria-label="Project view sections" className="flex gap-1 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
           <button
             onClick={() => setActiveTab('pages')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'pages' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+            className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'pages' ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
             }`}
           >
             Pages
-            {activeTab === 'pages' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-            )}
           </button>
           <button
             onClick={() => setActiveTab('takeoffs')}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === 'takeoffs' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+            className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'takeoffs' ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
             }`}
           >
             Takeoffs
-            {activeTab === 'takeoffs' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-            )}
           </button>
           {project.email && (
             <button
               onClick={() => setActiveTab('email')}
-              className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap flex items-center gap-1.5 ${
-                activeTab === 'email' ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                activeTab === 'email' ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
               }`}
             >
               <Mail size={14} /> Email
               {project.emails && project.emails.length > 1 && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300">
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                  activeTab === 'email' ? 'bg-white/25 text-white' : 'bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300'
+                }`}>
                   {project.emails.length}
                 </span>
               )}
-              {activeTab === 'email' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-              )}
             </button>
           )}
-        </div>
+        </nav>
 
+        <div key={activeTab} className="anim-tab-in">
         {activeTab === 'pages' ? (
           <ProjectPagesTab
             project={project}
@@ -2115,6 +2109,7 @@ export const ProjectView: React.FC = () => {
           /* Email tab — only reachable when project.email exists */
           <EmailTab project={project} onOpenProposal={isAdmin ? () => navigate(`/project/${projectId}/proposal`) : undefined} />
         )}
+        </div>
       </div>
 
       <TakeoffDeleteModals

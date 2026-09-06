@@ -261,4 +261,27 @@ describe('customerSummaries / customerOverview', () => {
     const upcoming = ov.attention.find((a: any) => a.type === 'bid_due' && a.projectId === 'p-bid');
     expect(upcoming.overdue).toBeUndefined();
   });
+
+  it('customerOverview.billing.aging buckets outstanding docs by age (current/31-60/61+)', () => {
+    // beforeEach already seeded p-prog with a sent, unpaid $100 invoice dated
+    // "now" — that one lands in `current` alongside the 10-day invoice below.
+    const inv10 = createInvoice(d, 'p-prog', { number: 'INV-10D', date: Date.now() - 10 * DAY, lines: [{ description: 'A', qty: 1, unitPrice: 200 }] });
+    setInvoiceStatus(d, inv10.id, 'sent');
+    const inv45 = createInvoice(d, 'p-prog', { number: 'INV-45D', date: Date.now() - 45 * DAY, lines: [{ description: 'B', qty: 1, unitPrice: 300 }] });
+    setInvoiceStatus(d, inv45.id, 'sent');
+    const inv90 = createInvoice(d, 'p-prog', { number: 'INV-90D', date: Date.now() - 90 * DAY, lines: [{ description: 'C', qty: 1, unitPrice: 400 }] });
+    setInvoiceStatus(d, inv90.id, 'sent');
+
+    const ov = customerOverview(d, cid, true)!;
+    expect(ov.billing.aging).toEqual({
+      current: 30000,      // p-prog's original $100 (age 0) + the $200 10-day-old invoice
+      days31to60: 30000,   // the $300 45-day-old invoice
+      days61plus: 40000,   // the $400 90-day-old invoice
+    });
+  });
+
+  it('customerOverview.billing.aging is undefined for non-admin (no billing object at all)', () => {
+    const ov = customerOverview(d, cid, false)!;
+    expect(ov.billing).toBeUndefined();
+  });
 });

@@ -9,6 +9,9 @@ import { TaskListItem } from '../../utils/store';
 import { Card, CardBody, EmptyState, Skeleton } from '../ui';
 import { TaskStatusPill } from '../ui/TaskStatusPill';
 import { EditingChip } from '../EditingChip';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
+import { ReplyFlagChip } from '../documents/ReplyFlagChip';
+import { useReveal } from '../../hooks/useReveal';
 
 type Filter = 'all' | 'mine' | 'todo' | 'in_progress' | 'done' | 'overdue';
 
@@ -26,6 +29,15 @@ const isOverdue = (t: TaskListItem) => !!t.dueDate && t.dueDate < todayISO && t.
 
 interface CategoryGroup { key: string; label: string; items: TaskListItem[]; }
 const UNCATEGORIZED = 'Uncategorized';
+
+// Reveals a category-group Card on scroll (Wave 3 Task 11). A dedicated
+// component (not an inline hook call in .map) so each group gets its own
+// IntersectionObserver — hooks can't be called a variable number of times
+// per render.
+const RevealGroup: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+  const ref = useReveal<HTMLDivElement>();
+  return <div ref={ref}>{children}</div>;
+};
 
 export const TaskListPanel: React.FC<{
   tasks: TaskListItem[] | null;
@@ -45,6 +57,7 @@ export const TaskListPanel: React.FC<{
   }, []);
 
   const list = tasks ?? [];
+  const replyFlags = useReplyFlags('task', list.map(t => t.id));
 
   const filtered = useMemo(() => {
     switch (filter) {
@@ -103,7 +116,8 @@ export const TaskListPanel: React.FC<{
       ) : (
         <div className="space-y-5">
           {groups.map(g => (
-            <Card key={g.key}>
+            <RevealGroup key={g.key}>
+            <Card>
               <CardBody>
                 <h2 className="mb-2 text-sm font-semibold text-ink">{g.label}</h2>
                 <ul className="divide-y divide-edge">
@@ -122,6 +136,7 @@ export const TaskListPanel: React.FC<{
                             {t.title || '(untitled)'}
                           </span>
                           <EditingChip type="task" id={t.id} />
+                          {replyFlags.has(t.id) && <ReplyFlagChip data-testid={`task-reply-flag-${t.id}`} />}
                           <span className={`shrink-0 text-xs ${t.assigneeUsername ? 'text-ink-soft' : 'text-ink-faint'}`}>
                             {t.assigneeUsername || 'Unassigned'}
                           </span>
@@ -148,6 +163,7 @@ export const TaskListPanel: React.FC<{
                 </ul>
               </CardBody>
             </Card>
+            </RevealGroup>
           ))}
         </div>
       )}

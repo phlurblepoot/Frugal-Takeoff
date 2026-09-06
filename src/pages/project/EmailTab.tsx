@@ -22,16 +22,16 @@ export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
 
   return (
     <div className="space-y-4 max-w-3xl">
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm p-5">
+      <div className="bg-raised rounded-xl border border-edge shadow-sm p-5">
         <div className="flex items-start gap-3 mb-4">
           <div className="p-2 rounded-lg bg-accent-50 dark:bg-accent-900/30 shrink-0">
             <Mail size={18} className="text-accent-600 dark:text-accent-400" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-slate-900 dark:text-white leading-tight">{project.email.subject}</p>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-              <span className="font-medium text-slate-700 dark:text-slate-300">{project.email.fromName || project.email.from}</span>
-              {project.email.fromName && <span className="text-slate-400"> &lt;{project.email.from}&gt;</span>}
+            <p className="font-bold text-ink leading-tight">{project.email.subject}</p>
+            <p className="text-sm text-ink-soft mt-0.5">
+              <span className="font-medium text-ink">{project.email.fromName || project.email.from}</span>
+              {project.email.fromName && <span className="text-ink-faint"> &lt;{project.email.from}&gt;</span>}
               <span className="ml-2">{new Date(project.email.receivedAt).toLocaleString()}</span>
             </p>
           </div>
@@ -62,19 +62,19 @@ export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
                   const n = new Set(s); isOpen ? n.delete(idx) : n.add(idx); return n;
                 });
                 return (
-                  <div key={idx} className="rounded-xl border border-slate-200 dark:border-slate-600 overflow-hidden">
-                    <button onClick={toggle} className={`w-full flex items-center justify-between px-4 py-2.5 text-left transition-colors ${isLatest ? 'bg-accent-50 dark:bg-accent-900/20' : 'bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-700/60'}`}>
-                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+                  <div key={idx} className="rounded-xl border border-edge-strong overflow-hidden">
+                    <button onClick={toggle} className={`w-full flex items-center justify-between px-4 py-2.5 text-left transition-colors ${isLatest ? 'bg-accent-50 dark:bg-accent-900/20' : 'bg-sunken/60 hover:bg-hover/60'}`}>
+                      <span className="text-sm font-medium text-ink truncate">
                         {em.fromName || em.from}
-                        {em.fromName && <span className="ml-1 text-slate-400 font-normal text-xs">&lt;{em.from}&gt;</span>}
+                        {em.fromName && <span className="ml-1 text-ink-faint font-normal text-xs">&lt;{em.from}&gt;</span>}
                       </span>
                       <span className="flex items-center gap-2 shrink-0 ml-3">
-                        <span className="text-xs text-slate-400">{new Date(em.receivedAt).toLocaleDateString()}</span>
-                        {isOpen ? <ChevronUp size={13} className="text-slate-400" /> : <ChevronDown size={13} className="text-slate-400" />}
+                        <span className="text-xs text-ink-faint">{new Date(em.receivedAt).toLocaleDateString()}</span>
+                        {isOpen ? <ChevronUp size={13} className="text-ink-faint" /> : <ChevronDown size={13} className="text-ink-faint" />}
                       </span>
                     </button>
                     {isOpen && (
-                      <div className="border-t border-slate-100 dark:border-slate-700">
+                      <div className="border-t border-edge">
                         {em.htmlBody ? (
                           <iframe
                             srcDoc={em.htmlBody}
@@ -97,7 +97,7 @@ export function EmailTab({ project, onOpenProposal }: EmailTabProps) {
                             }}
                           />
                         ) : (
-                          <p className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{em.body}</p>
+                          <p className="px-4 py-3 text-sm text-ink-soft whitespace-pre-wrap">{em.body}</p>
                         )}
                       </div>
                     )}

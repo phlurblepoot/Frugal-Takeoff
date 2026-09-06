@@ -18,6 +18,9 @@ const { fakeSocket, getIssues, getIssue, getDocumentsBySource } = vi.hoisted(() 
 vi.mock('../../context/CollaborationContext', () => ({
   useCollaboration: () => ({ socket: fakeSocket, sessions: [], mySessionId: 'sock-1' }),
 }));
+// Not under test here — see ReplyFlagChip/useReplyFlags.test for that; a real
+// fetch would otherwise fire (and outlive) this file's tests.
+vi.mock('../../hooks/useReplyFlags', () => ({ useReplyFlags: () => new Set<string>() }));
 vi.mock('../../utils/store', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getIssues, getIssue, getDocumentsBySource,
@@ -55,9 +58,9 @@ vi.mock('./ProjectLayout', () => ({
 import { fireEvent } from '@testing-library/react';
 import { ProjectIssues } from './ProjectIssues';
 
-function mount() {
+function mount(initialEntry = '/project/p1/issues') {
   return render(
-    <MemoryRouter initialEntries={['/project/p1/issues']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes><Route path="/project/:projectId/issues" element={<ProjectIssues />} /></Routes>
     </MemoryRouter>
   );
@@ -129,6 +132,13 @@ describe('ProjectIssues — report status on rows', () => {
     await rtlWaitFor(() => expect(screen.getByText('PDF up to date')).toBeInTheDocument());
     expect(screen.queryByText('No PDF yet')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Open PDF' })).toHaveLength(1);
+  });
+
+  it('?open= opens that issue\'s editor (CreateFromThreadMenu convention) and strips the param', async () => {
+    getIssue.mockResolvedValue({ ...listRow(), photos: [] });
+    mount('/project/p1/issues?open=i1');
+    await screen.findByTestId('editor');
+    expect(getIssue).toHaveBeenCalledWith('i1');
   });
 
   it('marks the chip out of date when the issue changed after the report was made', async () => {

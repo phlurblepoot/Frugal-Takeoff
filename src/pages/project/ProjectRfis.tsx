@@ -1,7 +1,7 @@
 // src/pages/project/ProjectRfis.tsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Eye, MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
+import { Eye, Mail, MessageCircleQuestion, Plus, Trash2, ImageIcon } from 'lucide-react';
 import {
   Rfi, RfiListItem, getRfis, getRfi, createRfi, deleteRfi,
 } from '../../utils/store';
@@ -16,7 +16,9 @@ import { RfiStatusPill } from '../../components/ui/RfiStatusPill';
 import { RfiEditor } from './rfi/RfiEditor';
 import { EditingChip } from '../../components/EditingChip';
 import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 
 export const rfiNo = (n: number): string => `RFI-${String(n).padStart(3, '0')}`;
@@ -58,6 +60,7 @@ export const ProjectRfis: React.FC = () => {
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('rfi', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New RFI" action.
@@ -68,6 +71,16 @@ export const ProjectRfis: React.FC = () => {
       if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
       setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('new'); return p; }, { replace: true });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Open a specific RFI's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3) — same one-shot query-param convention as ?new=1 above.
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openRfi(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -118,7 +131,29 @@ export const ProjectRfis: React.FC = () => {
               <TR key={rfi.id} interactive onClick={() => openRfi(rfi.id)}>
                 <TD className="font-mono text-xs text-ink-soft">{rfiNo(rfi.number)}</TD>
                 <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{rfi.title || '(untitled)'}<EditingChip type="rfi" id={rfi.id} /></span></TD>
-                <TD><RfiStatusPill status={rfi.status} /></TD>
+                <TD>
+                  <span className="inline-flex items-center gap-1.5">
+                    <RfiStatusPill status={rfi.status} />
+                    {/* An emailed answer came back and is waiting for someone to
+                        accept or dismiss it in the editor. Gated on the status
+                        as well as the row: a pendingReply can outlive an
+                        out-of-band status change. */}
+                    {rfi.pendingReply && rfi.status === 'sent' ? (
+                      <span
+                        title="Email reply waiting for review"
+                        className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-300"
+                      >
+                        <Mail size={11} />Reply
+                      </span>
+                    ) : (
+                      // Same reply-state signal as the pendingReply chip above,
+                      // just less rich (no accountId/response file) — shown
+                      // only when pendingReply isn't already covering it, so a
+                      // flagged RFI is never double-chipped.
+                      replyFlags.has(rfi.id) && <ReplyFlagChip data-testid={`rfi-reply-flag-${rfi.id}`} />
+                    )}
+                  </span>
+                </TD>
                 <TD className={isRfiOverdue(rfi) ? 'font-medium text-red-600' : 'text-ink-soft'}>
                   {rfi.responseNeededBy ? new Date(`${rfi.responseNeededBy}T00:00:00`).toLocaleDateString() : '—'}
                   {isRfiOverdue(rfi) ? ' · overdue' : ''}

@@ -1,5 +1,6 @@
 // src/pages/project/billing/ChangeOrdersSection.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Eye, FileText, Plus, Trash2 } from 'lucide-react';
 import {
   ChangeOrder, ChangeOrderListItem,
@@ -18,7 +19,9 @@ import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
 import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
@@ -48,11 +51,25 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('changeOrder', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   const openChangeOrder = async (id: string) => {
     try { setEditing(await getChangeOrder(id)); } catch { toast('Failed to open change order', { type: 'error' }); }
   };
+
+  // Open a specific change order's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3/follow-up) — same one-shot query-param convention as the
+  // Tasks/RFI/Issue pages' ?open=.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openChangeOrder(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const newChangeOrder = async () => {
     if (!projectId) return;
     try {
@@ -86,7 +103,7 @@ export const ChangeOrdersSection: React.FC<{ projectId: string; onChange?: () =>
               <TBody>
                 {changeOrders.map(co => (
                   <TR key={co.id} interactive onClick={() => openChangeOrder(co.id)}>
-                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">CO-{co.number || '—'}<EditingChip type="changeOrder" id={co.id} /></span></TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">CO-{co.number || '—'}<EditingChip type="changeOrder" id={co.id} />{replyFlags.has(co.id) && <ReplyFlagChip data-testid={`co-reply-flag-${co.id}`} />}</span></TD>
                     <TD className="text-ink-soft">{co.title || '—'}</TD>
                     <TD><ChangeOrderStatusPill status={co.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(co.totalCents)}</TD>

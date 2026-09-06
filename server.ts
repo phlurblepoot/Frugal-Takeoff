@@ -12,7 +12,6 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
-import nodemailer from "nodemailer";
 import { openDb } from './server/db';
 import { runMigrations } from './server/migrations';
 import { migrations } from './server/migrationList';
@@ -24,6 +23,16 @@ import { createChangeFeed, requestMeta } from './server/realtime/changeFeed';
 import { normalizeTokenPayload } from './server/realtime/verifyPayload';
 import { SheetSessionStore } from './server/realtime/sheetSessions';
 import { SheetFlushEngine } from './server/realtime/sheetFlush';
+import { loadMailCrypto } from './server/mail/crypto';
+import type { MailContext } from './server/mail/context';
+import type { MailCrypto } from './server/mail/crypto';
+import { createMailProvider, defaultProviderDeps } from './server/mail/providers';
+import { registerMailRoutes } from './server/mail/routes';
+import { MailScheduler } from './server/mail/sync/scheduler';
+import { WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './server/mail/push';
+import { BodyCache } from './server/mail/sync/bodyCache';
+import { sweepUploads } from './server/mail/uploads';
+import { installInboundHooks } from './server/mail/inboundHooks';
 
 dotenv.config();
 
@@ -31,6 +40,10 @@ const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "app.db");
 
 let db: Database.Database;
+// Loaded (or generated) once in initDb, then shared by migration 31 and the
+// mail subsystem — two MailCrypto instances over one key file would be pure
+// duplication.
+let mailCrypto: MailCrypto;
 
 async function ensureDirs() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -69,7 +82,10 @@ function initDb() {
     }
 
     db = openDb(DB_FILE);
-    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true });
+    // mailCrypto is what lets migration 31 re-seal each user's smtp.* config as
+    // a mail account; without it that transform skips with a warning.
+    mailCrypto = loadMailCrypto(DATA_DIR);
+    runMigrations(db, DATA_DIR, migrations, { dbFile: DB_FILE, vacuum: true, mailCrypto });
 
     // Initialize default settings
     const settingsCount = db.prepare('SELECT COUNT(*) as count FROM settings').get() as { count: number };
@@ -115,7 +131,16 @@ async function startServer() {
     maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
-  app.use(express.json({ limit: "50mb" }));
+  // Two mail paths bring their own body parser, and this one runs first, so it
+  // steps aside for exactly those:
+  //   * POST /api/mail/uploads streams a raw attachment body (its own
+  //     express.raw parser lives in registerMailRoutes);
+  //   * the Graph and Pub/Sub webhooks are unauthenticated and open to the
+  //     internet, so each takes a 256 KB express.json() of its own instead of
+  //     this 50 MB one.
+  const jsonParser = express.json({ limit: "50mb" });
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
+  app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
   //   1. JWT_SECRET environment variable (admin override)
@@ -153,11 +178,15 @@ async function startServer() {
   });
   sheetFlush.start();
 
+  // One token verifier, shared by realtime, the data routes and the mail routes
+  // so a token means the same thing everywhere.
+  const verifyToken = (token: string) => {
+    try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
+    catch { return null; }
+  };
+
   const realtime = registerRealtime(io, {
-    verifyToken: (token: string) => {
-      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); }
-      catch { return null; }
-    },
+    verifyToken,
     db,
     broadcastChange,
     sheetStore,
@@ -171,11 +200,14 @@ async function startServer() {
   // entirely in tests, which construct their own harness instead of calling
   // startServer().
   let shuttingDown = false;
+  // Assigned further down (the mail subsystem needs routes/auth in place first);
+  // hoisted so the shutdown handler can stop its sync workers.
+  let mailScheduler: MailScheduler | undefined;
   const flushAndExit = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`Received ${signal}, flushing dirty spreadsheet sessions before exit...`);
-    sheetFlush.flushAll().finally(() => process.exit(0));
+    Promise.allSettled([mailScheduler?.stop(), sheetFlush.flushAll()]).finally(() => process.exit(0));
   };
   process.once('SIGTERM', () => flushAndExit('SIGTERM'));
   process.once('SIGINT', () => flushAndExit('SIGINT'));
@@ -216,9 +248,7 @@ async function startServer() {
     dbFile: DB_FILE,
     authenticateToken,
     requireAdmin,
-    verifyToken: (token: string) => {
-      try { return normalizeTokenPayload(jwt.verify(token, JWT_SECRET)); } catch { return null; }
-    },
+    verifyToken,
     broadcastChange,
     sheetStore,
   });
@@ -436,9 +466,9 @@ async function startServer() {
   });
 
   // Settings API — public endpoint, excludes any key that could contain secrets
-  // (jwt.secret, smtp.*, email.* credentials). Those are fetched via their own
+  // (jwt.secret, retired smtp.* rows, mail.webhookSecret). Those are fetched via their own
   // authenticated endpoints.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.'];
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
@@ -533,8 +563,10 @@ async function startServer() {
     try {
       const rows = db.prepare('SELECT key, value FROM user_preferences WHERE userId = ?').all((req as any).user.id) as { key: string; value: string }[];
       const prefs: Record<string, string> = {};
-      // Exclude smtp.* keys (per-user SMTP config incl. password) — those are
-      // read/written only via the dedicated GET/POST /api/email/smtp routes.
+      // Exclude smtp.* keys. Migration 31 deletes them for every user it could
+      // convert into a mail account, but a half-filled block (blank smtp.host,
+      // or neither fromAddress nor username) is left behind untouched — and it
+      // can still hold a password, so it must never leak out here.
       rows.forEach(row => { if (!row.key.startsWith('smtp.')) prefs[row.key] = row.value; });
       res.json(prefs);
     } catch (error) {
@@ -549,9 +581,9 @@ async function startServer() {
       const stmt = db.prepare('INSERT OR REPLACE INTO user_preferences (userId, key, value) VALUES (?, ?, ?)');
       const userId = (req as any).user.id;
       Object.entries(prefs).forEach(([key, value]) => {
-        // SMTP credentials are written only via the dedicated POST /api/email/smtp
-        // route (per-user, type-coerced). Don't let the generic prefs endpoint be
-        // a second write path for them.
+        // The smtp.* namespace is retired (migration 31 converted it to mail
+        // accounts and deleted the rows it converted). Refuse writes so nothing
+        // can resurrect a credential there.
         if (key.startsWith('smtp.')) return;
         stmt.run(userId, key, value as string);
       });
@@ -562,43 +594,57 @@ async function startServer() {
     }
   });
 
-  // ── Email API ──────────────────────────────────────────────────────────────
-
-  // Helper: read a user's per-user SMTP config (smtp.* keys in user_preferences),
-  // stripped of the `smtp.` prefix. SMTP is strictly per-user — no global fallback.
-  function getUserSmtp(userId: string): Record<string, string> {
-    const rows = db.prepare("SELECT key, value FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").all(userId) as { key: string; value: string }[];
-    const cfg: Record<string, string> = {};
-    rows.forEach(r => { cfg[r.key.replace('smtp.', '')] = r.value; });
-    return cfg;
-  }
-
-  // Helper: build SMTP transporter from the given user's config (null when not configured).
-  function buildTransporter(userId: string) {
-    const cfg = getUserSmtp(userId);
-    if (!cfg.host || !cfg.username) return null;
-    return nodemailer.createTransport({
-      host: cfg.host,
-      port: parseInt(cfg.port || '587'),
-      secure: cfg.secure === 'true',
-      auth: { user: cfg.username, pass: cfg.password },
-    });
-  }
-
-  // The SMTP-settings routes + the four send routes (proposal/invoice/change-
-  // order/issue) and the shared sendProjectEmail helper now live in
-  // server/routes.ts so they can be unit-tested with a stubbed transporter.
-  // SMTP-absent still no-ops: buildTransporter() returns null → sends throw
-  // "SMTP not configured", exactly as before.
-  registerEmailRoutes(app, {
+  // ── Mail subsystem (spec 2026-08-29) ───────────────────────────────────────
+  // One outbound path for the whole app: the /api/mail client routes and the
+  // per-item send routes both go through sendService against the sending user's
+  // connected mail account. The old per-user SMTP config is gone — migration 31
+  // converted each saved smtp.* block into an account in 'needs_review'.
+  const mailCtx: MailContext = {
     db,
     dataDir: DATA_DIR,
+    crypto: mailCrypto,
+    providerFactory: (a, auth) => createMailProvider(a, auth, defaultProviderDeps(db, mailCrypto)),
+    broadcastChange,
+  };
+  // publicUrl is what lets Graph accounts use change notifications instead of
+  // polling alone: the scheduler both points Microsoft at our webhook and keeps
+  // the subscription renewed. Unset → poll only (spec §4.2).
+  // GOOGLE_PUBSUB_TOPIC does the same for Gmail: with a topic configured the
+  // scheduler keeps each Gmail watch renewed and Pub/Sub posts to
+  // /api/mail/google/webhook. Both are optional — polling never stops either way.
+  mailScheduler = new MailScheduler(mailCtx, {
+    publicUrl: process.env.APP_PUBLIC_URL || null,
+    googlePubsubTopic: process.env.GOOGLE_PUBSUB_TOPIC || null,
+  });
+  mailCtx.scheduler = mailScheduler;
+
+  registerMailRoutes(app, {
+    ctx: mailCtx,
     authenticateToken,
     requireAdmin,
-    buildTransporter,
-    getUserSmtp,
-    broadcastChange,
+    verifyToken,
+    bodyCache: new BodyCache({ maxBytes: 50 * 1024 * 1024, ttlMs: 10 * 60_000 }),
+    publicUrl: process.env.APP_PUBLIC_URL || null,
+    env: process.env,
+    jwtSecret: JWT_SECRET,
   });
+
+  registerEmailRoutes(app, {
+    db,
+    authenticateToken,
+    requireAdmin,
+    broadcastChange,
+    mailCtx,
+  });
+
+  // Before the first sync tick: a reply that lands in that tick must still be
+  // captured against its RFI.
+  installInboundHooks();
+  mailScheduler.start();
+  // Staged compose attachments are written to disk before the message exists;
+  // reap the ones no send ever claimed.
+  sweepUploads(DATA_DIR);
+  setInterval(() => sweepUploads(DATA_DIR), 15 * 60_000).unref();
 
   registerAiRoutes(app, {
     dataDir: DATA_DIR,
@@ -771,7 +817,7 @@ async function startServer() {
     res.status(500).json({ error: "Internal server error" });
   });
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });

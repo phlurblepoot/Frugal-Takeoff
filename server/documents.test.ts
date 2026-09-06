@@ -328,6 +328,86 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-2', label: 'Takeoff Print', href: '/project/p1/takeoff' });
   });
 
+  // Files saved out of an email attachment (sourceType 'mailMessage'). Beyond
+  // the label, resolving these is what stops the Documents page offering a
+  // Delete the server always refuses: the client keys `deletable` off `source`
+  // while deleteDocument() keys off the raw sourceType column, so an
+  // unresolved mail row read as "loose upload" — and a saved attachment
+  // re-typed to `document` is a direct-upload kind, so the button really did
+  // show, and really did 409.
+  const seedMailMessage = (over: { id?: string; subject?: string } = {}) => {
+    const id = over.id ?? 'mm-1';
+    db.prepare(`INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1','u1','x','admin')`).run();
+    db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, authBlob, indexedSince, createdAt, updatedAt)
+      VALUES ('acct-1','u1','imap','pm@bigbearplaster.com','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
+    db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, threadKey, subject, date, createdAt, updatedAt)
+      VALUES (?, 'acct-1', ?, 'thr-9', ?, '2026-08-28', '2026-08-28', '2026-08-28')`)
+      .run(id, `p-${id}`, over.subject ?? 'RE: Corridor ceiling height');
+    return id;
+  };
+
+  it('resolves a mailMessage label from the subject, with a mail thread deep link', async () => {
+    const mid = seedMailMessage();
+    const fid = await upload('mail-att', { projectId: 'p1', kind: 'email-attachment', sourceType: 'mailMessage', sourceId: mid, name: 'ceiling-detail.pdf' });
+
+    const res = await request(app).get('/api/documents');
+    const row = res.body.rows.find((r: any) => r.id === fid);
+    expect(row.source).toEqual({
+      type: 'mailMessage', id: mid,
+      label: 'RE: Corridor ceiling height',
+      // Per-ROW href (account + thread key off the message), not the file's
+      // projectId; `_` is the mail page's no-folder-filter segment.
+      href: '/mail/acct-1/_/thr-9',
+    });
+  });
+
+  // Several attachments off ONE email are now several live rows sharing the
+  // same (mailMessage, id) source — the resolver labels each row on its own,
+  // so every one of them lists with its own name and the same deep link.
+  it('lists every attachment saved from one message as its own row', async () => {
+    const mid = seedMailMessage({ id: 'mm-multi', subject: 'Signed COR-4 + site photos' });
+    const src = { projectId: 'p1', kind: 'document', sourceType: 'mailMessage', sourceId: mid };
+    const a = await upload('mm-a', { ...src, name: 'COR-4 signed.pdf' });
+    const b = await upload('mm-b', { ...src, name: 'site-1.jpg' });
+    const c = await upload('mm-c', { ...src, name: 'site-2.jpg' });
+
+    const res = await request(app).get('/api/documents');
+    const rows = [a, b, c].map(id => res.body.rows.find((r: any) => r.id === id));
+    expect(rows.map((r: any) => r.name)).toEqual(['COR-4 signed.pdf', 'site-1.jpg', 'site-2.jpg']);
+    for (const r of rows) {
+      expect(r.source).toEqual({ type: 'mailMessage', id: mid, label: 'Signed COR-4 + site photos', href: '/mail/acct-1/_/thr-9' });
+      expect(r.versionNumber).toBe(1); // its own document, not a version of a sibling
+    }
+  });
+
+  it('a subject-less mail message falls back to a generic label, still linked', async () => {
+    const mid = seedMailMessage({ id: 'mm-2', subject: '   ' });
+    const fid = await upload('mail-att2', { projectId: 'p1', kind: 'email-attachment', sourceType: 'mailMessage', sourceId: mid, name: 'x.pdf' });
+
+    const res = await request(app).get('/api/documents');
+    expect(res.body.rows.find((r: any) => r.id === fid).source)
+      .toEqual({ type: 'mailMessage', id: mid, label: 'Email message', href: '/mail/acct-1/_/thr-9' });
+  });
+
+  // Deliberately NOT source:null. Disconnecting the account cascades the
+  // messages away, but the file row keeps its sourceType — and deleteDocument()
+  // reads that column, so a null source here would put the Delete button back
+  // in front of a 409. Same shape as every other resolver's miss branch.
+  it('keeps a mailMessage source (generic label, no href) when the message row is gone', async () => {
+    const mid = seedMailMessage({ id: 'mm-3' });
+    const fid = await upload('mail-att3', { projectId: 'p1', kind: 'document', sourceType: 'mailMessage', sourceId: mid, name: 'orphan.pdf' });
+    db.prepare('DELETE FROM mail_messages WHERE id = ?').run(mid);
+
+    const res = await request(app).get('/api/documents');
+    expect(res.body.rows.find((r: any) => r.id === fid).source)
+      .toEqual({ type: 'mailMessage', id: mid, label: 'Email message', href: null });
+
+    // And the server still refuses the delete — which is exactly why the row
+    // must not read as source-less to the client.
+    const del = await request(app).delete(`/api/files/${fid}`);
+    expect(del.status).toBe(409);
+  });
+
   it('files with no sourceType have source: null', async () => {
     const fid = await upload('loose', { projectId: 'p1', kind: 'document', name: 'Loose.pdf' });
     const res = await request(app).get('/api/documents');

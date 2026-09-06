@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createBrowserRouter, RouterProvider, Outlet, useLocation, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
+import { PageTransition } from './components/motion/PageTransition';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { NewProject } from './pages/NewProject';
@@ -9,12 +10,14 @@ import { CanvasView } from './pages/CanvasView';
 import { ProjectLayout } from './pages/project/ProjectLayout';
 import { ProjectOverview } from './pages/project/ProjectOverview';
 import { DocumentsPage, ProjectDocumentsRedirect } from './pages/documents/DocumentsPage';
+import { MailPage } from './pages/mail/MailPage';
 import { ProjectNotes } from './pages/project/ProjectNotes';
 import { ProjectTime } from './pages/project/ProjectTime';
 import { ProjectBilling } from './pages/project/ProjectBilling';
 import { ProjectIssues } from './pages/project/ProjectIssues';
 import { ProjectRfis } from './pages/project/ProjectRfis';
 import { ProjectDailyReports } from './pages/project/ProjectDailyReports';
+import { ProjectMail } from './pages/project/ProjectMail';
 import { ProjectPunch } from './pages/project/ProjectPunch';
 import { ProposalsList } from './pages/project/proposal/ProposalsList';
 import { ProposalEditor } from './pages/project/proposal/ProposalEditor';
@@ -29,8 +32,9 @@ import { CustomersSplitView } from './pages/customers/CustomersSplitView';
 import { ShareView } from './pages/ShareView';
 import { CollaborationProvider } from './context/CollaborationContext';
 import { NotesProvider } from './context/NotesContext';
-import { UserPresenceOverlay } from './components/UserPresenceOverlay';
 import { FollowPill } from './components/FollowPill';
+import { ThemeWipe } from './components/shell/ThemeWipe';
+import { CelebrationOverlay } from './components/motion/Celebration';
 import { NotesOverlay } from './components/NotesOverlay';
 import { ToastProvider } from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -52,11 +56,14 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
           <CollaborationProvider>
             <NotesProvider>
               {!isLoginPage && <CommandPalette />}
-              <AppShell>
-                <UserPresenceOverlay />
+              <AppShell appName={appName}>
                 <FollowPill />
+                <ThemeWipe />
+                <CelebrationOverlay />
                 <NotesOverlay />
-                <Outlet context={{ appName, logoUrl }} />
+                <PageTransition>
+                  <Outlet context={{ appName, logoUrl }} />
+                </PageTransition>
               </AppShell>
             </NotesProvider>
           </CollaborationProvider>
@@ -128,6 +135,7 @@ export default function App() {
             { path: 'issues', element: <ProjectIssues /> },
             { path: 'rfis', element: <ProjectRfis /> },
             { path: 'daily-reports', element: <ProjectDailyReports /> },
+            { path: 'mail', element: <ProjectMail /> },
             { path: 'billing', element: <ProjectBilling /> },
             { path: 'settings', element: <ProjectSettings /> },
             { path: 'page/:pageId', element: <CanvasView /> },
@@ -168,6 +176,22 @@ export default function App() {
         {
           path: 'documents',
           element: <DocumentsPage />,
+        },
+        {
+          path: 'mail',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId/:folderId',
+          element: <MailPage />,
+        },
+        {
+          path: 'mail/:accountId/:folderId/:threadKey',
+          element: <MailPage />,
         },
         {
           path: 'time',

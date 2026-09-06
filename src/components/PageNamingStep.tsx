@@ -628,11 +628,11 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
-      <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-        <div className="p-4 sm:p-8 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="bg-raised rounded-2xl shadow-sm border border-edge overflow-hidden">
+        <div className="p-4 sm:p-8 border-b border-edge flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">{title}</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>
+            <h1 className="text-xl sm:text-2xl font-bold text-ink">{title}</h1>
+            <p className="text-sm text-ink-soft mt-1">{subtitle}</p>
           </div>
           <div className="w-full sm:w-auto flex flex-col items-stretch sm:items-end gap-1.5">
             <div className="w-full sm:w-auto flex items-center gap-2">
@@ -642,7 +642,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   onClick={rematchAll}
                   disabled={aiScanning || isConfirming}
                   title="Re-check each page's revision match against its current page number"
-                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium text-ink bg-sunken border border-edge hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   <RefreshCw size={18} /> Re-match by page #
                 </button>
@@ -664,16 +664,16 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                     {aiScanning ? <><Loader2 size={18} className="animate-spin" /> Scanning…</> : <><Sparkles size={18} /> AI Scan</>}
                   </button>
                   {aiScanning && aiScanProgress && (
-                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 min-w-0">
+                    <div className="text-xs text-ink-soft flex items-center gap-1.5 min-w-0">
                       {aiScanProgress.phase === 'loading' ? (
                         <>
                           <Loader2 size={12} className="animate-spin shrink-0" />
                           <span>Loading model…</span>
-                          <span className="text-slate-400 dark:text-slate-500">(first run ~30s)</span>
+                          <span className="text-ink-faint">(first run ~30s)</span>
                         </>
                       ) : aiScanProgress.phase === 'scanning' && aiScanProgress.total !== undefined ? (
                         <>
-                          <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                          <div className="w-24 h-1.5 bg-sunken rounded-full overflow-hidden">
                             <div
                               className="h-full bg-accent-500 rounded-full transition-all"
                               style={{ width: `${Math.round(((aiScanProgress.done ?? 0) / aiScanProgress.total) * 100)}%` }}
@@ -727,14 +727,14 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                 ? 'border-red-400 dark:border-red-500'
                 : needsReview
                 ? 'border-amber-300 dark:border-amber-500/60'
-                : 'border-slate-100 dark:border-slate-700';
+                : 'border-edge';
               return (
               <div
                 key={page.id}
-                className={`bg-white dark:bg-slate-800 rounded-2xl border-2 ${borderClass} overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300`}
+                className={`bg-raised rounded-2xl border-2 ${borderClass} overflow-hidden flex flex-col shadow-sm hover:shadow-md transition-all duration-300`}
               >
                 <div
-                  className="h-48 bg-slate-100 dark:bg-slate-700 relative flex-shrink-0 border-b border-slate-100 dark:border-slate-700 cursor-pointer overflow-hidden group"
+                  className="h-48 bg-sunken relative flex-shrink-0 border-b border-edge cursor-pointer overflow-hidden group"
                   onClick={() => setPreviewPageId(page.id)}
                 >
                   {thumbSrc ? (
@@ -744,7 +744,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                       className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-110"
                     />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-slate-400 dark:text-slate-500">
+                    <div className="w-full h-full flex items-center justify-center text-ink-faint">
                       <Loader2 size={32} className="animate-spin" />
                     </div>
                   )}
@@ -779,21 +779,21 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                 <div className="p-5 space-y-5">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Page Number</label>
+                      <label className="text-[10px] font-black text-ink-faint uppercase tracking-widest">Page Number</label>
                       {page.pageNumber && !needsReview && <Check size={12} className="text-green-500" />}
                     </div>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-ink-faint">
                         <Hash size={14} />
                       </div>
                       <input
                         type="text"
                         value={page.pageNumber || ''}
                         onChange={(e) => updateField(page.id, 'pageNumber', e.target.value)}
-                        className={`w-full pl-10 pr-4 py-3 rounded-xl border-2 bg-slate-50 focus:bg-white focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-slate-800 placeholder:text-slate-300 placeholder:font-normal dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800 ${
+                        className={`w-full pl-10 pr-4 py-3 rounded-xl border-2 bg-sunken focus:bg-raised focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-bold text-ink placeholder:text-ink-faint placeholder:font-normal ${
                           isDuplicate
                             ? 'border-red-400 focus:border-red-500 dark:border-red-500'
-                            : 'border-slate-100 focus:border-accent-500 dark:border-slate-600'
+                            : 'border-edge focus:border-accent-500'
                         }`}
                         placeholder="e.g. A-101"
                       />
@@ -817,12 +817,12 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   {reviewMode && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between px-1">
-                        <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Match</label>
+                        <label className="text-[10px] font-black text-ink-faint uppercase tracking-widest">Match</label>
                       </div>
                       <select
                         value={page.matchSheetId || ''}
                         onChange={(e) => setMatch(page.id, e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-medium text-slate-800 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:focus:bg-slate-800"
+                        className="w-full px-3 py-2.5 rounded-xl border-2 border-edge bg-sunken focus:bg-raised focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm font-medium text-ink"
                       >
                         <option value="">New sheet</option>
                         {(existingSheets || []).map(s => (
@@ -836,7 +836,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                           Carries the current measurements + scale forward; the prior revision becomes read-only.
                         </p>
                       ) : (
-                        <p className="text-[11px] text-slate-400 dark:text-slate-500 px-1">
+                        <p className="text-[11px] text-ink-faint px-1">
                           Starts as a brand-new, empty sheet.
                         </p>
                       )}
@@ -845,18 +845,18 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">Description</label>
+                      <label className="text-[10px] font-black text-ink-faint uppercase tracking-widest">Description</label>
                       {page.description && <Check size={12} className="text-green-500" />}
                     </div>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 dark:text-slate-500">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-ink-faint">
                         <FileText size={14} />
                       </div>
                       <input
                         type="text"
                         value={page.description || ''}
                         onChange={(e) => updateField(page.id, 'description', e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-slate-100 bg-slate-50 focus:bg-white focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm text-slate-800 placeholder:text-slate-300 dark:bg-slate-800/50 dark:border-slate-600 dark:text-white dark:placeholder-slate-500 dark:focus:bg-slate-800"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-edge bg-sunken focus:bg-raised focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10 outline-none transition-all text-sm text-ink placeholder:text-ink-faint"
                         placeholder="e.g. Floor Plan"
                       />
                     </div>
@@ -872,24 +872,24 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
       {/* ── Preview modal ────────────────────────────────────────────────── */}
       {previewPageId && previewPage && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-none sm:rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
-            <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900 gap-2">
+          <div className="bg-raised rounded-none sm:rounded-2xl shadow-2xl w-full max-w-5xl h-full flex flex-col overflow-hidden">
+            <div className="p-3 sm:p-4 border-b border-edge flex justify-between items-center bg-sunken gap-2">
               <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-                <button onClick={closePreview} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors flex-shrink-0">
+                <button onClick={closePreview} className="p-2 hover:bg-hover rounded-full transition-colors flex-shrink-0">
                   <ArrowLeft size={20} />
                 </button>
-                <h3 className="font-bold text-slate-900 dark:text-white truncate">Page Preview &amp; Extraction</h3>
+                <h3 className="font-bold text-ink truncate">Page Preview &amp; Extraction</h3>
               </div>
               <div className="flex items-center gap-1 sm:gap-2">
-                <div className="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1">
-                  <button onClick={handleZoomOut} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-300 transition-colors" title="Zoom Out">
+                <div className="flex items-center bg-raised border border-edge rounded-lg p-1">
+                  <button onClick={handleZoomOut} className="p-1.5 hover:bg-hover rounded text-ink-soft transition-colors" title="Zoom Out">
                     <ZoomOut size={16} />
                   </button>
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 w-10 sm:w-12 text-center">{Math.round(zoom * 100)}%</span>
-                  <button onClick={handleZoomIn} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-300 transition-colors" title="Zoom In">
+                  <span className="text-xs font-bold text-ink-soft w-10 sm:w-12 text-center">{Math.round(zoom * 100)}%</span>
+                  <button onClick={handleZoomIn} className="p-1.5 hover:bg-hover rounded text-ink-soft transition-colors" title="Zoom In">
                     <ZoomIn size={16} />
                   </button>
-                  <button onClick={handleResetZoom} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-300 transition-colors ml-1 border-l border-slate-100 dark:border-slate-700" title="Reset Zoom">
+                  <button onClick={handleResetZoom} className="p-1.5 hover:bg-hover rounded text-ink-soft transition-colors ml-1 border-l border-edge" title="Reset Zoom">
                     <Maximize size={16} />
                   </button>
                 </div>
@@ -898,7 +898,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   className={`px-2 sm:px-4 py-2 rounded-lg text-[11px] sm:text-sm font-bold transition-all ${
                     extractionType === 'pageNumber'
                       ? 'bg-accent-600 text-white shadow-md'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                      : 'bg-raised text-ink-soft border border-edge hover:border-accent-300'
                   }`}
                 >
                   Extract Number
@@ -908,28 +908,28 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   className={`px-2 sm:px-4 py-2 rounded-lg text-[11px] sm:text-sm font-bold transition-all ${
                     extractionType === 'description'
                       ? 'bg-accent-600 text-white shadow-md'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                      : 'bg-raised text-ink-soft border border-edge hover:border-accent-300'
                   }`}
                 >
                   Extract Description
                 </button>
-                <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1 sm:mx-2" />
-                <button onClick={closePreview} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                <div className="w-px h-6 bg-sunken mx-1 sm:mx-2" />
+                <button onClick={closePreview} className="p-2 text-ink-faint hover:text-ink transition-colors">
                   <X size={22} />
                 </button>
               </div>
             </div>
 
             {extractionType && (
-              <div className="px-3 sm:px-4 py-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex items-center gap-2 text-xs">
-                <span className="text-slate-400 dark:text-slate-500">Engine:</span>
+              <div className="px-3 sm:px-4 py-2 border-b border-edge bg-sunken flex items-center gap-2 text-xs">
+                <span className="text-ink-faint">Engine:</span>
                 <button
                   type="button"
                   onClick={() => setExtractEngine('text')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                     extractEngine === 'text'
                       ? 'bg-accent-600 text-white shadow-md'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                      : 'bg-raised text-ink-soft border border-edge hover:border-accent-300'
                   }`}
                 >
                   Text/OCR
@@ -942,7 +942,7 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                     extractEngine === 'ai'
                       ? 'bg-accent-600 text-white shadow-md'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-accent-300'
+                      : 'bg-raised text-ink-soft border border-edge hover:border-accent-300'
                   }`}
                 >
                   AI read
@@ -998,9 +998,9 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               </div>
             </div>
 
-            <div className="p-4 sm:p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-              <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                <div className={`w-2 h-2 rounded-full ${isAreaSelected ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'}`} />
+            <div className="p-4 sm:p-6 border-t border-edge bg-sunken flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+              <div className="flex items-center gap-2 text-sm text-ink-soft">
+                <div className={`w-2 h-2 rounded-full ${isAreaSelected ? 'bg-green-500' : 'bg-edge-strong'}`} />
                 {isAreaSelected
                   ? `Area selected. Ready to extract${extractionType === 'pageNumber' ? ' page number' : extractionType === 'description' ? ' description' : ''}.`
                   : extractionType
@@ -1009,21 +1009,21 @@ export const PageNamingStep: React.FC<PageNamingStepProps> = ({
               </div>
               <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 {extractProgress && (
-                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  <span className="text-xs font-medium text-ink-soft">
                     Extracting… {extractProgress.done}/{extractProgress.total}
                   </span>
                 )}
                 <button
                   onClick={() => setExtractionRect(null)}
                   disabled={!extractionRect || isExtracting}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+                  className="px-4 py-2 text-sm font-medium text-ink-soft hover:bg-hover rounded-lg transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
                 >
                   Clear Selection
                 </button>
                 <button
                   onClick={() => handleExtractText(false)}
                   disabled={!isAreaSelected || !extractionType || isExtracting}
-                  className="px-4 sm:px-6 py-2 bg-slate-800 dark:bg-slate-700 text-white rounded-lg text-sm font-bold hover:bg-slate-900 dark:hover:bg-slate-600 transition-all flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 sm:px-6 py-2 bg-ink text-raised rounded-lg text-sm font-bold hover:opacity-90 transition-all flex items-center gap-2 disabled:opacity-50"
                 >
                   {isExtracting ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
                   Extract Current

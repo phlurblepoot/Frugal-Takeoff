@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupSessionsByUser, humanizeSection, describeLocation } from './presence';
+import { groupSessionsByUser, humanizeSection, describeLocation, lerp1D, lerpStep, isCursorIdle } from './presence';
 import type { SessionView } from '../context/CollaborationContext';
 
 const sess = (over: Partial<SessionView>): SessionView => ({
@@ -67,4 +67,54 @@ describe('describeLocation', () => {
     ['/time', 'Time'], ['/settings', 'Settings'], ['/tools/pdf', 'PDF editor'],
     ['/tools/sheets', 'Spreadsheet editor'], ['/whatever', 'Online'],
   ])('%s -> %s', (path, expected) => expect(describeLocation({ path }, names)).toBe(expected));
+});
+
+describe('lerp1D', () => {
+  it('moves partway toward the target by `factor`', () => {
+    expect(lerp1D(0, 100, 0.25)).toBe(25);
+    expect(lerp1D(25, 100, 0.25)).toBe(43.75);
+  });
+  it('converges monotonically toward the target across repeated steps', () => {
+    let v = 0;
+    const steps = [0];
+    for (let i = 0; i < 20; i++) { v = lerp1D(v, 100, 0.25); steps.push(v); }
+    for (let i = 1; i < steps.length; i++) expect(steps[i]).toBeGreaterThanOrEqual(steps[i - 1]);
+    expect(v).toBeCloseTo(100, 0);
+  });
+  it('snaps to target once within snapDistance', () => {
+    expect(lerp1D(99.7, 100, 0.25, 0.5)).toBe(100);
+    expect(lerp1D(100, 100, 0.25, 0.5)).toBe(100);
+  });
+  it('handles a target below current the same way', () => {
+    expect(lerp1D(100, 0, 0.25)).toBe(75);
+    expect(lerp1D(0.3, 0, 0.25, 0.5)).toBe(0);
+  });
+});
+
+describe('lerpStep', () => {
+  it('eases both axes independently toward the target', () => {
+    expect(lerpStep({ x: 0, y: 0 }, { x: 100, y: -40 }, 0.25)).toEqual({ x: 25, y: -10 });
+  });
+  it('snaps once both axes are within snapDistance', () => {
+    expect(lerpStep({ x: 99.8, y: 200.1 }, { x: 100, y: 200 }, 0.25, 0.5)).toEqual({ x: 100, y: 200 });
+  });
+  it('is a no-op once current equals target', () => {
+    expect(lerpStep({ x: 50, y: 50 }, { x: 50, y: 50 }, 0.25, 0.5)).toEqual({ x: 50, y: 50 });
+  });
+});
+
+describe('isCursorIdle', () => {
+  it('is not idle within the threshold', () => {
+    expect(isCursorIdle(1000, 1000 + 29_000)).toBe(false);
+  });
+  it('is idle once past the threshold', () => {
+    expect(isCursorIdle(1000, 1000 + 30_001)).toBe(true);
+  });
+  it('respects a custom threshold', () => {
+    expect(isCursorIdle(1000, 1000 + 6_000, 5_000)).toBe(true);
+    expect(isCursorIdle(1000, 1000 + 4_000, 5_000)).toBe(false);
+  });
+  it('treats a missing lastActive as active (never wrongly hides a live cursor)', () => {
+    expect(isCursorIdle(undefined, Date.now())).toBe(false);
+  });
 });

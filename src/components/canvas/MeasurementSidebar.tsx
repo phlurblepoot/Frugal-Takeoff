@@ -87,28 +87,28 @@ export function MeasurementSidebar({
       {/* Right Sidebar Wrapper */}
       {isRightSidebarOpen && (
         <div
-          className="fixed inset-0 bg-slate-900/20 backdrop-blur-[1px] z-40 md:hidden"
+          className="fixed inset-0 bg-black/20 backdrop-blur-[1px] z-40 md:hidden"
           onClick={() => setIsRightSidebarOpen(false)}
         />
       )}
       <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-20 flex h-full transition-all duration-300 ${isRightSidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}`}>
         <button
           onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 border-r-0 rounded-l-md p-1 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
+          className={`absolute left-0 -translate-x-full top-1/2 -translate-y-1/2 z-30 bg-raised border border-edge border-r-0 rounded-l-md p-1 shadow-sm hover:bg-hover text-ink-soft ${isRightSidebarOpen ? 'hidden md:block' : 'block'}`}
         >
           {isRightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
         </button>
-        <div data-testid="measurement-sidebar" className={`bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
-          <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20">
+        <div data-testid="measurement-sidebar" className={`bg-raised border-l border-edge flex flex-col h-full shadow-2xl md:shadow-none transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0'}`}>
+          <div className="w-full md:w-96 flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 pb-20 scroll-fade">
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsRightSidebarOpen(false)}
-                  className="md:hidden p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
+                  className="md:hidden p-2 text-ink-faint hover:text-ink-soft hover:bg-hover rounded-lg"
                 >
                   <ChevronRight size={20} />
                 </button>
-                <h2 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Takeoffs & Measurements</h2>
+                <h2 className="text-xs font-semibold text-ink-faint uppercase tracking-wider">Takeoffs & Measurements</h2>
               </div>
               <div className="flex items-center gap-3">
                 {(() => {
@@ -122,19 +122,19 @@ export function MeasurementSidebar({
                         setExpandedTakeoffs(next);
                       }}
                       title={anyExpanded ? 'Collapse all takeoffs' : 'Expand all takeoffs'}
-                      className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors"
+                      className="p-1.5 text-ink-soft hover:text-ink hover:bg-hover rounded transition-colors"
                     >
                       {anyExpanded ? <ChevronsDownUp size={14} /> : <ChevronsUpDown size={14} />}
                     </button>
                   );
                 })()}
-                <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
+                <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer">
                   <input
                     type="checkbox"
                     data-testid="toggle-current-page-only"
                     checked={showCurrentPageOnly}
                     onChange={(e) => setShowCurrentPageOnly(e.target.checked)}
-                    className="rounded border-slate-300 dark:border-slate-600 text-accent-600 focus:ring-accent-500"
+                    className="rounded border-edge-strong text-accent-600 focus:ring-accent-500"
                   />
                   <span className="hidden sm:inline">Current page only</span>
                   <span className="sm:hidden">Page only</span>
@@ -153,14 +153,14 @@ export function MeasurementSidebar({
 
             {/* Measurement filter */}
             <div className="mb-3 flex-shrink-0 relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none" />
               <input
                 type="text"
                 data-testid="measurement-filter"
                 value={measurementFilter}
                 onChange={(e) => setMeasurementFilter(e.target.value)}
                 placeholder="Filter takeoffs & measurements..."
-                className="w-full text-xs border border-slate-200 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+                className="w-full text-xs border border-edge rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink placeholder-ink-faint"
               />
             </div>
 
@@ -242,7 +242,7 @@ export function MeasurementSidebar({
               return (
                 <div
                   key={takeoff.id}
-                  className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
+                  className={`mb-4 bg-raised border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 border-l-4 ${isActive ? 'border-accent-500 ring-1 ring-accent-500' : 'border-edge'}`}
                   style={{ borderLeftColor: takeoff.color }}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -276,7 +276,7 @@ export function MeasurementSidebar({
                   }}
                 >
                   <div
-                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
+                    className={`px-3 py-2 border-b flex justify-between items-center group/header cursor-pointer transition-colors ${isActive ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-sunken border-edge hover:bg-hover/50'}`}
                     onClick={() => {
                       if (isActive) {
                         setSelectedTakeoffId(null);
@@ -296,19 +296,19 @@ export function MeasurementSidebar({
                           e.stopPropagation();
                           setExpandedTakeoffs(prev => ({ ...prev, [takeoff.id]: !isExpanded }));
                         }}
-                        className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded transition-colors active:scale-95 shrink-0"
+                        className="text-ink-faint hover:text-ink-soft p-2 rounded transition-colors active:scale-95 shrink-0"
                       >
                         {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: takeoff.color }} />
-                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>{takeoff.name}</span>
+                      <span className={`text-sm font-semibold break-words whitespace-normal flex-1 min-w-0 ${isActive ? 'text-accent-800 dark:text-accent-300' : 'text-ink'}`}>{takeoff.name}</span>
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             setTakeoffToDelete(takeoff);
                           }}
-                          className="text-slate-400 hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-ink-faint hover:text-red-500 p-2 rounded-md hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
                           title="Delete Takeoff"
                         >
                           <Trash2 size={16} />
@@ -318,7 +318,7 @@ export function MeasurementSidebar({
                             e.stopPropagation();
                             handleEditTakeoff(takeoff);
                           }}
-                          className="text-slate-400 hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
+                          className="text-ink-faint hover:text-accent-500 p-2 rounded-md hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors can-hover:md:opacity-0 can-hover:md:group-hover/header:opacity-100 active:scale-95"
                           title="Edit Takeoff"
                         >
                           <Edit2 size={16} />
@@ -326,7 +326,7 @@ export function MeasurementSidebar({
                       </div>
                     </div>
                     <div className="flex flex-col items-end shrink-0 ml-2">
-                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-600'}`}>
+                      <span className={`text-xs font-bold px-2 py-1 rounded-lg border transition-all ${isActive ? 'bg-accent-600 text-white border-accent-700 shadow-sm' : 'bg-sunken text-ink border-edge'}`}>
                         {formatRealValue(takeoff.totalRealValue, takeoff.type as 'length' | 'area' | 'count', page.scaleConfig?.unit || 'ft', takeoff, false)}
                       </span>
                       {(takeoff.costPerUnit || takeoff.isAdvancedCost) && (
@@ -345,10 +345,10 @@ export function MeasurementSidebar({
                     </div>
                   </div>
                   {isExpanded && takeoff.type !== 'count' && (
-                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
+                    <div className="divide-y divide-edge min-h-[10px]">
                       <button
                         onClick={() => openNewMeasurementModal(takeoff.id)}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-b border-dashed border-slate-200 dark:border-slate-700 transition-colors"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 border-b border-dashed border-edge transition-colors"
                       >
                         <Plus size={14} />
                         New Measurement
@@ -380,12 +380,12 @@ export function MeasurementSidebar({
                     </div>
                   )}
                   {isExpanded && takeoff.type === 'count' && (
-                    <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
+                    <div className="divide-y divide-edge min-h-[10px]">
                       {sidebarPages.map(p => {
                         const count = p.measurements.filter(m => m.takeoffId === takeoff.id).length;
                         if (count === 0) return null;
                         return (
-                          <div key={p.id} className="p-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                          <div key={p.id} className="p-3 flex items-center justify-between hover:bg-hover/50 transition-colors">
                             <Link
                               to={`/project/${project.id}/page/${p.id}`}
                               state={{ pageIds: project.pages.filter(pg => pg.measurements.some(m => m.takeoffId === takeoff.id)).map(pg => pg.id) }}
@@ -393,7 +393,7 @@ export function MeasurementSidebar({
                             >
                               {p.name}
                             </Link>
-                            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full">
+                            <span className="text-sm font-semibold text-ink bg-sunken px-2 py-0.5 rounded-full">
                               {count}
                             </span>
                           </div>
@@ -410,7 +410,7 @@ export function MeasurementSidebar({
                   {packageOrder.map(pkg => (
                     <React.Fragment key={`pkg-${pkg}`}>
                       <div className="px-2 pt-3 pb-1">
-                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">{pkg}</span>
+                        <span className="text-[10px] font-bold text-ink-soft uppercase tracking-widest">{pkg}</span>
                       </div>
                       {packageMap[pkg].map(renderTakeoffCard)}
                     </React.Fragment>
@@ -424,7 +424,7 @@ export function MeasurementSidebar({
             {sidebarPages.flatMap(p => p.measurements)
               .filter(m => !m.takeoffId && (!measurementFilter || m.name.toLowerCase().includes(measurementFilter.toLowerCase()))).length > 0 && (
               <div
-                className={`mb-4 bg-white dark:bg-slate-800 border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-accent-500 ring-1 ring-accent-500' : 'border-slate-200 dark:border-slate-700'}`}
+                className={`mb-4 bg-raised border rounded-xl overflow-hidden shadow-sm transition-colors flex-shrink-0 ${!selectedTakeoffId ? 'border-accent-500 ring-1 ring-accent-500' : 'border-edge'}`}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.currentTarget.classList.add('ring-2', 'ring-accent-400', 'ring-inset');
@@ -442,12 +442,12 @@ export function MeasurementSidebar({
                 }}
               >
                 <div
-                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/50'}`}
+                  className={`px-3 py-2 border-b cursor-pointer transition-colors ${!selectedTakeoffId ? 'bg-accent-50 dark:bg-accent-900/20 border-accent-100 dark:border-accent-800/30' : 'bg-sunken border-edge hover:bg-hover/50'}`}
                   onClick={() => setSelectedTakeoffId(null)}
                 >
-                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-accent-800 dark:text-accent-300' : 'text-slate-800 dark:text-slate-200'}`}>Ungrouped</span>
+                  <span className={`text-sm font-semibold ${!selectedTakeoffId ? 'text-accent-800 dark:text-accent-300' : 'text-ink'}`}>Ungrouped</span>
                 </div>
-                <div className="divide-y divide-slate-50 dark:divide-slate-800 min-h-[10px]">
+                <div className="divide-y divide-edge min-h-[10px]">
                   {sidebarPages.flatMap(p =>
                     p.measurements
                       .filter(m => !m.takeoffId)
@@ -476,7 +476,7 @@ export function MeasurementSidebar({
             )}
 
             {sidebarPages.flatMap(p => p.measurements).length === 0 && (
-              <p className="text-sm text-slate-500 italic text-center py-4">No measurements yet.</p>
+              <p className="text-sm text-ink-soft italic text-center py-4">No measurements yet.</p>
             )}
           </div>
         </div>

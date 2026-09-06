@@ -1,9 +1,9 @@
 // src/pages/project/ProjectLayout.tsx
 import React, { useRef, useState } from 'react';
-import { Outlet, useOutletContext, useParams } from 'react-router-dom';
+import { Outlet, useOutletContext, useParams, useLocation, matchPath } from 'react-router-dom';
 import { ProjectSummary, getProjectSummary } from '../../utils/store';
-import { useRegisterProjectShell } from '../../context/ProjectShellContext';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
+import { ProjectTabBar } from './ProjectTabBar';
 
 export interface ProjectOutletCtx {
   summary: ProjectSummary | null;
@@ -13,9 +13,10 @@ export interface ProjectOutletCtx {
 // Convenience for section pages.
 export const useProjectOutlet = () => useOutletContext<ProjectOutletCtx>();
 
-// Thin frame for all project sections: registers the sidebar context once and
-// shares a lightweight summary via outlet context. Sections that need full
-// project data (ProjectView, CanvasView) keep loading it themselves.
+// Thin frame for all project sections: renders the sticky header + tab bar
+// (hidden on canvas routes) and shares a lightweight summary via outlet
+// context. Sections that need full project data (ProjectView, CanvasView)
+// keep loading it themselves.
 export const ProjectLayout: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
@@ -47,8 +48,28 @@ export const ProjectLayout: React.FC = () => {
   };
   useLiveQuery(load, { types: ['project'], projectId, id: projectId });
 
-  // Register only once the name is known — the sidebar shows 'Project' until then.
-  useRegisterProjectShell(summary?.id, summary?.name);
+  const location = useLocation();
+  const isCanvas = !!matchPath('/project/:projectId/page/:pageId', location.pathname);
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isAdmin = user.role === 'admin';
 
-  return <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />;
+  return (
+    <>
+      {!isCanvas && (
+        <div className="glass-panel sticky top-0 z-30 border-b border-edge px-4 pt-3 pb-2 space-y-2 md:px-6">
+          <p className="text-lg font-bold tracking-tight text-ink truncate">
+            {summary?.name ?? 'Project'}
+          </p>
+          {projectId && <ProjectTabBar projectId={projectId} isAdmin={isAdmin} />}
+        </div>
+      )}
+      {isCanvas ? (
+        <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />
+      ) : (
+        <div key={location.pathname} className="anim-tab-in">
+          <Outlet context={{ summary, refreshSummary } satisfies ProjectOutletCtx} />
+        </div>
+      )}
+    </>
+  );
 };

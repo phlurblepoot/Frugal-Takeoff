@@ -143,49 +143,50 @@ export const ProjectBilling: React.FC = () => {
       </Card>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200 dark:border-slate-700 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+      <nav aria-label="Billing sections" className="flex gap-1 mb-6 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
         {BILLING_TABS.map(tab => (
           <button
             key={tab.value}
             onClick={() => setActiveTab(tab.value)}
-            className={`px-4 md:px-6 py-3 text-sm font-medium transition-colors relative whitespace-nowrap ${
-              activeTab === tab.value ? 'text-accent-600' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+            className={`flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              activeTab === tab.value ? 'glow-accent text-white active:brightness-95' : 'text-ink-soft hover:bg-hover hover:text-ink'
             }`}
           >
             {tab.label}
-            {activeTab === tab.value && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-600" />
-            )}
           </button>
         ))}
-      </div>
+      </nav>
 
       {/* Active section */}
-      {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} aiaSettings={aiaSettings} />}
-      {projectId && activeTab === 'change-orders' && (
-        <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
-      )}
-      {projectId && activeTab === 'pay-apps' && <AiaPayApplications projectId={projectId} />}
-      {projectId && activeTab === 'invoices' && (
-        <InvoicesSection projectId={projectId} onChange={reloadSummary} />
-      )}
-      {projectId && activeTab === 'payments' && (
-        <PaymentsSection projectId={projectId} onChange={reloadSummary} />
-      )}
-      {activeTab === 'settings' && (
-        aiaSettings === null || sovLines === null || payApps === null ? (
-          // AiaSettingsForm seeds its fields from props at mount only (no prop
-          // sync), so wait for settings AND the SOV lines to load before
-          // mounting it — the lines are needed to infer a default retainage
-          // mode for legacy projects — otherwise a direct reload on
-          // ?tab=settings would show defaults. The pay apps are waited on for
-          // the same reason: a mode-change save must never slip through
-          // unconfirmed just because the list hadn't arrived yet.
-          <Card className="mb-5"><CardBody><Skeleton className="h-10 w-full" /></CardBody></Card>
-        ) : (
-          <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} sovLines={sovLines} payApps={payApps} onSaved={setAiaSettings} defaultOpen />
-        )
-      )}
+      <div key={activeTab} className="anim-tab-in">
+        {projectId && activeTab === 'sov' && <AiaScheduleOfValues projectId={projectId} aiaSettings={aiaSettings} />}
+        {projectId && activeTab === 'change-orders' && (
+          <ChangeOrdersSection projectId={projectId} onChange={reloadSummary} />
+        )}
+        {projectId && activeTab === 'pay-apps' && (
+          <AiaPayApplications projectId={projectId} contractTotalCents={summary?.contractTotalCents} />
+        )}
+        {projectId && activeTab === 'invoices' && (
+          <InvoicesSection projectId={projectId} onChange={reloadSummary} />
+        )}
+        {projectId && activeTab === 'payments' && (
+          <PaymentsSection projectId={projectId} onChange={reloadSummary} />
+        )}
+        {activeTab === 'settings' && (
+          aiaSettings === null || sovLines === null || payApps === null ? (
+            // AiaSettingsForm seeds its fields from props at mount only (no prop
+            // sync), so wait for settings AND the SOV lines to load before
+            // mounting it — the lines are needed to infer a default retainage
+            // mode for legacy projects — otherwise a direct reload on
+            // ?tab=settings would show defaults. The pay apps are waited on for
+            // the same reason: a mode-change save must never slip through
+            // unconfirmed just because the list hadn't arrived yet.
+            <Card className="mb-5"><CardBody><Skeleton className="h-10 w-full" /></CardBody></Card>
+          ) : (
+            <AiaSettingsForm projectId={projectId ?? ''} settings={aiaSettings} sovLines={sovLines} payApps={payApps} onSaved={setAiaSettings} defaultOpen />
+          )
+        )}
+      </div>
     </div>
   );
 };

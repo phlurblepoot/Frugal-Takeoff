@@ -3,11 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckSquare, Plus, ImageIcon } from 'lucide-react';
 import {
-  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings,
-  getSmtpSettings, getAlwaysCc, getCustomer, getProject, sendPunchReport,
+  PunchItem, PunchListItem, getPunchItems, getPunchItem, createPunchItem, setPunchDone, getSettings, sendPunchReport,
 } from '../../utils/store';
-import { Customer } from '../../types';
-import { resolveRecipient } from '../../utils/recipients';
 import { useToast } from '../../components/Toast';
 import {
   Button, Card, CardBody, EmptyState, Field, Input, ProgressBar, Skeleton,
@@ -19,10 +16,22 @@ import { buildPunchPdf } from './punch/punchPdf';
 import { hexToRgb, invertImageDataUrl } from '../../utils/documentLetterhead';
 import { useProjectOutlet } from './ProjectLayout';
 import { useLiveQuery } from '../../hooks/useLiveQuery';
+import { useItemEmailDefaults } from '../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../utils/itemSend';
+import { useReveal } from '../../hooks/useReveal';
 
 const UNASSIGNED = 'Unassigned';
 
 interface AreaGroup { area: string; label: string; items: PunchListItem[]; }
+
+// Reveals an area-group Card on scroll (Wave 3 Task 11). A dedicated
+// component (not an inline hook call in .map) so each group gets its own
+// IntersectionObserver — hooks can't be called a variable number of times
+// per render.
+const RevealGroup: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+  const ref = useReveal<HTMLDivElement>();
+  return <div ref={ref}>{children}</div>;
+};
 
 export const ProjectPunch: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -34,45 +43,7 @@ export const ProjectPunch: React.FC = () => {
   const [newDesc, setNewDesc] = useState('');
 
   // Email defaults: resolved recipient, always-CC, header-email options.
-  const [emailDefaults, setEmailDefaults] = useState<{
-    defaultTo: string;
-    defaultCc: string;
-    defaultBcc: string;
-    companyEmail: string;
-    headerEmailOptions: { label: string; value: string }[];
-  }>({ defaultTo: '', defaultCc: '', defaultBcc: '', companyEmail: '', headerEmailOptions: [] });
-
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [settings, smtp, alwaysCc, project] = await Promise.all([
-          getSettings(),
-          getSmtpSettings().catch(() => ({})),
-          getAlwaysCc(),
-          getProject(projectId).catch(() => null),
-        ]);
-        if (cancelled) return;
-        let customer: Customer | undefined;
-        if (project?.customerId) {
-          customer = await getCustomer(project.customerId).catch(() => undefined);
-        }
-        const resolved = resolveRecipient('punch', project?.contactEmails, customer?.emails);
-        const mergeCsv = (...lists: string[]) => Array.from(new Set(lists.flatMap(s => (s || '').split(',').map(x => x.trim()).filter(Boolean)))).join(', ');
-        const companyEmail = settings.companyEmail ?? '';
-        const fromAddress = (smtp as { fromAddress?: string }).fromAddress ?? '';
-        const opts = [
-          companyEmail ? { label: 'Company default', value: companyEmail } : null,
-          fromAddress && fromAddress !== companyEmail ? { label: 'My email', value: fromAddress } : null,
-        ].filter(Boolean) as { label: string; value: string }[];
-        if (!cancelled) {
-          setEmailDefaults({ defaultTo: resolved.to, defaultCc: mergeCsv(resolved.cc, alwaysCc), defaultBcc: resolved.bcc, companyEmail, headerEmailOptions: opts });
-        }
-      } catch { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emailDefaults = useItemEmailDefaults('punch', projectId);
 
   const reload = () => {
     if (!projectId) return;
@@ -197,7 +168,7 @@ export const ProjectPunch: React.FC = () => {
           staleness="unknown"
           size="sm"
           send={{
-            blockedReason: list.length === 0 ? 'No punch items' : undefined,
+            blockedReason: (list.length === 0 ? 'No punch items' : undefined) ?? emailDefaults.sendBlockedReason,
             composer: {
               title: 'Send punch list report',
               defaultTo: emailDefaults.defaultTo || undefined,
@@ -208,12 +179,9 @@ export const ProjectPunch: React.FC = () => {
               headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
               defaultHeaderEmail: emailDefaults.companyEmail || undefined,
             },
-            sendFn: async (fileId, m) => {
+            sendFn: async (fileId, req) => {
               if (!projectId) return;
-              await sendPunchReport(projectId, {
-                to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                fileId, attachmentFileIds: m.attachmentFileIds,
-              });
+              return await sendPunchReport(projectId, { ...itemSendPayload(req), fileId });
             },
           }}
         />
@@ -257,7 +225,8 @@ export const ProjectPunch: React.FC = () => {
           {groups.map(g => {
             const gDone = g.items.filter(i => i.done).length;
             return (
-              <Card key={g.area}>
+              <RevealGroup key={g.area}>
+              <Card>
                 <CardBody>
                   <div className="mb-2 flex items-center gap-3">
                     <h2 className="shrink-0 text-sm font-semibold text-ink">{g.label}</h2>
@@ -287,6 +256,7 @@ export const ProjectPunch: React.FC = () => {
                   </ul>
                 </CardBody>
               </Card>
+              </RevealGroup>
             );
           })}
         </div>

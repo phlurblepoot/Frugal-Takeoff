@@ -49,6 +49,7 @@ const KIND_LABELS: Record<string, string> = {
   'plan-source': 'Plan Set',
   'daily-report': 'Daily Report',
   'daily-report-photo': 'Daily Report Photo',
+  'email-attachment': 'Email Attachment',
 };
 const genericLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
 
@@ -332,6 +333,48 @@ function resolveTakeoffPrints(rows: RawRow[], out: Map<string, DocumentSource>):
   }
 }
 
+// Files saved out of an email's attachments (POST /api/mail/messages/:id/save
+// — server/mail/routes.ts writes sourceType 'mailMessage', sourceId = the
+// mail_messages row id). Not a SIMPLE_RESOLVER because its href is per-ROW,
+// not per-project: the mail page routes by account and thread key, both of
+// which live on the message, and the file's own projectId says nothing about
+// where the mail sits. `_` is the mail page's "no folder filter" segment.
+//
+// Resolving this at all matters beyond the label: `source` is what the client
+// keys `deletable` off (src/pages/documents/documentsPolicy.ts), while the
+// server's deleteDocument() refuses anything with a raw sourceType. With no
+// resolver these rows read as source-less, so the Documents page offered a
+// Delete the server could only ever 409.
+//
+// The mailbox belongs to ONE user; another user following the link gets the
+// mail page's own not-your-account handling, the same trade the RFI
+// pending-reply banner makes for its deep link.
+function resolveMailMessages(db: Database.Database, rows: RawRow[], out: Map<string, DocumentSource>): void {
+  const list = rows.filter(r => r.sourceType === 'mailMessage' && r.sourceId);
+  if (!list.length) return;
+  const ids = [...new Set(list.map(r => r.sourceId as string))];
+  const found = new Map(
+    (db.prepare(`SELECT id, subject, threadKey, accountId FROM mail_messages WHERE id IN (${inClause(ids.length)})`)
+      .all(...ids) as any[]).map((m: any) => [m.id, m])
+  );
+  for (const r of list) {
+    const m = found.get(r.sourceId as string);
+    const subject = typeof m?.subject === 'string' ? m.subject.trim() : '';
+    // A message row that is gone (its account was disconnected —
+    // mail_messages cascades on mail_accounts) still keeps a source, with a
+    // generic label and no href, exactly like every other resolver's miss
+    // branch. Dropping to source:null instead would make the row look
+    // deletable to the client while deleteDocument still refused it on the
+    // raw sourceType column — the very mismatch this resolver exists to fix.
+    out.set(r.id, {
+      type: 'mailMessage',
+      id: r.sourceId as string,
+      label: subject || 'Email message',
+      href: m ? `/mail/${encodeURIComponent(m.accountId)}/_/${encodeURIComponent(m.threadKey)}` : null,
+    });
+  }
+}
+
 // sourceType 'punch' covers two different referents by kind: a punch-photo's
 // sourceId is a punch_items row (one of many items on a punch list), but a
 // punch-report's sourceId is the owning project id — the report is the
@@ -387,6 +430,7 @@ function resolveSources(db: Database.Database, rows: RawRow[]): Map<string, Docu
   }
   resolveTakeoffPrints(rows, out);
   resolvePunch(db, rows, out);
+  resolveMailMessages(db, rows, out);
   return out;
 }
 

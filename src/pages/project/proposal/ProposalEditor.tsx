@@ -23,7 +23,8 @@ import { formatCurrency, proposalFileName } from './proposalGenerator';
 import { STATUS_TONE, proposalLabel } from './proposalPresentation';
 import { buildProposalPdf } from './buildProposalPdf';
 import { isAdmin, useProposalDraft } from './useProposalDraft';
-import { useProposalEmailDefaults } from './useProposalEmailDefaults';
+import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
+import { itemSendPayload } from '../../../utils/itemSend';
 import { HistoryMenu } from './HistoryMenu';
 import { PricingLinesCard } from './PricingLinesCard';
 import { InclusionsExclusionsCard } from './InclusionsExclusionsCard';
@@ -48,7 +49,7 @@ export const ProposalEditor: React.FC = () => {
   // column — the same option the old page carried.
   const [includeHighlights, setIncludeHighlights] = useState(false);
   const [progress, setProgress] = useState('');
-  const emailDefaults = useProposalEmailDefaults(projectId);
+  const emailDefaults = useItemEmailDefaults('proposal', projectId);
 
   // The PDF renders the draft as it stands on screen — Generate saves first, so
   // what the client receives is exactly what was just stored.
@@ -134,7 +135,7 @@ export const ProposalEditor: React.FC = () => {
                 refreshMedia();
               }}
               send={{
-                blockedReason: sendBlockedReason,
+                blockedReason: sendBlockedReason ?? emailDefaults.sendBlockedReason,
                 composer: {
                   title: 'Send proposal',
                   defaultTo: emailDefaults.defaultTo || project.email?.from || '',
@@ -145,12 +146,10 @@ export const ProposalEditor: React.FC = () => {
                   headerEmailOptions: emailDefaults.headerEmailOptions.length ? emailDefaults.headerEmailOptions : undefined,
                   defaultHeaderEmail: emailDefaults.companyEmail || undefined,
                 },
-                sendFn: async (fileId, m) => {
+                sendFn: async (fileId, req) => {
+                  let result;
                   try {
-                    await sendProposal(proposal.id, {
-                      to: m.to, cc: m.cc, bcc: m.bcc, subject: m.subject, body: m.body,
-                      fileId, attachmentFileIds: m.attachmentFileIds,
-                    });
+                    result = await sendProposal(proposal.id, { ...itemSendPayload(req), fileId });
                   } catch (e) {
                     // Someone else sent this proposal first. Say which failure
                     // it was, then rethrow — swallowing it would let the bar
@@ -164,6 +163,7 @@ export const ProposalEditor: React.FC = () => {
                   // The send stamps the proposal 'sent' server-side, which makes
                   // it read-only — the whole record has to come back.
                   reload();
+                  return result;
                 },
               }}
             />

@@ -29,11 +29,18 @@ const ACCENT_SCALES: [number, number, number][] = [
   [900, 0.28, 0.14],
 ];
 
+export function daypartForHour(h: number): 'morning' | 'midday' | 'evening' {
+  if (h >= 5 && h <= 10) return 'morning';
+  if (h >= 11 && h <= 16) return 'midday';
+  return 'evening';
+}
+
 function applyAccent(key: AccentKey, customHex: string) {
   // Custom accents derive only their HUE from the picked colour and reuse the
   // fixed lightness/chroma scale, so contrast stays consistent with presets.
   const h = key === 'custom' ? hexToAccentHue(customHex) : ACCENT_HUES[key];
   const el = document.documentElement;
+  el.style.setProperty('--accent-h', String(h));   // NEW: drives the ambient scene
   ACCENT_SCALES.forEach(([step, l, c]) => {
     el.style.setProperty(`--color-accent-${step}`, `oklch(${l} ${c} ${h})`);
   });
@@ -44,10 +51,14 @@ interface ThemeContextType {
   accentColor: AccentKey;
   customAccentHex: string;
   reducedMotion: boolean;
+  timeAmbience: boolean;
+  solidSurfaces: boolean;
   toggleMode: () => void;
   setAccentColor: (key: AccentKey) => void;
   setCustomAccent: (hex: string) => void;
   setReducedMotion: (v: boolean) => void;
+  setTimeAmbience: (v: boolean) => void;
+  setSolidSurfaces: (v: boolean) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType>({
@@ -55,10 +66,14 @@ const ThemeContext = createContext<ThemeContextType>({
   accentColor: 'blue',
   customAccentHex: DEFAULT_CUSTOM_HEX,
   reducedMotion: false,
+  timeAmbience: true,
+  solidSurfaces: false,
   toggleMode: () => {},
   setAccentColor: () => {},
   setCustomAccent: () => {},
   setReducedMotion: () => {},
+  setTimeAmbience: () => {},
+  setSolidSurfaces: () => {},
 });
 
 export const useTheme = () => useContext(ThemeContext);
@@ -76,6 +91,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [reducedMotion, setReducedMotionState] = useState<boolean>(() => {
     return localStorage.getItem('theme-motion') === 'reduced';
   });
+  const [timeAmbience, setTimeAmbienceState] = useState<boolean>(() => localStorage.getItem('theme-ambience') !== 'off');
+  const [solidSurfaces, setSolidSurfacesState] = useState<boolean>(() => localStorage.getItem('theme-surfaces') === 'solid');
 
   // Sync from server — server is source of truth for cross-browser settings.
   // Guard: only fetch if logged in (ThemeProvider renders on /login too).
@@ -96,6 +113,14 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (prefs['theme-motion']) {
         const serverReduced = prefs['theme-motion'] === 'reduced';
         setReducedMotionState(prev => serverReduced !== prev ? serverReduced : prev);
+      }
+      if (prefs['theme-ambience']) {
+        const serverAmbience = prefs['theme-ambience'] !== 'off';
+        setTimeAmbienceState(prev => serverAmbience !== prev ? serverAmbience : prev);
+      }
+      if (prefs['theme-surfaces']) {
+        const serverSolid = prefs['theme-surfaces'] === 'solid';
+        setSolidSurfacesState(prev => serverSolid !== prev ? serverSolid : prev);
       }
     }).catch(() => { /* offline / not logged in — use localStorage values */ });
   };
@@ -145,6 +170,28 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (localStorage.getItem('token')) saveUserPreferences({ 'theme-motion': reducedMotion ? 'reduced' : 'full' }).catch(() => {});
   }, [reducedMotion]);
 
+  // Daypart ambience: attribute now + re-check every 15 minutes while on.
+  useEffect(() => {
+    const el = document.documentElement;
+    const apply = () => { el.dataset.daypart = daypartForHour(new Date().getHours()); };
+    if (timeAmbience) {
+      apply();
+      const iv = setInterval(apply, 15 * 60 * 1000);
+      localStorage.setItem('theme-ambience', 'auto');
+      if (localStorage.getItem('token')) saveUserPreferences({ 'theme-ambience': 'auto' }).catch(() => {});
+      return () => clearInterval(iv);
+    }
+    delete el.dataset.daypart;
+    localStorage.setItem('theme-ambience', 'off');
+    if (localStorage.getItem('token')) saveUserPreferences({ 'theme-ambience': 'off' }).catch(() => {});
+  }, [timeAmbience]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('solid-surfaces', solidSurfaces);
+    localStorage.setItem('theme-surfaces', solidSurfaces ? 'solid' : 'glass');
+    if (localStorage.getItem('token')) saveUserPreferences({ 'theme-surfaces': solidSurfaces ? 'solid' : 'glass' }).catch(() => {});
+  }, [solidSurfaces]);
+
   const toggleMode = () => setMode(prev => prev === 'light' ? 'dark' : 'light');
 
   const setAccentColor = (key: AccentKey) => {
@@ -160,8 +207,16 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setReducedMotionState(v);
   };
 
+  const setTimeAmbience = (v: boolean) => {
+    setTimeAmbienceState(v);
+  };
+
+  const setSolidSurfaces = (v: boolean) => {
+    setSolidSurfacesState(v);
+  };
+
   return (
-    <ThemeContext.Provider value={{ mode, accentColor, customAccentHex, reducedMotion, toggleMode, setAccentColor, setCustomAccent, setReducedMotion }}>
+    <ThemeContext.Provider value={{ mode, accentColor, customAccentHex, reducedMotion, timeAmbience, solidSurfaces, toggleMode, setAccentColor, setCustomAccent, setReducedMotion, setTimeAmbience, setSolidSurfaces }}>
       {children}
     </ThemeContext.Provider>
   );

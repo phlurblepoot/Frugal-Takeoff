@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Clock, LogIn, LogOut, PenLine, Trash2, ChevronLeft, ChevronRight, Users, User as UserIcon } from 'lucide-react';
 import { useLiveQuery } from '../hooks/useLiveQuery';
+import { startOfWeek } from '../utils/time';
+import { Card, CardHeader, CardBody } from '../components/ui';
 
 interface TimeEntry {
   id: string;
@@ -100,9 +102,9 @@ const CalendarHeatmap: React.FC<CalendarProps> = ({ entries, selectedDate, onSel
   };
 
   const cellBg = (ms: number, isCurrentMonth: boolean) => {
-    if (!isCurrentMonth) return 'bg-slate-50/50 dark:bg-slate-800/30';
+    if (!isCurrentMonth) return 'bg-sunken/50';
     const t = intensity(ms);
-    if (t === 0) return 'bg-white dark:bg-slate-800';
+    if (t === 0) return 'bg-raised';
     // Five intensity buckets using accent palette
     if (t < 0.2) return 'bg-accent-50 dark:bg-accent-900/30';
     if (t < 0.4) return 'bg-accent-100 dark:bg-accent-800/50';
@@ -112,20 +114,20 @@ const CalendarHeatmap: React.FC<CalendarProps> = ({ entries, selectedDate, onSel
   };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+    <div className="rounded-2xl border border-edge bg-raised p-4">
       <div className="flex items-center justify-between mb-3">
         <button
           onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
-          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors"
+          className="p-1.5 rounded-lg hover:bg-hover text-ink-soft transition-colors"
         >
           <ChevronLeft size={16} />
         </button>
-        <h3 className="text-sm font-semibold text-slate-800 dark:text-white">
+        <h3 className="text-sm font-semibold text-ink">
           {cursor.toLocaleDateString([], { month: 'long', year: 'numeric' })}
         </h3>
         <button
           onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}
-          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors"
+          className="p-1.5 rounded-lg hover:bg-hover text-ink-soft transition-colors"
         >
           <ChevronRight size={16} />
         </button>
@@ -133,7 +135,7 @@ const CalendarHeatmap: React.FC<CalendarProps> = ({ entries, selectedDate, onSel
 
       <div className="grid grid-cols-7 gap-1 mb-1">
         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-          <div key={i} className="text-[10px] font-bold text-slate-400 dark:text-slate-500 text-center uppercase tracking-wider">{d}</div>
+          <div key={i} className="text-[10px] font-bold text-ink-faint text-center uppercase tracking-wider">{d}</div>
         ))}
       </div>
 
@@ -162,11 +164,11 @@ const CalendarHeatmap: React.FC<CalendarProps> = ({ entries, selectedDate, onSel
               } hover:border-accent-300 dark:hover:border-accent-700`}
             >
               <span className={`leading-none ${
-                intense > 0.5 ? 'text-white' : 'text-slate-700 dark:text-slate-200'
+                intense > 0.5 ? 'text-white' : 'text-ink'
               }`}>{d.getDate()}</span>
               {ms > 0 && (
                 <span className={`text-[9px] mt-0.5 leading-none tabular-nums ${
-                  intense > 0.5 ? 'text-white/90' : 'text-slate-500 dark:text-slate-400'
+                  intense > 0.5 ? 'text-white/90' : 'text-ink-soft'
                 }`}>{formatHoursShort(ms)}</span>
               )}
             </button>
@@ -316,8 +318,8 @@ export const TimeKeeping: React.FC = () => {
 
   if (!loggedInUser) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
-        <div className="text-center text-slate-500 dark:text-slate-400">
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="text-center text-ink-soft">
           <Clock size={48} className="mx-auto mb-4 opacity-30" />
           <p className="text-lg font-medium">Please log in to use time tracking.</p>
         </div>
@@ -354,14 +356,7 @@ export const TimeKeeping: React.FC = () => {
 
   const weekMs = entries
     .filter(e => e.clockOut)
-    .filter(e => {
-      const d = new Date(e.clockIn);
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay());
-      startOfWeek.setHours(0, 0, 0, 0);
-      return d >= startOfWeek;
-    })
+    .filter(e => e.clockIn >= startOfWeek())
     .reduce((s, e) => s + (e.clockOut! - e.clockIn), 0);
 
   // Per-user totals for the team view summary
@@ -381,75 +376,79 @@ export const TimeKeeping: React.FC = () => {
   }, [view, teamEntries]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
-      <div className="max-w-2xl mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Clock size={24} className="text-accent-600 dark:text-accent-400" />
-            Time Tracking
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Logged in as <span className="font-medium text-slate-700 dark:text-slate-300">{loggedInUser.username}</span>
-          </p>
+    <div className="max-w-2xl mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-ink flex items-center gap-2">
+          <Clock size={24} className="text-accent-600 dark:text-accent-400" />
+          Time Tracking
+        </h1>
+        <p className="text-sm text-ink-soft mt-1">
+          Logged in as <span className="font-medium text-ink">{loggedInUser.username}</span>
+        </p>
+      </div>
+
+      {/* Admin tab toggle */}
+      {isAdmin && (
+        <div className="flex gap-1 p-1 bg-sunken rounded-xl mb-6 w-fit">
+          <button
+            onClick={() => { setView('me'); setSelectedDate(null); }}
+            className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+              view === 'me'
+                ? 'bg-raised text-ink shadow-sm'
+                : 'text-ink-soft hover:text-ink'
+            }`}
+          >
+            <UserIcon size={14} /> My Time
+          </button>
+          <button
+            onClick={() => { setView('team'); setSelectedDate(null); }}
+            className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
+              view === 'team'
+                ? 'bg-raised text-ink shadow-sm'
+                : 'text-ink-soft hover:text-ink'
+            }`}
+          >
+            <Users size={14} /> Team Time
+          </button>
         </div>
+      )}
 
-        {/* Admin tab toggle */}
-        {isAdmin && (
-          <div className="flex gap-1 p-1 bg-slate-200/70 dark:bg-slate-800 rounded-xl mb-6 w-fit">
-            <button
-              onClick={() => { setView('me'); setSelectedDate(null); }}
-              className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
-                view === 'me'
-                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              <UserIcon size={14} /> My Time
-            </button>
-            <button
-              onClick={() => { setView('team'); setSelectedDate(null); }}
-              className={`flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${
-                view === 'team'
-                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              <Users size={14} /> Team Time
-            </button>
-          </div>
-        )}
-
-        {view === 'me' ? (
-          <>
-            {/* Summary row */}
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Today</p>
-                <p className="text-2xl font-bold text-slate-800 dark:text-white tabular-nums">
+      {view === 'me' ? (
+        <>
+          {/* Summary row */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <Card>
+              <CardHeader title="Today" />
+              <CardBody>
+                <p className="text-2xl font-bold text-ink tabular-nums">
                   {todayMs > 0 ? formatDuration(todayMs) : '—'}
                 </p>
-              </div>
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4">
-                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">This Week</p>
-                <p className="text-2xl font-bold text-slate-800 dark:text-white tabular-nums">
+              </CardBody>
+            </Card>
+            <Card>
+              <CardHeader title="This Week" />
+              <CardBody>
+                <p className="text-2xl font-bold text-ink tabular-nums">
                   {weekMs > 0 ? formatDuration(weekMs) : '—'}
                 </p>
-              </div>
-            </div>
+              </CardBody>
+            </Card>
+          </div>
 
-            {/* Clock in/out card */}
-            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 mb-6 shadow-sm">
+          {/* Clock in/out card */}
+          <Card className="mb-6">
+            <CardBody>
               {activeEntry ? (
                 <div className="flex flex-col items-center gap-4">
                   <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
                     <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
                     <span className="text-sm font-semibold uppercase tracking-wider">Clocked In</span>
                   </div>
-                  <p className="text-5xl font-mono font-bold text-slate-800 dark:text-white tabular-nums">
+                  <p className="text-5xl font-mono font-bold text-ink tabular-nums">
                     {formatDuration(duration)}
                   </p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                  <p className="text-sm text-ink-soft">
                     Since {formatTime(activeEntry.clockIn)}
                   </p>
                   {showClockOutDesc ? (
@@ -459,7 +458,7 @@ export const TimeKeeping: React.FC = () => {
                         value={clockOutDesc}
                         onChange={e => setClockOutDesc(e.target.value)}
                         placeholder="What did you work on? (optional)"
-                        className="w-full text-sm border border-slate-200 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                        className="w-full text-sm border border-edge rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink placeholder:text-ink-faint"
                         onKeyDown={e => e.key === 'Enter' && handleClockOut()}
                         autoFocus
                       />
@@ -473,7 +472,7 @@ export const TimeKeeping: React.FC = () => {
                         </button>
                         <button
                           onClick={() => setShowClockOutDesc(false)}
-                          className="px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-xl transition-colors"
+                          className="px-4 py-2.5 text-sm text-ink-soft bg-sunken hover:bg-hover rounded-xl transition-colors"
                         >
                           Cancel
                         </button>
@@ -491,10 +490,10 @@ export const TimeKeeping: React.FC = () => {
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
-                    <Clock size={28} className="text-slate-400 dark:text-slate-500" />
+                  <div className="w-16 h-16 rounded-full bg-sunken flex items-center justify-center">
+                    <Clock size={28} className="text-ink-faint" />
                   </div>
-                  <p className="text-slate-500 dark:text-slate-400 text-sm">Not currently clocked in</p>
+                  <p className="text-ink-soft text-sm">Not currently clocked in</p>
                   <button
                     onClick={handleClockIn}
                     className="flex items-center gap-2 px-8 py-3 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold rounded-xl transition-colors shadow-sm"
@@ -504,57 +503,59 @@ export const TimeKeeping: React.FC = () => {
                   </button>
                 </div>
               )}
-            </div>
+            </CardBody>
+          </Card>
 
-            {/* Manual entry */}
-            <div className="mb-6">
-              <button
-                onClick={() => setShowManualForm(v => !v)}
-                className="flex items-center gap-2 text-sm text-accent-600 dark:text-accent-400 hover:text-accent-700 font-medium"
-              >
-                <PenLine size={15} />
-                {showManualForm ? 'Cancel manual entry' : 'Add manual entry'}
-              </button>
+          {/* Manual entry */}
+          <div className="mb-6">
+            <button
+              onClick={() => setShowManualForm(v => !v)}
+              className="flex items-center gap-2 text-sm text-accent-600 dark:text-accent-400 hover:text-accent-700 font-medium"
+            >
+              <PenLine size={15} />
+              {showManualForm ? 'Cancel manual entry' : 'Add manual entry'}
+            </button>
 
-              {showManualForm && (
-                <div className="mt-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 flex flex-col gap-3 shadow-sm">
+            {showManualForm && (
+              <Card className="mt-3">
+                <CardBody className="flex flex-col gap-3">
                   <div>
-                    <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5 block">Date</label>
+                    <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider mb-1.5 block">Date</label>
                     <input
                       type="date"
                       value={manualDate}
                       onChange={e => setManualDate(e.target.value)}
-                      className="w-full text-sm border border-slate-200 dark:border-slate-600 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-700 dark:text-white"
+                      className="w-full text-sm border border-edge rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink"
                     />
                   </div>
                   <div className="flex gap-3">
                     <div className="flex-1">
-                      <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5 block">Start Time</label>
+                      <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider mb-1.5 block">Start Time</label>
                       <input
                         type="time"
                         value={manualStart}
                         onChange={e => setManualStart(e.target.value)}
-                        className="w-full text-sm border border-slate-200 dark:border-slate-600 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-700 dark:text-white"
+                        className="w-full text-sm border border-edge rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink"
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5 block">End Time</label>
+                      <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider mb-1.5 block">End Time</label>
                       <input
                         type="time"
                         value={manualEnd}
                         onChange={e => setManualEnd(e.target.value)}
-                        className="w-full text-sm border border-slate-200 dark:border-slate-600 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-700 dark:text-white"
+                        className="w-full text-sm border border-edge rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5 block">Description (optional)</label>
+                    <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider mb-1.5 block">Description (optional)</label>
                     <input
                       type="text"
                       value={manualDesc}
                       onChange={e => setManualDesc(e.target.value)}
                       placeholder="What did you work on?"
-                      className="w-full text-sm border border-slate-200 dark:border-slate-600 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
+                      className="w-full text-sm border border-edge rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink placeholder:text-ink-faint"
                       onKeyDown={e => e.key === 'Enter' && handleManualEntry()}
                     />
                   </div>
@@ -564,134 +565,133 @@ export const TimeKeeping: React.FC = () => {
                   >
                     Save Entry
                   </button>
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Team filter row */}
-            <div className="flex items-center justify-between gap-3 mb-6">
-              <select
-                value={selectedTeamUserId}
-                onChange={e => { setSelectedTeamUserId(e.target.value); setSelectedDate(null); }}
-                className="text-sm border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 bg-white dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent-500"
-              >
-                <option value="all">All users</option>
-                {users.map(u => (
-                  <option key={u.id} value={u.id}>{u.username}{u.role === 'admin' ? ' (admin)' : ''}</option>
-                ))}
-              </select>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {teamEntries.length} {teamEntries.length === 1 ? 'entry' : 'entries'}
-              </p>
-            </div>
+                </CardBody>
+              </Card>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Team filter row */}
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <select
+              value={selectedTeamUserId}
+              onChange={e => { setSelectedTeamUserId(e.target.value); setSelectedDate(null); }}
+              className="text-sm border border-edge rounded-xl px-3 py-2 bg-raised text-ink focus:outline-none focus:ring-2 focus:ring-accent-500"
+            >
+              <option value="all">All users</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>{u.username}{u.role === 'admin' ? ' (admin)' : ''}</option>
+              ))}
+            </select>
+            <p className="text-xs text-ink-soft">
+              {teamEntries.length} {teamEntries.length === 1 ? 'entry' : 'entries'}
+            </p>
+          </div>
 
-            {/* Per-user summary tiles (only when viewing all) */}
-            {selectedTeamUserId === 'all' && teamTotals.length > 0 && (
-              <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 mb-6 shadow-sm">
-                <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Totals by User</h3>
-                <div className="flex flex-col divide-y divide-slate-100 dark:divide-slate-700">
+          {/* Per-user summary tiles (only when viewing all) */}
+          {selectedTeamUserId === 'all' && teamTotals.length > 0 && (
+            <Card className="mb-6">
+              <CardHeader title="Totals by User" />
+              <CardBody>
+                <div className="flex flex-col divide-y divide-edge">
                   {teamTotals.map(t => (
                     <div key={t.userId} className="flex items-center justify-between py-2 first:pt-0 last:pb-0">
                       <div className="flex items-center gap-2">
-                        <UserIcon size={14} className="text-slate-400 dark:text-slate-500" />
-                        <span className="text-sm font-medium text-slate-700 dark:text-slate-300">{t.username}</span>
-                        <span className="text-xs text-slate-400 dark:text-slate-500">· {t.entryCount} {t.entryCount === 1 ? 'entry' : 'entries'}</span>
+                        <UserIcon size={14} className="text-ink-faint" />
+                        <span className="text-sm font-medium text-ink-soft">{t.username}</span>
+                        <span className="text-xs text-ink-faint">· {t.entryCount} {t.entryCount === 1 ? 'entry' : 'entries'}</span>
                       </div>
-                      <span className="text-sm font-semibold text-slate-800 dark:text-white tabular-nums">{formatDuration(t.ms)}</span>
+                      <span className="text-sm font-semibold text-ink tabular-nums">{formatDuration(t.ms)}</span>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Calendar */}
-        <div className="mb-6">
-          <CalendarHeatmap
-            entries={sourceEntries}
-            selectedDate={selectedDate}
-            onSelectDate={setSelectedDate}
-          />
-          {selectedDate && (
-            <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>Showing entries for {selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-              <button
-                onClick={() => setSelectedDate(null)}
-                className="text-accent-600 dark:text-accent-400 font-medium hover:underline"
-              >
-                Clear filter
-              </button>
-            </div>
+              </CardBody>
+            </Card>
           )}
-        </div>
+        </>
+      )}
 
-        {/* Entry list */}
-        <div className="flex flex-col gap-6">
-          {grouped.length === 0 ? (
-            <p className="text-center text-slate-500 dark:text-slate-400 italic py-8">
-              {view === 'team' ? 'No entries for this filter.' : 'No time entries yet.'}
-            </p>
-          ) : (
-            grouped.map(group => (
-              <div key={group.key}>
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                    {group.label}
-                  </h3>
-                  <span className="text-xs text-slate-500 dark:text-slate-400 font-medium tabular-nums">
-                    {formatDuration(
-                      group.entries
-                        .filter(e => e.clockOut)
-                        .reduce((s, e) => s + (e.clockOut! - e.clockIn), 0)
-                    )}
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {group.entries.map(entry => (
-                    <div
-                      key={entry.id}
-                      className="group flex items-center justify-between bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 shadow-sm"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          {view === 'team' && entry.username && (
-                            <span className="text-xs font-semibold text-accent-700 dark:text-accent-400 bg-accent-50 dark:bg-accent-900/30 px-2 py-0.5 rounded-md">
-                              {entry.username}
-                            </span>
-                          )}
-                          <span className="text-sm font-medium text-slate-700 dark:text-slate-300 tabular-nums">
-                            {formatTime(entry.clockIn)} – {entry.clockOut ? formatTime(entry.clockOut) : (
-                              <span className="text-green-500">running</span>
-                            )}
+      {/* Calendar */}
+      <div className="mb-6">
+        <CalendarHeatmap
+          entries={sourceEntries}
+          selectedDate={selectedDate}
+          onSelectDate={setSelectedDate}
+        />
+        {selectedDate && (
+          <div className="mt-2 flex items-center justify-between text-xs text-ink-soft">
+            <span>Showing entries for {selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            <button
+              onClick={() => setSelectedDate(null)}
+              className="text-accent-600 dark:text-accent-400 font-medium hover:underline"
+            >
+              Clear filter
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Entry list */}
+      <div className="flex flex-col gap-6">
+        {grouped.length === 0 ? (
+          <p className="text-center text-ink-soft italic py-8">
+            {view === 'team' ? 'No entries for this filter.' : 'No time entries yet.'}
+          </p>
+        ) : (
+          grouped.map(group => (
+            <div key={group.key}>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-bold text-ink-soft uppercase tracking-wider">
+                  {group.label}
+                </h3>
+                <span className="text-xs text-ink-soft font-medium tabular-nums">
+                  {formatDuration(
+                    group.entries
+                      .filter(e => e.clockOut)
+                      .reduce((s, e) => s + (e.clockOut! - e.clockIn), 0)
+                  )}
+                </span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {group.entries.map(entry => (
+                  <Card key={entry.id} className="group flex items-center justify-between px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {view === 'team' && entry.username && (
+                          <span className="text-xs font-semibold text-accent-700 dark:text-accent-400 bg-accent-50 dark:bg-accent-900/30 px-2 py-0.5 rounded-md">
+                            {entry.username}
                           </span>
-                          {entry.clockOut && (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 tabular-nums">
-                              {formatDuration(entry.clockOut - entry.clockIn)}
-                            </span>
+                        )}
+                        <span className="text-sm font-medium text-ink-soft tabular-nums">
+                          {formatTime(entry.clockIn)} – {entry.clockOut ? formatTime(entry.clockOut) : (
+                            <span className="text-green-500">running</span>
                           )}
-                        </div>
-                        {entry.description && (
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{entry.description}</p>
+                        </span>
+                        {entry.clockOut && (
+                          <span className="text-xs text-ink-faint tabular-nums">
+                            {formatDuration(entry.clockOut - entry.clockIn)}
+                          </span>
                         )}
                       </div>
-                      {view === 'me' && (
-                        <button
-                          onClick={() => handleDelete(entry.id)}
-                          className="ml-3 opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 transition-all rounded-lg"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                      {entry.description && (
+                        <p className="text-xs text-ink-soft mt-0.5 truncate">{entry.description}</p>
                       )}
                     </div>
-                  ))}
-                </div>
+                    {view === 'me' && (
+                      <button
+                        onClick={() => handleDelete(entry.id)}
+                        className="ml-3 opacity-0 group-hover:opacity-100 p-1.5 text-ink-faint hover:text-red-500 transition-all rounded-lg"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </Card>
+                ))}
               </div>
-            ))
-          )}
-        </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

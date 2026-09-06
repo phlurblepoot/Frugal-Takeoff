@@ -24,7 +24,9 @@ reviews output at every gate.
 - **It is reversible.** The authoritative rollback is the **full-data backup**
   taken in Step 0 / Step 4 (`npm run backup`), which captures `app.db` **and**
   `files/`. Restore with `npm run restore`.
-- **Latest schema version: `11`.** The verifier asserts `schema_version == 11`.
+- **Latest schema version: `32`.** The verifier derives the expected version
+  from `server/migrationList.ts` (`LATEST_SCHEMA_VERSION`) and asserts the DB
+  reached it, so it stays correct as migrations are added.
 
 ### Deployment shape (from `docker-compose.yml` / `Dockerfile`)
 
@@ -304,6 +306,85 @@ and would leave the disk `files/` in the migrated (mutated) state.
 
 ---
 
+## Mail (migrations 31–32)
+
+The mail client replaces the old per-user SMTP config with real mail accounts.
+Treat this pull as **supervised** — migration 31 transforms data.
+
+**What the migrations do**
+
+- **31 `mail-client`** — creates the `mail_*` tables and adds three `rfis`
+  columns (all additive), then **transforms** each user's stored `smtp.*`
+  preferences into a mail account: provider `imap`, IMAP host guessed from the
+  SMTP host (port 993, TLS), the SMTP half copied verbatim, credentials sealed
+  with the mail key, status **`needs_review`**. The `smtp.*` preference rows are
+  then **deleted** for that user. A half-filled config — `smtp.host` set but no
+  `smtp.fromAddress` and no `smtp.username` — is **left untouched** (the prefs
+  are the only copy of it) and logged as
+  `[migration 31] user <id>: smtp.host set but no fromAddress/username — left untouched`.
+- **32** — adds `idx_mail_messages_acct_pthread`. Index only, no data change.
+
+**Before the pull**
+
+- [ ] Full backup as in Step 0 (`npm run backup`) — the transform deletes
+      preference rows.
+- [ ] Note who currently has SMTP configured, so the account list can be checked
+      against it afterwards:
+      `sqlite3 <prod-data>/app.db "SELECT userId FROM user_preferences WHERE key='smtp.host' AND TRIM(value)<>'';"`
+
+**After the pull**
+
+- [ ] Read the boot log for `[migration 31]` lines. `mailCrypto not supplied —
+      smtp.* transform skipped` must **not** appear (the server always supplies
+      it; seeing it means the key file could not be loaded). Any
+      `left untouched` line names a user whose SMTP config needs re-entering by
+      hand.
+- [ ] Confirm `<prod-data>/mail.key` exists, is `0600`, and is included in the
+      next backup. **It is generated on first start and must travel with the
+      data directory** — `app.db` alone cannot decrypt a single stored token or
+      IMAP password. Losing it costs no data: every user simply reconnects.
+      Setting `MAIL_SECRET_KEY` in the environment overrides the file entirely.
+- [ ] Each user opens **Settings → Mail**, checks the migrated IMAP account
+      (the IMAP host is a guess from the SMTP host) and presses **Test &
+      activate**, or connects Google / Microsoft instead. Until an account is
+      active, that user cannot send from the app.
+- [ ] For OAuth, the new env vars below must be set BEFORE users try to connect;
+      the redirect URI registered with each provider must match
+      `${APP_PUBLIC_URL}/api/mail/oauth/<google|microsoft>/callback` character
+      for character. Full walkthrough: **`docs/mail-setup.md`**.
+
+**RFI email-reply capture** (added after migrations 31–32, no new migration
+needed — it uses the three `rfis` columns migration 31 already added). When a
+reply arrives on the mail thread linked to a *sent* RFI, the server files it
+as a **pending reply** on that RFI — a banner on the RFI editor and a chip on
+the RFI list. Nothing is auto-answered: a "thanks, got it" is a reply too, so
+a person always presses **Use as response** (which can also pull in an
+attachment) or **Dismiss**. Recording the answer always goes through the
+accept endpoint, which sets the RFI response and clears the pending row in
+one step. This only reads mail already synced into the app; it needs no
+extra setup beyond an active mail account.
+
+- [ ] **Never set `MAIL_FAKE_PROVIDER` in production.** It swaps every mail
+      account for an in-memory fake provider (no real IMAP/OAuth calls) and
+      exists only for local dev and the Playwright E2E suite — see
+      "Development & tests" in `docs/mail-setup.md`.
+
+**New container environment** (none are required for the app to start; without
+them mail simply stays IMAP-only and poll-only):
+
+| Variable | Effect if unset |
+| --- | --- |
+| `APP_PUBLIC_URL` | OAuth Connect returns 503; Microsoft accounts poll instead of push. |
+| `MAIL_SECRET_KEY` | `<data>/mail.key` is generated and used instead. |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Connect Google unavailable. |
+| `MS_OAUTH_CLIENT_ID` / `MS_OAUTH_CLIENT_SECRET` | Connect Microsoft unavailable. |
+| `MS_OAUTH_TENANT` | Defaults to `common`. |
+
+They are listed, commented out, in `docker-compose.yml` under the `app`
+service's `environment:` block.
+
+---
+
 ## Appendix — Quick command reference
 
 > Replace `<prod-data>` with the Unraid host path mounted at `/app/data`
@@ -323,7 +404,9 @@ and would leave the disk `files/` in the migrated (mutated) state.
 
 **Facts:**
 
-- Latest schema version: **11** (migrations `1..11`, ending with `tasks`).
+- Latest schema version: **32** (migrations `1..32`, ending with the
+  `mail_messages providerThreadId index`). Migration **11 (`tasks`)** and
+  migration **31 (`mail-client`)** are the data-transforming ones.
 - Compose **service**: `app` · **container**: `plan-takeoff-app` · **volume**:
   `./data:/app/data` · `STORAGE_PATH=/app/data`.
 - Framework auto-backups land in **`<STORAGE_PATH>/backups/app-v<from>-<ts>.db`**

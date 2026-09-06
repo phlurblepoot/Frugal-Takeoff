@@ -1474,4 +1474,119 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 31,
+    name: 'mail-client',
+    // ADDITIVE tables (spec 2026-08-29 mail client §3) + rfis columns, PLUS a
+    // TRANSFORM: per-user smtp.* prefs become a sealed `imap` mail account in
+    // status needs_review and the prefs are deleted. The transform runs only
+    // when ctx.mailCrypto is supplied (server startup always supplies it;
+    // bare test harnesses may not) so it is safe to re-run.
+    up({ db, mailCrypto }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mail_accounts (
+          id TEXT PRIMARY KEY, userId TEXT NOT NULL, provider TEXT NOT NULL,
+          emailAddress TEXT NOT NULL, displayName TEXT, signatureHtml TEXT,
+          isDefault INTEGER NOT NULL DEFAULT 0, authBlob TEXT NOT NULL,
+          syncState TEXT, indexedSince TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ok',
+          lastSyncAt TEXT, lastError TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+          FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE);
+        CREATE INDEX IF NOT EXISTS idx_mail_accounts_user ON mail_accounts(userId);
+        CREATE TABLE IF NOT EXISTS mail_folders (
+          id TEXT PRIMARY KEY, accountId TEXT NOT NULL, providerId TEXT NOT NULL, name TEXT NOT NULL,
+          role TEXT, unreadCount INTEGER NOT NULL DEFAULT 0, totalCount INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY (accountId) REFERENCES mail_accounts(id) ON DELETE CASCADE);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_folders_acct_pid ON mail_folders(accountId, providerId);
+        CREATE TABLE IF NOT EXISTS mail_messages (
+          id TEXT PRIMARY KEY, accountId TEXT NOT NULL, providerMessageId TEXT NOT NULL, providerThreadId TEXT,
+          messageIdHeader TEXT, inReplyTo TEXT, referencesJson TEXT NOT NULL DEFAULT '[]', threadKey TEXT NOT NULL,
+          fromAddr TEXT, fromName TEXT, toJson TEXT NOT NULL DEFAULT '[]', ccJson TEXT NOT NULL DEFAULT '[]', bccJson TEXT NOT NULL DEFAULT '[]',
+          subject TEXT NOT NULL DEFAULT '', snippet TEXT NOT NULL DEFAULT '', date TEXT NOT NULL,
+          isRead INTEGER NOT NULL DEFAULT 0, isStarred INTEGER NOT NULL DEFAULT 0, isDraft INTEGER NOT NULL DEFAULT 0,
+          hasAttachments INTEGER NOT NULL DEFAULT 0, attachmentsJson TEXT NOT NULL DEFAULT '[]', sizeBytes INTEGER NOT NULL DEFAULT 0,
+          folderIdsJson TEXT NOT NULL DEFAULT '[]', sentFromApp INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+          FOREIGN KEY (accountId) REFERENCES mail_accounts(id) ON DELETE CASCADE);
+        CREATE INDEX IF NOT EXISTS idx_mail_messages_acct_date ON mail_messages(accountId, date DESC);
+        CREATE INDEX IF NOT EXISTS idx_mail_messages_acct_thread ON mail_messages(accountId, threadKey);
+        CREATE INDEX IF NOT EXISTS idx_mail_messages_mid ON mail_messages(messageIdHeader);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_messages_acct_pmid ON mail_messages(accountId, providerMessageId);
+        CREATE TABLE IF NOT EXISTS mail_threads (
+          id TEXT PRIMARY KEY, accountId TEXT NOT NULL, threadKey TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '',
+          firstDate TEXT NOT NULL, lastDate TEXT NOT NULL, messageCount INTEGER NOT NULL DEFAULT 0, unreadCount INTEGER NOT NULL DEFAULT 0,
+          hasAttachments INTEGER NOT NULL DEFAULT 0, isStarred INTEGER NOT NULL DEFAULT 0,
+          participantsJson TEXT NOT NULL DEFAULT '[]', folderIdsJson TEXT NOT NULL DEFAULT '[]', updatedAt TEXT NOT NULL,
+          FOREIGN KEY (accountId) REFERENCES mail_accounts(id) ON DELETE CASCADE);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_threads_acct_key ON mail_threads(accountId, threadKey);
+        CREATE INDEX IF NOT EXISTS idx_mail_threads_acct_last ON mail_threads(accountId, lastDate DESC);
+        CREATE TABLE IF NOT EXISTS mail_thread_links (
+          id TEXT PRIMARY KEY, threadKey TEXT NOT NULL, subjectSnapshot TEXT, firstDate TEXT, participantsJson TEXT NOT NULL DEFAULT '[]',
+          itemType TEXT NOT NULL, itemId TEXT NOT NULL, projectId TEXT, customerId TEXT, linkedByUserId TEXT NOT NULL, createdAt TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_links_unique ON mail_thread_links(threadKey, itemType, itemId);
+        CREATE INDEX IF NOT EXISTS idx_mail_links_item ON mail_thread_links(itemType, itemId);
+        CREATE INDEX IF NOT EXISTS idx_mail_links_project ON mail_thread_links(projectId);
+        CREATE INDEX IF NOT EXISTS idx_mail_links_customer ON mail_thread_links(customerId);
+        CREATE INDEX IF NOT EXISTS idx_mail_links_thread ON mail_thread_links(threadKey);
+        CREATE TABLE IF NOT EXISTS mail_thread_reply_state (
+          threadKey TEXT PRIMARY KEY, lastInboundDate TEXT, lastOutboundDate TEXT, updatedAt TEXT NOT NULL);
+      `);
+      const hasCol = (t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as any[]).some(x => x.name === c);
+      if (!hasCol('rfis', 'pendingReplyJson')) db.exec('ALTER TABLE rfis ADD COLUMN pendingReplyJson TEXT');
+      if (!hasCol('rfis', 'responseSource')) db.exec('ALTER TABLE rfis ADD COLUMN responseSource TEXT');
+      if (!hasCol('rfis', 'responseMessageIdHeader')) db.exec('ALTER TABLE rfis ADD COLUMN responseMessageIdHeader TEXT');
+
+      if (!mailCrypto) { console.warn('[migration 31] mailCrypto not supplied — smtp.* transform skipped'); return; }
+      // Scoped to live users: user_preferences rows can outlive a deleted user, and a
+      // mail_accounts insert for a missing userId would trip the FK (or orphan a row).
+      const users = db.prepare("SELECT DISTINCT userId FROM user_preferences WHERE key = 'smtp.host' AND TRIM(value) <> '' AND userId IN (SELECT id FROM users)").all() as { userId: string }[];
+      const now = new Date().toISOString();
+      const since = new Date(Date.now() - 180 * 86400000).toISOString();
+      for (const { userId } of users) {
+        const rows = db.prepare("SELECT key, value FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").all(userId) as { key: string; value: string }[];
+        const cfg: Record<string, string> = {};
+        rows.forEach(r => { cfg[r.key.slice(5)] = r.value; });
+        const smtpPort = parseInt(cfg.port || '587', 10) || 587;
+        const auth = {
+          imapHost: cfg.host, imapPort: 993, imapSecure: true,
+          smtpHost: cfg.host, smtpPort, smtpSecure: cfg.secure === 'true',
+          username: cfg.username || '', password: cfg.password || '',
+        };
+        const email = (cfg.fromAddress || cfg.username || '').trim().toLowerCase();
+        // No address to send as: leave the prefs in place (they are the only copy of
+        // that half-filled config) and say so, rather than silently dropping the user.
+        if (!email) { console.warn(`[migration 31] user ${userId}: smtp.host set but no fromAddress/username — left untouched`); continue; }
+        const id = 'mailacct-' + userId;
+        db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, displayName, isDefault, authBlob, indexedSince, status, createdAt, updatedAt)
+                    VALUES (?, ?, 'imap', ?, ?, 1, ?, ?, 'needs_review', ?, ?)`)
+          .run(id, userId, email, cfg.fromName || null, mailCrypto.seal(auth), since, now, now);
+        db.prepare("DELETE FROM user_preferences WHERE userId = ? AND key LIKE 'smtp.%'").run(userId);
+      }
+    },
+  },
+  {
+    version: 32,
+    name: 'mail_messages providerThreadId index',
+    // deriveThreadKey now resolves a provider conversation id to a thread we
+    // already hold, which is one lookup per synced message. Without this index
+    // that is a full scan of mail_messages per message — on a real mailbox,
+    // a delta page would cost millions of row visits.
+    up({ db }) {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_mail_messages_acct_pthread ON mail_messages(accountId, providerThreadId);');
+    },
+  },
+  {
+    version: 33,
+    name: 'invoice-notes',
+    // ADDITIVE, IDEMPOTENT: one nullable column, same pattern as migration 24
+    // (change_orders.title). Internal-only notes (Nathan's ruling) — never
+    // printed on the invoice PDF or included in invoice emails, so existing
+    // rows getting NULL changes nothing about how they render or send.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(invoices)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('notes')) {
+        db.exec(`ALTER TABLE invoices ADD COLUMN notes TEXT;`);
+      }
+    },
+  },
 ];

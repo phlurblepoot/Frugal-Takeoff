@@ -1,13 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text, Group, Rect, Shape } from 'react-konva';
 import { Html } from 'react-konva-utils';
 import { Trash2, Edit2, X, Check, ZoomIn, ZoomOut, RotateCcw, Maximize2 } from 'lucide-react';
 import useImage from 'use-image';
 import { v4 as uuidv4 } from 'uuid';
+import type Konva from 'konva';
 import { Point, Measurement, MeasurementSegment, Tool, ScaleConfig, MeasurementTakeoff, ScaleRegion } from '../types';
 import { calculateDistance, calculatePolylineLength, measurementAreaPx, measurementRings, formatMeasurement, generateArcPoints, expandArcPoints, calculateSurfaceAreaPx, isPointInPolygon, calculateRealValue, convertUnit, formatRealValue, UNIT_LABELS } from '../utils/math';
 import { createWorker } from 'tesseract.js';
 import { useToast } from './Toast';
+import { useTheme } from '../context/ThemeContext';
+import { lerpStep, lerp1D, isCursorIdle } from '../utils/presence';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 // @ts-ignore
 import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
@@ -23,6 +26,146 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 // cache module's public contract), so it lives here rather than in
 // pdfDocCache.ts.
 const bitmapRenderScaleByKey = new Map<string, number>();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Remote presence cursor (Task 12 — presentation only, no protocol change).
+// Smoothed via a per-cursor rAF lerp loop: one independent loop per cursor
+// rather than one shared scheduler, because a page's session list is small
+// (a handful at most) so N cheap rAF callbacks cost nothing, and each cursor
+// can start/stop its own loop purely from its own activity with no shared
+// bookkeeping. Position and fade-opacity are both driven imperatively via
+// Konva refs — never through React x/y/opacity props — so a parent
+// re-render (e.g. the idle-fade state flip) can never stomp the in-flight
+// lerped position with a stale prop value.
+// ─────────────────────────────────────────────────────────────────────────
+
+const CURSOR_IDLE_MS = 30_000;
+const CURSOR_IDLE_OPACITY = 0.3;
+const NAME_TAG_PAD_X = 8;
+const NAME_TAG_HEIGHT = 20;
+
+interface RemoteCursorProps {
+  user: { id: string; name: string; color: string; cursor: { x: number; y: number }; lastActive?: number };
+  stageScale: number;
+  reducedMotion: boolean;
+}
+
+const RemoteCursor: React.FC<RemoteCursorProps> = React.memo(({ user, stageScale, reducedMotion }) => {
+  const groupRef = useRef<Konva.Group>(null);
+  const textRef = useRef<Konva.Text>(null);
+  const posRef = useRef({ x: user.cursor.x, y: user.cursor.y });
+  const opacityRef = useRef(isCursorIdle(user.lastActive, Date.now()) ? CURSOR_IDLE_OPACITY : 1);
+  const rafRef = useRef<number | null>(null);
+  // Always holds the latest target so a loop already in flight (started on
+  // an earlier render) reads current values each frame instead of a stale
+  // closure over the render that scheduled it.
+  const latestRef = useRef({ x: user.cursor.x, y: user.cursor.y, opacity: 1 });
+
+  const [tagWidth, setTagWidth] = useState(() => user.name.length * 7 + NAME_TAG_PAD_X * 2);
+  const [isIdle, setIsIdle] = useState(() => isCursorIdle(user.lastActive, Date.now()));
+
+  // Measure the actual glyph width so the pill fits the name exactly,
+  // instead of the old `name.length * 7 + 8` guess.
+  useLayoutEffect(() => {
+    const w = textRef.current?.width();
+    if (w) setTagWidth(w + NAME_TAG_PAD_X * 2);
+  }, [user.name]);
+
+  // Idle detection: `lastActive` only changes on an actual cursor-move
+  // event, so noticing 30s of *silence* (no further prop updates at all)
+  // needs a timer, not just a dependency check.
+  useEffect(() => {
+    const now = Date.now();
+    setIsIdle(isCursorIdle(user.lastActive, now));
+    const last = user.lastActive ?? now;
+    const timer = setTimeout(() => setIsIdle(true), Math.max(0, last + CURSOR_IDLE_MS - now));
+    return () => clearTimeout(timer);
+  }, [user.lastActive]);
+
+  const targetOpacity = isIdle ? CURSOR_IDLE_OPACITY : 1;
+  latestRef.current = { x: user.cursor.x, y: user.cursor.y, opacity: targetOpacity };
+
+  // reducedMotion: bind straight to the latest values, no easing, and stop
+  // any in-flight lerp loop.
+  useLayoutEffect(() => {
+    if (!reducedMotion) return;
+    if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    posRef.current = { x: user.cursor.x, y: user.cursor.y };
+    opacityRef.current = targetOpacity;
+    groupRef.current?.position(posRef.current);
+    groupRef.current?.opacity(targetOpacity);
+    groupRef.current?.getLayer()?.batchDraw();
+  }, [reducedMotion, user.cursor.x, user.cursor.y, targetOpacity]);
+
+  // Smoothed motion: snap to whatever position/opacity has been reached so
+  // far (avoids a flash back to a stale value on re-render), then (re)start
+  // the rAF loop if it isn't already running. The loop stops itself once
+  // both position and opacity have snapped to target — and restarts
+  // automatically the next time this effect's deps change.
+  useLayoutEffect(() => {
+    if (reducedMotion) return;
+    groupRef.current?.position(posRef.current);
+    groupRef.current?.opacity(opacityRef.current);
+    if (rafRef.current != null) return;
+    const tick = () => {
+      const nextPos = lerpStep(posRef.current, latestRef.current, 0.25, 0.5);
+      const nextOpacity = lerp1D(opacityRef.current, latestRef.current.opacity, 0.25, 0.01);
+      posRef.current = nextPos;
+      opacityRef.current = nextOpacity;
+      const g = groupRef.current;
+      if (g) {
+        g.position(nextPos);
+        g.opacity(nextOpacity);
+        g.getLayer()?.batchDraw();
+      }
+      const settled = nextPos.x === latestRef.current.x && nextPos.y === latestRef.current.y
+        && nextOpacity === latestRef.current.opacity;
+      rafRef.current = settled ? null : requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [reducedMotion, user.cursor.x, user.cursor.y, targetOpacity]);
+
+  useEffect(() => () => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  return (
+    <Group ref={groupRef} name="remote-cursor">
+      <Line
+        points={[0, 0, 10, 10, 4, 10, 0, 14]}
+        closed
+        fill={user.color}
+        stroke="white"
+        strokeWidth={1 / stageScale}
+        scaleX={1 / stageScale}
+        scaleY={1 / stageScale}
+      />
+      <Group y={16 / stageScale} scaleX={1 / stageScale} scaleY={1 / stageScale}>
+        <Rect
+          width={tagWidth}
+          height={NAME_TAG_HEIGHT}
+          cornerRadius={NAME_TAG_HEIGHT / 2}
+          fill={user.color}
+          opacity={0.85}
+          shadowColor="black"
+          shadowBlur={4}
+          shadowOpacity={0.25}
+          shadowOffsetY={1}
+        />
+        <Text
+          ref={textRef}
+          text={user.name}
+          fontSize={10}
+          fill="white"
+          fontStyle="bold"
+          x={NAME_TAG_PAD_X}
+          y={(NAME_TAG_HEIGHT - 12) / 2}
+        />
+      </Group>
+    </Group>
+  );
+});
+RemoteCursor.displayName = 'RemoteCursor';
 
 interface PdfCanvasProps {
   imageUrl: string;
@@ -174,6 +317,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   onDrawingActiveChange,
 }) => {
   const { toast } = useToast();
+  const { reducedMotion } = useTheme();
   // The subtract (cutout) tool draws exactly like the area tool — same clicks,
   // arcs, preview and finalize gestures — it only differs in what finalizeSegment
   // does with the polygon. Sites that decide *drawing mechanics* test this;
@@ -2222,10 +2366,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-100 overflow-hidden cursor-crosshair touch-none relative" onContextMenu={e => e.preventDefault()}>
+    <div ref={containerRef} className="w-full h-full bg-sunken overflow-hidden cursor-crosshair touch-none relative" onContextMenu={e => e.preventDefault()}>
       {contextMenu && (
         <div
-          className="fixed z-[200] bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 py-1 min-w-[160px]"
+          className="fixed z-[200] bg-raised rounded-xl shadow-xl border border-edge py-1 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={e => e.stopPropagation()}
         >
@@ -2239,19 +2383,19 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
               </button>
               {onCopy && (
                 <button
-                  className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
                   onClick={() => { onCopy(); setContextMenu(null); }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                   Copy
                 </button>
               )}
-              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+              <div className="h-px bg-edge my-1" />
             </>
           )}
           {onUndo && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
               onClick={() => { onUndo(); setContextMenu(null); }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
@@ -2260,7 +2404,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {onRedo && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2"
               onClick={() => { onRedo(); setContextMenu(null); }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>
@@ -2269,7 +2413,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {onPaste && (
             <button
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2 disabled:opacity-40"
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover flex items-center gap-2 disabled:opacity-40"
               onClick={() => { onPaste(); setContextMenu(null); }}
               disabled={!hasCopied}
             >
@@ -2279,9 +2423,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           )}
           {activePoints.length > 0 && (
             <>
-              <div className="h-px bg-slate-100 dark:bg-slate-700 my-1" />
+              <div className="h-px bg-edge my-1" />
               <button
-                className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-hover"
                 onClick={() => { cancelDrawing(); setContextMenu(null); }}
               >
                 Cancel Drawing
@@ -2291,9 +2435,9 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
         </div>
       )}
       {isSearching && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur border border-slate-200 rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 glass-panel border border-edge rounded-full px-4 py-2 shadow-lg z-50 flex items-center gap-2">
           <div className="w-4 h-4 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium text-slate-700">Searching...</span>
+          <span className="text-sm font-medium text-ink">Searching...</span>
         </div>
       )}
       {!!sourcePdfUrl && !pdfImage && (
@@ -2314,32 +2458,32 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
       {dimensions.width > 0 && dimensions.height > 0 && (
         <>
           {/* Zoom Toolbar */}
-          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center bg-white/90 backdrop-blur-sm border border-slate-200 rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
+          <div className="absolute bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 flex items-center glass-panel border border-edge rounded-full shadow-lg px-2 py-1.5 z-30 gap-1">
             <button
               onClick={handleZoomOut}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Zoom Out"
             >
               <ZoomOut size={18} />
             </button>
             
-            <div className="px-2 min-w-[60px] text-center text-sm font-semibold text-slate-700 select-none">
+            <div className="px-2 min-w-[60px] text-center text-sm font-semibold text-ink select-none">
               {Math.round(stageScale * 100)}%
             </div>
             
             <button
               onClick={handleZoomIn}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Zoom In"
             >
               <ZoomIn size={18} />
             </button>
             
-            <div className="w-px h-4 bg-slate-200 mx-1" />
+            <div className="w-px h-4 bg-edge mx-1" />
             
             <button
               onClick={handleResetView}
-              className="p-2 text-slate-600 hover:text-accent-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-ink-soft hover:text-accent-600 hover:bg-hover rounded-full transition-colors"
               title="Reset View"
             >
               <RotateCcw size={18} />
@@ -2482,41 +2626,14 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
           </Layer>
           <Layer>
             {/* Remote Cursors. Hide anonymous sessions; each session gets its
-                own cursor (a user with two open tabs on this page shows two). */}
+                own cursor (a user with two open tabs on this page shows two).
+                Position/opacity are smoothed by RemoteCursor via a per-cursor
+                rAF lerp loop (reducedMotion binds directly instead) — see
+                the component above for the full rationale. */}
             {remoteUsers
               .filter((u: any) => u.id !== currentUserId && u.cursor && u.userId)
               .map((u: any) => (
-                <Group key={u.id} x={u.cursor!.x} y={u.cursor!.y}>
-                  <Line
-                    points={[0, 0, 10, 10, 4, 10, 0, 14]}
-                    closed
-                    fill={u.color}
-                    stroke="white"
-                    strokeWidth={1 / stageScale}
-                    scaleX={1 / stageScale}
-                    scaleY={1 / stageScale}
-                  />
-                  <Group y={16 / stageScale} scaleX={1 / stageScale} scaleY={1 / stageScale}>
-                    <Line
-                      points={[
-                        0, 0,
-                        u.name.length * 7 + 8, 0,
-                        u.name.length * 7 + 8, 16,
-                        0, 16
-                      ]}
-                      closed
-                      fill={u.color}
-                      opacity={0.8}
-                    />
-                    <Text
-                      text={u.name}
-                      fontSize={10}
-                      fill="white"
-                      padding={4}
-                      fontStyle="bold"
-                    />
-                  </Group>
-                </Group>
+                <RemoteCursor key={u.id} user={u} stageScale={stageScale} reducedMotion={reducedMotion} />
               ))}
           </Layer>
           {selectedMeasurementId && window.innerWidth < 768 && (
@@ -2537,7 +2654,7 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       }
                     }}
                   >
-                    <div className="flex items-center gap-1 bg-white/95 backdrop-blur border border-slate-200 rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
+                    <div className="flex items-center gap-1 glass-panel border border-edge rounded-full p-1 shadow-xl z-50 ring-1 ring-black/5">
                       <button
                         onClick={() => onDeleteMeasurement(selectedMeasurementId)}
                         className="p-2.5 text-red-500 hover:bg-red-50 rounded-full active:scale-90 transition-all"
@@ -2545,10 +2662,10 @@ export const PdfCanvas: React.FC<PdfCanvasProps> = ({
                       >
                         <Trash2 size={20} />
                       </button>
-                      <div className="w-px h-5 bg-slate-200 mx-0.5" />
+                      <div className="w-px h-5 bg-edge mx-0.5" />
                       <button
                         onClick={() => onSelectMeasurement(null)}
-                        className="p-2.5 text-slate-500 hover:bg-slate-100 rounded-full active:scale-90 transition-all"
+                        className="p-2.5 text-ink-soft hover:bg-hover rounded-full active:scale-90 transition-all"
                         title="Deselect"
                       >
                         <X size={20} />

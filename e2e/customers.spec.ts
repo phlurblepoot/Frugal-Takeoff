@@ -36,26 +36,34 @@ test('admin: sidebar select, overview tiles + attention, tasks tab, billing tab,
   await expect(authedPage.getByTestId('customer-pane')).toBeVisible();
 
   // Overview is the default tab (no ?tab= yet).
-  await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
+  await expect(authedPage.getByTestId('customer-tab-overview')).toHaveClass(/glow-accent/);
 
-  // Stat tiles: Bidding=1, In progress=1, Outstanding=$1,400.00 (invoice leg
-  // unpaid + pay-app leg's remaining balance after its partial payment),
-  // Open tasks=1 (1 overdue). The combined tile also carries a muted
-  // "contract $X · invoices $Y" sub-line since both legs' outstandingCents
-  // are > 0 (CustomerOverviewTab.tsx).
-  const tileValue = async (label: string) => {
-    const tile = authedPage.getByText(label, { exact: true }).locator('..');
-    return tile;
-  };
-  await expect(await tileValue('Bidding')).toContainText('1');
-  await expect(await tileValue('In progress')).toContainText('1');
-  const outstandingTile = await tileValue('Outstanding');
-  await expect(outstandingTile).toContainText(fmtCents(combinedOutstandingCents));
-  await expect(outstandingTile).toContainText(`contract ${fmtCents(payApp.balanceCents)}`);
-  await expect(outstandingTile).toContainText(`invoices ${fmtCents(seeded.invoiceAmountCents)}`);
-  const openTasksTile = await tileValue('Open tasks');
-  await expect(openTasksTile).toContainText('1');
-  await expect(openTasksTile).toContainText('1 overdue');
+  // The old stat tiles (Bidding/In progress/Outstanding/Open tasks) and their
+  // CustomerOverviewTab.tsx are gone — Overview is now the customer card grid
+  // (src/cards/customer/coreCards.tsx): cu-rollup (Financials, admin-only),
+  // cu-projects, cu-attention, cu-correspondence. Same seeded figures, now
+  // surfaced through those cards. There's no surviving aggregate "Open tasks"
+  // count anywhere on Overview post-refactor (taskCounts is computed
+  // server-side but never rendered) — the one overdue task is still visible
+  // via its own row in the attention feed asserted below, which is the
+  // closest behavior-preserving equivalent.
+  const combinedBilledCents = seeded.invoiceAmountCents + payApp.billedCents;
+  const combinedPaidCents = payApp.paidCents; // the invoice leg has no payment
+
+  const rollupCard = authedPage.locator('[data-card-id="cu-rollup"]');
+  await expect(rollupCard).toBeVisible();
+  await expect(rollupCard).toContainText(fmtCents(combinedOutstandingCents));
+  await expect(rollupCard).toContainText(fmtCents(combinedBilledCents));
+  await expect(rollupCard).toContainText(fmtCents(combinedPaidCents));
+
+  const projectsCard = authedPage.locator('[data-card-id="cu-projects"]');
+  await expect(projectsCard).toBeVisible();
+  await expect(
+    projectsCard.locator('li', { hasText: seeded.biddingProjectName }).getByText('Bidding', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    projectsCard.locator('li', { hasText: seeded.inProgressProjectName }).getByText('In Progress', { exact: true }),
+  ).toBeVisible();
 
   // Needs-attention: the overdue task, the upcoming bid, the outstanding
   // invoice, and the outstanding (finalized, unpaid) pay application.
@@ -158,16 +166,23 @@ test('non-admin: no Billing tab, no $ tiles, ?tab=billing falls back to overview
   // must fall back to overview rather than crash or render nothing.
   await page.goto(`/customers/${seeded.customerId}?tab=billing`);
   await expect(page.getByTestId('customer-pane')).toBeVisible();
-  await expect(page.getByTestId('customer-tab-overview')).toHaveClass(/text-accent-600/);
+  await expect(page.getByTestId('customer-tab-overview')).toHaveClass(/glow-accent/);
 
   // No Billing tab button at all for a non-admin.
   await expect(page.getByTestId('customer-tab-billing')).toHaveCount(0);
 
-  // Overview renders 3 tiles (no Outstanding): Bidding, In progress, Open tasks.
-  await expect(page.getByText('Bidding', { exact: true })).toBeVisible();
-  await expect(page.getByText('In progress', { exact: true })).toBeVisible();
-  await expect(page.getByText('Open tasks', { exact: true })).toBeVisible();
-  await expect(page.getByText('Outstanding', { exact: true })).toHaveCount(0);
+  // Overview is the customer card grid: cu-rollup (Financials, money) is
+  // admin-only and absent entirely; cu-projects (not money-gated) still
+  // shows both seeded projects with their status pills.
+  await expect(page.locator('[data-card-id="cu-rollup"]')).toHaveCount(0);
+  const projectsCard = page.locator('[data-card-id="cu-projects"]');
+  await expect(projectsCard).toBeVisible();
+  await expect(
+    projectsCard.locator('li', { hasText: seeded.biddingProjectName }).getByText('Bidding', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    projectsCard.locator('li', { hasText: seeded.inProgressProjectName }).getByText('In Progress', { exact: true }),
+  ).toBeVisible();
 
   // Attention still lists the overdue task and the upcoming bid (non-money
   // items), but never the outstanding invoice (money-gated server-side).

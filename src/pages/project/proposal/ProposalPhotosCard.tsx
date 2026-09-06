@@ -13,6 +13,7 @@ import { Button, Card, CardBody, CardHeader, Input } from '../../../components/u
 import { AddFilesButton } from '../../../components/documents/AddFilesButton';
 import { useAttachFiles } from '../../../components/documents/useAttachFiles';
 import { useToast } from '../../../components/Toast';
+import { Lightbox } from '../../../components/Lightbox';
 import { handleProposalCardError, toastProposalCardError } from './proposalCardErrors';
 
 // Caption text stays local while typing (like PricingLinesCard's amount
@@ -26,18 +27,24 @@ const PhotoTile: React.FC<{
   onCaptionCommit: (caption: string) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
-}> = ({ photo, readOnly, canMoveLeft, canMoveRight, onCaptionCommit, onMove, onRemove }) => {
+  onOpen: () => void;
+}> = ({ photo, readOnly, canMoveLeft, canMoveRight, onCaptionCommit, onMove, onRemove, onOpen }) => {
   const [caption, setCaption] = useState(photo.caption ?? '');
   useEffect(() => { setCaption(photo.caption ?? ''); }, [photo.caption]);
 
   return (
     <div className="group relative rounded-lg border border-edge bg-sunken p-2" data-testid={`proposal-photo-${photo.id}`}>
       <div className="relative">
-        <img src={getImageUrl(photo.fileId)} alt="" className="h-28 w-full rounded-md object-cover" />
+        <img
+          src={getImageUrl(photo.fileId)}
+          alt=""
+          onClick={onOpen}
+          className="h-28 w-full cursor-pointer rounded-md object-cover"
+        />
         {!readOnly && (
           <button
             type="button"
-            onClick={onRemove}
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
             aria-label="Remove photo"
             title="Remove"
             className="absolute right-1 top-1 flex min-h-9 min-w-9 items-center justify-center rounded-md bg-black/50 p-1 text-white opacity-100 transition-opacity focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
@@ -52,13 +59,14 @@ const PhotoTile: React.FC<{
         placeholder="Caption (optional)"
         value={caption}
         disabled={readOnly}
+        onClick={e => e.stopPropagation()}
         onChange={e => setCaption(e.target.value)}
         onBlur={() => { if (caption !== (photo.caption ?? '')) onCaptionCommit(caption); }}
       />
       {!readOnly && (
         <div className="mt-1 flex items-center justify-end">
-          <Button variant="ghost" size="sm" aria-label="Move left" title="Move left" disabled={!canMoveLeft} onClick={() => onMove(-1)}><ArrowLeft size={14} /></Button>
-          <Button variant="ghost" size="sm" aria-label="Move right" title="Move right" disabled={!canMoveRight} onClick={() => onMove(1)}><ArrowRight size={14} /></Button>
+          <Button variant="ghost" size="sm" aria-label="Move left" title="Move left" disabled={!canMoveLeft} onClick={(e) => { e.stopPropagation(); onMove(-1); }}><ArrowLeft size={14} /></Button>
+          <Button variant="ghost" size="sm" aria-label="Move right" title="Move right" disabled={!canMoveRight} onClick={(e) => { e.stopPropagation(); onMove(1); }}><ArrowRight size={14} /></Button>
         </div>
       )}
     </div>
@@ -72,6 +80,7 @@ export const ProposalPhotosCard: React.FC<{
   onChanged: () => void;
 }> = ({ proposal, projectId, readOnly, onChanged }) => {
   const { toast } = useToast();
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const photos = [...proposal.photos].sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -165,11 +174,19 @@ export const ProposalPhotosCard: React.FC<{
                 onCaptionCommit={caption => handleCaption(photo, caption)}
                 onMove={dir => handleMove(i, dir)}
                 onRemove={() => handleRemove(photo)}
+                onOpen={() => setLightboxIndex(i)}
               />
             ))}
           </div>
         )}
       </CardBody>
+      {lightboxIndex !== null && (
+        <Lightbox
+          items={photos.map(p => ({ src: getImageUrl(p.fileId), caption: p.caption ?? undefined }))}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </Card>
   );
 };

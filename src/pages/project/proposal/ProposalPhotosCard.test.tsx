@@ -167,4 +167,19 @@ describe('ProposalPhotosCard', () => {
     await screen.findByText('This proposal was sent and is now locked');
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
+
+  it('clicking a photo opens the lightbox with its caption; Remove/Move/caption clicks do not open it', () => {
+    const { container } = renderCard();
+    const thumbs = container.querySelectorAll('img');
+    fireEvent.click(thumbs[0]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Front porch')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByLabelText('Move right')[0]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByLabelText('Remove photo')[0]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

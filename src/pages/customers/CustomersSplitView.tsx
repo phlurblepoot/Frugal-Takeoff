@@ -61,7 +61,7 @@ export const CustomersSplitView: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-full bg-surface">
+    <div className="flex bg-surface h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] md:h-dvh">
       {/* Sidebar: list-only on phone when nothing is selected; hidden on
           phone once a customer is open (md:flex keeps it visible on desktop). */}
       <div className={`w-full shrink-0 flex-col border-r border-edge md:flex md:w-72 lg:w-80 ${id ? 'hidden' : 'flex'}`}>

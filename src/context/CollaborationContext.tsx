@@ -180,7 +180,7 @@ export const CollaborationProvider: React.FC<{ children: React.ReactNode }> = ({
     if (location.pathname === '/') setCurrentPageName('Projects');
   }, [location.pathname]);
 
-  // Legacy derived shapes — keeps CanvasView/PdfCanvas/UserPresenceOverlay untouched in WS1
+  // Legacy derived shapes — keeps CanvasView/PdfCanvas/SidebarPresence untouched in WS1
   const globalUsers: User[] = sessions.map(s => ({
     id: s.sessionId, userId: s.userId, name: s.name,
     pageId: s.location?.path ?? '', pageName: s.location?.label ?? '',

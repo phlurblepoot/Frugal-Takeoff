@@ -1,8 +1,11 @@
-import { Project, TakeoffTemplate, SmtpSettings, ProjectNote, Customer } from '../types';
+import { Project, TakeoffTemplate, ProjectNote, Customer } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { computeTakeoffTotals } from '../pages/project/proposal/proposalGenerator';
 import { calculateTakeoffTotalCost } from './math';
 import { CLIENT_SESSION_ID } from './clientSession';
+import type { ItemSendPayload } from './itemSend';
+import type { SendResult, ProjectThreadRow } from '../pages/mail/types';
+import { dedupeInFlight } from './dedupeFetch';
 
 export const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -66,7 +69,17 @@ const fetchWithRetry = async (
   throw lastErr instanceof Error ? lastErr : new Error('Network error');
 };
 
-const handleResponse = async (res: Response) => {
+/** What handleResponse throws for a non-OK response. Carries the status so a
+ *  caller can tell a definitive answer (404: no such thing) from a transient
+ *  one (502, offline) — the message alone cannot. */
+export class HttpError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
+export const handleResponse = async (res: Response) => {
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -75,7 +88,7 @@ const handleResponse = async (res: Response) => {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Request failed');
+    throw new HttpError(err.error || 'Request failed', res.status);
   }
   return res;
 };
@@ -332,32 +345,56 @@ export const deleteTemplate = async (id: string): Promise<void> => {
   await handleResponse(res);
 };
 
-// Email / SMTP functions
-export const getSmtpSettings = async (): Promise<Partial<SmtpSettings>> => {
-  const res = await fetch('/api/email/smtp', { headers: getAuthHeaders() });
+// ── Mail accounts ────────────────────────────────────────────────────────────
+// Outbound email goes through the sending user's connected mail account
+// (Settings → Mail). The old per-user SMTP settings are gone.
+export interface MailAccountSummary {
+  id: string;
+  provider: string;
+  emailAddress: string;
+  displayName: string | null;
+  isDefault: number;
+  status: string;
+  unreadCount: number;
+}
+
+export const getMailAccounts = async (): Promise<MailAccountSummary[]> => {
+  const res = await fetch('/api/mail/accounts', { headers: getAuthHeaders() });
   await handleResponse(res);
-  // Values are stored as strings; normalize the typed fields so the form's
-  // boolean toggle / numeric port round-trip correctly.
-  const raw = await res.json() as Record<string, string>;
-  const out: Partial<SmtpSettings> = { ...(raw as Partial<SmtpSettings>) };
-  if ('secure' in raw) out.secure = raw.secure === 'true';
-  if (raw.port) out.port = Number(raw.port); else delete (out as Partial<SmtpSettings>).port;
-  return out;
+  return await res.json();
 };
 
-export const saveSmtpSettings = async (cfg: Partial<SmtpSettings>): Promise<void> => {
-  const res = await fetch('/api/email/smtp', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-    body: JSON.stringify(cfg),
-  });
-  await handleResponse(res);
+// The account a send would go out through. Mirrors the rule the server applies
+// in server/mail/sendService (usable-first, default preferred) so the Send
+// button and the send route never disagree about whether a send can happen.
+export const pickSendableAccount = (list: MailAccountSummary[]): MailAccountSummary | null => {
+  const usable = list.filter(a => a.status === 'ok' || a.status === 'syncing');
+  return usable.find(a => a.isDefault) ?? usable[0] ?? null;
 };
 
-export const testSmtpConnection = async (): Promise<void> => {
-  const res = await fetch('/api/email/test-smtp', { method: 'POST', headers: getAuthHeaders() });
-  await handleResponse(res);
-};
+/** Everything an item send route accepts. `to` and `fileId` are the only
+ *  required parts; subject/body fall back to the route's own defaults, and
+ *  html (the composer's rich text) supersedes the legacy plain-text `body`. */
+export interface ItemSendBody extends Partial<ItemSendPayload> {
+  to: string;
+  fileId: string;
+  /** Legacy plain text, still accepted server-side for API callers. */
+  body?: string;
+  /** Legacy alias for `body` (the pre-composer proposal/invoice routes). */
+  message?: string;
+}
+
+/** What every item send route returns once the provider has accepted the mail.
+ *  `effectsSkipped` names the item statuses the server could NOT move, so the
+ *  composer can warn instead of letting a half-applied send pass unnoticed. */
+export type ItemSendResult = SendResult & { success: boolean };
+
+export const NO_MAIL_ACCOUNT_REASON = 'Connect a mail account in Settings → Mail';
+
+// The DocumentActionsBar `send.blockedReason` for a user with nowhere to send
+// from; undefined once any account is usable.
+export const mailSendBlockedReason = (list: MailAccountSummary[]): string | undefined =>
+  pickSendableAccount(list) === null ? NO_MAIL_ACCOUNT_REASON : undefined;
 
 export const getProjectNotes = async (projectId: string): Promise<ProjectNote | null> => {
   const res = await fetch(`/api/projects/${projectId}/notes`, { headers: getAuthHeaders() });
@@ -863,10 +900,15 @@ export interface Invoice {
   date: number | null;
   status: string; // draft | sent | paid
   terms: string | null;
+  // Internal-only — never printed on the invoice PDF or included in invoice
+  // emails (migration 33). A notes-only save does not bump `updatedAt` (see
+  // below), so it can't affect the freshness chip.
+  notes: string | null;
   version: number;
   createdAt: number;
   // Stamped server-side on every write (migration 30) — the "is the generated
-  // PDF still current?" comparison in DocumentActionsBar reads it.
+  // PDF still current?" comparison in DocumentActionsBar reads it. notes-only
+  // edits are exempt (server/billingStore.ts saveInvoice).
   updatedAt: number;
   lines: InvoiceLine[];
   payments: Payment[];
@@ -876,7 +918,7 @@ export interface Invoice {
 }
 export interface InvoiceListItem {
   id: string; projectId: string; number: string | null; date: number | null;
-  status: string; terms: string | null; version: number; createdAt: number;
+  status: string; terms: string | null; notes: string | null; version: number; createdAt: number;
   updatedAt: number;
   totalCents: number; paidCents: number; balanceCents: number;
 }
@@ -958,7 +1000,7 @@ export interface BillingSummary {
   invoiceOutstandingBilledCents: number;
 }
 export interface InvoiceInput {
-  number?: string; date?: number | null; terms?: string; status?: string;
+  number?: string; date?: number | null; terms?: string; status?: string; notes?: string | null;
   lines: { description: string; qty: number; unitPrice: number }[];
 }
 
@@ -1043,16 +1085,18 @@ export const addCOPhoto = async (coId: string, fileId: string): Promise<void> =>
 export const removeCOPhoto = async (coId: string, fileId: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/change-orders/${coId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendChangeOrder = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res);
+export const sendChangeOrder = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await billingJson('POST', `/api/change-orders/${id}/send`, payload); await handleResponse(res); return res.json();
 };
-export const getBillingSummary = async (projectId: string): Promise<BillingSummary> => {
-  const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
-  await handleResponse(res); return res.json();
-};
-export const sendInvoice = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
+export const getBillingSummary = async (projectId: string): Promise<BillingSummary> =>
+  dedupeInFlight(`billing-summary:${projectId}`, async () => {
+    const res = await fetchWithRetry(`/api/projects/${projectId}/billing-summary`, { headers: { ...getAuthHeaders() } });
+    await handleResponse(res); return res.json();
+  });
+export const sendInvoice = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
   const res = await billingJson('POST', `/api/invoices/${id}/send`, payload);
   await handleResponse(res);
+  return res.json();
 };
 
 // ── Phase 4b: issues ─────────────────────────────────────────────────────────
@@ -1113,13 +1157,35 @@ export const addIssuePhoto = async (issueId: string, fileId: string): Promise<vo
 export const removeIssuePhoto = async (issueId: string, fileId: string): Promise<void> => {
   const res = await issueJson('DELETE', `/api/issues/${issueId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendIssue = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res);
+export const sendIssue = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await issueJson('POST', `/api/issues/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 
 // ── RFIs ─────────────────────────────────────────────────────────────────────
 
 export interface RfiPhoto { id: string; fileId: string; sortOrder: number; }
+
+// An emailed reply captured against a sent RFI, waiting for a human to accept
+// or dismiss it. EVERY string here (the body text, the sender's display name,
+// every attachment name) was typed by an outsider into an email: render it as
+// text only — never as markup, never into a PDF/HTML template, and never build
+// a path from an attachment name.
+export interface RfiPendingReplyAttachment { attId: string; name: string; mime: string; size: number; }
+export interface RfiPendingReply {
+  threadKey: string;
+  accountId: string;          // the RECEIVING user's mailbox — usually not the viewer's
+  mailMessageId: string;
+  messageIdHeader: string | null;
+  from: { addr: string; name?: string };
+  date: string;               // ISO
+  text: string;
+  attachments: RfiPendingReplyAttachment[];
+  receivedAt: string;         // ISO
+}
+
+// pendingReply / responseSource / responseMessageIdHeader are optional on the
+// client types purely so existing constructors of an Rfi (editors, fixtures)
+// stay valid — the server always sends them.
 export interface Rfi {
   id: string;
   projectId: string;
@@ -1139,6 +1205,9 @@ export interface Rfi {
   createdAt: number;
   updatedAt: number;
   photos: RfiPhoto[];
+  pendingReply?: RfiPendingReply | null;
+  responseSource?: string | null;            // 'email' once an emailed reply was accepted
+  responseMessageIdHeader?: string | null;
 }
 export interface RfiListItem {
   id: string; projectId: string; number: number; title: string | null;
@@ -1147,6 +1216,9 @@ export interface RfiListItem {
   responseText: string | null; responseFileId: string | null;
   status: string; version: number; sentAt: number | null; answeredAt: number | null;
   createdAt: number; updatedAt: number; photoCount: number;
+  pendingReply?: RfiPendingReply | null;
+  responseSource?: string | null;
+  responseMessageIdHeader?: string | null;
 }
 
 const rfiJson = (method: string, url: string, body?: unknown) =>
@@ -1188,8 +1260,44 @@ export const removeRfiPhoto = async (rfiId: string, fileId: string): Promise<voi
 export const setRfiResponse = async (id: string, input: { fileId?: string; text?: string }): Promise<void> => {
   const res = await rfiJson('POST', `/api/rfis/${id}/response`, input); await handleResponse(res);
 };
-export const sendRfi = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[]; message?: string }): Promise<void> => {
-  const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res);
+export const sendRfi = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/send`, payload); await handleResponse(res); return res.json();
+};
+
+/** The pending reply was accepted or dismissed by someone else first. Distinct
+ *  from a transport failure: the caller's move is to refresh, not to retry. */
+export class NoPendingReplyError extends Error {
+  constructor(message = 'No pending reply') { super(message); this.name = 'NoPendingReplyError'; }
+}
+
+// A 409 from either of these routes means one thing: the reply is no longer
+// pending (someone else accepted or dismissed it). `code: 'no_pending_reply'`
+// is the explicit marker, but the status alone is treated as sufficient —
+// there is no other conflict these two routes can report, and depending on the
+// marker made the client mis-handle a server that omitted it. Only an explicit
+// version_conflict is passed through as an ordinary failure.
+const rfiPendingReplyPost = async (id: string, action: 'accept' | 'dismiss', body: unknown): Promise<Response> => {
+  const res = await rfiJson('POST', `/api/rfis/${id}/pending-reply/${action}`, body);
+  if (res.status === 409) {
+    const err = await res.json().catch(() => ({} as { error?: string; code?: string }));
+    if (err.code === 'version_conflict') throw new HttpError(err.error || 'Request failed', 409);
+    throw new NoPendingReplyError(err.error || 'No pending reply');
+  }
+  await handleResponse(res);
+  return res;
+};
+
+/** Promotes the emailed reply into the recorded response. `text` overrides the
+ *  reply's own body; `fileId` (NOT responseFileId) attaches a response document. */
+export const acceptRfiPendingReply = async (
+  id: string, input: { text?: string; fileId?: string } = {},
+): Promise<{ status: string }> => {
+  const res = await rfiPendingReplyPost(id, 'accept', input);
+  return res.json();
+};
+
+export const dismissRfiPendingReply = async (id: string): Promise<void> => {
+  await rfiPendingReplyPost(id, 'dismiss', {});
 };
 
 // ── Daily Reports ──────────────────────────────────────────────────────────
@@ -1253,8 +1361,8 @@ export const addDailyReportPhoto = async (id: string, fileId: string): Promise<v
 export const removeDailyReportPhoto = async (id: string, fileId: string): Promise<void> => {
   const res = await dailyJson('DELETE', `/api/daily-reports/${id}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
-export const sendDailyReport = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
-  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res);
+export const sendDailyReport = async (id: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await dailyJson('POST', `/api/daily-reports/${id}/send`, payload); await handleResponse(res); return res.json();
 };
 export const getDailyWeather = async (projectId: string, date: string): Promise<{ hourly: DailyWeatherHour[]; summary: string; temperature: string }> => {
   // No retries: a failing upstream (Open-Meteo/Nominatim) should fail fast
@@ -1355,12 +1463,12 @@ export const removeProposalAttachment = attachmentsApi.remove;
 export const setProposalStatus = async (id: string, status: 'accepted' | 'declined', signedFileId?: string | null): Promise<{ version: number }> => {
   const res = await proposalJson('POST', `/api/proposals/${id}/status`, { status, signedFileId: signedFileId ?? null }); await handleResponse(res); return res.json();
 };
-export const sendProposal = async (id: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<{ version: number }> => {
+export const sendProposal = async (id: string, payload: ItemSendBody): Promise<ItemSendResult & { version: number }> => {
   const res = await proposalJson('POST', `/api/proposals/${id}/send`, payload); await handleProposalResponse(res, id); return res.json();
 };
 
-export const sendPunchReport = async (projectId: string, payload: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; fileId: string; attachmentFileIds?: string[] }): Promise<void> => {
-  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res);
+export const sendPunchReport = async (projectId: string, payload: ItemSendBody): Promise<ItemSendResult> => {
+  const res = await punchJson('POST', `/api/projects/${projectId}/send-punch`, payload); await handleResponse(res); return res.json();
 };
 
 // ── Phase 4c: punch list ──────────────────────────────────────────────────────
@@ -1716,6 +1824,10 @@ export interface CustomerBilling {
   paidCents: number;
   outstandingCents: number;
   ledger: CustomerBillingLedgerEntry[];
+  // Every outstanding (balanceCents > 0) ledger doc bucketed by age of its
+  // billed date — see server/customerStore.ts's customerOverview. Present
+  // whenever `billing` itself is (i.e. always, for admins).
+  aging: { current: number; days31to60: number; days61plus: number };
   contract: { billedCents: number; paidCents: number; outstandingCents: number };
   invoices: { invoicedCents: number; paidCents: number; outstandingCents: number };
 }
@@ -1740,11 +1852,12 @@ export const getCustomersSummary = async (): Promise<CustomerSummary[]> => {
   return await res.json();
 };
 
-export const getCustomerOverview = async (id: string): Promise<CustomerOverview> => {
-  const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
-  await handleResponse(res);
-  return await res.json();
-};
+export const getCustomerOverview = async (id: string): Promise<CustomerOverview> =>
+  dedupeInFlight(`customer-overview:${id}`, async () => {
+    const res = await fetchWithRetry(`/api/customers/${id}/overview`, { headers: { ...getAuthHeaders() } });
+    await handleResponse(res);
+    return await res.json();
+  });
 
 export const getCustomers = async (): Promise<Customer[]> => (await fetch('/api/customers', { headers: getAuthHeaders() })).json();
 export const getCustomer = async (id: string): Promise<Customer> => (await fetch('/api/customers/' + id, { headers: getAuthHeaders() })).json();
@@ -1782,4 +1895,66 @@ export const computeSovSeedFromEstimate = (project: Project): { description: str
     .map(([description, dollars]) => ({ description, scheduledValueCents: Math.round(dollars * 100) }))
     .filter(g => g.scheduledValueCents > 0)
     .sort((a, b) => a.description.localeCompare(b.description));
+};
+
+// ── Wave 2: card system fetchers ─────────────────────────────────────────────
+// Types below mirror server/dashboardStore.ts's exported interfaces verbatim.
+
+export interface AttentionItem {
+  type: 'overdue_task' | 'bid_due' | 'aging_receivable' | 'stale_rfi' | 'draft_payapp';
+  label: string;
+  sub: string;
+  projectId: string | null;
+  projectName: string | null;
+  itemId: string;
+  date: number;
+  severity: 'red' | 'amber';
+  balanceCents?: number;
+}
+
+export interface DashboardMoney {
+  outstandingCents: number;
+  contractTotalCents: number;
+  billedCents: number;
+  paidCents: number;
+  draftPayAppCount: number;
+  recentPayments: { id: string; amount: number; date: number; method: string | null; projectId: string; projectName: string }[];
+  trend: { month: string; paidCents: number }[];
+  aging: { current: number; days31to60: number; days61plus: number };
+}
+
+export interface HappeningItem {
+  kind: 'activity' | 'mail';
+  id: string;
+  type?: string;
+  message: string;
+  username?: string | null;
+  createdAt: number;
+}
+
+export const getDashboardAttention = async (): Promise<AttentionItem[]> => {
+  const res = await fetchWithRetry('/api/dashboard/attention', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).items;
+};
+
+export const getDashboardMoney = async (): Promise<DashboardMoney> => {
+  const res = await fetchWithRetry('/api/dashboard/money', { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
+};
+
+export const getProjectHappenings = async (projectId: string, limit = 12): Promise<HappeningItem[]> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/happenings?limit=${limit}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return (await res.json()).items;
+};
+
+// Same response shape as the project-scoped mail thread fetcher
+// (mailApi.projectThreads) — this is the customerId-filtered alternative of
+// the same GET /api/mail/project-threads endpoint.
+export const getCustomerThreads = async (customerId: string): Promise<ProjectThreadRow[]> => {
+  const res = await fetchWithRetry(`/api/mail/project-threads?customerId=${encodeURIComponent(customerId)}`, { headers: { ...getAuthHeaders() } });
+  await handleResponse(res);
+  return await res.json();
 };

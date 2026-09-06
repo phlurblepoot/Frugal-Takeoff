@@ -23,12 +23,12 @@ const CustomCostRow: React.FC<{
   };
 
   return (
-    <div className="flex flex-col gap-2 p-3 bg-white dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm">
+    <div className="flex flex-col gap-2 p-3 bg-raised rounded-lg border border-edge shadow-sm">
       <div className="flex gap-2 items-center">
         <select
           value={item.type}
           onChange={(e) => onChange(index, { ...item, type: e.target.value as any })}
-          className="text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-slate-50 dark:bg-slate-800 dark:text-white"
+          className="text-xs border border-edge-strong rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-sunken text-ink"
         >
           <option value="flat">Flat Cost</option>
           <option value="yield">Material Yield</option>
@@ -40,11 +40,11 @@ const CustomCostRow: React.FC<{
           value={item.name}
           onChange={(e) => onChange(index, { ...item, name: e.target.value })}
           placeholder="Line Name"
-          className="flex-1 text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+          className="flex-1 text-xs border border-edge-strong rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
         />
         <button
           onClick={() => onRemove(index)}
-          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors"
+          className="p-1.5 text-ink-faint hover:text-red-500 transition-colors"
         >
           <Trash2 size={14} />
         </button>
@@ -53,15 +53,15 @@ const CustomCostRow: React.FC<{
       <div className="flex gap-2 items-center pl-2 border-l-2 border-accent-100 dark:border-accent-800">
         {item.type === 'flat' && (
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+            <span className="text-[10px] font-bold text-ink-faint uppercase">Cost:</span>
             <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-[10px]">$</span>
               <input
                 type="text"
                 value={item.cost || '0'}
                 onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                 onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                className="w-24 text-xs border border-slate-300 dark:border-slate-600 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-24 text-xs border border-edge-strong rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
             </div>
           </div>
@@ -70,36 +70,36 @@ const CustomCostRow: React.FC<{
         {item.type === 'yield' && (
           <>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Yield:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Yield:</span>
               <input
                 type="text"
                 value={item.yield || '0'}
                 onChange={(e) => onChange(index, { ...item, yield: e.target.value })}
                 onBlur={(e) => handleMathBlur('yield', e.target.value)}
-                className="w-20 text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-20 text-xs border border-edge-strong rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
-              <span className="text-[10px] text-slate-500 dark:text-slate-400">{unitLabel} per unit</span>
+              <span className="text-[10px] text-ink-soft">{unitLabel} per unit</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Unit:</span>
               <input
                 type="text"
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. bags"
-                className="w-20 text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-20 text-xs border border-edge-strong rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Cost:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Cost:</span>
               <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-[10px]">$</span>
                 <input
                   type="text"
                   value={item.cost || '0'}
                   onChange={(e) => onChange(index, { ...item, cost: e.target.value })}
                   onBlur={(e) => handleMathBlur('cost', e.target.value)}
-                  className="w-24 text-xs border border-slate-300 dark:border-slate-600 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                  className="w-24 text-xs border border-edge-strong rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
                 />
               </div>
             </div>
@@ -108,15 +108,15 @@ const CustomCostRow: React.FC<{
 
         {item.type === 'unit' && (
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Cost per {unitLabel}:</span>
+            <span className="text-[10px] font-bold text-ink-faint uppercase">Cost per {unitLabel}:</span>
             <div className="relative">
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-[10px]">$</span>
               <input
                 type="text"
                 value={item.costPerUnit || '0'}
                 onChange={(e) => onChange(index, { ...item, costPerUnit: e.target.value })}
                 onBlur={(e) => handleMathBlur('costPerUnit', e.target.value)}
-                className="w-24 text-xs border border-slate-300 dark:border-slate-600 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-24 text-xs border border-edge-strong rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
             </div>
           </div>
@@ -125,37 +125,37 @@ const CustomCostRow: React.FC<{
         {item.type === 'amount_per_units' && (
           <>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Amount:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Amount:</span>
               <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[10px]">$</span>
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-[10px]">$</span>
                 <input
                   type="text"
                   value={item.amount || '0'}
                   onChange={(e) => onChange(index, { ...item, amount: e.target.value })}
                   onBlur={(e) => handleMathBlur('amount', e.target.value)}
-                  className="w-20 text-xs border border-slate-300 dark:border-slate-600 rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                  className="w-20 text-xs border border-edge-strong rounded-lg pl-5 pr-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
                 />
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Per:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Per:</span>
               <input
                 type="text"
                 value={item.perUnits || '0'}
                 onChange={(e) => onChange(index, { ...item, perUnits: e.target.value })}
                 onBlur={(e) => handleMathBlur('perUnits', e.target.value)}
-                className="w-16 text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-16 text-xs border border-edge-strong rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
-              <span className="text-[10px] text-slate-500 dark:text-slate-400">{unitLabel}s</span>
+              <span className="text-[10px] text-ink-soft">{unitLabel}s</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase">Unit:</span>
+              <span className="text-[10px] font-bold text-ink-faint uppercase">Unit:</span>
               <input
                 type="text"
                 value={item.unit || ''}
                 onChange={(e) => onChange(index, { ...item, unit: e.target.value })}
                 placeholder="e.g. days"
-                className="w-20 text-xs border border-slate-300 dark:border-slate-600 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+                className="w-20 text-xs border border-edge-strong rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               />
             </div>
           </>
@@ -269,20 +269,20 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
   const filteredPackages = existingPackages.filter(p => !pricePackage || p.toLowerCase().includes(pricePackage.toLowerCase()));
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Create Measurement Takeoff</h3>
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-raised rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+        <div className="p-6 border-b border-edge">
+          <h3 className="text-lg font-semibold text-ink">Create Measurement Takeoff</h3>
         </div>
 
         <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
           {templates.length > 0 && (
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Use Template (Optional)</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Use Template (Optional)</label>
               <select
                 value={selectedTemplateId}
                 onChange={(e) => handleTemplateChange(e.target.value)}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               >
                 <option value="">Select a template...</option>
                 {templates.map(t => (
@@ -293,21 +293,21 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Takeoff Name</label>
+            <label className="block text-sm font-medium text-ink mb-1.5">Takeoff Name</label>
             <input
               data-testid="takeoff-name-input"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+              className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               placeholder="e.g. Hardwood Flooring"
               autoFocus
             />
           </div>
 
           <div className="relative">
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-              Price Package <span className="text-slate-400 font-normal">(optional)</span>
+            <label className="block text-sm font-medium text-ink mb-1.5">
+              Price Package <span className="text-ink-faint font-normal">(optional)</span>
             </label>
             <input
               type="text"
@@ -315,17 +315,17 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
               onChange={(e) => { setPricePackage(e.target.value); setShowPkgSuggestions(true); }}
               onFocus={() => setShowPkgSuggestions(true)}
               onBlur={() => setTimeout(() => setShowPkgSuggestions(false), 150)}
-              className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white"
+              className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               placeholder="e.g. Phase 1, Exterior, Base Bid"
               autoComplete="off"
             />
             {showPkgSuggestions && filteredPackages.length > 0 && (
-              <ul className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-xl shadow-lg overflow-hidden">
+              <ul className="absolute z-10 left-0 right-0 mt-1 bg-raised border border-edge-strong rounded-xl shadow-lg overflow-hidden">
                 {filteredPackages.map(pkg => (
                   <li
                     key={pkg}
                     onMouseDown={() => { setPricePackage(pkg); setShowPkgSuggestions(false); }}
-                    className="px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-accent-50 dark:hover:bg-accent-900/20 cursor-pointer"
+                    className="px-4 py-2.5 text-sm text-ink hover:bg-accent-50 dark:hover:bg-accent-900/20 cursor-pointer"
                   >
                     {pkg}
                   </li>
@@ -336,14 +336,14 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Measurement Type</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Measurement Type</label>
               <select
                 value={type}
                 onChange={(e) => {
                   setType(e.target.value as 'length' | 'area' | 'count');
                   setUnit('');
                 }}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               >
                 <option value="length">Length</option>
                 <option value="area">Area</option>
@@ -351,23 +351,23 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Color</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Color</label>
               <input
                 type="color"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                className="h-11 w-full rounded-lg cursor-pointer border border-slate-300 dark:border-slate-600 p-1"
+                className="h-11 w-full rounded-lg cursor-pointer border border-edge-strong p-1"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Unit</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Unit</label>
               <select
                 value={unit}
                 onChange={(e) => setUnit(e.target.value)}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-white dark:bg-slate-800 dark:text-white"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink"
               >
                 <option value="">Default (Scale Unit)</option>
                 {type === 'length' && (
@@ -394,7 +394,7 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Cost Per Unit ($)</label>
+              <label className="block text-sm font-medium text-ink mb-1.5">Cost Per Unit ($)</label>
               <input
                 type="text"
                 disabled={isAdvanced}
@@ -406,7 +406,7 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
                     if (result !== null) setCostPerUnit(result.toString());
                   }
                 }}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-slate-800 dark:text-white disabled:bg-slate-50 dark:disabled:bg-slate-800/50 disabled:text-slate-400"
+                className="w-full border border-edge-strong rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 bg-raised text-ink disabled:bg-sunken disabled:text-ink-faint"
                 placeholder={isAdvanced ? 'Disabled in Advanced' : '0.00 or =95*40%'}
               />
             </div>
@@ -418,17 +418,17 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
               id="newTakeoffAdvanced"
               checked={isAdvanced}
               onChange={(e) => setIsAdvanced(e.target.checked)}
-              className="w-4 h-4 text-accent-600 rounded border-slate-300 dark:border-slate-600 focus:ring-accent-500"
+              className="w-4 h-4 text-accent-600 rounded border-edge-strong focus:ring-accent-500"
             />
-            <label htmlFor="newTakeoffAdvanced" className="text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer">
+            <label htmlFor="newTakeoffAdvanced" className="text-sm font-medium text-ink cursor-pointer">
               Advanced Costing (Custom Items)
             </label>
           </div>
 
           {isAdvanced && (
-            <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
+            <div className="mt-4 pt-4 border-t border-edge">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Advanced Costing</h4>
+                <h4 className="text-xs font-bold text-ink-faint uppercase tracking-wider">Advanced Costing</h4>
                 <button
                   onClick={() => setCustomCosts([...customCosts, { id: uuidv4(), name: '', type: 'unit', costPerUnit: '0' }])}
                   className="text-[10px] flex items-center gap-1 text-accent-600 hover:text-accent-700 font-bold uppercase tracking-tight"
@@ -457,10 +457,10 @@ export const NewTakeoffModal: React.FC<NewTakeoffModalProps> = ({
           )}
         </div>
 
-        <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex justify-end gap-3">
+        <div className="p-6 border-t border-edge bg-sunken/50 flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 rounded-xl transition-all"
+            className="px-5 py-2.5 text-sm font-medium text-ink-soft hover:bg-hover active:scale-95 rounded-xl transition-all"
           >
             Cancel
           </button>

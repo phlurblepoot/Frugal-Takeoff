@@ -1,5 +1,6 @@
 // src/pages/project/billing/InvoicesSection.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Eye, FileText, Plus, Trash2 } from 'lucide-react';
 import {
   Invoice, InvoiceListItem,
@@ -18,7 +19,9 @@ import { useProjectOutlet } from '../ProjectLayout';
 import { useLiveQuery } from '../../../hooks/useLiveQuery';
 import { EditingChip } from '../../../components/EditingChip';
 import { useGeneratedDocuments } from '../../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../../components/documents/useDocumentViewer';
 
 export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => void }> = ({ projectId, onChange }) => {
@@ -48,11 +51,25 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('invoice', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   const openInvoice = async (id: string) => {
     try { setEditing(await getInvoice(id)); } catch { toast('Failed to open invoice', { type: 'error' }); }
   };
+
+  // Open a specific invoice's editor when arriving via CreateFromThreadMenu
+  // (mail Task 3/follow-up) — same one-shot query-param convention as the
+  // Tasks/RFI/Issue pages' ?open=.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    openInvoice(openId);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('open'); return p; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const newInvoice = async () => {
     if (!projectId) return;
     try {
@@ -87,7 +104,7 @@ export const InvoicesSection: React.FC<{ projectId: string; onChange?: () => voi
               <TBody>
                 {invoices.map(inv => (
                   <TR key={inv.id} interactive onClick={() => openInvoice(inv.id)}>
-                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{inv.number || '(untitled)'}<EditingChip type="invoice" id={inv.id} /></span></TD>
+                    <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{inv.number || '(untitled)'}<EditingChip type="invoice" id={inv.id} />{replyFlags.has(inv.id) && <ReplyFlagChip data-testid={`invoice-reply-flag-${inv.id}`} />}</span></TD>
                     <TD title="Click to advance status" onClick={e => { e.stopPropagation(); cycleStatus(inv); }}><InvoiceStatusPill status={inv.status} /></TD>
                     <TD className="text-ink-soft">{formatMoney(inv.totalCents)}</TD>
                     <TD className="text-ink-soft">{formatMoney(inv.balanceCents)}</TD>

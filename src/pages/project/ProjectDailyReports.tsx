@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Eye, Plus, Trash2, ImageIcon } from 'lucide-react';
+import { DailyReportsCalendar } from './daily/DailyReportsCalendar';
 import {
   DailyReport, DailyReportListItem, DateTakenError,
   getDailyReports, getDailyReport, createDailyReport, deleteDailyReport,
@@ -17,7 +18,9 @@ import {
 import { EditingChip } from '../../components/EditingChip';
 import { DailyReportEditor } from './daily/DailyReportEditor';
 import { useGeneratedDocuments } from '../../hooks/useGeneratedDocument';
+import { useReplyFlags } from '../../hooks/useReplyFlags';
 import { DocumentStatusChip } from '../../components/documents/DocumentStatusChip';
+import { ReplyFlagChip } from '../../components/documents/ReplyFlagChip';
 import { useDocumentViewer } from '../../components/documents/useDocumentViewer';
 // Owned by dailyReportForm.ts (a leaf module) so DailyReportEditor/dailyReportPdf
 // can import them without a cycle back through this file. Re-exported here for
@@ -39,6 +42,13 @@ export const ProjectDailyReports: React.FC = () => {
   const [editorSeq, setEditorSeq] = useState(0);
   const [reportDate, setReportDate] = useState(() => new Date().toLocaleDateString('en-CA'));
   const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<'calendar' | 'list'>(
+    () => localStorage.getItem('dailyReports:view') === 'list' ? 'list' : 'calendar'
+  );
+  const setViewPersist = (v: 'calendar' | 'list') => {
+    setView(v);
+    localStorage.setItem('dailyReports:view', v);
+  };
 
   const load = () => {
     if (!projectId) return;
@@ -55,6 +65,7 @@ export const ProjectDailyReports: React.FC = () => {
     sourceIds: rows.map(r => r.id),
     updatedAtById: Object.fromEntries(rows.map(r => [r.id, r.updatedAt])),
   });
+  const replyFlags = useReplyFlags('dailyReport', rows.map(r => r.id));
   const viewer = useDocumentViewer();
 
   // Focus the create-form input when arriving via the command palette's "New daily report" action.
@@ -89,12 +100,12 @@ export const ProjectDailyReports: React.FC = () => {
     } catch { return ''; }
   };
 
-  const addReport = async () => {
-    if (!projectId || !reportDate) { toast('Pick a date', { type: 'warning' }); return; }
+  const addReportFor = async (dateStr: string) => {
+    if (!projectId || !dateStr) { toast('Pick a date', { type: 'warning' }); return; }
     setCreating(true);
     try {
       const contractorName = await resolveContractorName();
-      const r = await createDailyReport(projectId, { reportDate, jobName: summary?.name ?? '', contractorName });
+      const r = await createDailyReport(projectId, { reportDate: dateStr, jobName: summary?.name ?? '', contractorName });
       setEditing(await getDailyReport(r.id));
       load();
     } catch (e) {
@@ -115,33 +126,56 @@ export const ProjectDailyReports: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
-      <h1 className="mb-4 text-xl font-bold text-ink">Daily Reports</h1>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-xl font-bold text-ink">Daily Reports</h1>
+        <div role="tablist" aria-label="View" data-testid="daily-view-toggle" className="flex rounded-lg border border-edge p-0.5">
+          {(['calendar', 'list'] as const).map(v => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setViewPersist(v)}
+              className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+                view === v ? 'bg-raised text-ink shadow-sm' : 'text-ink-faint hover:text-ink'
+              }`}
+            >
+              {v === 'calendar' ? 'Calendar' : 'List'}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <Card className="mb-5">
         <CardBody>
           <div className="flex flex-wrap items-end gap-2">
             <Field label="New report" htmlFor="new-daily-report-date">
               <Input id="new-daily-report-date" type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addReport(); }}
+                onKeyDown={e => { if (e.key === 'Enter') addReportFor(reportDate); }}
                 className="w-full sm:w-auto" />
             </Field>
-            <Button onClick={addReport} disabled={creating}><Plus size={15} />New report</Button>
+            <Button onClick={() => addReportFor(reportDate)} disabled={creating}><Plus size={15} />New report</Button>
           </div>
         </CardBody>
       </Card>
 
       {reports === null ? (
         <div className="space-y-2">{[0, 1, 2].map(i => <Skeleton key={i} className="h-10" />)}</div>
+      ) : view === 'calendar' ? (
+        <div key={view} className="anim-tab-in">
+          <DailyReportsCalendar reports={reports} onOpen={openReport} onCreate={addReportFor} />
+        </div>
       ) : reports.length === 0 ? (
         <EmptyState icon={<CalendarDays size={22} />} title="No daily reports yet"
           description="Log crew counts, weather, and field notes for each day on site — attach photos and send a branded PDF." />
       ) : (
+        <div key={view} className="anim-tab-in">
         <Table>
           <THead><TR><TH>Date</TH><TH>Crew</TH><TH>Weather</TH><TH>Photos</TH><TH></TH></TR></THead>
           <TBody>
             {reports.map(r => (
               <TR key={r.id} interactive onClick={() => openReport(r.id)}>
-                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{formatReportDate(r.reportDate)}<EditingChip type="dailyReport" id={r.id} /></span></TD>
+                <TD className="font-medium text-ink"><span className="inline-flex items-center gap-1.5">{formatReportDate(r.reportDate)}<EditingChip type="dailyReport" id={r.id} />{replyFlags.has(r.id) && <ReplyFlagChip data-testid={`daily-report-reply-flag-${r.id}`} />}</span></TD>
                 <TD className="text-ink-soft">{manCountTotal(r.manCounts) > 0 ? `${manCountTotal(r.manCounts)} men` : '—'}</TD>
                 <TD className="max-w-[16rem] truncate text-ink-soft">{[r.weatherSummary, r.temperature].filter(Boolean).join(' ') || '—'}</TD>
                 <TD className="text-ink-soft">{r.photoCount > 0 ? <span className="inline-flex items-center gap-1"><ImageIcon size={13} />{r.photoCount}</span> : '—'}</TD>
@@ -166,6 +200,7 @@ export const ProjectDailyReports: React.FC = () => {
             ))}
           </TBody>
         </Table>
+        </div>
       )}
 
       {editing && (
