@@ -1,8 +1,12 @@
 // src/pages/project/daily/DailyReportsCalendar.tsx
-// Month calendar for a project's daily reports: days with a report highlight
-// in the accent color and open it; empty days start a new report dated to
-// that cell. All date math stays in local time — `toISOString` would drift a
-// day near midnight in negative-offset timezones.
+// Month calendar for a project's daily reports, styled after the Time
+// Keeping page's calendar (bg-raised card, accent-filled day cells, explicit
+// text colors) so it reads correctly in both light and dark mode: days with
+// a report fill with the accent color and open that report; empty days start
+// a new report dated to that cell. Weeks start Monday (app-wide rule — Time
+// Keeping's own grid is a legacy Sunday-start; only its look is reused).
+// All date math stays in local time — `toISOString` would drift a day near
+// midnight in negative-offset timezones.
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
 import { DailyReportListItem } from '../../../utils/store';
@@ -19,7 +23,6 @@ export const monthGrid = (year: number, month: number): { dateStr: string; inMon
   const first = new Date(year, month, 1);
   // getDay(): 0=Sun..6=Sat. Convert to a Monday-start offset (0=Mon..6=Sun).
   const leadingCount = (first.getDay() + 6) % 7;
-  const start = new Date(year, month, 1 - leadingCount);
 
   const lastOfMonth = new Date(year, month + 1, 0);
   const trailingCount = (7 - ((lastOfMonth.getDay() + 6) % 7) - 1 + 7) % 7;
@@ -33,7 +36,7 @@ export const monthGrid = (year: number, month: number): { dateStr: string; inMon
   return cells;
 };
 
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; // Monday-start
 const MONTH_LABEL = (year: number, month: number) =>
   new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
@@ -63,24 +66,26 @@ export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ repo
   const cells = monthGrid(year, month);
 
   return (
-    <div data-testid="daily-calendar">
+    <div data-testid="daily-calendar" className="rounded-2xl border border-edge bg-raised p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-ink">{MONTH_LABEL(year, month)}</h2>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={goToday} className="rounded-md px-2 py-1 text-xs font-medium text-ink-soft hover:bg-hover hover:text-ink">
+          <button type="button" onClick={goToday} className="rounded-md px-2 py-1 text-xs font-medium text-ink-soft transition-colors hover:bg-hover hover:text-ink">
             Today
           </button>
-          <button type="button" onClick={goPrev} aria-label="Previous month" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-ink">
+          <button type="button" onClick={goPrev} aria-label="Previous month" className="rounded-lg p-1.5 text-ink-soft transition-colors hover:bg-hover hover:text-ink">
             <ChevronLeft size={16} />
           </button>
-          <button type="button" onClick={goNext} aria-label="Next month" className="rounded-md p-1.5 text-ink-faint hover:bg-hover hover:text-ink">
+          <button type="button" onClick={goNext} aria-label="Next month" className="rounded-lg p-1.5 text-ink-soft transition-colors hover:bg-hover hover:text-ink">
             <ChevronRight size={16} />
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-xs font-medium text-ink-faint">
-        {WEEKDAY_LABELS.map(w => <div key={w} className="py-1">{w}</div>)}
+      <div className="mb-1 grid grid-cols-7 gap-1">
+        {WEEKDAY_LABELS.map((w, i) => (
+          <div key={i} className="py-1 text-center text-[10px] font-bold uppercase tracking-wider text-ink-faint">{w}</div>
+        ))}
       </div>
 
       <div className="grid grid-cols-7 gap-1">
@@ -95,21 +100,26 @@ export const DailyReportsCalendar: React.FC<DailyReportsCalendarProps> = ({ repo
               key={dateStr}
               type="button"
               data-testid={`daily-calendar-day-${dateStr}`}
+              data-report={report ? 'true' : undefined}
               aria-label={report ? `Open daily report for ${dateStr}` : `Create daily report for ${dateStr}`}
               onClick={() => report ? onOpen(report.id) : onCreate(dateStr)}
-              className={`flex min-h-14 flex-col items-center gap-1 rounded-lg p-1 text-sm hover:bg-hover sm:min-h-20 sm:items-start sm:p-1.5 ${inMonth ? '' : 'text-ink-faint'}`}
+              className={`flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-[11px] font-medium transition-all sm:min-h-20 ${
+                report
+                  ? 'bg-accent-500 text-white'
+                  : inMonth
+                  ? 'bg-raised text-ink'
+                  : 'bg-sunken/50 text-ink opacity-50'
+              } ${
+                isToday
+                  ? report ? 'border-white/70' : 'border-accent-400 dark:border-accent-500'
+                  : 'border-transparent'
+              } hover:border-accent-300 dark:hover:border-accent-700`}
             >
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full ${
-                  report ? 'glow-accent text-white' : isToday ? 'ring-1 ring-accent-500' : ''
-                }`}
-              >
-                {day}
-              </span>
+              <span className="text-sm leading-none">{day}</span>
               {report && (
-                <span className="hidden flex-col items-start gap-0.5 text-[11px] leading-tight text-ink-faint sm:flex">
+                <span className="hidden flex-col items-center gap-0.5 text-[9px] leading-tight text-white/90 sm:flex">
                   {report.photoCount > 0 && (
-                    <span className="inline-flex items-center gap-1"><ImageIcon size={11} />{report.photoCount}</span>
+                    <span className="inline-flex items-center gap-1"><ImageIcon size={10} />{report.photoCount}</span>
                   )}
                   {crew > 0 && <span>{crew} men</span>}
                 </span>

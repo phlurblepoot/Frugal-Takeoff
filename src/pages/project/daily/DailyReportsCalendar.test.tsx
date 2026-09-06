@@ -34,10 +34,16 @@ describe('DailyReportsCalendar', () => {
   });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('renders a glow-accent badge on a day with a report', () => {
+  it('fills a day that has a report with the accent color', () => {
     render(<DailyReportsCalendar reports={[report({ reportDate: '2026-09-10' })]} onOpen={vi.fn()} onCreate={vi.fn()} />);
     const cell = screen.getByTestId('daily-calendar-day-2026-09-10');
-    expect(cell.querySelector('.glow-accent')).toBeTruthy();
+    expect(cell.dataset.report).toBe('true');
+    expect(cell.className).toContain('bg-accent-500');
+    expect(cell.className).toContain('text-white');
+    // Empty days stay plain raised cells.
+    const empty = screen.getByTestId('daily-calendar-day-2026-09-11');
+    expect(empty.dataset.report).toBeUndefined();
+    expect(empty.className).toContain('text-ink');
   });
 
   it('calls onOpen with the report id when a report day is clicked', () => {
