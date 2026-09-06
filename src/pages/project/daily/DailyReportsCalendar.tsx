@@ -15,17 +15,17 @@ import { manCountTotal } from './dailyReportForm';
 const toDateStr = (d: Date): string => d.toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
 
 /**
- * Builds the day cells for a Monday-start month calendar. `month` is
+ * Builds the day cells for a Sunday-start month calendar. `month` is
  * 0-based (0 = January). The result always covers whole weeks (length is a
  * multiple of 7), including muted leading/trailing days from adjacent months.
  */
 export const monthGrid = (year: number, month: number): { dateStr: string; inMonth: boolean }[] => {
   const first = new Date(year, month, 1);
-  // getDay(): 0=Sun..6=Sat. Convert to a Monday-start offset (0=Mon..6=Sun).
-  const leadingCount = (first.getDay() + 6) % 7;
+  // getDay(): 0=Sun..6=Sat — already the Sunday-start offset.
+  const leadingCount = first.getDay();
 
   const lastOfMonth = new Date(year, month + 1, 0);
-  const trailingCount = (7 - ((lastOfMonth.getDay() + 6) % 7) - 1 + 7) % 7;
+  const trailingCount = 6 - lastOfMonth.getDay();
   const totalDays = leadingCount + lastOfMonth.getDate() + trailingCount;
 
   const cells: { dateStr: string; inMonth: boolean }[] = [];
@@ -36,7 +36,7 @@ export const monthGrid = (year: number, month: number): { dateStr: string; inMon
   return cells;
 };
 
-const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; // Monday-start
+const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']; // Sunday-start, like Time Keeping
 const MONTH_LABEL = (year: number, month: number) =>
   new Date(year, month, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 

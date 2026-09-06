@@ -13,14 +13,14 @@ const report = (over: Partial<DailyReportListItem> = {}): DailyReportListItem =>
 });
 
 describe('monthGrid', () => {
-  it('starts on Monday and covers whole weeks (length is a multiple of 7)', () => {
+  it('starts on Sunday and covers whole weeks (length is a multiple of 7)', () => {
     const g = monthGrid(2026, 8); // September 2026 (0-based month)
     expect(g.length % 7).toBe(0);
   });
 
-  it('September 2026 grid starts 2026-08-31 and covers through 2026-09-30', () => {
+  it('September 2026 grid starts Sunday 2026-08-30 and covers through 2026-09-30', () => {
     const g = monthGrid(2026, 8);
-    expect(g[0]).toEqual({ dateStr: '2026-08-31', inMonth: false });
+    expect(g[0]).toEqual({ dateStr: '2026-08-30', inMonth: false });
     const inMonthDates = g.filter(c => c.inMonth).map(c => c.dateStr);
     expect(inMonthDates[0]).toBe('2026-09-01');
     expect(inMonthDates[inMonthDates.length - 1]).toBe('2026-09-30');
