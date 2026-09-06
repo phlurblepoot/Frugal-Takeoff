@@ -83,9 +83,12 @@ describe('PhotoDropCard', () => {
       excludeFileIds: ['f-1'],
       upload: {
         kind: 'issue-photo', projectId: 'p1', sourceType: 'issue', sourceId: 'iss-1',
-        accept: 'image/*', capture: 'environment',
+        accept: 'image/*',
       },
     });
+    // No capture default: on a phone this opens the native photo picker
+    // (camera available as a source) instead of jumping straight to the camera.
+    expect(h.props.upload.capture).toBeUndefined();
   });
 
   it('links every picked row and then reloads the record', async () => {

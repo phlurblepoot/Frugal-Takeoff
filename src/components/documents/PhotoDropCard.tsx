@@ -64,8 +64,10 @@ export const PhotoDropCard: React.FC<PhotoDropCardProps> = ({
             accept="image"
             size="sm"
             defaultTab="upload"
-            // capture opens the rear camera straight from a phone (spec §4.3 field use).
-            upload={{ accept: 'image/*', capture: 'environment', ...upload }}
+            // No `capture` here: on a phone this opens the native photo picker,
+            // which itself offers the camera as one of its sources — jumping
+            // straight into the camera app skips the gallery entirely.
+            upload={{ accept: 'image/*', ...upload }}
             initialProjectIds={initialProjectIds}
             excludeFileIds={photos.map(p => p.fileId)}
             disabled={disabled || busy}
