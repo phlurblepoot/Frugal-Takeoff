@@ -118,6 +118,19 @@ describe('CommandPalette layering', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(document.querySelector('[data-palette-open]')).not.toBeInTheDocument());
   });
+
+  // Residual to I2: the keyboard-shortcuts help overlay (opened via '?',
+  // independent of the search dialog's `open` state) is its OWN z-[400]
+  // palette-family surface and must carry the same marker — an earlier pass
+  // only put it on the search dialog, so a Lightbox open behind the help
+  // overlay would still close itself instead of the help overlay on Escape.
+  it('marks the keyboard-shortcuts help overlay with data-palette-open too, and clears it once closed', async () => {
+    renderPalette('/dashboard');
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toHaveAttribute('data-palette-open', 'true');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(document.querySelector('[data-palette-open]')).not.toBeInTheDocument());
+  });
 });
 
 describe('CommandPalette recents', () => {

@@ -326,11 +326,15 @@ export const CommandPalette: React.FC = () => {
             className="fixed inset-0 z-[400] flex items-start justify-center p-4 pt-[12vh] bg-black/30 backdrop-blur-sm"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={close} role="dialog" aria-modal="true" aria-label="Command palette"
-            // Fix wave I2: signals to other Escape-capturing layers (e.g.
-            // Lightbox, z-300, listens on the CAPTURE phase) that the
-            // palette is the topmost thing open, so they should let Escape
-            // bubble through to this component's own window listener
-            // instead of swallowing it for themselves.
+            // Fix wave I2 (+ residual fix covering the helpOpen overlay
+            // below): signals to other Escape-capturing layers (e.g.
+            // Lightbox, z-300, listens on the CAPTURE phase) that a
+            // palette-family surface is the topmost thing open, so they
+            // should let Escape bubble through to this component's own
+            // window listener instead of swallowing it for themselves.
+            // Both z-[400] overlays this component renders (search dialog
+            // here, keyboard-shortcuts help below) carry this marker —
+            // either one being up is enough to invert the layering.
             data-palette-open="true"
           >
             <motion.div
@@ -406,6 +410,7 @@ export const CommandPalette: React.FC = () => {
             className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setHelpOpen(false)} role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
+            data-palette-open="true"
           >
             <motion.div
               className="w-full max-w-md glass-panel border border-edge rounded-2xl shadow-xl overflow-hidden"

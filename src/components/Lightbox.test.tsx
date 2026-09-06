@@ -149,6 +149,35 @@ describe('Lightbox', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // Residual to I2: CommandPalette's keyboard-shortcuts help overlay
+  // (opened via '?', independent of the search dialog's `open` state) is
+  // its own z-[400] palette-family surface with its own Escape handling.
+  // Mirrors the test above but through that surface instead of the search
+  // dialog, to prove the data-palette-open marker covers both.
+  it('Escape closes the keyboard-shortcuts help overlay first when both are open, and only closes the lightbox on a second press', async () => {
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <ToastProvider>
+          <CommandPalette />
+          <Lightbox items={items} index={0} onClose={onClose} />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.keyDown(window, { key: '?' }); // open the keyboard-shortcuts help overlay
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the spring entrance by default (not reducedMotion)', () => {
     render(<Lightbox items={items} index={0} onClose={() => {}} />);
     expect(screen.getByTestId('lightbox-frame')).toHaveAttribute('data-motion', 'spring');
