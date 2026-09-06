@@ -101,6 +101,7 @@ const CardGridItem: React.FC<{
   effectiveWidth: CardWidth;
   widths: CardWidth[];
   armed: boolean;
+  touchDevice: boolean;
   onDragStart: () => void;
   onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -110,7 +111,7 @@ const CardGridItem: React.FC<{
   onResizeStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   onResizeKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 }> = ({
-  entry, def, ctx, editing, effectiveWidth, widths, armed,
+  entry, def, ctx, editing, effectiveWidth, widths, armed, touchDevice,
   onDragStart, onDragOver, onDrop, onCardPointerDown, onWidthChange, onRemove, onResizeStart, onResizeKeyDown,
 }) => {
   const { ref: measureRef, span } = useMasonrySpan<HTMLDivElement>();
@@ -146,6 +147,19 @@ const CardGridItem: React.FC<{
         gridColumn: `span ${effectiveWidth}`,
         gridRow: `span ${span}`,
         paddingBottom: MASONRY_GAP_PX,
+        // Fix wave I1: touch-action is honored from touchSTART, not from
+        // whenever we later flip a style prop — setting this only once the
+        // long-press "arms" (500ms in) is too late, the native scroll
+        // arbiter has already claimed the in-flight touch, so the first
+        // post-arm move becomes a scroll + pointercancel and the reorder
+        // gesture silently dies. Setting it here, from render, whenever
+        // we're editing on a touch device — armed or not — means it's
+        // already in force at the touchstart that begins the gesture.
+        // Tradeoff: while editing on touch, a finger drag starting ON a
+        // card can no longer scroll the page; scrolling still works via the
+        // page/container area outside the cards, which is acceptable since
+        // Customize mode is a deliberate, temporary editing state.
+        touchAction: editing && touchDevice ? 'none' : undefined,
       }}
     >
       {editing && (
@@ -452,9 +466,6 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
           gridAutoFlow: 'dense',
           columnGap: MASONRY_GAP_PX,
           rowGap: 0,
-          // Scroll suppression while a touch-reorder gesture is armed only —
-          // before arming, a finger drag is an ordinary scroll.
-          touchAction: armed ? 'none' : undefined,
         }}
       >
         {layout.cards.map(entry => {
@@ -474,6 +485,7 @@ export const CardGrid: React.FC<{ page: CardPage; ctx: CardContext }> = ({ page,
               effectiveWidth={effectiveWidth}
               widths={widths}
               armed={armed && gestureId === entry.id}
+              touchDevice={touchDevice}
               onDragStart={handleDragStart(entry.id)}
               onDragOver={handleDragOver}
               onDrop={handleDrop(entry.id)}

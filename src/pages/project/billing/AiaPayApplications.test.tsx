@@ -114,25 +114,25 @@ describe('AiaPayApplications — draft completion bar (Wave 3 Task 11)', () => {
     // contract puts each at 25%.
     mount(1_000_000);
     await screen.findByText('#1');
-    expect(screen.getAllByText('25% billed of contract')).toHaveLength(2);
+    expect(screen.getAllByText('this draft = 25% of contract')).toHaveLength(2);
   });
 
   it('omits the bar entirely when contractTotalCents is not yet known', async () => {
     mount(); // no contractTotalCents — e.g. summary still loading, or non-admin
     await screen.findByText('#1');
-    expect(screen.queryByText(/% billed of contract/)).toBeNull();
+    expect(screen.queryByText(/this draft = .*% of contract/)).toBeNull();
   });
 
   it('omits the bar for a finalized application even when contractTotalCents is known', async () => {
     h.getPayApps.mockResolvedValue([app({ status: 'finalized' })]);
     mount(1_000_000);
     await screen.findByText('#1');
-    expect(screen.queryByText(/% billed of contract/)).toBeNull();
+    expect(screen.queryByText(/this draft = .*% of contract/)).toBeNull();
   });
 
   it('does not divide by zero for a zero contract total', async () => {
     mount(0);
     await screen.findByText('#1');
-    expect(screen.getAllByText('0% billed of contract')).toHaveLength(2);
+    expect(screen.getAllByText('this draft = 0% of contract')).toHaveLength(2);
   });
 });

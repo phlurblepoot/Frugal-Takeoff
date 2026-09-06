@@ -86,6 +86,38 @@ describe('CommandPalette grouping', () => {
     expect(screen.queryByText('This project')).not.toBeInTheDocument();
     expect(screen.getByText('Actions')).toBeInTheDocument();
   });
+
+  // M5: arrow-nav can move selection past the visible window of the
+  // internally-scrolling results pane; the newly-selected row needs to
+  // bring itself into view.
+  it('scrolls the newly-selected row into view on arrow-nav', () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      renderPalette('/dashboard');
+      openPalette();
+      scrollIntoView.mockClear(); // drop the initial-selection call
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+});
+
+describe('CommandPalette layering', () => {
+  // I2: other Escape-capturing layers (Lightbox) check for this attribute
+  // to know the palette is on top and let Escape bubble through instead of
+  // closing themselves. See src/components/Lightbox.tsx.
+  it('marks its dialog root with data-palette-open while open, and clears it once closed', async () => {
+    renderPalette('/dashboard');
+    expect(document.querySelector('[data-palette-open]')).not.toBeInTheDocument();
+    openPalette();
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toHaveAttribute('data-palette-open', 'true');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(document.querySelector('[data-palette-open]')).not.toBeInTheDocument());
+  });
 });
 
 describe('CommandPalette recents', () => {

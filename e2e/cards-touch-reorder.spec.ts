@@ -73,6 +73,28 @@ test('long-press arms move mode (visible lift), drags a card, and drop-before-ta
   await expect(page.locator('[data-card-id]')).toHaveCount(4);
 });
 
+test('touch-action:none is already in force on a card the instant edit mode is entered, before any long-press arms', async ({ authedPage: page }) => {
+  // Fix wave I1: touch-action is honored by the browser from touchSTART, so
+  // setting it only once a gesture "arms" (500ms into a press) is too late —
+  // the native scroll arbiter has already claimed the touch by then. This
+  // can't fully prove the real-device behavior (Playwright's synthetic
+  // dispatchEvent('pointerdown', ...) above doesn't route through the
+  // compositor's touch-action gate the way a physical touch does — that's
+  // why the reorder tests above work even against the old, latent bug), but
+  // it does prove our half of the contract: the style is present on the
+  // wrapper from render, not gated behind `armed`. Real-device confirmation
+  // lands in Nathan's phone smoke.
+  await page.goto('/dashboard');
+  await expect(page.getByTestId('card-grid')).toBeVisible();
+  await page.getByTestId('cards-customize').click();
+
+  const source = page.locator('[data-card-id="dash-activity"]');
+  await expect(source).toHaveCSS('touch-action', 'none');
+
+  await page.getByTestId('cards-customize').click(); // Done
+  await expect(source).not.toHaveCSS('touch-action', 'none');
+});
+
 test('a move past tolerance before the long-press fires is treated as a scroll, not a reorder', async ({ authedPage: page }) => {
   await page.goto('/dashboard');
   await expect(page.getByTestId('card-grid')).toBeVisible();

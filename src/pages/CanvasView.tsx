@@ -1957,7 +1957,7 @@ const CanvasViewInner: React.FC = () => {
           {isSupersededRevision && (
             <div
               data-testid="canvas-superseded-banner"
-              className="absolute top-16 left-3 right-3 z-40 flex items-center gap-3 bg-black/85 backdrop-blur border border-edge-strong text-white rounded-xl px-4 py-3 shadow-xl"
+              className="absolute top-16 left-3 right-3 z-40 flex items-center gap-3 bg-black/85 border border-edge-strong text-white rounded-xl px-4 py-3 shadow-xl"
             >
               <History size={18} className="shrink-0 text-amber-300" />
               <span className="text-sm leading-snug flex-1 font-medium">
@@ -1980,7 +1980,7 @@ const CanvasViewInner: React.FC = () => {
           {isPhone && !isSupersededRevision && !readOnlyBannerDismissed && (
             <div
               data-testid="canvas-readonly-banner"
-              className="absolute top-16 left-3 right-3 z-40 flex items-start gap-2 bg-amber-50/95 backdrop-blur border border-amber-200 text-amber-900 rounded-xl px-3 py-2.5 shadow-lg"
+              className="absolute top-16 left-3 right-3 z-40 flex items-start gap-2 bg-amber-50/95 border border-amber-200 text-amber-900 rounded-xl px-3 py-2.5 shadow-lg"
             >
               <Layers size={16} className="mt-0.5 shrink-0 text-amber-600" />
               <span className="text-xs leading-snug flex-1">
@@ -2300,7 +2300,7 @@ const CanvasViewInner: React.FC = () => {
 
           {/* Tool Instructions Overlay */}
           {currentTool !== 'pan' && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-white px-4 py-2 rounded-full text-xs md:text-sm shadow-lg pointer-events-none z-10 text-center max-w-[90vw]">
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 text-white px-4 py-2 rounded-full text-xs md:text-sm shadow-lg pointer-events-none z-10 text-center max-w-[90vw]">
               {currentTool === 'scale' && (calibratingRegionId ? `Calibrating scale for ${page.scaleRegions?.find(r => r.id === calibratingRegionId)?.name}` : "Click two points to define a known distance")}
               {currentTool === 'length' && `Click points to draw a line. ${finishHint}`}
               {currentTool === 'area' && `Click points to draw a polygon. ${finishHint}`}

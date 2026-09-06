@@ -79,6 +79,7 @@ export const CommandPalette: React.FC = () => {
   const [selected, setSelected] = useState(0);
   const [recentsTick, setRecentsTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const reqId = useRef(0);
   const clockInFlight = useRef(false);
 
@@ -227,6 +228,16 @@ export const CommandPalette: React.FC = () => {
 
   useEffect(() => { setSelected(0); }, [items.length]);
 
+  // M5: arrow-key navigation past the visible window (the results pane
+  // scrolls internally, `max-h-[50vh] overflow-y-auto`) needs to bring the
+  // newly-selected row into view itself — 'nearest' so it only scrolls when
+  // the row is actually clipped, not on every keypress.
+  useEffect(() => {
+    // Optional-called: jsdom (unit tests) doesn't implement scrollIntoView
+    // at all on some setups, unlike a real browser.
+    selectedRowRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected]);
+
   const runItem = useCallback((item: Item) => {
     close();
     if (item.type === 'action') {
@@ -315,6 +326,12 @@ export const CommandPalette: React.FC = () => {
             className="fixed inset-0 z-[400] flex items-start justify-center p-4 pt-[12vh] bg-black/30 backdrop-blur-sm"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={close} role="dialog" aria-modal="true" aria-label="Command palette"
+            // Fix wave I2: signals to other Escape-capturing layers (e.g.
+            // Lightbox, z-300, listens on the CAPTURE phase) that the
+            // palette is the topmost thing open, so they should let Escape
+            // bubble through to this component's own window listener
+            // instead of swallowing it for themselves.
+            data-palette-open="true"
           >
             <motion.div
               className="w-full max-w-xl glass-panel border border-edge rounded-2xl shadow-2xl overflow-hidden"
@@ -350,6 +367,7 @@ export const CommandPalette: React.FC = () => {
                         </div>
                       )}
                       <button
+                        ref={i === selected ? selectedRowRef : undefined}
                         onMouseEnter={() => setSelected(i)}
                         onClick={() => runItem(item)}
                         style={reducedMotion ? undefined : ({ '--i': Math.min(i, 10) } as React.CSSProperties)}

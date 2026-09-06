@@ -79,6 +79,16 @@ export const Lightbox: React.FC<LightboxProps> = ({ items, index, onClose }) => 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Fix wave I2: CommandPalette (z-400) can open ON TOP of an
+        // already-open Lightbox (z-300) via ⌘K or '/'. If this capture-phase
+        // handler unconditionally stopped propagation here, the topmost
+        // layer visually would be the palette, but Escape would close the
+        // Lightbox underneath instead (inverted from what the user sees).
+        // So: while the palette is open, let Escape pass through uncaptured
+        // — CommandPalette's own bubble-phase window listener closes the
+        // palette first. Only once the palette is gone does the Lightbox
+        // reclaim Escape for itself.
+        if (document.querySelector('[data-palette-open]')) return;
         e.stopPropagation();
         onClose();
         return;

@@ -367,16 +367,24 @@ describe('CardGrid touch reorder', () => {
     const c = grid.querySelector('[data-card-id="card-c"]') as HTMLElement;
     document.elementFromPoint = vi.fn(() => c);
 
+    // Fix wave I1: touch-action:none is on the card WRAPPER itself, present
+    // from the moment edit mode is entered — not gated behind `armed` — so
+    // it's already in force at touchstart, before the native scroll arbiter
+    // can claim the gesture. Setting it only once armed (the old grid-level
+    // behavior) was too late on a real device.
+    expect(a.style.touchAction).toBe('none');
+
     vi.useFakeTimers();
     fireEvent.pointerDown(a, { clientX: 10, clientY: 10, pointerType: 'touch' });
-    // Not armed yet at t=0 — no lift class, and the grid isn't scroll-locked.
+    // Not armed yet at t=0 — no lift class, but touch-action was already
+    // locked in before this pointerdown ever fired.
     expect(a.className).not.toContain('scale-105');
-    expect(grid.style.touchAction).not.toBe('none');
+    expect(a.style.touchAction).toBe('none');
 
     act(() => { vi.advanceTimersByTime(500); });
     expect(a.className).toContain('scale-105');
     expect(a.className).toContain('shadow-2xl');
-    expect(grid.style.touchAction).toBe('none');
+    expect(a.style.touchAction).toBe('none');
     vi.useRealTimers();
 
     fireEvent.pointerMove(window, { clientX: 12, clientY: 12 });
@@ -384,7 +392,11 @@ describe('CardGrid touch reorder', () => {
 
     expect(wrapperIds()).toEqual(['card-b', 'card-a', 'card-c']);
     expect(a.className).not.toContain('scale-105');
-    expect(grid.style.touchAction).not.toBe('none');
+    // Still editing (only "Done" ends it) — touch-action stays locked.
+    expect(a.style.touchAction).toBe('none');
+
+    fireEvent.click(screen.getByTestId('cards-customize')); // Done
+    expect(a.style.touchAction).not.toBe('none');
     await waitFor(() => {
       expect(saveUserPreferences).toHaveBeenCalledWith({
         'cards-dashboard': JSON.stringify({
@@ -419,9 +431,12 @@ describe('CardGrid touch reorder', () => {
     fireEvent.pointerMove(window, { clientX: 12, clientY: 12 });
     fireEvent.pointerCancel(window);
 
-    // Cleanup happened (disarmed, lift class gone, scroll lock released)...
+    // Cleanup happened (disarmed, lift class gone) — touch-action stays
+    // locked the whole time editing is on (see fix wave I1: it no longer
+    // tracks `armed`, only `editing && touchDevice`), so it's still 'none'
+    // here rather than being released by the cancel.
     expect(a.className).not.toContain('scale-105');
-    expect(grid.style.touchAction).not.toBe('none');
+    expect(a.style.touchAction).toBe('none');
     // ...but nothing was committed: order unchanged, nothing persisted.
     expect(wrapperIds()).toEqual(['card-a', 'card-b', 'card-c']);
     await new Promise(resolve => setTimeout(resolve, 0));

@@ -6,8 +6,11 @@
 // would close both layers at once (see the capture-phase test below).
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { Lightbox } from './Lightbox';
+import { CommandPalette } from './CommandPalette';
+import { ToastProvider } from './Toast';
 
 let reducedMotion = false;
 vi.mock('../context/ThemeContext', async (importOriginal) => {
@@ -113,6 +116,37 @@ describe('Lightbox', () => {
     expect(parentEscapeListener).not.toHaveBeenCalled();
 
     window.removeEventListener('keydown', parentEscapeListener);
+  });
+
+  // Fix wave I2: CommandPalette (z-400) can open ON TOP of an already-open
+  // Lightbox (z-300) via ⌘K or '/'. Before the fix, the Lightbox's
+  // capture-phase Escape listener would stopPropagation() and close
+  // ITSELF, leaving the (visually topmost) palette open — inverted from
+  // what the user sees. Real integration test (both components rendered
+  // together) rather than a stand-in, so it actually exercises the
+  // data-palette-open contract between the two files.
+  it('Escape closes the palette first when both are open, and only closes the lightbox on a second press', async () => {
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <ToastProvider>
+          <CommandPalette />
+          <Lightbox items={items} index={0} onClose={onClose} />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true }); // open the palette
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('uses the spring entrance by default (not reducedMotion)', () => {

@@ -26,14 +26,16 @@ const STATUS_META: Record<string, { label: string; tone: PillTone }> = {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-// Draft rows show a mini "breathing" bar: this application's total-to-date
-// as a share of the WHOLE contract (mirrors the "{pct}% billed of contract"
-// wording already used by the dashboard Money pulse card). That's a
-// proxy for "how much of this draft is filled in" — not a from-scratch
-// completion metric — because the pay-apps LIST endpoint doesn't carry
-// per-line percentComplete/scheduledValueCents (only the detail endpoint,
-// opened per-app in the editor, does). It's the cheapest honest ratio
-// available here, and the label says exactly what it shows.
+// Draft rows show a mini "breathing" bar: this application's totalCents —
+// G702 Line 8, the NET CURRENT PAYMENT DUE for just this one application,
+// not a cumulative to-date figure — as a share of the WHOLE contract.
+// That's a proxy for "how much of this draft is filled in" — not a
+// from-scratch completion metric — because the pay-apps LIST endpoint
+// doesn't carry per-line percentComplete/scheduledValueCents (only the
+// detail endpoint, opened per-app in the editor, does). It's the cheapest
+// honest ratio available here, and the label ("this draft = N% of
+// contract") says exactly what it shows rather than implying a running
+// total.
 const contractSharePct = (app: AiaPayAppListItem, contractTotalCents: number) =>
   contractTotalCents > 0 ? Math.round((app.totalCents / contractTotalCents) * 100) : 0;
 
@@ -131,7 +133,7 @@ export const AiaPayApplications: React.FC<{ projectId: string; contractTotalCent
                             done={app.totalCents}
                             total={contractTotalCents}
                             barClassName="breathing"
-                            label={`${contractSharePct(app, contractTotalCents)}% billed of contract`}
+                            label={`this draft = ${contractSharePct(app, contractTotalCents)}% of contract`}
                           />
                         </div>
                       )}
