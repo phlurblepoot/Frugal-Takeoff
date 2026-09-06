@@ -175,7 +175,7 @@ const MyHoursCard: React.FC<{ width: CardWidth; ctx: CardContext }> = () => {
       {!loading && (
         <div className="flex items-baseline gap-2">
           <CountUp value={hours!} format={v => v.toFixed(1)} className="text-2xl font-bold text-ink" />
-          <span className="text-sm text-ink-soft">hours since Monday</span>
+          <span className="text-sm text-ink-soft">hours since Sunday</span>
         </div>
       )}
     </CardShell>

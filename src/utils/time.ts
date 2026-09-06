@@ -12,10 +12,11 @@ export const timeAgo = (ms: number): string => {
   return `${Math.floor(diff / DAY)}d ago`;
 };
 
-// Monday 00:00 local time of the week containing `now`.
+// Sunday 00:00 local time of the week containing `now` — the app's weeks
+// run Sun–Sat, like the Time Keeping calendar.
 export const startOfWeek = (now: Date = new Date()): number => {
   const d = new Date(now);
-  const dow = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
+  const dow = d.getDay(); // Sun=0 … Sat=6
   d.setHours(0, 0, 0, 0);
   return d.getTime() - dow * DAY;
 };
@@ -29,7 +30,7 @@ export const hoursThisWeek = (entries: TimeEntryLike[], now: number = Date.now()
   const start = startOfWeek(new Date(now));
   let ms = 0;
   for (const e of entries) {
-    // An entry is charged to the week it STARTED in (a Sun→Mon overnight
+    // An entry is charged to the week it STARTED in (a Sat→Sun overnight
     // shift counts toward last week) — intended for contractor billing.
     if (e.clockIn >= start) ms += (e.clockOut ?? now) - e.clockIn;
   }

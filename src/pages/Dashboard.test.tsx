@@ -42,24 +42,24 @@ function mount() {
 }
 
 describe('startOfWeek', () => {
-  it('returns the preceding Monday at 00:00', () => {
-    // Wed 2026-06-10 15:30 local → Mon 2026-06-08 00:00 local
+  it('returns the preceding Sunday at 00:00', () => {
+    // Wed 2026-06-10 15:30 local → Sun 2026-06-07 00:00 local
     const wed = new Date(2026, 5, 10, 15, 30);
     const start = new Date(startOfWeek(wed));
-    expect(start.getDay()).toBe(1); // Monday
+    expect(start.getDay()).toBe(0); // Sunday
     expect([start.getHours(), start.getMinutes()]).toEqual([0, 0]);
-    expect(start.getDate()).toBe(8);
+    expect(start.getDate()).toBe(7);
   });
 });
 
 describe('hoursThisWeek', () => {
   it('sums only entries clocked in this week, counting open entries to now', () => {
     const now = new Date(2026, 5, 10, 12, 0).getTime(); // Wed noon
-    const monday = startOfWeek(new Date(now));
+    const weekStart = startOfWeek(new Date(now));
     const entries = [
-      { id: '1', projectId: null, clockIn: monday + 3_600_000, clockOut: monday + 3 * 3_600_000, description: '' }, // 2h
+      { id: '1', projectId: null, clockIn: weekStart + 3_600_000, clockOut: weekStart + 3 * 3_600_000, description: '' }, // 2h
       { id: '2', projectId: null, clockIn: now - 1_800_000, clockOut: null, description: '' },                      // 0.5h open
-      { id: '3', projectId: null, clockIn: monday - 24 * 3_600_000, clockOut: monday - 20 * 3_600_000, description: '' }, // last week
+      { id: '3', projectId: null, clockIn: weekStart - 24 * 3_600_000, clockOut: weekStart - 20 * 3_600_000, description: '' }, // last week
     ];
     expect(hoursThisWeek(entries, now)).toBeCloseTo(2.5, 5);
   });

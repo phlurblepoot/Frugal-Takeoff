@@ -28,6 +28,7 @@ const CHANGELOG: ChangelogEntry[] = [
     changes: [
       'Takeoff Pro 3.0 — this release caps the full UI rehaul (v2.12–v2.14): ambient accent-derived theming, frosted-glass surfaces, springy motion, and customizable card-based dashboard, project, and customer pages are now the standard experience throughout the app.',
       'Daily Reports is now a calendar: days with a report are highlighted in your accent color, tapping a highlighted day opens that report, and tapping an empty day starts one for that date — a toggle switches back to the classic list view (your choice is remembered).',
+      'Weekly hour totals (Dashboard, project Time, Time Keeping) now follow a Sunday-to-Saturday week, matching the time sheet calendar.',
       'Fixed: adding photos from a phone now opens the photo picker (with the camera available as a source) instead of jumping straight into the camera — everywhere photos can be added (Issues, Punch, Daily Reports, RFIs, Change Orders, Tasks).',
     ],
   },

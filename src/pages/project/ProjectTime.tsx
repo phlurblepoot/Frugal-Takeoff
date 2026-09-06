@@ -79,7 +79,7 @@ export const ProjectTime: React.FC = () => {
               <div className="flex items-baseline gap-2">
                 <Clock size={18} className="self-center text-ink-faint" />
                 <span className="text-2xl font-bold text-ink">{weekH.toFixed(1)}</span>
-                <span className="text-sm text-ink-soft">hours since Monday</span>
+                <span className="text-sm text-ink-soft">hours since Sunday</span>
               </div>
             )}
           </CardBody>

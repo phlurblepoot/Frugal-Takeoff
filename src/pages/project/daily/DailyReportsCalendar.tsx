@@ -3,9 +3,8 @@
 // Keeping page's calendar (bg-raised card, accent-filled day cells, explicit
 // text colors) so it reads correctly in both light and dark mode: days with
 // a report fill with the accent color and open that report; empty days start
-// a new report dated to that cell. Weeks start Monday (app-wide rule — Time
-// Keeping's own grid is a legacy Sunday-start; only its look is reused).
-// All date math stays in local time — `toISOString` would drift a day near
+// a new report dated to that cell. Weeks start Sunday, matching the Time
+// Keeping page. All date math stays in local time — `toISOString` would drift a day near
 // midnight in negative-offset timezones.
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, Image as ImageIcon } from 'lucide-react';
