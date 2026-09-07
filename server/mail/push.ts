@@ -104,6 +104,13 @@ const parseState = (json: string | null): Record<string, unknown> => {
   }
 };
 
+/** The stored syncState as a plain object — `{}` when it is absent or corrupt.
+ *  Callers that keep their own bookkeeping in the same JSON (the resumable
+ *  backfill's cursor, the scheduler's gate) read it through here. */
+export function parseSyncState(json: string | null): Record<string, unknown> {
+  return parseState(json);
+}
+
 /** The push-owned keys of a stored syncState, and nothing else. */
 export function pickPushState(json: string | null): Record<string, unknown> {
   const s = parseState(json);
@@ -128,6 +135,13 @@ export function mergePushState(db: Database.Database, accountId: string, patch: 
   if (!row) return;
   accounts.updateAccount(db, accountId, { syncState: JSON.stringify({ ...parseState(row.syncState), ...patch }) });
 }
+
+/** `mergePushState` under the name that says what it actually does: merge a
+ *  patch into the stored syncState, leaving every other key alone. Anything
+ *  parked in the JSON that is NOT in PUSH_STATE_KEYS survives only until the
+ *  next `writeSyncState`, which is exactly the lifetime the backfill cursor
+ *  wants — it is meant to disappear the moment the import completes. */
+export const mergeSyncKeys = mergePushState;
 
 // ── subscription lifecycle ──────────────────────────────────────────────────
 

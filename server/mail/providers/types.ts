@@ -44,7 +44,13 @@ export interface OutgoingMessage {
 export interface MailProvider {
   kind: MailProviderKind;
   listFolders(): Promise<ProviderFolder[]>;
-  backfill(opts: { since: Date; cursor?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean }>;
+  /** Reads the mailbox a page at a time. `cursor` resumes a paused import; a
+   *  provider that keeps a per-import watermark (Gmail's history id, read
+   *  BEFORE the first page so mid-import arrivals cannot fall in a gap) returns
+   *  it as `watermark` and accepts it back on `opts.watermark`, so an import
+   *  resumed in a fresh process still adopts the watermark it began with.
+   *  Providers without one ignore both fields. */
+  backfill(opts: { since: Date; cursor?: string; watermark?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean; watermark?: string }>;
   /** `reset: true` means the provider's change log no longer reaches back to
    *  the caller's cursor (Gmail expires history after about a week), so the
    *  returned state is worthless and the caller must re-run a full backfill. */

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import { openDb } from '../../db'; import { runMigrations } from '../../migrations'; import { migrations } from '../../migrationList';
 import { MailCrypto } from '../crypto'; import * as accounts from '../accountStore';
-import { FakeMailProvider } from '../providers/fake'; import { AuthExpiredError } from '../providers/types';
+import { FakeMailProvider } from '../providers/fake'; import { AuthExpiredError, RateLimitedError } from '../providers/types';
 import type { MailProvider } from '../providers/types';
 import { MailScheduler } from './scheduler';
 import type { MailContext } from '../context';
@@ -342,5 +342,65 @@ describe('MailScheduler push', () => {
     s.start(); await vi.runOnlyPendingTimersAsync();
     expect(graph.createSubscription).not.toHaveBeenCalled();
     await s.stop(); vi.useRealTimers();
+  });
+  // ── rate limiting ─────────────────────────────────────────────────────────
+  it('routes the tick back to the backfill while a parked import is still in the syncState', async () => {
+    vi.useFakeTimers();
+    let backfills = 0;
+    const origBackfill = provider.backfill.bind(provider);
+    provider.backfill = async (o: any) => { backfills++; return origBackfill(o); };
+    // A non-null syncState that nevertheless holds an unfinished import: before
+    // the resume work this fell through to the incremental poll, which happily
+    // reported "nothing new" over a mailbox that was never fully read.
+    accounts.updateAccount(ctx.db, acct.id, { syncState: JSON.stringify({ cursor: 3, backfillCursor: 'PT2', backfillSince: acct.indexedSince }) });
+
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 5000 });
+    s.start(); await vi.runOnlyPendingTimersAsync();
+
+    expect(backfills).toBe(1);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    // …and the completed import clears the parked keys, so the next tick polls.
+    expect(JSON.parse(accounts.getAccountAny(ctx.db, acct.id)!.syncState!).backfillCursor).toBeUndefined();
+    await s.stop(); vi.useRealTimers();
+  });
+  it('waits exactly as long as a throttling provider asked, and does not count the throttle as a failure', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const throttled = new RateLimitedError('Gmail 403 — rate limited');
+    throttled.retryAfterMs = 120_000;
+    provider.failNextWith(throttled);
+
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 1000, backoffMaxMs: 5000 });
+    s.start();
+    await vi.advanceTimersByTimeAsync(0);   // the first attempt fails without needing a macrotask
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 0 });
+    const delays = () => setTimeoutSpy.mock.calls.map(c => c[1]).filter((d): d is number => typeof d === 'number');
+    expect(Math.max(...delays())).toBe(120_000);
+
+    // The normal backoff would have come back inside a couple of seconds.
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 0 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(ctx.db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+    // Exactly slowMs, with no jittered multiplier over it: the throttle never
+    // entered the failure count, so the account is not left in retreat.
+    expect(delays().at(-1)).toBe(1000);
+    await s.stop(); warn.mockRestore(); setTimeoutSpy.mockRestore(); vi.useRealTimers();
+  });
+  it('caps the stand-down, so a provider asking for an hour does not strand the account', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const throttled = new RateLimitedError('Gmail 429 — rate limited');
+    throttled.retryAfterMs = 3600_000;
+    provider.failNextWith(throttled);
+
+    const s = new MailScheduler(ctx, { fastMs: 1000, slowMs: 1000, backoffMaxMs: 5000 });
+    s.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const delays = setTimeoutSpy.mock.calls.map(c => c[1]).filter((d): d is number => typeof d === 'number');
+    expect(Math.max(...delays)).toBe(15 * 60_000);
+    await s.stop(); warn.mockRestore(); setTimeoutSpy.mockRestore(); vi.useRealTimers();
   });
 });
