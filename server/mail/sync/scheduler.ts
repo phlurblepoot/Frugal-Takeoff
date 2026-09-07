@@ -4,14 +4,21 @@
 import type { MailContext } from '../context';
 import * as accounts from '../accountStore';
 import type { MailProvider } from '../providers/types';
-import { AuthExpiredError } from '../providers/types';
-import { runBackfill, runIncremental } from './engine';
+import { AuthExpiredError, RateLimitedError } from '../providers/types';
+import { hasParkedBackfill, runBackfill, runIncremental } from './engine';
 import { ensureGmailWatch, ensureGraphSubscription, hasGmailWatchApi, hasGraphPushApi } from '../push';
 
 interface Worker {
   accountId: string; provider: MailProvider; timer: NodeJS.Timeout | null; failures: number;
   running: Promise<void> | null; stopped: boolean; pokeRequested: boolean;
+  /** Set when the provider asked us to slow down: no tick before this moment. */
+  rateLimitedUntil?: number;
 }
+
+/** However long a provider asks us to stand down for, we come back inside this.
+ *  A Retry-After measured in hours would otherwise strand the account with no
+ *  sync and no way back short of a restart. */
+const RATE_LIMIT_MAX_STANDDOWN_MS = 15 * 60_000;
 
 export class MailScheduler {
   private workers = new Map<string, Worker>();
@@ -152,7 +159,11 @@ export class MailScheduler {
     // Clamp AFTER jitter, not before — otherwise a maxed-out failure count can still push the
     // delay up to backoffMaxMs * 1.2.
     const delay = w.failures ? Math.min(this.backoffMaxMs, base * 2 ** w.failures * (0.8 + Math.random() * 0.4)) : base;
-    w.timer = setTimeout(() => void this.tick(w), delay);
+    // A provider that told us how long to wait outranks our own cadence: going
+    // back early only spends the account's remaining quota on another refusal.
+    const standDown = (w.rateLimitedUntil ?? 0) - this.now();
+    w.rateLimitedUntil = undefined;
+    w.timer = setTimeout(() => void this.tick(w), Math.max(delay, standDown));
   }
   private async tick(w: Worker): Promise<void> {
     if (w.stopped || w.running) return;
@@ -162,8 +173,10 @@ export class MailScheduler {
         if (!account) { this.stopAccount(w.accountId); return; }
         // Gate on the DB's own syncState every tick (not just the worker's first tick) so a
         // transient backfill failure gets retried on the next tick instead of silently falling
-        // through to runIncremental against a null syncState forever.
-        if (!account.syncState) await runBackfill(this.ctx, account, w.provider); else await runIncremental(this.ctx, account, w.provider);
+        // through to runIncremental against a null syncState forever. A state that still holds
+        // a parked import counts as "backfill": the run picks up from that cursor.
+        if (!account.syncState || hasParkedBackfill(account.syncState)) await runBackfill(this.ctx, account, w.provider);
+        else await runIncremental(this.ctx, account, w.provider);
         w.failures = 0;
         // Graph push is a subscription that expires, not a socket, so the tick
         // doubles as its renewal timer. Cheap (no network) until renewal is due,
@@ -182,6 +195,16 @@ export class MailScheduler {
         }
       } catch (e) {
         if (e instanceof AuthExpiredError) { this.stopAccount(w.accountId); this.providers.delete(w.accountId); return; }
+        if (e instanceof RateLimitedError) {
+          // Being throttled is the provider pacing us, not the account failing:
+          // it must not feed the failure backoff (which would keep growing for
+          // as long as a big import keeps hitting the limit, and would leave
+          // the account in escalating retreat once it finally succeeded).
+          const wait = Math.min(e.retryAfterMs, RATE_LIMIT_MAX_STANDDOWN_MS);
+          w.rateLimitedUntil = this.now() + wait;
+          console.warn(`[mail] ${w.accountId} is rate limited by the provider — standing down for ${Math.round(wait / 1000)}s`);
+          return;
+        }
         w.failures = Math.min(w.failures + 1, 6);
         console.error(`[mail] sync failed for ${w.accountId}:`, (e as Error).message);
       }

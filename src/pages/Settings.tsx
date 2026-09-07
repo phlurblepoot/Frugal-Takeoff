@@ -23,6 +23,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.0.1',
+    date: 'September 7, 2026',
+    changes: [
+      'Fixed: connecting a large Gmail mailbox could get stuck showing "Syncing" with a rate-limit error forever — the initial import restarted from the beginning after every throttle. It now resumes where it left off, paces itself under Gmail\'s speed limit, and waits exactly as long as Google asks before retrying.',
+      'While a mailbox import is being throttled, Settings now shows a calm amber "retrying automatically" note instead of a red error.',
+    ],
+  },
+  {
     version: '3.0.0',
     date: 'September 5, 2026',
     changes: [

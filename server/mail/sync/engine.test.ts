@@ -1,5 +1,5 @@
 // server/mail/sync/engine.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import type Database from 'better-sqlite3';
 import { openDb } from '../../db';
@@ -10,7 +10,8 @@ import * as accounts from '../accountStore';
 import { FakeMailProvider } from '../providers/fake';
 import type { MailContext } from '../context';
 import type { Envelope, MailProvider, SyncState } from '../providers/types';
-import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages, sweepSentPlaceholders } from './engine';
+import { RateLimitedError } from '../providers/types';
+import { upsertFolders, upsertEnvelopes, runBackfill, runIncremental, registerInboundHook, clearInboundHooks, removeMessages, sweepSentPlaceholders, hasParkedBackfill, RATE_LIMIT_NOTICE } from './engine';
 
 let db: Database.Database; let ctx: MailContext; let acct: accounts.MailAccountRow; let provider: FakeMailProvider; let events: any[];
 const crypto = new MailCrypto(Buffer.alloc(32, 9));
@@ -27,6 +28,36 @@ beforeEach(() => {
   ctx = { db, dataDir: dir, crypto, providerFactory: () => provider, broadcastChange: e => events.push(e) };
   clearInboundHooks();
 });
+
+
+type PageFn = (o: { since: Date; cursor?: string; watermark?: string }) => Promise<{ messages: Envelope[]; cursor?: string; done: boolean; watermark?: string }>;
+type Recorded = { cursor?: string; watermark?: string; since: string };
+
+/** A provider that pages under the test's control and records every backfill
+ *  call, so the resume path can be asserted on what it ASKED the provider for,
+ *  not just on what ended up in the database. Everything else delegates to the
+ *  fake. */
+function pagingProvider(page: PageFn, baseline: SyncState = { historyId: 'H-baseline' }): MailProvider & { calls: Recorded[] } {
+  const inner = new FakeMailProvider();
+  const calls: Recorded[] = [];
+  return {
+    kind: 'fake',
+    calls,
+    listFolders: () => inner.listFolders(),
+    backfill: async o => { calls.push({ cursor: o.cursor, watermark: o.watermark, since: o.since.toISOString() }); return page(o); },
+    incremental: async () => ({ upserts: [], deletes: [], state: baseline }),
+    getBody: id => inner.getBody(id),
+    getAttachment: (id, attId) => inner.getAttachment(id, attId),
+    send: m => inner.send(m),
+    setFlags: (ids, f) => inner.setFlags(ids, f),
+    move: (ids, f) => inner.move(ids, f),
+    archive: ids => inner.archive(ids),
+    trash: ids => inner.trash(ids),
+    saveDraft: (d, existing) => inner.saveDraft(d, existing),
+    deleteDraft: id => inner.deleteDraft(id),
+    search: (q, o) => inner.search(q, o),
+  };
+}
 
 describe('engine', () => {
   it('upsertFolders maps provider ids to local ids and is idempotent', () => {
@@ -261,5 +292,77 @@ describe('engine', () => {
     removeMessages(ctx, acct, ['n1']);
     expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 0 });
     expect(db.prepare('SELECT COUNT(*) c FROM mail_threads').get()).toEqual({ c: 0 });
+  });
+  // ── resumable backfill ────────────────────────────────────────────────────
+  // The bug these cover: the whole syncState was written only after the LAST
+  // page, so a rate limit part-way through a big first import threw the run
+  // away. The next tick started again at page one, re-read enough of the
+  // mailbox to be throttled in the same place, and the account sat on "Syncing"
+  // with a rate-limit error for ever.
+  it('parks its place when a backfill is rate limited, and resumes there instead of starting over', async () => {
+    let throttleNext = true;
+    const p = pagingProvider(async o => {
+      if (!o.cursor) return { messages: [env('p1')], cursor: 'PT2', done: false, watermark: 'H1' };
+      if (throttleNext) { throttleNext = false; throw new RateLimitedError('Gmail 403 — rate limited'); }
+      return { messages: [env('p2')], done: true, watermark: o.watermark };
+    });
+
+    await expect(runBackfill(ctx, acct, p)).rejects.toBeInstanceOf(RateLimitedError);
+
+    const parked = accounts.getAccountAny(db, acct.id)!;
+    expect(JSON.parse(parked.syncState!)).toMatchObject({ backfillCursor: 'PT2', backfillWatermark: 'H1', backfillSince: acct.indexedSince });
+    expect(hasParkedBackfill(parked.syncState)).toBe(true);
+    expect(parked.status).toBe('syncing');
+    expect(parked.lastError).toBe(RATE_LIMIT_NOTICE);
+    expect(db.prepare('SELECT COUNT(*) c FROM mail_messages').get()).toEqual({ c: 1 });
+
+    await runBackfill(ctx, accounts.getAccountAny(db, acct.id)!, p);
+
+    // Page one is never read a second time, and the resumed run carries the
+    // watermark captured before the import began — this instance would
+    // otherwise have no way back to it.
+    expect(p.calls.map(c => c.cursor)).toEqual([undefined, 'PT2', 'PT2']);
+    expect(p.calls[2].watermark).toBe('H1');
+    expect(db.prepare('SELECT providerMessageId FROM mail_messages ORDER BY providerMessageId').all())
+      .toEqual([{ providerMessageId: 'p1' }, { providerMessageId: 'p2' }]);
+    // A finished import leaves the incremental baseline and nothing else: the
+    // parked keys must not survive, or every later tick would re-run a backfill.
+    const done = accounts.getAccountAny(db, acct.id)!;
+    expect(JSON.parse(done.syncState!)).toEqual({ historyId: 'H-baseline' });
+    expect(hasParkedBackfill(done.syncState)).toBe(false);
+    expect(done.status).toBe('ok');
+    expect(done.lastError).toBeNull();
+  });
+  it('restarts the import once, from the beginning, when the parked cursor is no longer honoured', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    accounts.updateAccount(db, acct.id, { syncState: JSON.stringify({ backfillCursor: 'STALE', backfillWatermark: 'H1', backfillSince: acct.indexedSince }) });
+    const p = pagingProvider(async o => {
+      if (o.cursor === 'STALE') throw Object.assign(new Error('Gmail 400: invalid pageToken'), { status: 400 });
+      return { messages: [env('p1')], done: true, watermark: 'H2' };
+    });
+
+    await runBackfill(ctx, accounts.getAccountAny(db, acct.id)!, p);
+
+    expect(p.calls.map(c => c.cursor)).toEqual(['STALE', undefined]);
+    expect(warn).toHaveBeenCalled();
+    expect(JSON.parse(accounts.getAccountAny(db, acct.id)!.syncState!)).toEqual({ historyId: 'H-baseline' });
+    warn.mockRestore();
+  });
+  it('ignores a parked cursor from a narrower window: load-older re-reads from its own since', async () => {
+    accounts.updateAccount(db, acct.id, { syncState: JSON.stringify({ backfillCursor: 'PT2', backfillSince: acct.indexedSince }) });
+    const p = pagingProvider(async () => ({ messages: [env('p1')], done: true }));
+
+    await runBackfill(ctx, accounts.getAccountAny(db, acct.id)!, p, new Date('2026-01-01T00:00:00.000Z'));
+
+    expect(p.calls).toEqual([{ cursor: undefined, watermark: undefined, since: '2026-01-01T00:00:00.000Z' }]);
+  });
+  it('says a throttle is a throttle, and leaves every other failure its own message', async () => {
+    provider.failNextWith(new RateLimitedError('Gmail 403 — rate limited'));
+    await expect(runBackfill(ctx, acct, provider)).rejects.toBeInstanceOf(RateLimitedError);
+    expect(accounts.getAccountAny(db, acct.id)!.lastError).toBe(RATE_LIMIT_NOTICE);
+
+    provider.failNextWith(new Error('listFolders down'));
+    await expect(runBackfill(ctx, acct, provider)).rejects.toThrow('listFolders down');
+    expect(accounts.getAccountAny(db, acct.id)!.lastError).toBe('listFolders down');
   });
 });

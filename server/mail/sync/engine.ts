@@ -5,10 +5,10 @@ import type { MailContext } from '../context';
 import type { MailAccountRow } from '../accountStore';
 import * as accounts from '../accountStore';
 import type { Envelope, MailProvider, ProviderFolder } from '../providers/types';
-import { AuthExpiredError } from '../providers/types';
+import { AuthExpiredError, RateLimitedError } from '../providers/types';
 import { deriveThreadKey, mergeThreadKeys, normalizeMessageId, normalizeSubject, stripSubjectPrefixes } from '../threadKey';
 import { snippetOf } from '../mime';
-import { mergePushState, pickPushState, writeSyncState } from '../push';
+import { clearPushState, mergePushState, mergeSyncKeys, parseSyncState, pickPushState, writeSyncState } from '../push';
 
 export type InboundHook = (ctx: MailContext, ev: { threadKey: string; messageId: string; account: MailAccountRow }) => void;
 const inboundHooks: InboundHook[] = [];
@@ -20,6 +20,22 @@ export function clearInboundHooks(): void { inboundHooks.length = 0; }   // test
 const SENT_MATCH_WINDOW_MS = 5 * 60_000;
 /** A placeholder older than this has had every chance to be reconciled. */
 const PLACEHOLDER_TTL_MS = 60 * 60_000;
+/** Where a paused import parks its place in the mailbox, inside the account's
+ *  syncState JSON. Deliberately NOT push-state keys: `writeSyncState` carries
+ *  only those forward, so the moment the import completes and writes the
+ *  provider's real state these disappear on their own. */
+const BACKFILL_KEYS = ['backfillCursor', 'backfillWatermark', 'backfillSince'] as const;
+/** What the user is told while the provider is throttling the import. The raw
+ *  "Gmail 403 — rate limited" reads like a fault the user has to fix; this is a
+ *  wait state the scheduler is already handling. */
+export const RATE_LIMIT_NOTICE = 'Mailbox import is rate limited by the provider — retrying automatically';
+
+/** True when a stored syncState holds a paused import — the scheduler's gate
+ *  and the engine's resume path must agree on what that looks like. */
+export function hasParkedBackfill(syncStateJson: string | null): boolean {
+  const cursor = parseSyncState(syncStateJson).backfillCursor;
+  return typeof cursor === 'string' && cursor.length > 0;
+}
 
 export function upsertFolders(db: Database.Database, accountId: string, folders: ProviderFolder[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -249,27 +265,77 @@ async function guarded(ctx: MailContext, account: MailAccountRow, fn: () => Prom
   try { await fn(); accounts.updateAccount(ctx.db, account.id, { status: 'ok', lastSyncAt: new Date().toISOString(), lastError: null }); }
   catch (e: any) {
     if (e instanceof AuthExpiredError) accounts.updateAccount(ctx.db, account.id, { status: 'auth_error', lastError: e.message });
+    // A throttle is not something the user did or can fix, and the import is
+    // parked rather than lost, so it gets said in those words.
+    else if (e instanceof RateLimitedError) accounts.updateAccount(ctx.db, account.id, { lastError: RATE_LIMIT_NOTICE });
     else accounts.updateAccount(ctx.db, account.id, { lastError: e?.message || String(e) });
     throw e;
   } finally { ctx.broadcastChange({ type: 'mailAccount', id: account.id, action: 'updated', byUserId: account.userId }); }
 }
 
+/** Imports the mailbox from `since` (default: the account's indexedSince), a
+ *  provider page at a time, and leaves the incremental baseline behind it.
+ *
+ *  Progress is PARKED after every page. Without that, a mailbox big enough to
+ *  outlast the provider's rate limit could never finish: the whole state is
+ *  written only at the end, so a throttle three quarters of the way through
+ *  threw the run away and the next tick started again from page one — which
+ *  re-read enough of the mailbox to be throttled at the same place, for ever,
+ *  with the account stuck showing "Syncing". */
 export async function runBackfill(ctx: MailContext, account: MailAccountRow, provider: MailProvider, since?: Date): Promise<void> {
   await guarded(ctx, account, async () => {
     accounts.updateAccount(ctx.db, account.id, { status: 'syncing' });
     upsertFolders(ctx.db, account.id, await provider.listFolders());
-    let cursor: string | undefined; const from = since ?? new Date(account.indexedSince);
-    do {
-      const page = await provider.backfill({ since: from, cursor });
+    const from = since ?? new Date(account.indexedSince);
+    const parked = parseSyncState(account.syncState);
+    // A parked cursor belongs to the window it was minted for: `load-older`
+    // widens `since`, and a page token for the old query would either be
+    // rejected or, worse, silently skip the newly opened months.
+    const resumable = typeof parked.backfillCursor === 'string' && !!parked.backfillCursor
+      && parked.backfillSince === from.toISOString();
+    let cursor: string | undefined = resumable ? parked.backfillCursor as string : undefined;
+    let watermark: string | undefined = resumable && typeof parked.backfillWatermark === 'string' ? parked.backfillWatermark : undefined;
+    const resumedFrom = cursor;
+    let first = true;
+    let restarted = false;
+
+    for (;;) {
+      let page: Awaited<ReturnType<MailProvider['backfill']>>;
+      try {
+        page = await provider.backfill({ since: from, cursor, ...(watermark ? { watermark } : {}) });
+      } catch (e) {
+        // A parked page token can go stale while the import is standing down
+        // (Gmail answers 400). Once, and only once, throw it away and read the
+        // mailbox from the top rather than parking a token that can never work.
+        const status = (e as { status?: number } | null)?.status;
+        if (first && !restarted && resumedFrom && !(e instanceof RateLimitedError) && status === 400) {
+          console.warn(`[mail] the parked import cursor for ${account.id} was rejected (400) — restarting the import from the beginning`);
+          restarted = true; first = false;
+          cursor = undefined; watermark = undefined;
+          clearPushState(ctx.db, account.id, BACKFILL_KEYS);
+          continue;
+        }
+        throw e;
+      }
+      first = false;
       upsertEnvelopes(ctx, account, page.messages);
-      cursor = page.cursor; if (page.done) break;
-    } while (cursor);
+      if (page.watermark) watermark = page.watermark;
+      cursor = page.cursor;
+      if (page.done || !cursor) break;
+      mergeSyncKeys(ctx.db, account.id, {
+        backfillCursor: cursor,
+        backfillSince: from.toISOString(),
+        ...(watermark ? { backfillWatermark: watermark } : {}),
+      });
+    }
     // Establish the incremental baseline so history starts "now". Deliberately
     // `{}` and not the row's syncState: a backfill has just re-read everything,
     // so any cursor from before it is stale — and after a reset it is the very
     // cursor the provider told us it could no longer honour.
     const r = await provider.incremental({});
     upsertEnvelopes(ctx, account, r.upserts);
+    // writeSyncState keeps only the push keys from the old row, so this is also
+    // what retires the parked cursor: the import is over, it must not resume.
     writeSyncState(ctx.db, account.id, r.state);
   });
 }

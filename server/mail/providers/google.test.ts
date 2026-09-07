@@ -4,7 +4,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { GmailProvider, googleRefresh } from './google';
+import { GmailProvider, googleRefresh, makeSpacer } from './google';
 import { TokenSource } from './tokenSource';
 import { AuthExpiredError, RateLimitedError, ProviderNotFoundError } from './types';
 import type { OutgoingMessage } from './types';
@@ -82,6 +82,32 @@ describe('GmailProvider', () => {
     expect(m.snippet).toContain('COR-4');
     expect(m.attachments.map(a => a.name)).toContain('COR-4.pdf');
     expect(m.attachments.find(a => a.contentId)).toMatchObject({ name: 'signature.png', contentId: 'ii_sig_001', mime: 'image/png' });
+  });
+
+  it('backfill returns the watermark it read, and adopts a stored one when resuming an import it did not start', async () => {
+    const f = fakeFetch([
+      [/\/messages\?/, () => ({ ...fx('gmail-list.json'), nextPageToken: 'PT2' })],
+      [/\/messages\/m1\?/, () => fx('gmail-message-full.json')],
+      [/\/profile$/, () => fx('gmail-profile.json')],
+    ]);
+    const p = provider(f);
+    const first = await p.backfill({ since: new Date('2026-03-01T00:00:00.000Z') });
+    expect(first.watermark).toBe(String(fx('gmail-profile.json').historyId));
+
+    // A fresh instance resuming a parked import: the profile must NOT be read
+    // again — its history id has moved on, and everything that arrived while
+    // the import was parked would fall into the gap between the two.
+    const f2 = fakeFetch([
+      [/\/messages\?/, () => fx('gmail-list.json')],
+      [/\/messages\/m1\?/, () => fx('gmail-message-full.json')],
+      [/\/profile$/, () => { throw new Error('the profile must not be re-read on a resume'); }],
+    ]);
+    const resumed = provider(f2);
+    const page = await resumed.backfill({ since: new Date('2026-03-01T00:00:00.000Z'), cursor: 'PT2', watermark: '90210' });
+    expect(page.watermark).toBe('90210');
+    expect(f2.calls.some(c => /\/profile$/.test(c.url))).toBe(false);
+    // …and that watermark is what the closing incremental adopts as its baseline.
+    expect((await resumed.incremental({})).state).toEqual({ historyId: '90210' });
   });
 
   it('backfill pages through nextPageToken and reports done only on the last page', async () => {
@@ -440,5 +466,31 @@ describe('GmailProvider', () => {
     // A 200 with no token must not be cached as an empty Bearer.
     const empty = fakeFetch([[/token/, () => ({ expires_in: 3599 })]]);
     await expect(googleRefresh({ GOOGLE_OAUTH_CLIENT_ID: 'i', GOOGLE_OAUTH_CLIENT_SECRET: 's' } as NodeJS.ProcessEnv, 'rt', empty)).rejects.toThrow(/no access token/);
+  });
+  it('makeSpacer starts successive calls at least the spacing apart, and never delays after a quiet spell', async () => {
+    // A fake clock, so the assertion is on the spacing the limiter enforces
+    // rather than on how long a real timer happened to take.
+    let clock = 0;
+    const sleep = async (ms: number): Promise<void> => { clock += ms; };
+    const space = makeSpacer(25, sleep, () => clock);
+
+    const starts: number[] = [];
+    await Promise.all(Array.from({ length: 4 }, () => (async () => { await space(); starts.push(clock); })()));
+    expect(starts).toEqual([0, 25, 50, 75]);
+
+    clock += 1000;                      // idle: the budget has long since refilled
+    await space();
+    expect(clock).toBe(1075);           // no wait was added
+
+    // A wait that fails must not wedge every caller queued behind it.
+    let failNext = true;
+    const fragile = makeSpacer(25, async ms => {
+      if (failNext) { failNext = false; throw new Error('timer died'); }
+      clock += ms;
+    }, () => clock);
+    await fragile();                                              // first call: nothing to wait for
+    await expect(fragile()).rejects.toThrow('timer died');
+    await expect(fragile()).resolves.toBeUndefined();
+    expect(clock).toBe(1100);
   });
 });

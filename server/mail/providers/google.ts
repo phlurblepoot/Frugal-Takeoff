@@ -33,6 +33,40 @@ const DRAFT_PREFIX = 'draft:';
 /** How many messages' part lists getAttachment may remember. Metadata only —
  *  never body bytes — and bounded so a long-lived account cannot grow it. */
 const PART_CACHE_MAX = 500;
+/** Gmail budgets roughly 250 quota units per second per user, and a
+ *  `messages.get?format=full` costs 5 of them — so CONCURRENCY fetches over a
+ *  fast link burst straight through the ceiling and the whole import is thrown
+ *  back with a 403. Starting requests at least this far apart holds a provider
+ *  instance to ~40 calls/s (~200 units/s), which is under the limit with room
+ *  to spare and imperceptible on a single interactive call. */
+const FETCH_SPACING_MS = 25;
+
+const sleepMs = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/** A minimum-spacing limiter: successive calls START at least `ms` apart.
+ *
+ *  Callers queue on a promise chain, so nothing is dropped or reordered, and a
+ *  request that arrives after a quiet spell waits not at all — the spacing is
+ *  measured against the clock, not simply slept on every time. `sleep` and
+ *  `now` are injectable so the behaviour can be tested without real timers. */
+export function makeSpacer(
+  ms: number,
+  sleep: (ms: number) => Promise<void> = sleepMs,
+  now: () => number = () => Date.now(),
+): () => Promise<void> {
+  let earliestNext = 0;
+  let tail: Promise<void> = Promise.resolve();
+  return () => {
+    const mine = tail.then(async () => {
+      const wait = earliestNext - now();
+      if (wait > 0) await sleep(wait);
+      earliestNext = Math.max(earliestNext, now()) + ms;
+    });
+    // One caller's failure must not wedge the queue behind a rejected promise.
+    tail = mine.catch(() => {});
+    return mine;
+  };
+}
 
 // -- Gmail JSON shapes (only the fields this provider reads) ----------------
 interface GmailHeader { name: string; value: string }
@@ -166,6 +200,9 @@ export class GmailProvider implements MailProvider {
    *  the profile's value once the backfill finishes) is what stops a message
    *  that arrived mid-backfill from falling into the gap between the two. */
   private backfillHistoryId: string | null = null;
+  /** Paces every call this instance makes — see FETCH_SPACING_MS. Per instance,
+   *  which is per account: the quota Gmail is defending is per user. */
+  private space = makeSpacer(FETCH_SPACING_MS);
 
   constructor(private tokens: TokenSource, private opts: GoogleProviderOpts) {}
 
@@ -176,6 +213,7 @@ export class GmailProvider implements MailProvider {
     init: RequestInit & { query?: Record<string, string | number | undefined> } = {},
     retry = true,
   ): Promise<T> {
+    await this.space();
     const { query, ...rest } = init;
     const url = new URL(API + path.replace(/^\//, ''));
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
@@ -338,11 +376,18 @@ export class GmailProvider implements MailProvider {
 
   // -- sync -----------------------------------------------------------------
 
-  async backfill(opts: { since: Date; cursor?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean }> {
+  async backfill(opts: { since: Date; cursor?: string; watermark?: string }): Promise<{ messages: Envelope[]; cursor?: string; done: boolean; watermark?: string }> {
     if (!opts.cursor) {
       // Read the watermark BEFORE listing so the first incremental poll starts
       // from where this import began, not from where it finished.
       this.backfillHistoryId = (await this.api<GmailProfile>('profile')).historyId ?? null;
+    } else if (opts.watermark && !this.backfillHistoryId) {
+      // Resuming an import this instance did not start (the server restarted,
+      // or a throttle stood the account down long enough to lose the provider).
+      // Adopting the caller's stored watermark rather than re-reading the
+      // profile is the whole point: the profile has moved on, and everything
+      // that arrived in between would fall into the gap.
+      this.backfillHistoryId = opts.watermark;
     }
     const list = await this.api<GmailListResponse>('messages', {
       query: {
@@ -352,7 +397,10 @@ export class GmailProvider implements MailProvider {
       },
     });
     const messages = await this.envelopesFor((list.messages ?? []).map(m => m.id));
-    return { messages, cursor: list.nextPageToken, done: !list.nextPageToken };
+    return {
+      messages, cursor: list.nextPageToken, done: !list.nextPageToken,
+      ...(this.backfillHistoryId ? { watermark: this.backfillHistoryId } : {}),
+    };
   }
 
   async incremental(state: SyncState): Promise<{ upserts: Envelope[]; deletes: string[]; state: SyncState; reset?: boolean }> {
