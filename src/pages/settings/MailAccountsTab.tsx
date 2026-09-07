@@ -59,6 +59,14 @@ export function lastSyncLabel(iso: string | null, now: Date = new Date()): strin
   return `Last sync ${new Date(iso).toLocaleDateString('en-US')}`;
 }
 
+/** How an account's `lastError` should read. A provider throttling a big first
+ *  import is a wait, not a fault — the server keeps resuming it on its own — so
+ *  it gets amber rather than the red reserved for something the user has to act
+ *  on. Matches the server's wording (RATE_LIMIT_NOTICE in server/mail/sync/engine.ts). */
+export function lastErrorTone(message: string): string {
+  return /rate limited/i.test(message) ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+}
+
 const ProviderBadge: React.FC<{ provider: MailAccount['provider'] }> = ({ provider }) => {
   if (provider === 'google') {
     return (
@@ -160,7 +168,7 @@ const AccountCard: React.FC<{
             <span>{lastSyncLabel(account.lastSyncAt)}</span>
           </p>
           {account.lastError && (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{account.lastError}</p>
+            <p className={`mt-1 text-xs ${lastErrorTone(account.lastError)}`}>{account.lastError}</p>
           )}
         </div>
         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-ink-soft">

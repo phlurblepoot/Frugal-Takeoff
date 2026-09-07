@@ -47,7 +47,7 @@ vi.mock('../mail/compose/RichTextEditor', () => ({
 }));
 vi.mock('../mail/MailSetupGuide', () => ({ MailSetupGuide: () => <div data-testid="setup-guide" /> }));
 
-import { MailAccountsTab } from './MailAccountsTab';
+import { MailAccountsTab, lastErrorTone } from './MailAccountsTab';
 
 const acct = (over: Partial<MailAccount> = {}): MailAccount => ({
   id: 'a1', provider: 'imap', emailAddress: 'nathan@bigbearplaster.com', displayName: 'Nathan',
@@ -207,5 +207,28 @@ describe('MailAccountsTab', () => {
 
     mount(true);
     await waitFor(() => expect(screen.getByTestId('setup-guide')).toBeInTheDocument());
+  });
+  // A mailbox import being throttled by Google is a wait the server is already
+  // handling, not something the user has to fix — a red error there sent Nathan
+  // looking for a broken connection that was working fine.
+  it('shows a throttled import in amber and a real fault in red', async () => {
+    h.accounts.mockResolvedValue([
+      acct({ status: 'syncing', lastError: 'Mailbox import is rate limited by the provider — retrying automatically' }),
+      acct({ id: 'a2', status: 'auth_error', lastError: 'invalid_grant' }),
+    ]);
+    mount();
+    const waiting = within(await card('a1')).getByText(/rate limited/);
+    expect(waiting.className).toContain('text-amber-600');
+    expect(waiting.className).not.toContain('text-red-600');
+    const broken = within(await card('a2')).getByText('invalid_grant');
+    expect(broken.className).toContain('text-red-600');
+  });
+
+  it('lastErrorTone keeps the amber/red split on the message alone', () => {
+    expect(lastErrorTone('Mailbox import is rate limited by the provider — retrying automatically'))
+      .toBe('text-amber-600 dark:text-amber-400');
+    expect(lastErrorTone('Gmail 403 — Rate Limited')).toBe('text-amber-600 dark:text-amber-400');
+    expect(lastErrorTone('invalid_grant')).toBe('text-red-600 dark:text-red-400');
+    expect(lastErrorTone('')).toBe('text-red-600 dark:text-red-400');
   });
 });
