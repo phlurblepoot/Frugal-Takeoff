@@ -893,6 +893,12 @@ export interface Payment {
   createdAt: number;
   targetLabel?: string;
 }
+export interface InvoicePhoto {
+  id: string;
+  fileId: string;
+  sortOrder: number;
+}
+export interface InvoiceAttachment { id: string; fileId: string; sortOrder: number; name: string | null; mime: string | null; size: number | null }
 export interface Invoice {
   id: string;
   projectId: string;
@@ -912,6 +918,10 @@ export interface Invoice {
   updatedAt: number;
   lines: InvoiceLine[];
   payments: Payment[];
+  // Appended to the generated invoice PDF (migration 34): photos as pages,
+  // then attached PDFs, in sortOrder.
+  photos: InvoicePhoto[];
+  attachments: InvoiceAttachment[];
   totalCents: number;
   paidCents: number;
   balanceCents: number;
@@ -1034,6 +1044,21 @@ export const setInvoiceStatus = async (id: string, status: string): Promise<{ ve
 };
 export const deleteInvoice = async (id: string): Promise<void> => {
   const res = await billingJson('DELETE', `/api/invoices/${id}`); await handleResponse(res);
+};
+export const addInvoicePhoto = async (invoiceId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/invoices/${invoiceId}/photos`, { fileId }); await handleResponse(res);
+};
+export const removeInvoicePhoto = async (invoiceId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/invoices/${invoiceId}/photos/${encodeURIComponent(fileId)}`); await handleResponse(res);
+};
+export const addInvoiceAttachment = async (invoiceId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('POST', `/api/invoices/${invoiceId}/attachments`, { fileId }); await handleResponse(res);
+};
+export const updateInvoiceAttachment = async (invoiceId: string, fileId: string, patch: { sortOrder: number }): Promise<void> => {
+  const res = await billingJson('PATCH', `/api/invoices/${invoiceId}/attachments/${encodeURIComponent(fileId)}`, patch); await handleResponse(res);
+};
+export const removeInvoiceAttachment = async (invoiceId: string, fileId: string): Promise<void> => {
+  const res = await billingJson('DELETE', `/api/invoices/${invoiceId}/attachments/${encodeURIComponent(fileId)}`); await handleResponse(res);
 };
 export const getProjectPayments = async (projectId: string): Promise<Payment[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/payments`, { headers: { ...getAuthHeaders() } });

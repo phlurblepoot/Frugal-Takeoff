@@ -17,6 +17,13 @@ const h = vi.hoisted(() => ({
   persistGeneratedDocument: vi.fn(),
   getDocumentBySource: vi.fn(),
   buildInvoicePdf: vi.fn(),
+  appendPdfAttachments: vi.fn(),
+  addInvoicePhoto: vi.fn(),
+  removeInvoicePhoto: vi.fn(),
+  addInvoiceAttachment: vi.fn(),
+  updateInvoiceAttachment: vi.fn(),
+  removeInvoiceAttachment: vi.fn(),
+  pickerProps: { last: null as any },
 }));
 
 vi.mock('../../../context/CollaborationContext', () => ({
@@ -39,9 +46,28 @@ vi.mock('../../../utils/store', async (importOriginal) => ({
   getDocumentTypes: vi.fn(async () => []),
   fetchFileBlob: vi.fn(async () => new Blob(['pdf'])),
   getFileMeta: vi.fn(async () => null),
+  getImageUrl: (id: string) => `/img/${id}`,
+  addInvoicePhoto: h.addInvoicePhoto,
+  removeInvoicePhoto: h.removeInvoicePhoto,
+  addInvoiceAttachment: h.addInvoiceAttachment,
+  updateInvoiceAttachment: h.updateInvoiceAttachment,
+  removeInvoiceAttachment: h.removeInvoiceAttachment,
 }));
 
-vi.mock('./invoicePdf', () => ({ buildInvoicePdf: h.buildInvoicePdf }));
+// Stand-in picker: records the config the editor asked for and hands back one
+// already-uploaded row on demand (mirrors ChangeOrderEditor.test.tsx).
+vi.mock('../../../components/FilePickerModal', () => ({
+  FilePickerModal: (props: any) => {
+    h.pickerProps.last = props;
+    return (
+      <div data-testid="picker">
+        <button data-testid="picker-pick" onClick={() => void props.onPick?.([{ id: 'up-1', name: 'shot.png' }])}>pick</button>
+      </div>
+    );
+  },
+}));
+
+vi.mock('./invoicePdf', () => ({ buildInvoicePdf: h.buildInvoicePdf, appendPdfAttachments: h.appendPdfAttachments }));
 
 vi.mock('../../../pages/documents/DocumentViewerModal', () => ({
   DocumentViewerModal: () => <div data-testid="viewer" />,
@@ -86,7 +112,7 @@ const invoice = (over: Partial<Invoice> = {}): Invoice => ({
   id: 'inv-1', projectId: 'p1', number: 'INV-1', date: null, status: 'draft',
   terms: null, notes: null, version: 2, createdAt: 1, updatedAt: 10,
   lines: [{ description: 'work', qty: 1, unitPrice: 100 }],
-  payments: [], totalCents: 10000, paidCents: 0, balanceCents: 10000,
+  payments: [], photos: [], attachments: [], totalCents: 10000, paidCents: 0, balanceCents: 10000,
   ...over,
 });
 
@@ -120,6 +146,13 @@ beforeEach(() => {
   h.persistGeneratedDocument.mockResolvedValue({ fileId: 'file-9', versioned: true });
   h.getDocumentBySource.mockResolvedValue(null);
   h.buildInvoicePdf.mockResolvedValue(new Uint8Array([1, 2, 3]));
+  h.appendPdfAttachments.mockImplementation(async (base: Uint8Array) => base);
+  h.pickerProps.last = null;
+  h.addInvoicePhoto.mockResolvedValue(undefined);
+  h.removeInvoicePhoto.mockResolvedValue(undefined);
+  h.addInvoiceAttachment.mockResolvedValue(undefined);
+  h.updateInvoiceAttachment.mockResolvedValue(undefined);
+  h.removeInvoiceAttachment.mockResolvedValue(undefined);
 });
 
 describe('InvoiceEditor — document actions', () => {
@@ -222,5 +255,73 @@ describe('InvoiceEditor — internal notes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save invoice' }));
     await waitFor(() => expect(h.saveInvoice).toHaveBeenCalledTimes(1));
     expect(h.saveInvoice.mock.calls[0][1]).toMatchObject({ notes: null });
+  });
+});
+
+describe('InvoiceEditor — photos + attachments', () => {
+  it('renders the photos card and the attachments section', async () => {
+    mount();
+    expect(await screen.findByRole('button', { name: /Add photos/i })).toBeInTheDocument();
+    expect(screen.getByText('Attachments')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add PDFs/i })).toBeInTheDocument();
+    expect(screen.getByText('No photos. Attach reference shots for the invoice.')).toBeInTheDocument();
+    expect(screen.getByText('No attachments.')).toBeInTheDocument();
+  });
+
+  it('adds a picked photo through the shared picker and reloads', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Add photos/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addInvoicePhoto).toHaveBeenCalledWith('inv-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    expect(h.pickerProps.last).toMatchObject({
+      accept: 'image', defaultTab: 'upload', initialProjectIds: ['p1'],
+      upload: { kind: 'invoice-photo', projectId: 'p1', sourceType: 'invoice', sourceId: 'inv-1' },
+    });
+  });
+
+  it('adds a picked PDF attachment through the shared picker and reloads', async () => {
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Add PDFs/i }));
+    fireEvent.click(await screen.findByTestId('picker-pick'));
+
+    await waitFor(() => expect(h.addInvoiceAttachment).toHaveBeenCalledWith('inv-1', 'up-1'));
+    expect(onSaved).toHaveBeenCalled();
+    expect(h.pickerProps.last).toMatchObject({ accept: 'pdf', defaultTab: 'upload', initialProjectIds: [] });
+  });
+
+  it('lists an existing attachment and removes it through the API', async () => {
+    mount(invoice({
+      attachments: [{ id: 'at1', fileId: 'a1', sortOrder: 0, name: 'Warranty.pdf', mime: 'application/pdf', size: 2048 }],
+    }));
+    expect(await screen.findByText('Warranty.pdf')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }));
+    await waitFor(() => expect(h.removeInvoiceAttachment).toHaveBeenCalledWith('inv-1', 'a1'));
+  });
+
+  it('lists an existing photo and removes it through the API', async () => {
+    // No line items, so the line-item table's own "Remove" button (same title)
+    // isn't in the DOM to collide with the photo grid's.
+    mount(invoice({ lines: [], photos: [{ id: 'ph1', fileId: 'f1', sortOrder: 0 }] }));
+    expect(await screen.findByTitle('Remove')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Remove'));
+    await waitFor(() => expect(h.removeInvoicePhoto).toHaveBeenCalledWith('inv-1', 'f1'));
+  });
+
+  it('builds the PDF with photo data URLs and merges attachment bytes when the saved invoice carries them', async () => {
+    h.getInvoice.mockResolvedValue({
+      ...SAVED,
+      photos: [{ id: 'ph1', fileId: 'f1', sortOrder: 0 }],
+      attachments: [{ id: 'at1', fileId: 'a1', sortOrder: 0, name: 'Warranty.pdf', mime: 'application/pdf', size: 2048 }],
+    });
+    mount();
+    fireEvent.click(await screen.findByTestId('doc-generate'));
+
+    await waitFor(() => expect(h.buildInvoicePdf).toHaveBeenCalledTimes(1));
+    expect(h.buildInvoicePdf.mock.calls[0][0].photoDataUrls).toHaveLength(1);
+    await waitFor(() => expect(h.appendPdfAttachments).toHaveBeenCalledTimes(1));
   });
 });

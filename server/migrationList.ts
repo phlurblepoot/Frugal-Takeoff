@@ -1589,4 +1589,34 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 34,
+    name: 'invoice-photos-attachments',
+    // ADDITIVE: two join tables, same shape as their precedents — photos mirror
+    // change_order_photos (migration 14), attachments mirror proposal_attachments
+    // (migration 28). IF NOT EXISTS makes replaying up() a no-op.
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoice_photos (
+          id TEXT PRIMARY KEY,
+          invoiceId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(invoiceId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_invoice_photos_invoice ON invoice_photos (invoiceId);
+
+        CREATE TABLE IF NOT EXISTS invoice_attachments (
+          id TEXT PRIMARY KEY,
+          invoiceId TEXT NOT NULL,
+          fileId TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL,
+          UNIQUE(invoiceId, fileId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_invoice_attachments_invoice ON invoice_attachments (invoiceId);
+      `);
+    },
+  },
 ];
