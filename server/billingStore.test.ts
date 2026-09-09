@@ -118,6 +118,46 @@ describe('invoices', () => {
   });
 });
 
+describe('invoice numbering — universal autofill', () => {
+  it('assigns "1001" to the very first invoice ever, when number is empty', () => {
+    const { id } = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, id)!.number).toBe('1001');
+  });
+
+  it('continues from the highest trailing integer already used anywhere, app-wide ("INV-1007" -> "1008")', () => {
+    createInvoice(db, 'p1', { number: 'INV-1007', lines: [] });
+    const { id } = createInvoice(db, 'p1', { lines: [] }); // number omitted entirely
+    expect(getInvoice(db, id)!.number).toBe('1008');
+  });
+
+  it('keeps an explicitly provided number verbatim — no renumbering on save', () => {
+    const { id } = createInvoice(db, 'p1', { number: '003', lines: [] });
+    expect(getInvoice(db, id)!.number).toBe('003');
+    const inv = getInvoice(db, id)!;
+    const saved = saveInvoice(db, id, { ...inv, number: '003' });
+    expect(saved.version).toBe(2);
+    expect(getInvoice(db, id)!.number).toBe('003');
+  });
+
+  it('never reuses a number after the invoice holding it is deleted — the high-water counter survives', () => {
+    const first = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, first.id)!.number).toBe('1001');
+    deleteInvoice(db, first.id);
+    const second = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, second.id)!.number).toBe('1002');
+  });
+
+  it('scans invoices at assignment time (not just the stored counter), so a later explicit number above it cannot collide', () => {
+    const a = createInvoice(db, 'p1', { number: '', lines: [] }); // 1001
+    const b = createInvoice(db, 'p1', { number: '', lines: [] }); // 1002
+    expect(getInvoice(db, a.id)!.number).toBe('1001');
+    // Explicitly jump one invoice's number far above the counter via a save.
+    saveInvoice(db, b.id, { ...getInvoice(db, b.id)!, number: '5000' });
+    const c = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, c.id)!.number).toBe('5001');
+  });
+});
+
 describe('payments + status', () => {
   it('records and deletes payments; balance reflects them', () => {
     const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [{ description: 'A', qty: 1, unitPrice: 100 }] });

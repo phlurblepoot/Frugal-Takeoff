@@ -105,6 +105,38 @@ export function listInvoices(db: Database.Database, projectId: string): any[] {
   });
 }
 
+// Universal invoice numbering: unlike RFI/proposal numbers (per-project
+// counters on the `projects` row), invoice numbers are assigned from ONE
+// counter app-wide — Nathan wants a new invoice to pick up the next number
+// after the highest one used anywhere, not just on this project. The counter
+// lives in the generic `settings` key/value table (base-schema, migration 1)
+// under key 'invoiceNumber' — no new table/migration needed for it.
+//
+// Never reuse an issued number: the high-water counter survives deletes. The
+// MAX-of-trailing-integer guard is a re-scan of every invoice at ASSIGNMENT
+// TIME (not just a read of the stored counter), so a save that later sets an
+// explicit number higher than the counter still can't cause a future
+// collision — the next autofill sees it via this scan. Existing numbers are
+// free text ("1001", "INV-1007", "003"); only the trailing run of digits is
+// considered, and non-matching numbers are ignored.
+function nextInvoiceNumber(db: Database.Database): string {
+  const row = db.prepare(`SELECT value FROM settings WHERE key = 'invoiceNumber'`).get() as { value: string } | undefined;
+  const counter = row ? (parseInt(row.value, 10) || 0) : 0;
+  const rows = db.prepare(`SELECT number FROM invoices WHERE number IS NOT NULL AND number <> ''`).all() as { number: string }[];
+  let max = 0;
+  for (const r of rows) {
+    const m = /(\d+)\s*$/.exec(r.number);
+    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+  }
+  // 1000 is a floor, not a real invoice — it makes the very first assigned
+  // number a professional-looking "1001" instead of "1", comfortably above
+  // any small legacy numbers already in the data.
+  const next = Math.max(counter, max, 1000) + 1;
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('invoiceNumber', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(next));
+  return String(next);
+}
+
 export function createInvoice(db: Database.Database, projectId: string, input: InvoiceInput): { id: string; version: number } {
   requireProject(db, projectId);
   const lines = validateLines(input.lines);
@@ -112,10 +144,12 @@ export function createInvoice(db: Database.Database, projectId: string, input: I
     throw new ValidationError(`Invalid invoice status: ${input.status}`);
   }
   const id = crypto.randomUUID();
+  const explicitNumber = typeof input.number === 'string' ? input.number.trim() : (input.number ?? null);
   const tx = db.transaction(() => {
     const now = Date.now();
+    const number = explicitNumber || nextInvoiceNumber(db);
     db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, notes, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
-      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, normalizeNotes(input.notes), now, now);
+      .run(id, projectId, number, input.date ?? null, input.status ?? 'draft', input.terms ?? null, normalizeNotes(input.notes), now, now);
     writeLines(db, id, lines);
   });
   tx();
