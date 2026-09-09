@@ -468,7 +468,11 @@ async function startServer() {
   // Settings API — public endpoint, excludes any key that could contain secrets
   // (jwt.secret, retired smtp.* rows, mail.webhookSecret). Those are fetched via their own
   // authenticated endpoints.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.'];
+  // 'invoiceNumber' is the universal invoice-number counter (billingStore's
+  // nextInvoiceNumber) — internal bookkeeping, not a user setting. Withholding
+  // it from GET keeps it out of the client's settings object, so the Settings
+  // page can never round-trip a stale copy back and roll the counter backwards.
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {
@@ -486,6 +490,10 @@ async function startServer() {
       const settings = req.body;
       const stmt = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
       Object.entries(settings).forEach(([key, value]) => {
+        // Private keys never appear in GET, so nothing legitimate posts them
+        // back; dropping them here protects internal bookkeeping (the invoice
+        // counter, jwt secret) from a crafted or stale client payload.
+        if (isPrivateSettingKey(key)) return;
         stmt.run(key, value as string);
       });
       res.json({ success: true });
