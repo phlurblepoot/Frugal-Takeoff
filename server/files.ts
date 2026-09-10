@@ -46,7 +46,7 @@ export interface FileMeta {
 export const SYSTEM_KINDS = [
   'plan-source', 'plan', 'proposal', 'proposal-photo', 'proposal-signed', 'printout',
   'takeoff-print', 'takeoff-export',
-  'invoice', 'change-order', 'change-order-photo', 'issue-report',
+  'invoice', 'invoice-photo', 'change-order', 'change-order-photo', 'issue-report',
   'issue-photo', 'punch-report', 'punch-photo', 'rfi', 'rfi-photo',
   'rfi-response', 'task-photo', 'payapp-export', 'email-attachment',
   'settings-asset', 'daily-report', 'daily-report-photo',
@@ -61,7 +61,7 @@ export const SYSTEM_KINDS = [
 // onto another would keep the live id — so the pages split out of the FIRST
 // pdf would start rendering the second.
 export const MULTI_INSTANCE_KINDS = [
-  'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo',
+  'issue-photo', 'punch-photo', 'task-photo', 'change-order-photo', 'invoice-photo',
   'rfi-photo', 'proposal-photo', 'plan-source', 'daily-report-photo',
   // Several attachments saved from one email message share a source triple
   // (sourceType='mailMessage', sourceId=<messageId>) — spec §3.2. The kind

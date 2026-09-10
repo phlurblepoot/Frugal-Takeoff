@@ -660,6 +660,45 @@ describe('billing routes', () => {
     expect((await request(memberApp).get('/api/projects/p1/invoices')).status).toBe(403);
     expect((await request(memberApp).post('/api/projects/p1/invoices').send({ lines: [] })).status).toBe(403);
   });
+
+  it('invoice photo/attachment routes exist, admin-gated, and broadcast', async () => {
+    const inv = (await request(app).post('/api/projects/p1/invoices').send({ number: 'INV-photos', lines: [] })).body;
+
+    const memberApp = express();
+    memberApp.use(express.json());
+    registerDataRoutes(memberApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'm1', role: 'member' }; next(); },
+      requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
+      verifyToken: () => null,
+      broadcastChange: () => {},
+    });
+    expect((await request(memberApp).post(`/api/invoices/${inv.id}/photos`).send({ fileId: 'f1' })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/invoices/${inv.id}/photos/f1`)).status).toBe(403);
+    expect((await request(memberApp).post(`/api/invoices/${inv.id}/attachments`).send({ fileId: 'f1' })).status).toBe(403);
+    expect((await request(memberApp).patch(`/api/invoices/${inv.id}/attachments/f1`).send({ sortOrder: 0 })).status).toBe(403);
+    expect((await request(memberApp).delete(`/api/invoices/${inv.id}/attachments/f1`)).status).toBe(403);
+
+    // As admin: the routes exist and mutate + broadcast (version bumps).
+    const events: any[] = [];
+    const adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'a1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: any) => events.push(e),
+    });
+    const before = (await request(adminApp).get(`/api/invoices/${inv.id}`)).body.version;
+    await request(adminApp).post(`/api/invoices/${inv.id}/photos`).send({ fileId: 'f1' }).expect(200);
+    const after = (await request(adminApp).get(`/api/invoices/${inv.id}`)).body;
+    expect(after.photos).toEqual([expect.objectContaining({ fileId: 'f1' })]);
+    expect(after.version).toBe(before + 1);
+    const photoEvent = events.find(e => e.type === 'invoice' && e.action === 'updated');
+    expect(photoEvent).toBeTruthy();
+    expect(typeof photoEvent.version).toBe('number');
+  });
 });
 
 describe('unified project payment routes (admin-gated)', () => {

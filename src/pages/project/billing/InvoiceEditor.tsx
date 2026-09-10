@@ -1,17 +1,112 @@
 // src/pages/project/billing/InvoiceEditor.tsx
 import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
-import { Invoice, InvoiceLine, saveInvoice, getInvoice, getSettings, sendInvoice } from '../../../utils/store';
+import { ArrowDown, ArrowUp, FileText, Plus, Trash2, X } from 'lucide-react';
+import {
+  Invoice, InvoiceAttachment, saveInvoice, getInvoice, getSettings, sendInvoice, InvoiceLine,
+  addInvoicePhoto, removeInvoicePhoto, fetchFileBlob,
+  addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
+} from '../../../utils/store';
 import { formatMoney } from '../../../utils/money';
 import { useToast } from '../../../components/Toast';
 import { Button, Field, Input, Modal, Table, TBody, TD, TH, THead, TR, Textarea } from '../../../components/ui';
 import { DocumentActionsBar } from '../../../components/documents/DocumentActionsBar';
+import { PhotoDropCard } from '../../../components/documents/PhotoDropCard';
+import { AddFilesButton } from '../../../components/documents/AddFilesButton';
+import { useAttachFiles } from '../../../components/documents/useAttachFiles';
 import { useCollabEditing } from '../../../hooks/useCollabEditing';
 import { useItemEmailDefaults } from '../../../hooks/useItemEmailDefaults';
 import { itemSendPayload } from '../../../utils/itemSend';
 import { EditPresenceBanner } from '../../../components/EditPresenceBanner';
-import { buildInvoicePdf } from './invoicePdf';
+import { buildInvoicePdf, appendPdfAttachments } from './invoicePdf';
 import { hexToRgb, invertImageDataUrl } from '../../../utils/documentLetterhead';
+
+const fmtAttachmentSize = (n: number | null) => {
+  if (n == null) return null;
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+};
+
+// Inline (no Card wrapper — this lives inside the invoice modal, alongside the
+// Payments block). Mirrors ProposalAttachmentsCard's behavior: fully
+// controlled, every action reloads the invoice — but invoices never lock, so
+// there is no readOnly state.
+const InvoiceAttachmentsSection: React.FC<{
+  invoice: Invoice;
+  projectId: string;
+  onChanged: () => void;
+}> = ({ invoice, projectId, onChanged }) => {
+  const { toast } = useToast();
+  const attachments = [...invoice.attachments].sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const attachmentUpload = { kind: 'document', projectId };
+  const { busy, attachRows } = useAttachFiles({
+    upload: attachmentUpload,
+    accept: 'pdf',
+    link: fileId => addInvoiceAttachment(invoice.id, fileId),
+    onDone: onChanged,
+    noun: 'files',
+  });
+
+  const handleMove = async (index: number, dir: -1 | 1) => {
+    const cur = attachments[index];
+    const other = attachments[index + dir];
+    if (!other) return;
+    try {
+      await updateInvoiceAttachment(invoice.id, cur.fileId, { sortOrder: other.sortOrder });
+      await updateInvoiceAttachment(invoice.id, other.fileId, { sortOrder: cur.sortOrder });
+    } catch { toast('Failed to reorder attachments', { type: 'error' }); }
+    finally { onChanged(); }
+  };
+
+  const handleRemove = async (attachment: InvoiceAttachment) => {
+    try { await removeInvoiceAttachment(invoice.id, attachment.fileId); onChanged(); }
+    catch { toast('Failed to remove attachment', { type: 'error' }); }
+  };
+
+  return (
+    <div className="mt-4 border-t border-edge pt-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-ink">Attachments</h4>
+        <div className="flex flex-wrap items-center gap-2">
+          {busy && <span className="text-xs text-ink-faint">Uploading…</span>}
+          <AddFilesButton
+            label="Add PDFs"
+            accept="pdf"
+            size="sm"
+            defaultTab="upload"
+            upload={attachmentUpload}
+            // Global by design: an invoice often appends a PDF filed under
+            // another project (a standard warranty, a spec sheet).
+            initialProjectIds={[]}
+            excludeFileIds={invoice.attachments.map(a => a.fileId)}
+            disabled={busy}
+            onPick={attachRows}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-ink-faint">Attached PDFs are appended to the end of the generated invoice, after any photos, in this order.</p>
+      {attachments.length === 0 ? (
+        <p className="mt-2 text-sm text-ink-faint">No attachments.</p>
+      ) : (
+        <ul className="mt-2 divide-y divide-edge">
+          {attachments.map((attachment, i) => (
+            <li key={attachment.id} className="flex items-center gap-3 py-2" data-testid={`invoice-attachment-${attachment.id}`}>
+              <FileText size={16} className="shrink-0 text-ink-faint" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink">{attachment.name ?? attachment.fileId}</p>
+                {fmtAttachmentSize(attachment.size) && <p className="text-xs text-ink-faint">{fmtAttachmentSize(attachment.size)}</p>}
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" aria-label="Move up" title="Move up" disabled={i === 0} onClick={() => handleMove(i, -1)}><ArrowUp size={14} /></Button>
+                <Button variant="ghost" size="sm" aria-label="Move down" title="Move down" disabled={i === attachments.length - 1} onClick={() => handleMove(i, 1)}><ArrowDown size={14} /></Button>
+                <Button variant="ghost" size="sm" aria-label="Remove attachment" title="Remove" onClick={() => handleRemove(attachment)}><X size={14} /></Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 export const lineCents = (l: { description?: string; qty: number; unitPrice: number }): number =>
   Math.round((Number(l.qty) || 0) * (Number(l.unitPrice) || 0) * 100);
@@ -116,6 +211,10 @@ export const InvoiceEditor: React.FC<{
     try { await handleSave({ keepMounted: true }); return true; } catch { return false; }
   };
 
+  const dropPhoto = async (fileId: string) => {
+    try { await removeInvoicePhoto(invoice.id, fileId); onSaved(); } catch { toast('Failed to remove photo', { type: 'error' }); }
+  };
+
   // Built from the SAVED invoice, never the typed-in draft: the bar commits
   // first, so re-reading the record here is what keeps a generated PDF and the
   // invoice it claims to represent from drifting apart. A failed re-read
@@ -147,7 +246,15 @@ export const InvoiceEditor: React.FC<{
     if (logoDataUrl && settings.invertLogoOnDocuments === 'true') {
       logoDataUrl = await invertImageDataUrl(logoDataUrl);
     }
-    return buildInvoicePdf({
+    // fetch each photo as a dataURL (authenticated content endpoint)
+    const photoDataUrls: string[] = [];
+    for (const p of saved.photos) {
+      try {
+        const blob = await fetchFileBlob(p.fileId);
+        photoDataUrls.push(await new Promise<string>(r => { const fr = new FileReader(); fr.onload = () => r(fr.result as string); fr.readAsDataURL(blob); }));
+      } catch { /* skip */ }
+    }
+    const bytes = buildInvoicePdf({
       invoice: saved,
       projectName,
       contractor,
@@ -162,8 +269,15 @@ export const InvoiceEditor: React.FC<{
         },
         logoDataUrl,
       },
+      photoDataUrls,
       headerEmail: headerEmail || undefined,
     });
+    if (!saved.attachments.length) return bytes;
+    const attachmentBuffers: ArrayBuffer[] = [];
+    for (const a of saved.attachments) {
+      try { attachmentBuffers.push(await (await fetchFileBlob(a.fileId)).arrayBuffer()); } catch { /* skip unreadable — appendPdfAttachments warns per-file */ }
+    }
+    return appendPdfAttachments(bytes, attachmentBuffers);
   };
 
   return (
@@ -283,6 +397,20 @@ export const InvoiceEditor: React.FC<{
           <p className="mt-1 text-xs text-ink-faint">Record payments in the Billing → Payments tab.</p>
         )}
       </div>
+
+      <PhotoDropCard
+        title="Photos"
+        emptyText="No photos. Attach reference shots for the invoice."
+        testId="invoice"
+        photos={invoice.photos}
+        upload={{ kind: 'invoice-photo', projectId, sourceType: 'invoice', sourceId: invoice.id }}
+        initialProjectIds={[projectId]}
+        link={fileId => addInvoicePhoto(invoice.id, fileId)}
+        onRemove={dropPhoto}
+        onDone={onSaved}
+      />
+
+      <InvoiceAttachmentsSection invoice={invoice} projectId={projectId} onChanged={onSaved} />
     </Modal>
   );
 };

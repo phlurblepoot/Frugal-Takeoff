@@ -12,6 +12,7 @@ import { logActivity, listActivity } from './activity';
 import {
   listInvoices, getInvoice, createInvoice, saveInvoice, deleteInvoice,
   recordPayment, deletePayment, listProjectPayments, setInvoiceStatus,
+  addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus, deleteChangeOrder,
   addChangeOrderPhoto, removeChangeOrderPhoto,
   billingSummary,
@@ -318,6 +319,48 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const before = getInvoice(db, req.params.id);
       deleteInvoice(db, req.params.id);
       if (before) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/invoices/:id/photos', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addInvoicePhoto(db, req.params.id, req.body.fileId);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/invoices/:id/photos/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removeInvoicePhoto(db, req.params.id, req.params.fileId);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.post('/api/invoices/:id/attachments', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      if (typeof req.body?.fileId !== 'string' || !req.body.fileId) return res.status(400).json({ error: 'fileId is required' });
+      addInvoiceAttachment(db, req.params.id, req.body.fileId);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.patch('/api/invoices/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      updateInvoiceAttachment(db, req.params.id, req.params.fileId, req.body ?? {});
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
+    } catch (e) { billingErr(e, res); }
+  });
+  app.delete('/api/invoices/:id/attachments/:fileId', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      removeInvoiceAttachment(db, req.params.id, req.params.fileId);
+      const row = getInvoice(db, req.params.id);
+      if (row) deps.broadcastChange({ type: 'invoice', id: req.params.id, projectId: row.projectId, version: row.version, action: 'updated', ...requestMeta(req) });
       res.json({ success: true });
     } catch (e) { billingErr(e, res); }
   });

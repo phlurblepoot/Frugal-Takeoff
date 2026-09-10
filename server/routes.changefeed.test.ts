@@ -293,6 +293,25 @@ describe('route mutations broadcast entity-changed', () => {
     c.close();
   });
 
+  it('POST/DELETE /api/invoices/:id/photos and /attachments are admin-gated and broadcast a version', async () => {
+    await request(app).post('/api/projects').send({ id: 'p18', name: 'P18', pages: [], takeoffs: [] }).expect(200);
+    const inv = await request(app).post('/api/projects/p18/invoices').send({ number: 'INV-18', lines: [] }).expect(200);
+    await request(app).post('/api/images').send({ id: 'f18', data: PNG }).expect(200);
+
+    const c = await connectedClient();
+    let evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).post(`/api/invoices/${inv.body.id}/photos`).send({ fileId: 'f18' }).expect(200);
+    let e = await evt;
+    expect(e).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p18', action: 'updated' });
+    expect(typeof e.version).toBe('number');
+
+    evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);
+    await request(app).delete(`/api/invoices/${inv.body.id}/photos/f18`).expect(200);
+    e = await evt;
+    expect(e).toMatchObject({ type: 'invoice', id: inv.body.id, projectId: 'p18', action: 'updated' });
+    c.close();
+  });
+
   it('POST /api/tasks broadcasts task created (projectId omitted when unscoped)', async () => {
     const c = await connectedClient();
     const evt = waitFor<EntityChangedEvent>(c, ENTITY_CHANGED);

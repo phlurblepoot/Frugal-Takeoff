@@ -47,8 +47,32 @@ export interface InvoicePdfContext {
   address?: string | null;
   /** Branded header/footer + brand accent colour (replaces the per-user UI accent). */
   letterhead: LetterheadContext;
+  /** pre-fetched (caller resolves each fileId → dataURL) — appended as pages
+   *  after the totals/PAID stamp, same layout as change orders' photo section. */
+  photoDataUrls?: string[];
   /** When provided and non-empty, overrides the company email shown in the document header. */
   headerEmail?: string;
+}
+
+// Merges PDF attachment bytes onto the end of a generated PDF, in order.
+// Mirrors the proposal generator's attachment merge (proposalGenerator.ts)
+// so invoices get the same "append PDFs in the order the user picked" behavior.
+// An attachment whose bytes can't be parsed as a PDF is skipped (warned, not
+// thrown) rather than failing the whole document.
+export async function appendPdfAttachments(base: Uint8Array, attachments: ArrayBuffer[]): Promise<Uint8Array> {
+  if (!attachments.length) return base;
+  const { PDFDocument } = await import('pdf-lib');
+  const merged = await PDFDocument.load(base, { ignoreEncryption: true });
+  for (const bytes of attachments) {
+    try {
+      const d = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      (await merged.copyPages(d, d.getPageIndices())).forEach(p => merged.addPage(p));
+    } catch (e) {
+      console.warn('[invoice] skipped unreadable attachment', e);
+    }
+  }
+  const out = await merged.save();
+  return out;
 }
 
 export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
@@ -137,6 +161,24 @@ export function buildInvoicePdf(ctx: InvoicePdfContext): Uint8Array {
   if (ctx.invoice.totalCents > 0 && ctx.invoice.totalCents - ctx.invoice.paidCents === 0) {
     doc.setFont('helvetica', 'bold').setFontSize(56).setTextColor(22, 163, 74);
     doc.text('PAID', W / 2 - 40, y + 40, { angle: 18 });
+  }
+
+  // Photos appended as pages (fresh page after the totals/PAID stamp) — same
+  // layout as change orders' photo section (changeOrderPdf.ts).
+  const photoDataUrls = ctx.photoDataUrls ?? [];
+  if (photoDataUrls.length) {
+    newPage();
+    doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(60, 60, 60);
+    doc.text('Photos', M, y); y += 14;
+    const cellW = (W - 2 * M - 12) / 2, cellH = 150;
+    let col = 0;
+    for (const url of photoDataUrls) {
+      if (y + cellH > bottom) { newPage(); col = 0; }
+      const x = M + col * (cellW + 12);
+      try { doc.addImage(url, 'JPEG', x, y, cellW, cellH, undefined, 'FAST'); } catch { /* skip bad image */ }
+      col++;
+      if (col === 2) { col = 0; y += cellH + 12; }
+    }
   }
 
   return doc.output('arraybuffer') as unknown as Uint8Array;

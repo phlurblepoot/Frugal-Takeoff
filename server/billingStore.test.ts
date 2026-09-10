@@ -7,10 +7,12 @@ import type Database from 'better-sqlite3';
 import { openDb } from './db';
 import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
+import { putBuffer } from './files';
 import {
   toCents, sumCents, listInvoices, getInvoice, createInvoice, saveInvoice,
   deleteInvoice, ValidationError, ConflictError, NotFoundError,
   recordPayment, deletePayment, setInvoiceStatus, listProjectPayments, paidCentsFor,
+  addInvoicePhoto, removeInvoicePhoto, addInvoiceAttachment, updateInvoiceAttachment, removeInvoiceAttachment,
   listChangeOrders, getChangeOrder, createChangeOrder, saveChangeOrder, setChangeOrderStatus,
   deleteChangeOrder, addChangeOrderPhoto, removeChangeOrderPhoto, billingSummary,
   listBilledDocuments,
@@ -18,12 +20,17 @@ import {
 import { createSovLine, listSovLines, createPayApp, savePayAppLines, setPayApp } from './aiaStore';
 
 let db: Database.Database;
+let dir: string;
 
 beforeEach(() => {
+  dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-bill-'));
   db = openDb(':memory:');
-  runMigrations(db, fsSync.mkdtempSync(path.join(os.tmpdir(), 'ft-bill-')), migrations);
+  runMigrations(db, dir, migrations);
   db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
 });
+
+const pdfFile = (id: string) => putBuffer(db, dir, id, Buffer.from('%PDF'), 'application/pdf', { projectId: 'p1', kind: 'document', name: `${id}.pdf` });
+const jpgFile = (id: string) => putBuffer(db, dir, id, Buffer.from('x'), 'image/jpeg', { projectId: 'p1', kind: 'invoice-photo', name: `${id}.jpg` });
 
 describe('money helpers', () => {
   it('toCents rounds half-up to the nearest cent', () => {
@@ -115,6 +122,115 @@ describe('invoices', () => {
     const cleared = saveInvoice(db, withNotes.id, { ...getInvoice(db, withNotes.id)!, notes: '   ' });
     expect(cleared.version).toBe(3);
     expect(getInvoice(db, withNotes.id)!.notes).toBeNull();
+  });
+});
+
+describe('invoice numbering — universal autofill', () => {
+  it('assigns "1001" to the very first invoice ever, when number is empty', () => {
+    const { id } = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, id)!.number).toBe('1001');
+  });
+
+  it('continues from the highest trailing integer already used anywhere, app-wide ("INV-1007" -> "1008")', () => {
+    createInvoice(db, 'p1', { number: 'INV-1007', lines: [] });
+    const { id } = createInvoice(db, 'p1', { lines: [] }); // number omitted entirely
+    expect(getInvoice(db, id)!.number).toBe('1008');
+  });
+
+  it('keeps an explicitly provided number verbatim — no renumbering on save', () => {
+    const { id } = createInvoice(db, 'p1', { number: '003', lines: [] });
+    expect(getInvoice(db, id)!.number).toBe('003');
+    const inv = getInvoice(db, id)!;
+    const saved = saveInvoice(db, id, { ...inv, number: '003' });
+    expect(saved.version).toBe(2);
+    expect(getInvoice(db, id)!.number).toBe('003');
+  });
+
+  it('never reuses a number after the invoice holding it is deleted — the high-water counter survives', () => {
+    const first = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, first.id)!.number).toBe('1001');
+    deleteInvoice(db, first.id);
+    const second = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, second.id)!.number).toBe('1002');
+  });
+
+  it('scans invoices at assignment time (not just the stored counter), so a later explicit number above it cannot collide', () => {
+    const a = createInvoice(db, 'p1', { number: '', lines: [] }); // 1001
+    const b = createInvoice(db, 'p1', { number: '', lines: [] }); // 1002
+    expect(getInvoice(db, a.id)!.number).toBe('1001');
+    // Explicitly jump one invoice's number far above the counter via a save.
+    saveInvoice(db, b.id, { ...getInvoice(db, b.id)!, number: '5000' });
+    const c = createInvoice(db, 'p1', { number: '', lines: [] });
+    expect(getInvoice(db, c.id)!.number).toBe('5001');
+  });
+});
+
+describe('invoice photos + attachments', () => {
+  it('photos: idempotent add bumps version, remove bumps version', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    addInvoicePhoto(db, id, 'file-1');
+    addInvoicePhoto(db, id, 'file-1'); // idempotent — no second row, no extra bump
+    let inv = getInvoice(db, id)!;
+    expect(inv.photos).toHaveLength(1);
+    expect(inv.version).toBe(2); // 1 → +1 on the first add only
+    addInvoicePhoto(db, id, 'file-2');
+    inv = getInvoice(db, id)!;
+    expect(inv.photos).toHaveLength(2);
+    expect(inv.version).toBe(3);
+    removeInvoicePhoto(db, id, 'file-1');
+    inv = getInvoice(db, id)!;
+    expect(inv.photos.map((p: any) => p.fileId)).toEqual(['file-2']);
+    expect(inv.version).toBe(4);
+  });
+
+  it('photo add/remove bumps updatedAt (freshness contract)', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    const before = getInvoice(db, id)!.updatedAt;
+    addInvoicePhoto(db, id, 'file-1');
+    expect(getInvoice(db, id)!.updatedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it('attachments must be PDFs and existing files; sortOrder assigns in add order', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    jpgFile('notpdf');
+    expect(() => addInvoiceAttachment(db, id, 'notpdf')).toThrow(ValidationError);
+    expect(() => addInvoiceAttachment(db, id, 'missing')).toThrow(NotFoundError);
+    pdfFile('a1'); pdfFile('a2');
+    addInvoiceAttachment(db, id, 'a1');
+    addInvoiceAttachment(db, id, 'a1'); // idempotent
+    addInvoiceAttachment(db, id, 'a2');
+    let inv = getInvoice(db, id)!;
+    expect(inv.attachments).toEqual([
+      expect.objectContaining({ fileId: 'a1', sortOrder: 0, name: 'a1.pdf', mime: 'application/pdf' }),
+      expect.objectContaining({ fileId: 'a2', sortOrder: 1, name: 'a2.pdf', mime: 'application/pdf' }),
+    ]);
+    expect(inv.version).toBe(3); // 1 -> +1 (a1) -> +1 (a2); the a1 repeat is a no-op
+
+    updateInvoiceAttachment(db, id, 'a1', { sortOrder: 5 });
+    inv = getInvoice(db, id)!;
+    expect(inv.attachments.map((a: any) => a.fileId)).toEqual(['a2', 'a1']); // re-ordered by sortOrder
+    expect(inv.version).toBe(4);
+
+    removeInvoiceAttachment(db, id, 'a1');
+    inv = getInvoice(db, id)!;
+    expect(inv.attachments.map((a: any) => a.fileId)).toEqual(['a2']);
+    expect(inv.version).toBe(5);
+  });
+
+  it('updateInvoiceAttachment on a file not attached to this invoice throws NotFoundError', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    expect(() => updateInvoiceAttachment(db, id, 'nope', { sortOrder: 0 })).toThrow(NotFoundError);
+  });
+
+  it('deleteInvoice cleans up photos and attachments', () => {
+    const { id } = createInvoice(db, 'p1', { number: 'INV-1', lines: [] });
+    addInvoicePhoto(db, id, 'file-1');
+    pdfFile('a1');
+    addInvoiceAttachment(db, id, 'a1');
+    deleteInvoice(db, id);
+    expect(getInvoice(db, id)).toBeNull();
+    expect((db.prepare('SELECT COUNT(*) c FROM invoice_photos WHERE invoiceId = ?').get(id) as any).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) c FROM invoice_attachments WHERE invoiceId = ?').get(id) as any).c).toBe(0);
   });
 });
 

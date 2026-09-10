@@ -23,6 +23,14 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.1.0',
+    date: 'September 9, 2026',
+    changes: [
+      'Invoice numbers now fill in automatically: a new invoice gets the next number after the highest one used anywhere in the app (numbers are never reused, and you can still type your own).',
+      'Invoices can now carry photos and PDF attachments: photos are appended as pages of the generated invoice PDF, and attached PDFs are appended after them in your chosen order — same as change orders and proposals.',
+    ],
+  },
+  {
     version: '3.0.1',
     date: 'September 7, 2026',
     changes: [

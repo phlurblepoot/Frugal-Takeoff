@@ -28,6 +28,7 @@ const isDeletableGeneratedKind = (kind: string) =>
 // referent (deleted entity) -> label from kind, href null").
 const KIND_LABELS: Record<string, string> = {
   invoice: 'Invoice',
+  'invoice-photo': 'Invoice Photo',
   'change-order': 'Change Order',
   'change-order-photo': 'Change Order Photo',
   'issue-report': 'Issue',

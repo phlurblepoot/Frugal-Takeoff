@@ -93,7 +93,10 @@ export function getInvoice(db: Database.Database, id: string): any | null {
   const totalCents = lineTotalsCents(db, id);
   const paidCents = paidCentsFor(db, 'invoice', id);
   const payments = db.prepare("SELECT id, date, amount, method, note FROM payments WHERE targetType = 'invoice' AND targetId = ? ORDER BY date").all(id);
-  return { ...row, lines, payments, totalCents, paidCents, balanceCents: totalCents - paidCents };
+  const photos = db.prepare('SELECT id, fileId, sortOrder FROM invoice_photos WHERE invoiceId = ? ORDER BY sortOrder, createdAt').all(id);
+  const attachments = db.prepare(`SELECT a.id, a.fileId, a.sortOrder, f.name, f.mime, f.size
+    FROM invoice_attachments a LEFT JOIN files f ON f.id = a.fileId WHERE a.invoiceId = ? ORDER BY a.sortOrder, a.createdAt`).all(id);
+  return { ...row, lines, payments, photos, attachments, totalCents, paidCents, balanceCents: totalCents - paidCents };
 }
 
 export function listInvoices(db: Database.Database, projectId: string): any[] {
@@ -105,6 +108,38 @@ export function listInvoices(db: Database.Database, projectId: string): any[] {
   });
 }
 
+// Universal invoice numbering: unlike RFI/proposal numbers (per-project
+// counters on the `projects` row), invoice numbers are assigned from ONE
+// counter app-wide — Nathan wants a new invoice to pick up the next number
+// after the highest one used anywhere, not just on this project. The counter
+// lives in the generic `settings` key/value table (base-schema, migration 1)
+// under key 'invoiceNumber' — no new table/migration needed for it.
+//
+// Never reuse an issued number: the high-water counter survives deletes. The
+// MAX-of-trailing-integer guard is a re-scan of every invoice at ASSIGNMENT
+// TIME (not just a read of the stored counter), so a save that later sets an
+// explicit number higher than the counter still can't cause a future
+// collision — the next autofill sees it via this scan. Existing numbers are
+// free text ("1001", "INV-1007", "003"); only the trailing run of digits is
+// considered, and non-matching numbers are ignored.
+function nextInvoiceNumber(db: Database.Database): string {
+  const row = db.prepare(`SELECT value FROM settings WHERE key = 'invoiceNumber'`).get() as { value: string } | undefined;
+  const counter = row ? (parseInt(row.value, 10) || 0) : 0;
+  const rows = db.prepare(`SELECT number FROM invoices WHERE number IS NOT NULL AND number <> ''`).all() as { number: string }[];
+  let max = 0;
+  for (const r of rows) {
+    const m = /(\d+)\s*$/.exec(r.number);
+    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+  }
+  // 1000 is a floor, not a real invoice — it makes the very first assigned
+  // number a professional-looking "1001" instead of "1", comfortably above
+  // any small legacy numbers already in the data.
+  const next = Math.max(counter, max, 1000) + 1;
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('invoiceNumber', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(next));
+  return String(next);
+}
+
 export function createInvoice(db: Database.Database, projectId: string, input: InvoiceInput): { id: string; version: number } {
   requireProject(db, projectId);
   const lines = validateLines(input.lines);
@@ -112,10 +147,12 @@ export function createInvoice(db: Database.Database, projectId: string, input: I
     throw new ValidationError(`Invalid invoice status: ${input.status}`);
   }
   const id = crypto.randomUUID();
+  const explicitNumber = typeof input.number === 'string' ? input.number.trim() : (input.number ?? null);
   const tx = db.transaction(() => {
     const now = Date.now();
+    const number = explicitNumber || nextInvoiceNumber(db);
     db.prepare('INSERT INTO invoices (id, projectId, number, date, status, terms, notes, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
-      .run(id, projectId, input.number ?? null, input.date ?? null, input.status ?? 'draft', input.terms ?? null, normalizeNotes(input.notes), now, now);
+      .run(id, projectId, number, input.date ?? null, input.status ?? 'draft', input.terms ?? null, normalizeNotes(input.notes), now, now);
     writeLines(db, id, lines);
   });
   tx();
@@ -167,10 +204,84 @@ export function saveInvoice(db: Database.Database, id: string, input: InvoiceInp
   return { version: newVersion };
 }
 
+// Photos + PDF attachments (mirrors change_order_photos / proposal_attachments).
+// Each mutation bumps the invoice's version + updatedAt — the freshness
+// contract: adding/removing/reordering either one changes what the generated
+// invoice PDF would contain (photos are appended as pages, attachments after
+// them), so DocumentActionsBar's "up to date" chip must go stale.
+const requireInvoiceFile = (db: Database.Database, fileId: unknown): { id: string; mime: string } => {
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const f = db.prepare('SELECT id, mime FROM files WHERE id = ?').get(fileId) as { id: string; mime: string } | undefined;
+  if (!f) throw new NotFoundError('File not found');
+  return f;
+};
+
+function touchInvoice(db: Database.Database, invoiceId: string, now: number): void {
+  db.prepare('UPDATE invoices SET version = version + 1, updatedAt = ? WHERE id = ?').run(now, invoiceId);
+}
+
+export function addInvoicePhoto(db: Database.Database, invoiceId: string, fileId: string): void {
+  const row = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId) as { id: string } | undefined;
+  if (!row) throw new NotFoundError('Invoice not found');
+  if (typeof fileId !== 'string' || !fileId) throw new ValidationError('fileId is required');
+  const exists = db.prepare('SELECT id FROM invoice_photos WHERE invoiceId = ? AND fileId = ?').get(invoiceId, fileId);
+  if (exists) return; // idempotent
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM invoice_photos WHERE invoiceId = ?').get(invoiceId) as any).m;
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO invoice_photos (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), invoiceId, fileId, max + 1, Date.now());
+    touchInvoice(db, invoiceId, Date.now());
+  });
+  tx();
+}
+
+export function removeInvoicePhoto(db: Database.Database, invoiceId: string, fileId: string): void {
+  const tx = db.transaction(() => {
+    const r = db.prepare('DELETE FROM invoice_photos WHERE invoiceId = ? AND fileId = ?').run(invoiceId, fileId);
+    if (r.changes > 0) touchInvoice(db, invoiceId, Date.now());
+  });
+  tx();
+}
+
+export function addInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string): void {
+  const row = db.prepare('SELECT id FROM invoices WHERE id = ?').get(invoiceId) as { id: string } | undefined;
+  if (!row) throw new NotFoundError('Invoice not found');
+  const f = requireInvoiceFile(db, fileId);
+  if (f.mime !== 'application/pdf') throw new ValidationError('Only PDF files can be attached');
+  if (db.prepare('SELECT 1 FROM invoice_attachments WHERE invoiceId = ? AND fileId = ?').get(invoiceId, fileId)) return;
+  const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM invoice_attachments WHERE invoiceId = ?').get(invoiceId) as any).m;
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO invoice_attachments (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), invoiceId, fileId, max + 1, Date.now());
+    touchInvoice(db, invoiceId, Date.now());
+  });
+  tx();
+}
+
+export function updateInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string, patch: { sortOrder: number }): void {
+  if (!Number.isInteger(patch.sortOrder)) throw new ValidationError('sortOrder must be an integer');
+  const tx = db.transaction(() => {
+    const r = db.prepare('UPDATE invoice_attachments SET sortOrder = ? WHERE invoiceId = ? AND fileId = ?').run(patch.sortOrder, invoiceId, fileId);
+    if (r.changes === 0) throw new NotFoundError('Attachment not on this invoice');
+    touchInvoice(db, invoiceId, Date.now());
+  });
+  tx();
+}
+
+export function removeInvoiceAttachment(db: Database.Database, invoiceId: string, fileId: string): void {
+  const tx = db.transaction(() => {
+    const r = db.prepare('DELETE FROM invoice_attachments WHERE invoiceId = ? AND fileId = ?').run(invoiceId, fileId);
+    if (r.changes > 0) touchInvoice(db, invoiceId, Date.now());
+  });
+  tx();
+}
+
 export function deleteInvoice(db: Database.Database, id: string): void {
   const tx = db.transaction(() => {
     db.prepare("DELETE FROM payments WHERE targetType = 'invoice' AND targetId = ?").run(id);
     db.prepare('DELETE FROM invoice_lines WHERE invoiceId = ?').run(id);
+    db.prepare('DELETE FROM invoice_photos WHERE invoiceId = ?').run(id);
+    db.prepare('DELETE FROM invoice_attachments WHERE invoiceId = ?').run(id);
     db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
   });
   tx();

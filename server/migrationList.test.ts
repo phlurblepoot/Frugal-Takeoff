@@ -1027,3 +1027,44 @@ describe('migration 33: invoice-notes', () => {
     db.close();
   });
 });
+
+describe('migration 34: invoice-photos-attachments', () => {
+  it('creates invoice_photos and invoice_attachments (additive, IF NOT EXISTS)', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Proj', 1);
+    db.prepare('INSERT INTO invoices (id, projectId, number, status, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, ?, ?)')
+      .run('i1', 'p1', '1001', 'draft', 1, 1);
+
+    db.prepare('INSERT INTO invoice_photos (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run('ph1', 'i1', 'f1', 0, 1);
+    expect(() =>
+      db.prepare('INSERT INTO invoice_photos (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)').run('ph2', 'i1', 'f1', 1, 1),
+    ).toThrow(/UNIQUE/);
+
+    db.prepare('INSERT INTO invoice_attachments (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
+      .run('at1', 'i1', 'a1', 0, 1);
+    expect(() =>
+      db.prepare('INSERT INTO invoice_attachments (id, invoiceId, fileId, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)').run('at2', 'i1', 'a1', 1, 1),
+    ).toThrow(/UNIQUE/);
+
+    expect(db.prepare('SELECT COUNT(*) c FROM invoice_photos WHERE invoiceId = ?').get('i1')).toEqual({ c: 1 });
+    expect(db.prepare('SELECT COUNT(*) c FROM invoice_attachments WHERE invoiceId = ?').get('i1')).toEqual({ c: 1 });
+
+    // Idempotent: replaying up() must not throw.
+    const mig34 = migrations.find(m => m.version === 34)!;
+    expect(() => mig34.up({ db, dataDir: tmpDir() })).not.toThrow();
+
+    db.close();
+  });
+
+  it('creates idx_invoice_photos_invoice and idx_invoice_attachments_invoice', () => {
+    const db = openDb(':memory:');
+    runMigrations(db, tmpDir(), migrations);
+    const names = (db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_invoice_photos_invoice', 'idx_invoice_attachments_invoice')`
+    ).all() as { name: string }[]).map(r => r.name);
+    expect(names.sort()).toEqual(['idx_invoice_attachments_invoice', 'idx_invoice_photos_invoice']);
+    db.close();
+  });
+});
