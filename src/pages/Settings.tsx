@@ -23,6 +23,16 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.2.0',
+    date: 'September 12, 2026',
+    changes: [
+      'Schedule of values can be finalized: from the SOV tab, or automatically when the first pay application is created. A finalized SOV refuses line edits (server-enforced) so earlier pay applications never change under you; approved change orders can still be synced in. Admins can reopen it with a warning.',
+      'SOV supports header lines (label-only section titles) and blank spacer lines. They show in the SOV editor, the pay-app G703, and the Excel export, and never count toward any total.',
+      'Split an SOV line by percentage: the original becomes a header and each part becomes an item line under it (e.g. 60/40), with item numbers like 5.1, 5.2. Cents always add up to the original.',
+      'SOV editor: contract lines and change-order lines are now separate sections; move lines up/down, insert a header or blank above any line.',
+    ],
+  },
+  {
     version: '3.1.1',
     date: 'September 11, 2026',
     changes: [
