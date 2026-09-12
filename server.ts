@@ -35,6 +35,8 @@ import { sweepUploads } from './server/mail/uploads';
 import { installInboundHooks } from './server/mail/inboundHooks';
 import { registerBackupRoutes } from './server/backup/routes';
 import { createDriveStore } from './server/backup/drive';
+import { readDrive } from './server/backup/settings';
+import { BackupScheduler } from './server/backup/scheduler';
 
 dotenv.config();
 
@@ -649,13 +651,16 @@ async function startServer() {
   });
 
   const BACKUP_PATH = process.env.BACKUP_PATH || path.join(DATA_DIR, 'backup-store');
-  registerBackupRoutes(app, {
+  const backupRoutes = registerBackupRoutes(app, {
     db, dataDir: DATA_DIR, backupRoot: BACKUP_PATH, backupRootIsDefault: !process.env.BACKUP_PATH,
     appVersion: APP_VERSION, env: process.env, publicUrl: process.env.APP_PUBLIC_URL || null, jwtSecret: JWT_SECRET,
     mailCrypto, authenticateToken, requireAdmin, verifyToken, broadcastChange,
     closeDb: () => db.close(), exit: code => process.exit(code),
     driveStore: conn => createDriveStore(conn, { db, env: process.env, mailCrypto, fetch: globalThis.fetch }),
   });
+  const backupScheduler = new BackupScheduler({ db, run: (t, trigger) => backupRoutes.runAndWait(t, trigger), hasDrive: () => !!readDrive(db, mailCrypto) });
+  backupRoutes.setScheduler(backupScheduler);
+  backupScheduler.start();
 
   // Before the first sync tick: a reply that lands in that tick must still be
   // captured against its RFI.

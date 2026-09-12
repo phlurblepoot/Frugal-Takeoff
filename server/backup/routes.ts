@@ -10,7 +10,7 @@ import type Database from 'better-sqlite3';
 import type { MailCrypto } from '../mail/crypto';
 import type { EntityChangedEvent } from '../realtime/changeFeed';
 import { LocalStore } from './store';
-import { takeSnapshot, listRuns, isRunActive, BackupRunningError } from './snapshot';
+import { takeSnapshot, listRuns, isRunActive, BackupRunningError, type SnapshotResult } from './snapshot';
 import { streamSnapshotZip, unpackSnapshotZip } from './zip';
 import { isFreshInstall, restoreSnapshot, RestoreRefusedError, DEFAULT_ADMIN_ID } from './restore';
 import { readSchedule, writeSchedule, readKeep, writeKeep, readDrive, writeDrive, type DriveConnection } from './settings';
@@ -30,15 +30,20 @@ export interface BackupRouteDeps {
   broadcastChange: (e: EntityChangedEvent) => void;
   closeDb: () => void; exit: (code: number) => void;
   fetch?: typeof fetch;
-  scheduler?: { nextRunAt(): number | null };
   driveStore?: (conn: DriveConnection) => BackupTarget & BackupSource;
+}
+
+export interface BackupRoutesHandle {
+  startRun: (t: Target, trigger: 'manual' | 'schedule') => Promise<string>;
+  runAndWait: (t: Target, trigger: 'manual' | 'schedule') => Promise<SnapshotResult>;
+  setScheduler: (s: { nextRunAt(): number | null }) => void;
 }
 
 const TARGETS = ['local', 'drive'] as const;
 type Target = typeof TARGETS[number];
 const isTarget = (v: unknown): v is Target => typeof v === 'string' && (TARGETS as readonly string[]).includes(v);
 
-export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps): void {
+export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps): BackupRoutesHandle {
   const { db, authenticateToken, requireAdmin } = deps;
   const local = new LocalStore(deps.backupRoot);
   const targetFor = (t: Target): (BackupTarget & BackupSource) | null => {
@@ -47,15 +52,22 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!conn || !deps.driveStore) return null;
     return deps.driveStore(conn);
   };
+  let scheduler: { nextRunAt(): number | null } | null = null;
 
-  // Run in the background; the response is the run id, progress arrives via
-  // the backupRun change-feed event and GET /runs.
-  const startRun = (t: Target, trigger: 'manual' | 'schedule'): Promise<string> => {
+  // Shared by startRun (fire-and-forget) and runAndWait (scheduler): resolve
+  // the target, guard against a concurrent run, and take the snapshot.
+  const runNow = (t: Target, trigger: 'manual' | 'schedule'): Promise<SnapshotResult> => {
     const target = targetFor(t);
     if (!target) throw new Error(t === 'drive' ? 'Google Drive is not connected' : 'no target');
     if (isRunActive(db, t)) throw new BackupRunningError();
     const keep = readKeep(db)[t];
-    const p = takeSnapshot(db, deps.dataDir, target, { trigger, keep, appVersion: deps.appVersion, env: deps.env });
+    return takeSnapshot(db, deps.dataDir, target, { trigger, keep, appVersion: deps.appVersion, env: deps.env });
+  };
+
+  // Run in the background; the response is the run id, progress arrives via
+  // the backupRun change-feed event and GET /runs.
+  const startRun = (t: Target, trigger: 'manual' | 'schedule'): Promise<string> => {
+    const p = runNow(t, trigger);
     p.then(r => deps.broadcastChange({ type: 'backupRun', id: r.runId, action: 'updated' } as EntityChangedEvent))
      .catch(() => deps.broadcastChange({ type: 'backupRun', id: t, action: 'updated' } as EntityChangedEvent));
     // The run id is minted inside takeSnapshot; read it back from the newest running row.
@@ -64,6 +76,16 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
       resolve(row?.id ?? '');
     }));
   };
+
+  // Used by the scheduler: awaits completion (a scheduled run must finish
+  // local before deciding whether to proceed to Drive).
+  const runAndWait = async (t: Target, trigger: 'manual' | 'schedule'): Promise<SnapshotResult> => {
+    const r = await runNow(t, trigger);
+    deps.broadcastChange({ type: 'backupRun', id: r.runId, action: 'updated' } as EntityChangedEvent);
+    return r;
+  };
+
+  const setScheduler = (s: { nextRunAt(): number | null }): void => { scheduler = s; };
 
   app.get('/api/backup/status', authenticateToken, requireAdmin, async (_req, res) => {
     const lastRun = (t: Target) => db.prepare(`SELECT * FROM backup_runs WHERE target = ? AND status != 'running' ORDER BY startedAt DESC LIMIT 1`).get(t) ?? null;
@@ -75,7 +97,7 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
       root: deps.backupRoot, rootIsDefault: deps.backupRootIsDefault,
       lastRun: { local: lastRun('local'), drive: lastRun('drive') }, running,
       totals: { snapshots: snaps.length, objects: objects.size, bytes: snaps[0]?.counts.bytes ?? 0 },
-      nextRunAt: deps.scheduler?.nextRunAt() ?? null,
+      nextRunAt: scheduler?.nextRunAt() ?? null,
       schedule: readSchedule(db), keep: readKeep(db),
       drive: drive ? { connected: true, email: drive.email, needsReconnect: !!drive.needsReconnect } : { connected: false, configurable: !!deps.env.GOOGLE_OAUTH_CLIENT_ID },
     });
@@ -117,9 +139,6 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (req.body?.keep) writeKeep(db, req.body.keep);
     res.json({ schedule: readSchedule(db), keep: readKeep(db) });
   });
-
-  // Exposed for the scheduler (Task 9) and tests.
-  (app as any).__backupStartRun = startRun;
 
   // ── Fresh-install restore (spec §Setup mode and restore) ─────────────────
   app.get('/api/setup/state', (_req, res) => res.json({ fresh: isFreshInstall(db) }));
@@ -229,4 +248,6 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!setupDrive.conn || !deps.driveStore) return res.status(400).json({ error: 'Google Drive is not connected' });
     try { res.json(await deps.driveStore(setupDrive.conn).listSnapshots()); } catch (e) { res.status(502).json({ error: (e as Error).message }); }
   });
+
+  return { startRun, runAndWait, setScheduler };
 }
