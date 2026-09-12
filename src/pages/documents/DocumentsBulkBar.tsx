@@ -1,33 +1,65 @@
 // src/pages/documents/DocumentsBulkBar.tsx
 // Dark bulk-action bar shown once at least one row is selected (mockup: N
-// selected · Download · Archive/Restore · Delete (N of M) · clear). Purely
-// presentational — DocumentsPage owns the actual mutations (patchFile/
-// deleteFile calls + refresh); this component only decides what's enabled
-// via selectionPolicy and confirms before delete.
-import React, { useState } from 'react';
-import { Archive, ArchiveRestore, Download, Trash2, X } from 'lucide-react';
+// selected · Download · Archive/Restore · Change type (N of M) · Delete (N of
+// M) · clear). Purely presentational — DocumentsPage owns the actual
+// mutations (patchFile/deleteFile calls + refresh); this component only
+// decides what's enabled via selectionPolicy and confirms before delete.
+import React, { useEffect, useRef, useState } from 'react';
+import { Archive, ArchiveRestore, Download, Tag, Trash2, X } from 'lucide-react';
 import { DocumentRow } from '../../utils/store';
 import { useToast } from '../../components/Toast';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { CustomDocType, retypeOptions } from './docTypes';
 import { selectionPolicy } from './documentsPolicy';
 
-type Busy = 'download' | 'archive' | 'delete' | null;
+type Busy = 'download' | 'archive' | 'retype' | 'delete' | null;
 
 export const DocumentsBulkBar: React.FC<{
   selected: DocumentRow[];
+  customTypes: CustomDocType[];
   archivedView: boolean;
   onClear: () => void;
   onDownload: (rows: DocumentRow[]) => Promise<void>;
   onArchive: (rows: DocumentRow[], archived: boolean) => Promise<void>;
+  // Only ever handed the re-typeable subset (selectionPolicy.retypeable) —
+  // a row locked to a system kind is never sent.
+  onChangeKind: (rows: DocumentRow[], kind: string) => Promise<void>;
   onDelete: (rows: DocumentRow[]) => Promise<void>;
-}> = ({ selected, archivedView, onClear, onDownload, onArchive, onDelete }) => {
+}> = ({ selected, customTypes, archivedView, onClear, onDownload, onArchive, onChangeKind, onDelete }) => {
   const { toast } = useToast();
   const confirm = useConfirm();
   const [busy, setBusy] = useState<Busy>(null);
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const typeMenuRef = useRef<HTMLDivElement>(null);
+
+  // Outside-click / Escape close the type popover. Same idiom as
+  // MultiSelectDropdown's mousedown-outside listener.
+  useEffect(() => {
+    if (!typeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (typeMenuRef.current && !typeMenuRef.current.contains(e.target as Node)) setTypeMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTypeMenuOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [typeMenuOpen]);
 
   if (selected.length === 0) return null;
 
-  const { downloadable, archivable, deletable } = selectionPolicy(selected);
+  const { downloadable, archivable, deletable, retypeable } = selectionPolicy(selected);
+  const typeOptions = retypeOptions(customTypes);
+
+  const handleChangeKind = async (kind: string) => {
+    setTypeMenuOpen(false);
+    setBusy('retype');
+    try { await onChangeKind(retypeable, kind); }
+    catch { toast('Failed to change type', { type: 'error' }); }
+    finally { setBusy(null); }
+  };
 
   const handleDownload = async () => {
     setBusy('download');
@@ -86,6 +118,37 @@ export const DocumentsBulkBar: React.FC<{
           {archivedView ? <ArchiveRestore size={14} /> : <Archive size={14} />}
           {busy === 'archive' ? (archivedView ? 'Restoring…' : 'Archiving…') : (archivedView ? 'Restore' : 'Archive')}
         </button>
+        <div ref={typeMenuRef} className="relative">
+          <button
+            data-testid="documents-bulk-change-type"
+            aria-haspopup="menu"
+            aria-expanded={typeMenuOpen}
+            onClick={() => setTypeMenuOpen(o => !o)}
+            disabled={busy !== null || retypeable.length === 0}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Tag size={14} />
+            {busy === 'retype' ? 'Changing type…' : `Change type (${retypeable.length} of ${selected.length})`}
+          </button>
+          {typeMenuOpen && retypeable.length > 0 && (
+            <div
+              role="menu"
+              aria-label="Change type"
+              className="absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto rounded-lg border border-edge bg-raised py-1 text-ink shadow-lg"
+            >
+              {typeOptions.map(o => (
+                <button
+                  key={o.id}
+                  role="menuitem"
+                  onClick={() => handleChangeKind(o.id)}
+                  className="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-hover"
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           onClick={handleDelete}
           disabled={busy !== null || deletable.length === 0}

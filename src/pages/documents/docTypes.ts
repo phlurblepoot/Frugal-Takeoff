@@ -89,3 +89,11 @@ export const isDeletableGeneratedKind = (kind: string): boolean =>
 
 export const isDirectUploadKind = (kind: string): boolean =>
   (DIRECT_UPLOAD_KINDS as readonly string[]).includes(kind) || kind.startsWith('custom:');
+
+// The option list every "Change type" control offers (row context menu +
+// bulk bar): the direct-upload kinds, then the admin-defined custom types.
+// One builder so the two menus can never drift apart.
+export const retypeOptions = (customTypes: CustomDocType[]): { id: string; label: string }[] => [
+  ...DIRECT_UPLOAD_KINDS.map(k => ({ id: k, label: kindLabel(k) })),
+  ...customTypes.map(t => ({ id: `custom:${t.id}`, label: t.label })),
+];
