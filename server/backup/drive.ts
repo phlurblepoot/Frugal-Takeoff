@@ -25,6 +25,20 @@ const FOLDER = 'application/vnd.google-apps.folder';
 const ALIGN = 256 * 1024;
 const CHUNK = 32 * ALIGN; // 8 MiB
 const TIMEOUT_MS = 60_000;
+// A throttled upload gets exactly one retry; Google says how long to hold off
+// via Retry-After, and a backup run must not sit on a huge value for ever.
+const RETRY_CAP_MS = 60_000;
+const DEFAULT_RETRY_MS = 1000;
+
+/** Retry-After as milliseconds: a count of seconds, or an HTTP date. */
+export function retryAfterMs(header: string | null | undefined, now = Date.now()): number | null {
+  const h = header?.trim();
+  if (!h) return null;
+  if (/^\d+$/.test(h)) return Math.min(Number(h) * 1000, RETRY_CAP_MS);
+  const at = Date.parse(h);
+  if (Number.isNaN(at)) return null;
+  return Math.min(Math.max(at - now, 0), RETRY_CAP_MS);
+}
 /** Object names are content hashes and are interpolated into Drive `q`
  *  strings, so nothing but a sha256 may reach one. */
 const isSha = (s: string): boolean => /^[0-9a-f]{64}$/.test(s);
@@ -98,7 +112,9 @@ export class DriveStore implements BackupTarget, BackupSource {
   readonly kind = 'drive' as const;
   private tokens: TokenSource;
   private access: Access;
-  constructor(private conn: DriveConnection, private opts: { env: NodeJS.ProcessEnv; fetch: typeof fetch; onRotate?: (t: string) => void; onAuthExpired?: () => void }) {
+  private sleep: (ms: number) => Promise<void>;
+  constructor(private conn: DriveConnection, private opts: { env: NodeJS.ProcessEnv; fetch: typeof fetch; onRotate?: (t: string) => void; onAuthExpired?: () => void; sleep?: (ms: number) => Promise<void> }) {
+    this.sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
     this.tokens = new TokenSource({ refreshToken: conn.refreshToken, refresh: t => googleRefresh(opts.env, t, opts.fetch), onRotate: opts.onRotate });
     this.access = async () => { try { return await this.tokens.get(); } catch (e) { if (e instanceof AuthExpiredError) opts.onAuthExpired?.(); throw e; } };
   }
@@ -122,7 +138,7 @@ export class DriveStore implements BackupTarget, BackupSource {
       const send = async (body: Buffer) => {
         const range = body.length ? `bytes ${offset}-${offset + body.length - 1}/${size}` : `bytes */${size}`;
         const r = await this.opts.fetch(session, { method: 'PUT', headers: { 'Content-Length': String(body.length), 'Content-Range': range }, body: body as any, signal: AbortSignal.timeout(TIMEOUT_MS) });
-        if (r.status === 429 || r.status >= 500) throw Object.assign(new Error(`Drive upload ${r.status}`), { retryable: true });
+        if (r.status === 429 || r.status >= 500) throw Object.assign(new Error(`Drive upload ${r.status}`), { retryable: true, retryAfter: retryAfterMs(r.headers.get('Retry-After')) });
         if (!r.ok && r.status !== 308) throw new Error(`Drive upload ${r.status}`);
         offset += body.length; complete = r.ok;
       };
@@ -139,7 +155,11 @@ export class DriveStore implements BackupTarget, BackupSource {
       if (!complete) throw new Error(`Drive upload of ${name} did not complete — the source gave ${offset} of the ${size} bytes expected`);
     };
     try { await attempt(); }
-    catch (e: any) { if (!e?.retryable) throw e; await new Promise(r => setTimeout(r, 1000)); await attempt(); }
+    catch (e: any) {
+      if (!e?.retryable) throw e;
+      await this.sleep(typeof e.retryAfter === 'number' ? e.retryAfter : DEFAULT_RETRY_MS);
+      await attempt();
+    }
   }
   async putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void> { if (!isSha(sha256)) throw new Error('bad object id'); await this.upload(sha256, this.conn.objectsFolderId, source, size); }
   async writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest }): Promise<void> {
@@ -173,6 +193,12 @@ export class DriveStore implements BackupTarget, BackupSource {
     const out: SnapshotSummary[] = [];
     for (const f of folders) { if (!isSnapshotId(f.name)) continue; try { out.push(summarize(f.name, await this.readManifest(f.name))); } catch { /* incomplete snapshot: no manifest */ } }
     return out.sort((a, b) => b.id.localeCompare(a.id));
+  }
+  async listIncompleteSnapshots(): Promise<string[]> {
+    const folders = await listAll(this.access, this.opts.fetch, `'${this.conn.snapshotsFolderId}' in parents and mimeType = '${FOLDER}' and trashed = false`);
+    const out: string[] = [];
+    for (const f of folders) { if (isSnapshotId(f.name) && !(await this.fileIn(f.id, 'manifest.json'))) out.push(f.name); }
+    return out.sort();
   }
   async deleteSnapshot(id: string): Promise<void> { const f = await this.snapshotFolder(id); if (f) await this.call(`files/${f}`, { method: 'DELETE' }); }
   async deleteObject(sha256: string): Promise<void> { if (!isSha(sha256)) throw new Error('bad object id'); const f = await this.fileIn(this.conn.objectsFolderId, sha256); if (f) await this.call(`files/${f}`, { method: 'DELETE' }); }

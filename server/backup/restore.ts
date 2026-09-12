@@ -53,7 +53,12 @@ export async function restoreSnapshot(source: BackupSource, snapshotId: string, 
   log(`restore ${snapshotId}: ${manifest.files.length} file(s) verified`);
   // 2. mail key (the sealed credentials in the restored db need the original)
   if ('sha256' in manifest.mailKey) {
-    await copyVerified(await source.openSnapshotFile(snapshotId, 'mail.key'), path.join(deps.dataDir, 'mail.key'), manifest.mailKey.sha256);
+    const keyPath = path.join(deps.dataDir, 'mail.key');
+    await copyVerified(await source.openSnapshotFile(snapshotId, 'mail.key'), keyPath, manifest.mailKey.sha256);
+    // loadMailCrypto creates this 0600; a restored copy inherits the umask
+    // instead, so put the original mode back on the one file that unseals
+    // every stored mail credential.
+    fs.chmodSync(keyPath, 0o600);
   }
   // 3. database, staged beside the live one
   const staged = path.join(deps.dataDir, 'app.db.restored');

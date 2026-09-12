@@ -94,7 +94,7 @@ export async function takeSnapshot(db: Database.Database, dataDir: string, targe
     bytesWritten += dbInfo.size;
 
     // 4. retention
-    await pruneTarget(target, opts.keep);
+    await pruneTarget(target, opts.keep, snapshotId);
 
     db.prepare(`UPDATE backup_runs SET finishedAt = ?, status = 'ok', snapshotId = ?, objectsAdded = ?, bytesWritten = ?, warningsJson = ? WHERE id = ?`)
       .run(Date.now(), snapshotId, objectsAdded, bytesWritten, JSON.stringify(warnings), runId);
@@ -111,10 +111,19 @@ export async function takeSnapshot(db: Database.Database, dataDir: string, targe
   }
 }
 
-export async function pruneTarget(target: BackupTarget, keep: number): Promise<{ snapshotsDeleted: number; objectsDeleted: number }> {
+export async function pruneTarget(target: BackupTarget, keep: number, currentSnapshotId?: string): Promise<{ snapshotsDeleted: number; objectsDeleted: number }> {
   const snaps = await target.listSnapshots(); // newest first
   const doomed = snaps.slice(Math.max(1, keep));
   for (const s of doomed) await target.deleteSnapshot(s.id);
+  // A run that died before writing manifest.json leaves a folder holding a
+  // whole app.db that no listing will ever show. Only sweep the ones older
+  // than the run that just finished — anything newer is not ours to judge,
+  // and the current run's own folder must never be touched.
+  if (currentSnapshotId) {
+    for (const id of (await target.listIncompleteSnapshots?.()) ?? []) {
+      if (id < currentSnapshotId) await target.deleteSnapshot(id);
+    }
+  }
   const kept = snaps.slice(0, Math.max(1, keep));
   const referenced = new Set<string>();
   for (const s of kept) for (const f of (await target.readManifest(s.id)).files) referenced.add(f.sha256);

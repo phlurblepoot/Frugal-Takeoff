@@ -10,7 +10,7 @@ import type { Manifest } from './types';
 class FakeDrive {
   files = new Map<string, { name: string; parents: string[]; mime: string; data?: Buffer }>();
   sessions = new Map<string, { name: string; parents: string[]; data: Buffer }>();
-  next = 1; failNextUploadWith: number | null = null; calls: string[] = []; puts: string[] = [];
+  next = 1; failNextUploadWith: number | null = null; failNextUploadRetryAfter: string | null = null; calls: string[] = []; puts: string[] = [];
   fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
     const u = new URL(url); this.calls.push(`${init.method ?? 'GET'} ${u.pathname}`);
     if (u.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'AT', expires_in: 3600 });
@@ -34,7 +34,11 @@ class FakeDrive {
     }
     if (u.pathname.startsWith('/upload/session/') && init.method === 'PUT') {
       const cr = String((init.headers as any)['Content-Range']); this.puts.push(cr);
-      if (this.failNextUploadWith) { const s = this.failNextUploadWith; this.failNextUploadWith = null; return new Response('busy', { status: s }); }
+      if (this.failNextUploadWith) {
+        const s = this.failNextUploadWith; this.failNextUploadWith = null;
+        const ra = this.failNextUploadRetryAfter; this.failNextUploadRetryAfter = null;
+        return new Response('busy', { status: s, headers: ra ? { 'Retry-After': ra } : {} });
+      }
       const sid = u.pathname.split('/').pop()!; const s = this.sessions.get(sid)!;
       const body = Buffer.from((init.body ?? Buffer.alloc(0)) as ArrayBuffer);
       // `bytes a-b/total`, or `bytes */total` for the zero-length finalise.
@@ -93,6 +97,30 @@ describe('DriveStore', () => {
     await st.putObject('d'.repeat(64), () => Readable.from([Buffer.from('dd')]), 2);
     expect([...fake.files.values()].find(f => f.name === 'd'.repeat(64))!.data!.toString()).toBe('dd');
   });
+  it('waits the Retry-After Google asked for before its one retry, capped at a minute', async () => {
+    const slept: number[] = [];
+    const folders = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
+    const st = new DriveStore({ refreshToken: 'r', email: 'a@b', ...folders },
+      { env, fetch: fake.fetch as any, sleep: async (ms: number) => { slept.push(ms); } });
+
+    fake.failNextUploadWith = 429; fake.failNextUploadRetryAfter = '2';
+    await st.putObject('a'.repeat(64), () => Readable.from([Buffer.from('A')]), 1);
+    expect(slept).toEqual([2000]);
+
+    // An HTTP-date Retry-After is honoured too…
+    fake.failNextUploadWith = 503; fake.failNextUploadRetryAfter = new Date(Date.now() + 5000).toUTCString();
+    await st.putObject('b'.repeat(64), () => Readable.from([Buffer.from('B')]), 1);
+    expect(slept[1]).toBeGreaterThan(3000); expect(slept[1]).toBeLessThanOrEqual(5000);
+
+    // …an absurd one is capped, and no header keeps the old one-second wait.
+    fake.failNextUploadWith = 429; fake.failNextUploadRetryAfter = '9999';
+    await st.putObject('c'.repeat(64), () => Readable.from([Buffer.from('C')]), 1);
+    expect(slept[2]).toBe(60_000);
+    fake.failNextUploadWith = 503;
+    await st.putObject('d'.repeat(64), () => Readable.from([Buffer.from('D')]), 1);
+    expect(slept[3]).toBe(1000);
+  });
+
   it('uploads a zero-byte object and one whose size is an exact multiple of the chunk size', async () => {
     const st = await mk();
     await st.putObject('0'.repeat(64), () => Readable.from([]), 0);
@@ -131,6 +159,26 @@ describe('DriveStore', () => {
     fake.files.set('stray', { name: 'a-stray-folder', parents: [folders.objectsFolderId], mime: 'application/vnd.google-apps.folder' });
     expect(await st.listObjects()).toEqual(new Set(['a'.repeat(64)]));
   });
+  it('reports a Drive snapshot folder with no manifest as incomplete, and prune deletes only the older ones', async () => {
+    const st = await mk();
+    const fsm = await import('fs'); const osm = await import('os'); const pathm = await import('path');
+    const d = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'ft-dr-')); fsm.writeFileSync(pathm.join(d, 'db'), 'DB');
+    // Two folders a crashed run could have left: one before the run that is
+    // about to finish, one after it.
+    await st.writeSnapshot('20260912-000000', { dbPath: pathm.join(d, 'db'), mailKeyPath: null, manifest: manifest([]) });
+    for (const id of ['20250101-000000', '29990101-000000']) {
+      fake.files.set(`f-${id}`, { name: id, parents: [(st as any).conn.snapshotsFolderId], mime: 'application/vnd.google-apps.folder' });
+      fake.files.set(`db-${id}`, { name: 'app.db', parents: [`f-${id}`], mime: 'application/octet-stream', data: Buffer.from('leaked') });
+    }
+    expect((await st.listIncompleteSnapshots()).sort()).toEqual(['20250101-000000', '29990101-000000']);
+
+    const { pruneTarget } = await import('./snapshot');
+    await pruneTarget(st, 14, '20260912-000000');
+    expect(fake.files.has('f-20250101-000000')).toBe(false);
+    expect(fake.files.has('f-29990101-000000')).toBe(true);
+    expect((await st.listSnapshots()).map(s => s.id)).toEqual(['20260912-000000']);
+  });
+
   it('writeSnapshot uploads app.db, mail.key, then manifest last; listSnapshots/readManifest/openObject round-trip; prune deletes', async () => {
     const st = await mk();
     const fs = await import('fs'); const os = await import('os'); const path = await import('path');

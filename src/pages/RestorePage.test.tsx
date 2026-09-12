@@ -116,6 +116,20 @@ describe('RestorePage', () => {
     await waitFor(() => expect(screen.getByTestId('restore-progress')).toHaveTextContent(/restarting/i));
   });
 
+  it('keeps the progress screen when the server says a restore is already running', async () => {
+    const { RestoreRunningError } = await import('../utils/store');
+    h.restoreSnapshot.mockRejectedValueOnce(new RestoreRunningError());
+    mount();
+    fireEvent.click(await screen.findByTestId('restore-snapshot-20260912-020000'));
+    fireEvent.click(screen.getByTestId('restore-confirm'));
+    fireEvent.click(await screen.findByRole('button', { name: /^restore$/i }));
+    await waitFor(() => expect(h.restoreSnapshot).toHaveBeenCalled());
+    // Still working, not an error: no toast and no drop back to the picker.
+    expect(screen.getByTestId('restore-progress')).toHaveTextContent(/unpacking/i);
+    expect(screen.queryByTestId('restore-source-local')).toBeNull();
+    expect(screen.queryByText(/a restore is already running/i)).toBeNull();
+  });
+
   it('refuses a dropped file that is not a zip', async () => {
     mount();
     fireEvent.click(await screen.findByTestId('restore-source-upload'));

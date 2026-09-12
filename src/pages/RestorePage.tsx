@@ -22,7 +22,7 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
   formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupStateStrict, restoreDriveStartUrl,
-  restoreSnapshot, uploadRestoreZip, type BackupSnapshot,
+  RestoreRunningError, restoreSnapshot, uploadRestoreZip, type BackupSnapshot,
 } from '../utils/store';
 
 // The bootstrap admin a fresh install ships with. Only that account may
@@ -286,6 +286,10 @@ export const RestorePage: React.FC = () => {
       setResult({ files: r.files, bytes: r.bytes });
       setPhase('restarting');
     } catch (e) {
+      // The server already has a restore under way — a double click, or a
+      // reload onto one that is still copying. Nothing has failed, so stay on
+      // the progress screen rather than dropping back to the picker.
+      if (e instanceof RestoreRunningError) return;
       toast(errText(e), { type: 'error' });
       setPhase('pick');
     }

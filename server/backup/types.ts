@@ -19,6 +19,10 @@ export interface BackupTarget {
   putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void>;
   writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest }): Promise<void>;
   listSnapshots(): Promise<SnapshotSummary[]>;
+  /** Ids of snapshot folders that exist but carry no manifest.json — what a
+   *  run that died mid-write leaves behind. Every listing ignores them, so
+   *  retention is the only thing that can ever collect them. */
+  listIncompleteSnapshots?(): Promise<string[]>;
   readManifest(id: string): Promise<Manifest>;
   deleteSnapshot(id: string): Promise<void>;
   deleteObject(sha256: string): Promise<void>;

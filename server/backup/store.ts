@@ -12,7 +12,9 @@ import { pipeline } from 'stream/promises';
 import type { BackupSource, BackupTarget, Manifest, SnapshotSummary } from './types';
 import { isSnapshotId } from './types';
 
-const isSha = (s: string): boolean => /^[0-9a-f]{64}$|^[0-9a-f]{4,}$/.test(s) && !s.includes('/') && !s.includes('..');
+// Object names are sha256 hex and nothing else: the second alternative this
+// used to carry made the 64-char branch dead and let shorter names through.
+const isSha = (s: string): boolean => /^[0-9a-f]{64}$/.test(s);
 
 export async function sha256OfStream(s: NodeJS.ReadableStream): Promise<{ sha256: string; size: number }> {
   const h = crypto.createHash('sha256');
@@ -80,6 +82,14 @@ export class LocalStore implements BackupTarget, BackupSource {
       catch (e) { console.warn(`[backup] unreadable manifest in ${mp}:`, (e as Error).message); }
     }
     return out.sort((a, b) => b.id.localeCompare(a.id));
+  }
+
+  async listIncompleteSnapshots(): Promise<string[]> {
+    const dir = path.join(this.root, 'snapshots');
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(id => isSnapshotId(id) && !fs.existsSync(path.join(dir, id, 'manifest.json')))
+      .sort();
   }
 
   async readManifest(id: string): Promise<Manifest> {

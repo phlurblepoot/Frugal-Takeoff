@@ -29,6 +29,12 @@ describe('BackupScheduler', () => {
     s.start();
     expect(s.nextRunAt()).toBeNull(); expect(timers.length).toBe(1); // a poll timer, not a run
     writeSchedule(db, { enabled: true, hour: 2, minute: 0 });
+    // A restart with the schedule already on must publish the next run at
+    // once, not after the first poll a minute later.
+    const restarted = new BackupScheduler({ db, run, hasDrive: () => true, now: () => now, setTimeout: (() => ({ unref() {} })) as any, clearTimeout: (() => {}) as any });
+    restarted.start();
+    expect(restarted.nextRunAt()).toBe(new Date(2026, 8, 12, 2, 0, 0).getTime());
+    expect(run).not.toHaveBeenCalled();
     await s.tick();
     expect(s.nextRunAt()).toBe(new Date(2026, 8, 12, 2, 0, 0).getTime());
     now = new Date(2026, 8, 12, 2, 0, 1).getTime();

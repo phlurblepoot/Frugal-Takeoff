@@ -535,12 +535,12 @@ export class BackupRunningError extends Error {
   constructor() { super('A backup is already running'); this.name = 'BackupRunningError'; }
 }
 
-const backupJson = (method: string, url: string, body?: unknown) =>
+const backupJson = (method: string, url: string, body?: unknown, opts?: { timeoutMs?: number }) =>
   fetchWithRetry(url, {
     method,
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
+  }, opts);
 
 // The download and OAuth-start routes are followed by the browser itself (a
 // link or a redirect), which cannot carry an Authorization header — those
@@ -630,8 +630,24 @@ export const getRestoreDriveSnapshots = async (): Promise<BackupSnapshot[]> => {
 
 export const restoreDriveStartUrl = (): string => `/api/setup/restore/drive/start?${tokenParam()}`;
 
+/** Thrown for the server's 409 `restore_running`. Not a failure: a restore is
+ *  already under way on this server, so the screen keeps waiting for the
+ *  restart instead of reporting an error. */
+export class RestoreRunningError extends Error {
+  constructor() { super('A restore is already running'); this.name = 'RestoreRunningError'; }
+}
+
 export const restoreSnapshot = async (p: { source: 'local' | 'upload' | 'drive'; snapshotId: string; uploadId?: string }): Promise<{ restarting: true; files: number; bytes: number }> => {
-  const res = await backupJson('POST', '/api/setup/restore', p);
+  // This one request does the whole restore before it answers: every file
+  // copied and hash-checked, then the database staged. On a real data set
+  // that is minutes. fetchWithRetry's one-minute default aborted it and the
+  // screen claimed a failure while the server was still busy — so give it
+  // hours, and let the server's own in-flight guard handle a second attempt.
+  const res = await backupJson('POST', '/api/setup/restore', p, { timeoutMs: 6 * 60 * 60_000 });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'restore_running') throw new RestoreRunningError();
+  }
   await handleResponse(res);
   return res.json();
 };

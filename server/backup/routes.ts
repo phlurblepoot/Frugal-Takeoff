@@ -109,7 +109,9 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
       totals: { snapshots: snaps.length, objects: objects.size, bytes: snaps[0]?.counts.bytes ?? 0 },
       nextRunAt: scheduler?.nextRunAt() ?? null,
       schedule: readSchedule(db), keep: readKeep(db),
-      drive: drive ? { connected: true, email: drive.email, needsReconnect: !!drive.needsReconnect } : { connected: false, configurable: !!deps.env.GOOGLE_OAUTH_CLIENT_ID },
+      // `configurable` gates the Connect link, which 503s without a public URL
+      // to send Google back to — so both halves have to be present.
+      drive: drive ? { connected: true, email: drive.email, needsReconnect: !!drive.needsReconnect } : { connected: false, configurable: !!deps.env.GOOGLE_OAUTH_CLIENT_ID && !!deps.publicUrl },
     });
   });
 
@@ -166,7 +168,8 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     if (!/^[0-9a-f-]{36}$/.test(uploadId)) throw new RestoreRefusedError('bad upload id');
     return new LocalStore(path.join(uploadsDir, uploadId));
   };
-  // Setup-mode Drive grant lives here in memory only (Task 8 fills it).
+  // Setup-mode Drive grant lives here in memory only; the setup OAuth
+  // callback below fills it and nothing outside this closure reads it.
   const setupDrive: { conn: DriveConnection | null } = { conn: null };
 
   app.get('/api/setup/restore/sources', ...setupOnly, async (_req, res) => {
@@ -193,26 +196,36 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     }
   });
 
+  // One restore at a time. A real one copies every file and the whole
+  // database back — minutes, not seconds — and they all stage onto the same
+  // paths, so a second request (an impatient second click, a reload) would
+  // race the first rather than queue behind it. Held for the life of the
+  // process on success, because success ends in exit(0) and a restart.
+  let restoreInFlight = false;
+
   app.post('/api/setup/restore', ...setupOnly, async (req, res) => {
     const { source, snapshotId, uploadId } = req.body ?? {};
     if (!isSnapshotId(String(snapshotId))) return res.status(400).json({ error: 'bad snapshot id' });
-    let src: BackupSource;
+    if (source !== 'local' && source !== 'upload' && source !== 'drive') return res.status(400).json({ error: 'source must be local, upload or drive' });
+    if (source === 'drive' && (!setupDrive.conn || !deps.driveStore)) return res.status(400).json({ error: 'Google Drive is not connected' });
+    if (restoreInFlight) return res.status(409).json({ error: 'A restore is already running', code: 'restore_running' });
+    restoreInFlight = true;
     try {
-      if (source === 'local') src = local;
-      else if (source === 'upload') src = uploadStore(String(uploadId));
-      else if (source === 'drive') { if (!setupDrive.conn || !deps.driveStore) return res.status(400).json({ error: 'Google Drive is not connected' }); src = deps.driveStore(setupDrive.conn); }
-      else return res.status(400).json({ error: 'source must be local, upload or drive' });
+      const src: BackupSource = source === 'local' ? local
+        : source === 'upload' ? uploadStore(String(uploadId))
+        : deps.driveStore!(setupDrive.conn!);
       const r = await restoreSnapshot(src, snapshotId, { dataDir: deps.dataDir, closeDb: deps.closeDb, exit: deps.exit });
       res.json({ restarting: true, files: r.files, bytes: r.bytes });
       // After the response is flushed: swap the db and exit for the restart.
       res.on('finish', () => setImmediate(() => { try { r.finish(); } catch (e) { console.error('[backup] restore finish failed', e); } }));
     } catch (e) {
+      // Nothing was changed, so a corrected retry must be allowed.
+      restoreInFlight = false;
       if (e instanceof RestoreRefusedError) return res.status(400).json({ error: e.message });
       console.error('[backup] restore failed', e);
       res.status(500).json({ error: 'Restore failed — the server was left as it was. See the server log.' });
     }
   });
-  (app as any).__setupDrive = setupDrive; // Task 8 attaches the setup-mode Drive grant here
 
   // ── Google Drive connect (admin) and setup-mode connect ─────────────────
   const fetchFn = deps.fetch ?? globalThis.fetch;

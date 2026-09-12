@@ -136,6 +136,12 @@ describe('setup mode + restore', () => {
     expect(closeDb).toHaveBeenCalledTimes(1); expect(exit).toHaveBeenCalledWith(0);
     expect(fs.existsSync(pathFor(dataDir, 'f-1'))).toBe(true);
     expect(fs.readFileSync(path.join(dataDir, 'mail.key'), 'utf8')).toBe('k'.repeat(64) + '\n');
+
+    // A restore takes minutes on real data and ends with the process exiting.
+    // A second request — an impatient click, a reload — must be refused, not
+    // raced onto the same staging paths.
+    const again = await request(a).post('/api/setup/restore').send({ source: 'upload', uploadId: up.body.uploadId, snapshotId: snap.snapshotId });
+    expect(again.status).toBe(409); expect(again.body.code).toBe('restore_running');
   });
 
   it('restore of a newer-schema snapshot → 400 with both versions named', async () => {
@@ -143,8 +149,13 @@ describe('setup mode + restore', () => {
     const dir = st.snapshotDir('20260901-000000'); fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'app.db'), 'x');
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ format: 1, createdAt: 1, appVersion: '9', schemaVersion: 999, db: { size: 1, sha256: 'x' }, mailKey: { source: 'env' }, files: [], counts: { files: 0, bytes: 0 }, warnings: [] }));
-    const r = await request(asDefaultAdmin()).post('/api/setup/restore').send({ source: 'local', snapshotId: '20260901-000000' });
+    const a = asDefaultAdmin();
+    const r = await request(a).post('/api/setup/restore').send({ source: 'local', snapshotId: '20260901-000000' });
     expect(r.status).toBe(400); expect(r.body.error).toMatch(/999/);
+    // A refused restore left the server exactly as it was, so the guard has
+    // to be released — otherwise one bad zip locks restore out for good.
+    const retry = await request(a).post('/api/setup/restore').send({ source: 'local', snapshotId: '20260901-000000' });
+    expect(retry.status).toBe(400);
   });
 });
 

@@ -20,19 +20,19 @@ const bytes = (s: string) => () => Readable.from([Buffer.from(s)]);
 describe('LocalStore objects', () => {
   it('putObject writes atomically under objects/<sha> and listObjects reports it', async () => {
     const st = new LocalStore(root);
-    await st.putObject('aa11', bytes('hello'), 5);
-    expect(fs.readFileSync(path.join(root, 'objects', 'aa11'), 'utf8')).toBe('hello');
+    await st.putObject('aa11'.repeat(16), bytes('hello'), 5);
+    expect(fs.readFileSync(path.join(root, 'objects', 'aa11'.repeat(16)), 'utf8')).toBe('hello');
     expect(fs.readdirSync(path.join(root, 'objects')).filter(f => f.endsWith('.tmp'))).toEqual([]);
-    expect(await st.listObjects()).toEqual(new Set(['aa11']));
-    const s = await st.openObject('aa11');
+    expect(await st.listObjects()).toEqual(new Set(['aa11'.repeat(16)]));
+    const s = await st.openObject('aa11'.repeat(16));
     expect((await sha256OfStream(s)).size).toBe(5);
   });
 
   it('putObject leaves no partial file when the source stream errors', async () => {
     const st = new LocalStore(root);
     const bad = () => { const r = new Readable({ read() { this.destroy(new Error('boom')); } }); return r; };
-    await expect(st.putObject('bb22', bad, 1)).rejects.toThrow('boom');
-    expect(fs.existsSync(path.join(root, 'objects', 'bb22'))).toBe(false);
+    await expect(st.putObject('bb22'.repeat(16), bad, 1)).rejects.toThrow('boom');
+    expect(fs.existsSync(path.join(root, 'objects', 'bb22'.repeat(16)))).toBe(false);
     expect(fs.existsSync(path.join(root, 'objects'))).toBe(true);
     expect(fs.readdirSync(path.join(root, 'objects'))).toEqual([]);
   });
@@ -65,11 +65,11 @@ describe('LocalStore snapshots', () => {
     const st = new LocalStore(root);
     const dbPath = path.join(root, 'tmp.db'); write(dbPath, 'DB!');
     await st.writeSnapshot('20260912-010203', { dbPath, mailKeyPath: null, manifest: manifest([]) });
-    await st.putObject('cc33', bytes('c'), 1);
+    await st.putObject('cc33'.repeat(16), bytes('c'), 1);
     await st.deleteSnapshot('20260912-010203');
-    await st.deleteObject('cc33');
+    await st.deleteObject('cc33'.repeat(16));
     expect(fs.existsSync(path.join(root, 'snapshots', '20260912-010203'))).toBe(false);
-    expect(fs.existsSync(path.join(root, 'objects', 'cc33'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'objects', 'cc33'.repeat(16)))).toBe(false);
   });
 
   it('rejects ids that are not snapshot ids or hex hashes (no path traversal)', async () => {

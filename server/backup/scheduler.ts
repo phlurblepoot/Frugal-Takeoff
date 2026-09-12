@@ -27,7 +27,13 @@ export class BackupScheduler {
 
   nextRunAt(): number | null { return this.due; }
 
-  start(): void { this.arm(); }
+  /** Computes the next run straight away (without firing) so the status card
+   *  does not read "Not scheduled" for the first minute after a restart. */
+  start(): void {
+    const s = readSchedule(this.deps.db);
+    if (s.enabled) this.due = nextOccurrence(this.now(), s.hour, s.minute);
+    this.arm();
+  }
   stop(): void { if (this.timer) (this.deps.clearTimeout ?? clearTimeout)(this.timer); this.timer = null; }
   private arm(): void {
     const st = this.deps.setTimeout ?? setTimeout;

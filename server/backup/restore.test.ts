@@ -54,6 +54,9 @@ describe('restoreSnapshot', () => {
     expect(r.files).toBe(2);
     expect(treeHashes(dst)).toEqual(treeHashes(srcDir));
     expect(fs.readFileSync(path.join(dst, 'mail.key'), 'utf8')).toBe('k'.repeat(64) + '\n');
+    // The key seals every stored mail credential; loadMailCrypto creates it
+    // 0600 and a restore must not hand it back more widely readable.
+    expect(fs.statSync(path.join(dst, 'mail.key')).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(path.join(dst, 'app.db.restored'))).toBe(true);
     expect(fs.readFileSync(path.join(dst, 'app.db'), 'utf8')).toBe('fresh-db'); // untouched until finish
     expect(closeDb).not.toHaveBeenCalled(); expect(exit).not.toHaveBeenCalled();

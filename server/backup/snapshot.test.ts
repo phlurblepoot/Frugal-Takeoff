@@ -83,6 +83,24 @@ describe('takeSnapshot', () => {
     expect(listRuns(db)[0]).toMatchObject({ status: 'error', error: 'disk gone' });
   });
 
+  it('prune sweeps up the manifest-less folder a failed earlier run left behind, but never the current one', async () => {
+    // A Drive (or local) run that dies after app.db lands leaves a whole
+    // database in a folder with no manifest.json. Every listing ignores it, so
+    // it used to sit there for ever — one leaked copy per failed night.
+    addFile('a', 'AAA');
+    fs.mkdirSync(path.join(root, 'snapshots', '20250101-000000'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'snapshots', '20250101-000000', 'app.db'), 'leaked');
+    fs.mkdirSync(path.join(root, 'snapshots', '29990101-000000'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'snapshots', '29990101-000000', 'app.db'), 'from the future');
+    expect(await store.listIncompleteSnapshots()).toEqual(['20250101-000000', '29990101-000000']);
+
+    const r = await takeSnapshot(db, dataDir, store, opts);
+    expect(fs.existsSync(path.join(root, 'snapshots', '20250101-000000'))).toBe(false);
+    // Newer than the run that just finished: not this run's to judge.
+    expect(fs.existsSync(path.join(root, 'snapshots', '29990101-000000'))).toBe(true);
+    expect(fs.existsSync(store.snapshotDir(r.snapshotId))).toBe(true);
+  });
+
   it('prune keeps the newest N snapshots and only objects they reference', async () => {
     addFile('a', 'AAA');
     const r1 = await takeSnapshot(db, dataDir, store, { ...opts, keep: 99 });
