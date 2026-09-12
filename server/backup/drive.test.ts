@@ -10,13 +10,15 @@ import type { Manifest } from './types';
 class FakeDrive {
   files = new Map<string, { name: string; parents: string[]; mime: string; data?: Buffer }>();
   sessions = new Map<string, { name: string; parents: string[]; data: Buffer }>();
-  next = 1; failNextUploadWith: number | null = null; calls: string[] = [];
+  next = 1; failNextUploadWith: number | null = null; calls: string[] = []; puts: string[] = [];
   fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
     const u = new URL(url); this.calls.push(`${init.method ?? 'GET'} ${u.pathname}`);
     if (u.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'AT', expires_in: 3600 });
     if (u.pathname === '/drive/v3/files' && (init.method ?? 'GET') === 'GET') {
       const q = u.searchParams.get('q') ?? ''; const parent = /'([^']+)' in parents/.exec(q)?.[1]; const name = /name = '([^']+)'/.exec(q)?.[1];
-      const all = [...this.files].filter(([, f]) => (!parent || f.parents.includes(parent)) && (!name || f.name === name)).map(([id, f]) => ({ id, name: f.name, mimeType: f.mime }));
+      const isMime = /mimeType = '([^']+)'/.exec(q)?.[1]; const notMime = /mimeType != '([^']+)'/.exec(q)?.[1];
+      const all = [...this.files].filter(([, f]) => (!parent || f.parents.includes(parent)) && (!name || f.name === name)
+        && (!isMime || f.mime === isMime) && (!notMime || f.mime !== notMime)).map(([id, f]) => ({ id, name: f.name, mimeType: f.mime }));
       const start = Number(u.searchParams.get('pageToken') ?? 0); const page = all.slice(start, start + 2);
       return Response.json({ files: page, nextPageToken: start + 2 < all.length ? String(start + 2) : undefined });
     }
@@ -31,12 +33,18 @@ class FakeDrive {
       return new Response(null, { status: 200, headers: { Location: `https://www.googleapis.com/upload/session/${sid}` } });
     }
     if (u.pathname.startsWith('/upload/session/') && init.method === 'PUT') {
+      const cr = String((init.headers as any)['Content-Range']); this.puts.push(cr);
       if (this.failNextUploadWith) { const s = this.failNextUploadWith; this.failNextUploadWith = null; return new Response('busy', { status: s }); }
       const sid = u.pathname.split('/').pop()!; const s = this.sessions.get(sid)!;
-      s.data = Buffer.concat([s.data, Buffer.from((init.body ?? Buffer.alloc(0)) as ArrayBuffer)]);
+      const body = Buffer.from((init.body ?? Buffer.alloc(0)) as ArrayBuffer);
       // `bytes a-b/total`, or `bytes */total` for the zero-length finalise.
-      const range = /bytes (?:(\d+)-(\d+)|\*)\/(\d+)/.exec(String((init.headers as any)['Content-Range']))!;
-      if (s.data.length !== Number(range[3])) return new Response(null, { status: 308 });
+      const range = /bytes (?:(\d+)-(\d+)|\*)\/(\d+)/.exec(cr)!;
+      const total = Number(range[3]);
+      // Google refuses a chunk that does not reach the end unless its length is
+      // a multiple of 256 KiB.
+      if (range[2] !== undefined && Number(range[2]) + 1 < total && body.length % (256 * 1024) !== 0) return new Response('bad chunk', { status: 400 });
+      s.data = Buffer.concat([s.data, body]);
+      if (s.data.length !== total) return new Response(null, { status: 308 });
       const id = `id${this.next++}`;
       this.files.set(id, { name: s.name, parents: s.parents, mime: 'application/octet-stream', data: s.data });
       this.sessions.delete(sid);
@@ -92,6 +100,36 @@ describe('DriveStore', () => {
     const big = Buffer.alloc(8 * 1024 * 1024, 7);
     await st.putObject('7'.repeat(64), () => Readable.from([big]), big.length);
     expect([...fake.files.values()].find(f => f.name === '7'.repeat(64))!.data!.length).toBe(big.length);
+  });
+  it('splits a large source into 256 KiB-aligned chunks and a final remainder', async () => {
+    const st = await mk();
+    const total = 8 * 1024 * 1024 + 300 * 1024;
+    const source = () => Readable.from((function* () {
+      for (let sent = 0; sent < total; sent += 100 * 1024) yield Buffer.alloc(Math.min(100 * 1024, total - sent), 1);
+    })());
+    await st.putObject('1'.repeat(64), source, total);
+    expect(fake.puts).toEqual([`bytes 0-8388607/${total}`, `bytes 8388608-${total - 1}/${total}`]);
+    expect([...fake.files.values()].find(f => f.name === '1'.repeat(64))!.data!.length).toBe(total);
+  });
+  it('a source that runs short of the declared size fails the upload instead of recording it', async () => {
+    const st = await mk();
+    await expect(st.putObject('2'.repeat(64), () => Readable.from([Buffer.alloc(512 * 1024)]), 1024 * 1024)).rejects.toThrow(/did not complete/);
+    expect([...fake.files.values()].some(f => f.name === '2'.repeat(64))).toBe(false);
+  });
+  it('rejects an object id that is not a sha256 before touching the network', async () => {
+    const st = await mk();
+    const before = fake.calls.length;
+    await expect(st.openObject('not-a-hash')).rejects.toThrow(/bad object id/);
+    await expect(st.deleteObject('../../etc/passwd')).rejects.toThrow(/bad object id/);
+    await expect(st.putObject("x' or '1", () => Readable.from([Buffer.from('x')]), 1)).rejects.toThrow(/bad object id/);
+    expect(fake.calls.length).toBe(before);
+  });
+  it('listObjects ignores a folder that turns up inside objects/', async () => {
+    const folders = await ensureDriveFolders(async () => 'AT', fake.fetch as any);
+    const st = new DriveStore({ refreshToken: 'r', email: 'a@b', ...folders }, { env, fetch: fake.fetch as any });
+    await st.putObject('a'.repeat(64), () => Readable.from([Buffer.from('a')]), 1);
+    fake.files.set('stray', { name: 'a-stray-folder', parents: [folders.objectsFolderId], mime: 'application/vnd.google-apps.folder' });
+    expect(await st.listObjects()).toEqual(new Set(['a'.repeat(64)]));
   });
   it('writeSnapshot uploads app.db, mail.key, then manifest last; listSnapshots/readManifest/openObject round-trip; prune deletes', async () => {
     const st = await mk();

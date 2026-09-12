@@ -20,8 +20,14 @@ export const ROOT_FOLDER_NAME = 'Frugal Takeoff Backups';
 const API = 'https://www.googleapis.com/drive/v3/';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const FOLDER = 'application/vnd.google-apps.folder';
-const CHUNK = 8 * 1024 * 1024;
+// Google accepts a non-final resumable chunk only if its length is a multiple
+// of 256 KiB, so every chunk we send is a whole number of these.
+const ALIGN = 256 * 1024;
+const CHUNK = 32 * ALIGN; // 8 MiB
 const TIMEOUT_MS = 60_000;
+/** Object names are content hashes and are interpolated into Drive `q`
+ *  strings, so nothing but a sha256 may reach one. */
+const isSha = (s: string): boolean => /^[0-9a-f]{64}$/.test(s);
 type Mode = 'admin' | 'setup';
 
 export const driveRedirectUri = (publicUrl: string, mode: Mode): string =>
@@ -99,7 +105,7 @@ export class DriveStore implements BackupTarget, BackupSource {
   private call<T>(path: string, init?: RequestInit & { query?: Record<string, string | undefined> }): Promise<T> { return api<T>(this.access, this.opts.fetch, path, init); }
 
   async listObjects(): Promise<Set<string>> {
-    return new Set((await listAll(this.access, this.opts.fetch, `'${this.conn.objectsFolderId}' in parents and trashed = false`, 'files(name)')).map(f => f.name));
+    return new Set((await listAll(this.access, this.opts.fetch, `'${this.conn.objectsFolderId}' in parents and trashed = false and mimeType != '${FOLDER}'`, 'files(name)')).map(f => f.name));
   }
   private async upload(name: string, parent: string, source: () => NodeJS.ReadableStream, size: number): Promise<void> {
     const attempt = async (): Promise<void> => {
@@ -109,26 +115,33 @@ export class DriveStore implements BackupTarget, BackupSource {
       });
       if (init.status === 401) throw new AuthExpiredError('Google rejected the Drive token');
       const session = init.headers.get('Location'); if (!init.ok || !session) throw new Error(`Drive upload init ${init.status}`);
-      let offset = 0; let buf = Buffer.alloc(0);
-      // Nothing buffered means nothing left to send: a size that is an exact
-      // multiple of CHUNK is already complete, and an extra empty PUT would be
-      // a malformed range. The one exception is a zero-byte file, which is
-      // finalised with Drive's `bytes */0` form and no body at all.
-      const flush = async (final: boolean) => {
-        if (!buf.length && !(final && size === 0)) return;
-        const range = buf.length ? `bytes ${offset}-${offset + buf.length - 1}/${size}` : `bytes */${size}`;
-        const r = await this.opts.fetch(session, { method: 'PUT', headers: { 'Content-Length': String(buf.length), 'Content-Range': range }, body: buf as any, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      let offset = 0; let buf = Buffer.alloc(0); let complete = false;
+      // A 2xx is Drive saying the whole object landed; a 308 only means "still
+      // listening". Tracking which one came back is what stops a source that
+      // runs short of `size` from being recorded as a stored object.
+      const send = async (body: Buffer) => {
+        const range = body.length ? `bytes ${offset}-${offset + body.length - 1}/${size}` : `bytes */${size}`;
+        const r = await this.opts.fetch(session, { method: 'PUT', headers: { 'Content-Length': String(body.length), 'Content-Range': range }, body: body as any, signal: AbortSignal.timeout(TIMEOUT_MS) });
         if (r.status === 429 || r.status >= 500) throw Object.assign(new Error(`Drive upload ${r.status}`), { retryable: true });
         if (!r.ok && r.status !== 308) throw new Error(`Drive upload ${r.status}`);
-        offset += buf.length; buf = Buffer.alloc(0);
+        offset += body.length; complete = r.ok;
       };
-      for await (const chunk of source() as AsyncIterable<Buffer>) { buf = Buffer.concat([buf, chunk]); if (buf.length >= CHUNK) await flush(false); }
-      await flush(true);
+      // Send only whole CHUNKs while the stream runs — whatever a source hands
+      // us in one read is almost never a multiple of ALIGN — and keep the
+      // remainder buffered for the final, unaligned call.
+      for await (const chunk of source() as AsyncIterable<Buffer>) {
+        buf = Buffer.concat([buf, chunk]);
+        while (buf.length >= CHUNK) { await send(buf.subarray(0, CHUNK)); buf = buf.subarray(CHUNK); }
+      }
+      // A size that is an exact multiple of CHUNK is already finished, so it
+      // needs no final call; a zero-byte file is finalised with `bytes */0`.
+      if (buf.length || !complete) await send(buf);
+      if (!complete) throw new Error(`Drive upload of ${name} did not complete — the source gave ${offset} of the ${size} bytes expected`);
     };
     try { await attempt(); }
     catch (e: any) { if (!e?.retryable) throw e; await new Promise(r => setTimeout(r, 1000)); await attempt(); }
   }
-  async putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void> { await this.upload(sha256, this.conn.objectsFolderId, source, size); }
+  async putObject(sha256: string, source: () => NodeJS.ReadableStream, size: number): Promise<void> { if (!isSha(sha256)) throw new Error('bad object id'); await this.upload(sha256, this.conn.objectsFolderId, source, size); }
   async writeSnapshot(id: string, files: { dbPath: string; mailKeyPath: string | null; manifest: Manifest }): Promise<void> {
     const folder = await findOrCreateFolder(this.access, this.opts.fetch, id, this.conn.snapshotsFolderId);
     const up = (name: string, p: string) => this.upload(name, folder, () => fs.createReadStream(p), fs.statSync(p).size);
@@ -162,8 +175,8 @@ export class DriveStore implements BackupTarget, BackupSource {
     return out.sort((a, b) => b.id.localeCompare(a.id));
   }
   async deleteSnapshot(id: string): Promise<void> { const f = await this.snapshotFolder(id); if (f) await this.call(`files/${f}`, { method: 'DELETE' }); }
-  async deleteObject(sha256: string): Promise<void> { const f = await this.fileIn(this.conn.objectsFolderId, sha256); if (f) await this.call(`files/${f}`, { method: 'DELETE' }); }
-  async openObject(sha256: string): Promise<NodeJS.ReadableStream> { const f = await this.fileIn(this.conn.objectsFolderId, sha256); if (!f) throw new Error(`object ${sha256} missing on Drive`); return this.download(f); }
+  async deleteObject(sha256: string): Promise<void> { if (!isSha(sha256)) throw new Error('bad object id'); const f = await this.fileIn(this.conn.objectsFolderId, sha256); if (f) await this.call(`files/${f}`, { method: 'DELETE' }); }
+  async openObject(sha256: string): Promise<NodeJS.ReadableStream> { if (!isSha(sha256)) throw new Error('bad object id'); const f = await this.fileIn(this.conn.objectsFolderId, sha256); if (!f) throw new Error(`object ${sha256} missing on Drive`); return this.download(f); }
   async openSnapshotFile(id: string, name: 'app.db' | 'mail.key'): Promise<NodeJS.ReadableStream> { const folder = await this.snapshotFolder(id); const f = folder && await this.fileIn(folder, name); if (!f) throw new Error(`${name} missing on Drive`); return this.download(f); }
 }
 
