@@ -9,6 +9,8 @@ export interface AttachmentMeta {
   // read by wantedAttachment, and never sent to a provider.
   priorIds?: string[];
 }
+/** What a caller can tell getAttachment about a part without a message read. */
+export interface AttachmentHint { name: string; mime: string }
 export interface Envelope {
   providerMessageId: string; providerThreadId?: string;
   messageIdHeader?: string; inReplyTo?: string; references: string[];
@@ -56,7 +58,15 @@ export interface MailProvider {
    *  returned state is worthless and the caller must re-run a full backfill. */
   incremental(state: SyncState): Promise<{ upserts: Envelope[]; deletes: string[]; state: SyncState; reset?: boolean }>;
   getBody(providerMessageId: string): Promise<{ html?: string; text?: string; attachments: AttachmentMeta[] }>;
-  getAttachment(providerMessageId: string, attId: string): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }>;
+  /** `hint` is the name and MIME type the caller already knows for `attId`.
+   *  A provider whose byte endpoint returns bytes and nothing else (Gmail)
+   *  otherwise has to read the whole message to learn them — and Gmail mints
+   *  NEW attachment ids on every such read, so a lookup done on the caller's
+   *  behalf silently invalidates every other id the caller is holding (see
+   *  getAttachmentFresh in ../routes.ts). With a hint the provider must go
+   *  straight to the bytes and report a dead id as ProviderNotFoundError.
+   *  Providers that carry the metadata with the bytes may ignore it. */
+  getAttachment(providerMessageId: string, attId: string, hint?: AttachmentHint): Promise<{ stream: NodeJS.ReadableStream; mime: string; size?: number; name: string }>;
   /** `messageIdHeader` is the Message-ID the provider actually used — Gmail/Graph rewrite
    *  the one we hand them, and the sent row must be indexed under the real value or the
    *  reply that quotes it will not thread. Omitted = ours was kept verbatim. */
