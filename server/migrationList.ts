@@ -1619,4 +1619,35 @@ export const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 35,
+    name: 'sov-line-types-and-locks',
+    // ADDITIVE. lineType ('item' | 'header' | 'blank') lets a schedule of
+    // values carry label-only header rows and blank spacers; the default keeps
+    // every existing row an item. aia_sov_locks (row present = locked) is what
+    // stops SOV edits from silently rewriting prior pay applications — see
+    // docs/superpowers/specs/2026-09-11-sov-finalize-headers-split-design.md.
+    // Backfill: any project that already has a pay application is locked
+    // (reason 'pay-app', lockedAt = its earliest app), so existing projects
+    // follow the new rule from day one. An admin can reopen in one click.
+    up({ db }) {
+      const cols = (db.prepare(`PRAGMA table_info(aia_sov_lines)`).all() as any[]).map((c: any) => c.name);
+      if (!cols.includes('lineType')) {
+        db.exec(`ALTER TABLE aia_sov_lines ADD COLUMN lineType TEXT NOT NULL DEFAULT 'item';`);
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS aia_sov_locks (
+          projectId      TEXT PRIMARY KEY,
+          lockedAt       INTEGER NOT NULL,
+          lockedByUserId TEXT,
+          reason         TEXT NOT NULL
+        );
+      `);
+      const r = db.prepare(`
+        INSERT OR IGNORE INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason)
+        SELECT projectId, MIN(createdAt), NULL, 'pay-app' FROM aia_pay_apps GROUP BY projectId
+      `).run();
+      if (r.changes > 0) console.log(`[migration 35] locked the schedule of values on ${r.changes} project(s) that already have pay applications`);
+    },
+  },
 ];
