@@ -574,6 +574,13 @@ describe('billingSummary — SOV-derived contract total', () => {
     expect(s.invoiceOutstandingCents).toBe(300000); // 500000 - 200000
     expect(s.outstandingCents).toBe(300000);
   });
+
+  it('contract base from the SOV counts item lines only (headers/blanks are zero and excluded)', () => {
+    createSovLine(db, 'p1', { description: 'Work', scheduledValueCents: 100000 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Section' });
+    createSovLine(db, 'p1', { lineType: 'blank' });
+    expect(billingSummary(db, 'p1').contractTotalCents).toBe(100000);
+  });
 });
 
 describe('billingSummary — payAppBilledCents / payAppOutstandingCents (contract split)', () => {

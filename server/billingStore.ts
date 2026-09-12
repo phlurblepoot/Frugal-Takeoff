@@ -565,7 +565,7 @@ export function billingSummary(db: Database.Database, projectId: string, billedD
 
   // SOV original (non-CO) lines drive the base when an SOV exists.
   const sovOriginalCents = (db.prepare(
-    'SELECT COALESCE(SUM(scheduledValueCents), 0) v FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0'
+    "SELECT COALESCE(SUM(scheduledValueCents), 0) v FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0 AND lineType = 'item'"
   ).get(projectId) as { v: number }).v;
   const sovCount = (db.prepare('SELECT COUNT(*) c FROM aia_sov_lines WHERE projectId = ?').get(projectId) as { c: number }).c;
   const hasSov = sovCount > 0;

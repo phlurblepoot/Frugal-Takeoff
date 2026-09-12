@@ -1110,3 +1110,77 @@ describe('SOV lock', () => {
     expect(getSovLock(db, 'p2')!.lockedByUserId).toBe('u9');
   });
 });
+
+describe('SOV line types (header / blank)', () => {
+  it('creates a header with zero value and null retainage; rejects money on a header or blank', () => {
+    const { id } = createSovLine(db, 'p1', { lineType: 'header', description: 'Drywall', itemNo: '5' });
+    const h = getSovLine(db, id)!;
+    expect(h.lineType).toBe('header');
+    expect(h.scheduledValueCents).toBe(0);
+    expect(h.retainagePercent).toBeNull();
+    expect(h.itemNo).toBe('5');
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: 'H', scheduledValueCents: 100 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: 'H', retainagePercent: 5 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'header', description: '   ' })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'blank', scheduledValueCents: 1 })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { lineType: 'bogus' as any, description: 'x', scheduledValueCents: 0 })).toThrow(ValidationError);
+  });
+
+  it('creates a blank with empty fields; default lineType is item', () => {
+    const { id } = createSovLine(db, 'p1', { lineType: 'blank' });
+    const b = getSovLine(db, id)!;
+    expect(b.lineType).toBe('blank');
+    expect(b.description).toBe('');
+    expect(b.itemNo).toBeNull();
+    expect(b.scheduledValueCents).toBe(0);
+    const { id: itemId } = createSovLine(db, 'p1', { description: 'Item', scheduledValueCents: 10 });
+    expect(getSovLine(db, itemId)!.lineType).toBe('item');
+  });
+
+  it('saveSovLine keeps the type when omitted, can convert item → header (value dropped to 0 only if sent as 0)', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    saveSovLine(db, id, { description: 'Framing', scheduledValueCents: 2000, version: 1 });
+    expect(getSovLine(db, id)!.lineType).toBe('item');
+    expect(() => saveSovLine(db, id, { lineType: 'header', description: 'Framing', scheduledValueCents: 2000, version: 2 })).toThrow(ValidationError);
+    saveSovLine(db, id, { lineType: 'header', description: 'Framing', scheduledValueCents: 0, version: 2 });
+    const h = getSovLine(db, id)!;
+    expect(h.lineType).toBe('header');
+    expect(h.scheduledValueCents).toBe(0);
+  });
+
+  it('header and blank rows stay in position in G703 with zero money, and every G702 line is unchanged by them', () => {
+    createSovLine(db, 'p1', { itemNo: '1', description: 'Mobilization', scheduledValueCents: 100000 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Interior' });
+    createSovLine(db, 'p1', { itemNo: '2', description: 'Framing', scheduledValueCents: 500000 });
+    createSovLine(db, 'p1', { lineType: 'blank' });
+    const { id: appId } = createPayApp(db, 'p1', { retainagePercent: 10 });
+    const app = getPayApp(db, appId)!;
+    // pay-app lines are seeded for items only
+    expect(app.lines.length).toBe(2);
+    const items = listSovLines(db, 'p1').filter(l => l.lineType === 'item');
+    savePayAppLines(db, appId, [
+      { sovLineId: items[0].id, percentComplete: 100, storedMaterialsCents: 0 },
+      { sovLineId: items[1].id, percentComplete: 50, storedMaterialsCents: 20000 },
+    ], 1);
+    const g703 = computeG703(db, appId);
+    expect(g703.map(r => r.lineType)).toEqual(['item', 'header', 'item', 'blank']);
+    expect(g703[1].description).toBe('Interior');
+    expect(g703[1].scheduledValueCents).toBe(0);
+    expect(g703[1].totalToDateCents).toBe(0);
+    expect(g703[1].retainageCents).toBe(0);
+    const g702 = computeG702(db, appId);
+    expect(g702.L1originalContractCents).toBe(600000);
+    expect(g702.L4totalCompletedStoredCents).toBe(100000 + 250000 + 20000);
+    expect(g702.L5aRetainageWorkCents).toBe(10000 + 25000);
+    expect(g702.L5bRetainageStoredCents).toBe(2000);
+  });
+
+  it('savePayAppLines ignores input for non-item lines', () => {
+    createSovLine(db, 'p1', { itemNo: '1', description: 'Work', scheduledValueCents: 100000 });
+    const { id: headerId } = createSovLine(db, 'p1', { lineType: 'header', description: 'H' });
+    const { id: appId } = createPayApp(db, 'p1', {});
+    savePayAppLines(db, appId, [{ sovLineId: headerId, percentComplete: 100, storedMaterialsCents: 5 }], 1);
+    expect(db.prepare('SELECT COUNT(*) c FROM aia_pay_app_lines WHERE payAppId = ? AND sovLineId = ?').get(appId, headerId)).toEqual({ c: 0 });
+    expect(computeG702(db, appId).L4totalCompletedStoredCents).toBe(0);
+  });
+});

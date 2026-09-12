@@ -24,13 +24,19 @@ export function requireProject(db: Database.Database, projectId: string): void {
   if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new NotFoundError('Project not found');
 }
 
+export const SOV_LINE_TYPES = ['item', 'header', 'blank'] as const;
+export type SovLineType = typeof SOV_LINE_TYPES[number];
+
 interface SovLineInput {
+  lineType?: SovLineType;
   itemNo?: string | null;
   description?: string;
   scheduledValueCents?: number;
   retainagePercent?: number | null;
   isChangeOrder?: boolean | number;
   changeOrderId?: string | null;
+  // Contract-line id to insert in front of (Task 5). Ignored on save.
+  insertBeforeId?: string | null;
 }
 
 // Validate the money + retainage fields shared by create/save. Returns the
@@ -48,6 +54,32 @@ function validateRetainagePercent(pct: any): number | null {
     throw new ValidationError('retainagePercent must be a number between 0 and 100');
   }
   return pct;
+}
+
+// One place decides what each line type may carry. Headers/blanks are
+// rejected — not silently zeroed — when money or retainage is sent, so a
+// client bug cannot smuggle value into a row every total ignores.
+function normalizeLineInput(input: SovLineInput, lineType: SovLineType): {
+  lineType: SovLineType; itemNo: string | null; description: string; cents: number; retainage: number | null;
+} {
+  if (!(SOV_LINE_TYPES as readonly string[]).includes(lineType)) throw new ValidationError('lineType must be item, header or blank');
+  if (lineType === 'item') {
+    if (typeof input.description !== 'string') throw new ValidationError('description is required');
+    return {
+      lineType, itemNo: input.itemNo ?? null, description: input.description,
+      cents: validateScheduledValueCents(input.scheduledValueCents),
+      retainage: validateRetainagePercent(input.retainagePercent),
+    };
+  }
+  if (input.scheduledValueCents !== undefined && input.scheduledValueCents !== 0) throw new ValidationError(`a ${lineType} line cannot carry a scheduled value`);
+  if (input.retainagePercent !== undefined && input.retainagePercent !== null) throw new ValidationError(`a ${lineType} line cannot carry retainage`);
+  if (input.isChangeOrder) throw new ValidationError(`a ${lineType} line cannot be a change order`);
+  if (lineType === 'header') {
+    const description = typeof input.description === 'string' ? input.description.trim() : '';
+    if (!description) throw new ValidationError('a header line needs a description');
+    return { lineType, itemNo: input.itemNo ?? null, description, cents: 0, retainage: null };
+  }
+  return { lineType, itemNo: null, description: '', cents: 0, retainage: null };
 }
 
 export function getSovLine(db: Database.Database, id: string): any | null {
@@ -111,17 +143,15 @@ export function assertSovEditable(db: Database.Database, projectId: string): voi
 export function createSovLine(db: Database.Database, projectId: string, input: SovLineInput): { id: string } {
   requireProject(db, projectId);
   assertSovEditable(db, projectId);
-  if (typeof input.description !== 'string') throw new ValidationError('description is required');
-  const cents = validateScheduledValueCents(input.scheduledValueCents);
-  const retainage = validateRetainagePercent(input.retainagePercent);
+  const n = normalizeLineInput(input, input.lineType ?? 'item');
   const isCO = input.isChangeOrder ? 1 : 0;
   const id = crypto.randomUUID();
   const now = Date.now();
   const tx = db.transaction(() => {
     const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM aia_sov_lines WHERE projectId = ?').get(projectId) as any).m;
     db.prepare(
-      'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)'
-    ).run(id, projectId, input.itemNo ?? null, input.description, cents, retainage, isCO, input.changeOrderId ?? null, max + 1, now);
+      'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt, lineType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+    ).run(id, projectId, n.itemNo, n.description, n.cents, n.retainage, isCO, input.changeOrderId ?? null, max + 1, now, n.lineType);
     touchProjectPayApps(db, projectId, now);
   });
   tx();
@@ -129,21 +159,19 @@ export function createSovLine(db: Database.Database, projectId: string, input: S
 }
 
 export function saveSovLine(db: Database.Database, id: string, input: SovLineInput & { version?: number }): { version: number } {
-  if (typeof input.description !== 'string') throw new ValidationError('description is required');
-  const cents = validateScheduledValueCents(input.scheduledValueCents);
-  const retainage = validateRetainagePercent(input.retainagePercent);
   if (!Number.isInteger(input.version) || (input.version as number) < 1) {
     throw new ValidationError('Missing or invalid version — reload the line');
   }
   let newVersion = 0;
   const tx = db.transaction(() => {
-    const row = db.prepare('SELECT version, projectId FROM aia_sov_lines WHERE id = ?').get(id) as { version: number; projectId: string } | undefined;
+    const row = db.prepare('SELECT version, projectId, lineType FROM aia_sov_lines WHERE id = ?').get(id) as { version: number; projectId: string; lineType: SovLineType } | undefined;
     if (!row) throw new NotFoundError('SOV line not found');
     assertSovEditable(db, row.projectId);
     if (row.version !== input.version) throw new ConflictError(`SOV line changed since it was loaded (server v${row.version}, payload v${input.version})`);
+    const n = normalizeLineInput(input, input.lineType ?? row.lineType ?? 'item');
     newVersion = row.version + 1;
-    db.prepare('UPDATE aia_sov_lines SET itemNo = ?, description = ?, scheduledValueCents = ?, retainagePercent = ?, version = ? WHERE id = ?')
-      .run(input.itemNo ?? null, input.description, cents, retainage, newVersion, id);
+    db.prepare('UPDATE aia_sov_lines SET itemNo = ?, description = ?, scheduledValueCents = ?, retainagePercent = ?, lineType = ?, version = ? WHERE id = ?')
+      .run(n.itemNo, n.description, n.cents, n.retainage, n.lineType, newVersion, id);
     touchProjectPayApps(db, row.projectId, Date.now());
   });
   tx();
@@ -325,7 +353,7 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
       for (const r of rows) priorLines.set(r.sovLineId, { percentComplete: r.percentComplete, storedMaterialsCents: r.storedMaterialsCents });
     }
 
-    const sovLines = db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? ORDER BY sortOrder ASC, createdAt ASC, rowid ASC').all(projectId) as { id: string }[];
+    const sovLines = db.prepare("SELECT id FROM aia_sov_lines WHERE projectId = ? AND lineType = 'item' ORDER BY sortOrder ASC, createdAt ASC, rowid ASC").all(projectId) as { id: string }[];
     const ins = db.prepare('INSERT INTO aia_pay_app_lines (id, payAppId, sovLineId, percentComplete, storedMaterialsCents, createdAt) VALUES (?, ?, ?, ?, ?, ?)');
     for (const sov of sovLines) {
       const carry = priorLines.get(sov.id) ?? { percentComplete: 0, storedMaterialsCents: 0 };
@@ -401,7 +429,11 @@ export function savePayAppLines(db: Database.Database, payAppId: string, lines: 
     if (app.version !== version) throw new ConflictError(`Pay application changed since it was loaded (server v${app.version}, payload v${version})`);
     const upd = db.prepare('UPDATE aia_pay_app_lines SET percentComplete = ?, storedMaterialsCents = ? WHERE payAppId = ? AND sovLineId = ?');
     const ins = db.prepare('INSERT INTO aia_pay_app_lines (id, payAppId, sovLineId, percentComplete, storedMaterialsCents, createdAt) VALUES (?, ?, ?, ?, ?, ?)');
+    const typeOf = db.prepare('SELECT lineType FROM aia_sov_lines WHERE id = ?');
     for (const p of prepared) {
+      // Header/blank rows have no inputs; a payload that names one is ignored.
+      const sov = typeOf.get(p.sovLineId) as { lineType: SovLineType } | undefined;
+      if (sov && sov.lineType !== 'item') continue;
       const r = upd.run(p.percentComplete, p.storedMaterialsCents, payAppId, p.sovLineId);
       if (r.changes === 0) {
         ins.run(crypto.randomUUID(), payAppId, p.sovLineId, p.percentComplete, p.storedMaterialsCents, now);
@@ -476,6 +508,7 @@ export interface G703Row {
   itemNo: string | null;
   description: string;
   isChangeOrder: number;
+  lineType: SovLineType;
   scheduledValueCents: number;     // C
   previousCents: number;           // D
   thisPeriodCents: number;         // E
@@ -616,6 +649,14 @@ export function computeG703(db: Database.Database, payAppId: string): G703Row[] 
   const storedPct = effectiveStoredPct(ctx);
   const rows: G703Row[] = [];
   for (const sov of sovLines) {
+    if (sov.lineType && sov.lineType !== 'item') {
+      rows.push({
+        sovLineId: sov.id, itemNo: sov.itemNo, description: sov.description, isChangeOrder: sov.isChangeOrder,
+        lineType: sov.lineType, scheduledValueCents: 0, previousCents: 0, thisPeriodCents: 0, storedCents: 0,
+        totalToDateCents: 0, percentComplete: 0, balanceToFinishCents: 0, retainageCents: 0,
+      });
+      continue;
+    }
     const scheduledValueCents = sov.scheduledValueCents;
     const thisLine = thisLines.get(sov.id);
     const percentComplete = thisLine ? thisLine.percentComplete : 0;
@@ -641,6 +682,7 @@ export function computeG703(db: Database.Database, payAppId: string): G703Row[] 
       itemNo: sov.itemNo,
       description: sov.description,
       isChangeOrder: sov.isChangeOrder,
+      lineType: (sov.lineType ?? 'item') as SovLineType,
       scheduledValueCents,
       previousCents,
       thisPeriodCents,
@@ -697,6 +739,7 @@ export function computeG702(db: Database.Database, payAppId: string): G702 {
   let additions = 0, deductions = 0;
 
   for (const sov of sovLines) {
+    if (sov.lineType && sov.lineType !== 'item') continue;
     const scheduledValueCents = sov.scheduledValueCents;
     if (sov.isChangeOrder) {
       L2 += scheduledValueCents;
