@@ -898,6 +898,21 @@ describe('AIA billing routes (admin-gated)', () => {
     expect((await request(app).get('/api/projects/nope/aia/sov/lock')).status).toBe(404);
   });
 
+  it('PUT /aia/sov/order reorders contract lines; 400 on an incomplete list', async () => {
+    const a = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 })).body.id;
+    const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;
+    expect((await request(app).put('/api/projects/p1/aia/sov/order').send({ ids: [b, a] })).status).toBe(200);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.map((l: any) => l.description)).toEqual(['B', 'A']);
+    expect((await request(app).put('/api/projects/p1/aia/sov/order').send({ ids: [a] })).status).toBe(400);
+  });
+
+  it('POST /aia/sov with insertBeforeId inserts in front of the target', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 });
+    const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;
+    expect((await request(app).post('/api/projects/p1/aia/sov').send({ lineType: 'header', description: 'H', insertBeforeId: b })).status).toBe(200);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.map((l: any) => l.description)).toEqual(['A', 'H', 'B']);
+  });
+
   it('pay app create → get returns app, lines, g702, g703', async () => {
     await request(app).post('/api/projects/p1/aia/sov')
       .send({ description: 'Work', scheduledValueCents: 100000 });

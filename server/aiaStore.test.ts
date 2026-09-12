@@ -9,7 +9,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
-  seedSovLines, syncChangeOrders,
+  seedSovLines, syncChangeOrders, reorderSovLines,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702, remainingReleasablePoints,
   getSovLock, lockSov, unlockSov, assertSovEditable,
@@ -1108,6 +1108,54 @@ describe('SOV lock', () => {
     createPayApp(db, 'p2', {});
     expect(getSovLock(db, 'p2')!.reason).toBe('manual');
     expect(getSovLock(db, 'p2')!.lockedByUserId).toBe('u9');
+  });
+});
+
+describe('SOV ordering', () => {
+  const descs = () => listSovLines(db, 'p1').map(l => l.description);
+
+  it('reorderSovLines assigns 0..n-1 in the given order and keeps CO lines after the contract block', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const c = createSovLine(db, 'p1', { description: 'C', scheduledValueCents: 1 }).id;
+    reorderSovLines(db, 'p1', [c, a, b]);
+    expect(descs()).toEqual(['C', 'A', 'B', 'Extra']);
+    expect(listSovLines(db, 'p1').map(l => l.sortOrder)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('reorderSovLines rejects a partial, duplicate, or foreign id list', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    const other = createSovLine(db, 'p2', { description: 'Z', scheduledValueCents: 1 }).id;
+    expect(() => reorderSovLines(db, 'p1', [a])).toThrow(ValidationError);
+    expect(() => reorderSovLines(db, 'p1', [a, a, b])).toThrow(ValidationError);
+    expect(() => reorderSovLines(db, 'p1', [a, other])).toThrow(ValidationError);
+    expect(descs()).toEqual(['A', 'B']);
+  });
+
+  it('reorderSovLines is refused while locked', () => {
+    const a = createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 }).id;
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => reorderSovLines(db, 'p1', [a])).toThrow(SovLockedError);
+  });
+
+  it('createSovLine with insertBeforeId places the new line in front of the target and shifts the rest', () => {
+    createSovLine(db, 'p1', { description: 'A', scheduledValueCents: 1 });
+    const b = createSovLine(db, 'p1', { description: 'B', scheduledValueCents: 1 }).id;
+    createSovLine(db, 'p1', { description: 'C', scheduledValueCents: 1 });
+    createSovLine(db, 'p1', { lineType: 'header', description: 'Section', insertBeforeId: b });
+    expect(descs()).toEqual(['A', 'Section', 'B', 'C']);
+  });
+
+  it('createSovLine rejects insertBeforeId that is a CO line or belongs to another project', () => {
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const co = listSovLines(db, 'p1')[0].id;
+    const other = createSovLine(db, 'p2', { description: 'Z', scheduledValueCents: 1 }).id;
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1, insertBeforeId: co })).toThrow(ValidationError);
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1, insertBeforeId: other })).toThrow(ValidationError);
   });
 });
 

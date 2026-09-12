@@ -148,10 +148,22 @@ export function createSovLine(db: Database.Database, projectId: string, input: S
   const id = crypto.randomUUID();
   const now = Date.now();
   const tx = db.transaction(() => {
+    const before = input.insertBeforeId ?? null;
+    if (before) {
+      const target = db.prepare('SELECT projectId, isChangeOrder FROM aia_sov_lines WHERE id = ?').get(before) as { projectId: string; isChangeOrder: number } | undefined;
+      if (!target || target.projectId !== projectId || target.isChangeOrder) throw new ValidationError('insertBeforeId must be a contract line of this project');
+    }
     const max = (db.prepare('SELECT COALESCE(MAX(sortOrder), -1) m FROM aia_sov_lines WHERE projectId = ?').get(projectId) as any).m;
     db.prepare(
       'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt, lineType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
     ).run(id, projectId, n.itemNo, n.description, n.cents, n.retainage, isCO, input.changeOrderId ?? null, max + 1, now, n.lineType);
+    if (before) {
+      // Renumber from the canonical order with the new id moved in front of
+      // the target — robust to existing sortOrder ties.
+      const ids = contractIdsInOrder(db, projectId).filter(x => x !== id);
+      ids.splice(ids.indexOf(before), 0, id);
+      renumberContract(db, projectId, ids);
+    }
     touchProjectPayApps(db, projectId, now);
   });
   tx();
@@ -228,6 +240,42 @@ export function seedSovLines(db: Database.Database, projectId: string, lines: Se
   });
   tx();
   return { count: prepared.length };
+}
+
+// The complete order of the project's CONTRACT lines (every non-CO line
+// exactly once). CO lines always follow the contract block, in their existing
+// order — the editor and export partition on isChangeOrder anyway, this just
+// keeps sortOrder honest.
+export function reorderSovLines(db: Database.Database, projectId: string, ids: unknown): void {
+  requireProject(db, projectId);
+  assertSovEditable(db, projectId);
+  if (!Array.isArray(ids) || ids.some(x => typeof x !== 'string')) throw new ValidationError('ids must be an array of line ids');
+  const ordered = ids as string[];
+  const tx = db.transaction(() => {
+    const contract = db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0').all(projectId) as { id: string }[];
+    const expected = new Set(contract.map(c => c.id));
+    if (ordered.length !== expected.size || new Set(ordered).size !== ordered.length || ordered.some(id => !expected.has(id))) {
+      throw new ValidationError('ids must list every contract line exactly once');
+    }
+    renumberContract(db, projectId, ordered);
+    touchProjectPayApps(db, projectId, Date.now());
+  });
+  tx();
+}
+
+// Assign sortOrder 0..n-1 to the given contract ids, then the CO lines after
+// them in their existing order. Callers hold the transaction.
+function renumberContract(db: Database.Database, projectId: string, orderedContractIds: string[]): void {
+  const upd = db.prepare('UPDATE aia_sov_lines SET sortOrder = ? WHERE id = ?');
+  orderedContractIds.forEach((id, i) => upd.run(i, id));
+  let next = orderedContractIds.length;
+  const cos = db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 1 ORDER BY sortOrder ASC, createdAt ASC, rowid ASC').all(projectId) as { id: string }[];
+  for (const co of cos) upd.run(next++, co.id);
+}
+
+// Contract line ids in canonical order (same ORDER BY as listSovLines).
+function contractIdsInOrder(db: Database.Database, projectId: string): string[] {
+  return (db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0 ORDER BY sortOrder ASC, createdAt ASC, rowid ASC').all(projectId) as { id: string }[]).map(r => r.id);
 }
 
 // Append a SOV line for every approved change_order that isn't already mirrored

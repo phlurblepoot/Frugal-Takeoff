@@ -51,7 +51,7 @@ import {
   NotFoundError as TaskNotFoundError,
 } from './taskStore';
 import {
-  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders,
+  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders, reorderSovLines,
   listPayApps, createPayApp, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702,
   getSovLock, lockSov, unlockSov, requireProject as requireAiaProject, SovLockedError,
@@ -540,6 +540,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       unlockSov(db, req.params.id);
       deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json(sovLockState(req.params.id));
+    } catch (e) { aiaErr(e, res); }
+  });
+
+  app.put('/api/projects/:id/aia/sov/order', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      reorderSovLines(db, req.params.id, req.body?.ids);
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
+      res.json({ success: true });
     } catch (e) { aiaErr(e, res); }
   });
 
