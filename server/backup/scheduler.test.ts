@@ -38,15 +38,33 @@ describe('BackupScheduler', () => {
   });
 
   it('skips a tick while a run is in progress, and a failing local run still lets drive run', async () => {
-    let now = new Date(2026, 8, 12, 2, 0, 1).getTime();
+    let now = new Date(2026, 8, 12, 1, 59, 59).getTime();
     writeSchedule(db, { enabled: true, hour: 2, minute: 0 });
-    db.prepare(`INSERT INTO backup_runs (id, target, trigger, startedAt, status) VALUES ('x', 'local', 'manual', ?, 'running')`).run(now);
     const run = vi.fn(async (t: string) => { if (t === 'local') throw new Error('disk'); });
     const s = new BackupScheduler({ db, run, hasDrive: () => true, now: () => now, setTimeout: (() => ({ unref() {} })) as any, clearTimeout: (() => {}) as any });
+    await s.tick(); // sets due = today 02:00, not yet due
+    const due = s.nextRunAt();
+    expect(due).toBe(new Date(2026, 8, 12, 2, 0, 0).getTime());
+
+    db.prepare(`INSERT INTO backup_runs (id, target, trigger, startedAt, status) VALUES ('x', 'local', 'manual', ?, 'running')`).run(now);
+    now = new Date(2026, 8, 12, 2, 0, 1).getTime();
     await s.tick();
     expect(run).not.toHaveBeenCalled();
+    expect(s.nextRunAt()).toBe(due); // skipped: due is unchanged, not consumed
+
     db.prepare('DELETE FROM backup_runs').run();
     await s.tick();
     expect(run.mock.calls.map(c => c[0])).toEqual(['local', 'drive']);
+  });
+
+  it('does not fire a catch-up run when first ticked well after the configured time', async () => {
+    const now = new Date(2026, 8, 12, 3, 0, 0).getTime();
+    writeSchedule(db, { enabled: true, hour: 2, minute: 0 });
+    const run = vi.fn(async () => {});
+    const s = new BackupScheduler({ db, run, hasDrive: () => true, now: () => now, setTimeout: (() => ({ unref() {} })) as any, clearTimeout: (() => {}) as any });
+    s.start();
+    await s.tick();
+    expect(run).not.toHaveBeenCalled();
+    expect(s.nextRunAt()).toBe(new Date(2026, 8, 13, 2, 0, 0).getTime());
   });
 });

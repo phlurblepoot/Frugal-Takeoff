@@ -40,23 +40,10 @@ export class BackupScheduler {
       const s = readSchedule(this.deps.db);
       if (!s.enabled) { this.due = null; return; }
       const now = this.now();
-      if (this.due === null) {
-        // First time we've computed a due time for this schedule: anchor to
-        // *today's* hh:mm even if that instant already passed — a poll can
-        // land just after it (or this can be the very first tick ever), and
-        // that should still count as due rather than skipping a whole day.
-        const d = new Date(now); d.setHours(s.hour, s.minute, 0, 0);
-        this.due = d.getTime();
-      } else if (this.lastFired !== null && this.due <= this.lastFired) {
-        // We already fired for the previous `due` — the next one must be
-        // strictly in the future.
-        this.due = nextOccurrence(now, s.hour, s.minute);
-      } else {
-        // Schedule setting may have changed since `due` was computed →
-        // recompute if hour/minute no longer match.
-        const expected = nextOccurrence(this.due - 1, s.hour, s.minute);
-        if (expected !== this.due) this.due = nextOccurrence(now, s.hour, s.minute);
-      }
+      if (this.due === null || (this.lastFired !== null && this.due <= this.lastFired)) this.due = nextOccurrence(now, s.hour, s.minute);
+      // schedule changed → recompute
+      const expected = nextOccurrence(this.due - 1, s.hour, s.minute);
+      if (expected !== this.due) this.due = nextOccurrence(now, s.hour, s.minute);
       if (now < this.due) return;
       if (isRunActive(this.deps.db, 'local') || isRunActive(this.deps.db, 'drive')) { console.warn('[backup] scheduled run skipped: a backup is still in progress'); return; }
       this.lastFired = now;
