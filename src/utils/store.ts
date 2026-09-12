@@ -514,6 +514,140 @@ export const formatBytes = (bytes: number): string => {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
+// ── Backup & restore (spec docs/superpowers/specs/2026-09-12-backup-restore-design.md) ──
+//
+// Every read goes through fetchWithRetry so a backup page left open on a flaky
+// LAN keeps refreshing; the writes (run / settings / disconnect) are POSTs and
+// PUTs that fetchWithRetry deliberately never retries.
+export interface BackupRun { id: string; target: 'local' | 'drive'; trigger: 'manual' | 'schedule'; startedAt: number; finishedAt: number | null; status: 'running' | 'ok' | 'error'; snapshotId: string | null; objectsAdded: number; bytesWritten: number; warnings: string[]; error: string | null }
+export interface BackupSnapshot { id: string; createdAt: number; appVersion: string; schemaVersion: number; counts: { files: number; bytes: number }; warnings: number }
+export interface BackupStatus {
+  root: string; rootIsDefault: boolean;
+  lastRun: { local: BackupRun | null; drive: BackupRun | null }; running: BackupRun | null;
+  totals: { snapshots: number; objects: number; bytes: number }; nextRunAt: number | null;
+  schedule: { enabled: boolean; hour: number; minute: number }; keep: { local: number; drive: number };
+  drive: { connected: true; email: string; needsReconnect: boolean } | { connected: false; configurable: boolean };
+}
+
+/** Thrown for the server's 409 `backup_running` so the UI can say "already
+ *  running" instead of showing a generic failure for a harmless collision. */
+export class BackupRunningError extends Error {
+  constructor() { super('A backup is already running'); this.name = 'BackupRunningError'; }
+}
+
+const backupJson = (method: string, url: string, body?: unknown) =>
+  fetchWithRetry(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+
+// The download and OAuth-start routes are followed by the browser itself (a
+// link or a redirect), which cannot carry an Authorization header — those
+// routes accept the token as a query param, like the mail attachment routes.
+const tokenParam = () => `token=${encodeURIComponent(localStorage.getItem('token') ?? '')}`;
+
+export const getSetupState = async (): Promise<{ fresh: boolean }> => {
+  // Unauthenticated on purpose: the login page asks before anyone can sign in.
+  // An unreachable server is not a fresh install, so failures read as "not fresh".
+  try {
+    const res = await fetch('/api/setup/state');
+    return res.ok ? await res.json() : { fresh: false };
+  } catch {
+    return { fresh: false };
+  }
+};
+
+export const getBackupStatus = async (): Promise<BackupStatus> => {
+  const res = await fetchWithRetry('/api/backup/status', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const runBackup = async (target: 'local' | 'drive'): Promise<{ runId: string }> => {
+  const res = await backupJson('POST', '/api/backup/run', { target });
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'backup_running') throw new BackupRunningError();
+  }
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupRuns = async (): Promise<BackupRun[]> => {
+  const res = await fetchWithRetry('/api/backup/runs', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getBackupSnapshots = async (target: 'local' | 'drive'): Promise<BackupSnapshot[]> => {
+  const res = await fetchWithRetry(`/api/backup/snapshots?target=${target}`, { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const backupDownloadUrl = (id: string): string =>
+  `/api/backup/snapshots/${encodeURIComponent(id)}/download?${tokenParam()}`;
+
+export const saveBackupSettings = async (s: { schedule?: BackupStatus['schedule']; keep?: BackupStatus['keep'] }): Promise<void> => {
+  await handleResponse(await backupJson('PUT', '/api/backup/settings', s));
+};
+
+export const disconnectBackupDrive = async (): Promise<void> => {
+  await handleResponse(await backupJson('DELETE', '/api/backup/drive'));
+};
+
+export const backupDriveStartUrl = (): string => `/api/backup/drive/start?${tokenParam()}`;
+
+// ── Fresh-install restore (the /restore screen, Task 11) ────────────────────
+
+export const getRestoreSources = async (): Promise<{
+  root: string;
+  local: BackupSnapshot[];
+  drive: { configurable: boolean; connected: boolean; email: string | null };
+}> => {
+  const res = await fetchWithRetry('/api/setup/restore/sources', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const getRestoreDriveSnapshots = async (): Promise<BackupSnapshot[]> => {
+  const res = await fetchWithRetry('/api/setup/restore/drive/snapshots', { headers: getAuthHeaders() });
+  await handleResponse(res);
+  return res.json();
+};
+
+export const restoreDriveStartUrl = (): string => `/api/setup/restore/drive/start?${tokenParam()}`;
+
+export const restoreSnapshot = async (p: { source: 'local' | 'upload' | 'drive'; snapshotId: string; uploadId?: string }): Promise<{ restarting: true; files: number; bytes: number }> => {
+  const res = await backupJson('POST', '/api/setup/restore', p);
+  await handleResponse(res);
+  return res.json();
+};
+
+/** XMLHttpRequest rather than fetch: a restore zip can be gigabytes and the
+ *  upload progress bar is the only sign the browser is still working. */
+export const uploadRestoreZip = (file: File, onProgress: (pct: number) => void): Promise<{ uploadId: string; snapshotId: string; summary: BackupSnapshot }> =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/setup/restore/upload');
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    const token = localStorage.getItem('token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round((100 * e.loaded) / e.total)); };
+    xhr.onload = () => {
+      try {
+        const body = JSON.parse(xhr.responseText);
+        if (xhr.status < 300) resolve(body);
+        else reject(new Error(body.error || `Upload failed (${xhr.status})`));
+      } catch {
+        reject(new Error('Upload failed'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.send(file);
+  });
+
 // ── Phase 3a: summaries, granular patches, activity, time ────────────────────
 
 export interface ProjectSummary {

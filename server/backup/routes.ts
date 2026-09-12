@@ -87,6 +87,16 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
 
   const setScheduler = (s: { nextRunAt(): number | null }): void => { scheduler = s; };
 
+  // Routes the browser navigates to itself — the snapshot download and the
+  // Drive OAuth start — cannot carry an Authorization header, so they accept
+  // the token as a query param (same trick as the mail attachment routes).
+  // Declared here because the admin download route below is the first user.
+  const authOrQueryToken: express.RequestHandler = (req, res, next) => {
+    const t = typeof req.query.token === 'string' ? req.query.token : null;
+    if (t) { const u = deps.verifyToken(t); if (!u) return res.status(401).json({ error: 'Invalid token' }); (req as any).user = u; return next(); }
+    return authenticateToken(req, res, next);
+  };
+
   app.get('/api/backup/status', authenticateToken, requireAdmin, async (_req, res) => {
     const lastRun = (t: Target) => db.prepare(`SELECT * FROM backup_runs WHERE target = ? AND status != 'running' ORDER BY startedAt DESC LIMIT 1`).get(t) ?? null;
     const running = db.prepare(`SELECT * FROM backup_runs WHERE status = 'running' ORDER BY startedAt DESC LIMIT 1`).get() ?? null;
@@ -126,7 +136,7 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     catch (e) { console.error('[backup] list snapshots failed', e); res.status(502).json({ error: (e as Error).message }); }
   });
 
-  app.get('/api/backup/snapshots/:id/download', authenticateToken, requireAdmin, async (req, res) => {
+  app.get('/api/backup/snapshots/:id/download', authOrQueryToken, requireAdmin, async (req, res) => {
     if (!isSnapshotId(req.params.id)) return res.status(400).json({ error: 'bad snapshot id' });
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="frugal-takeoff-backup-${req.params.id}.zip"`);
@@ -206,11 +216,6 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
 
   // ── Google Drive connect (admin) and setup-mode connect ─────────────────
   const fetchFn = deps.fetch ?? globalThis.fetch;
-  const authOrQueryToken: express.RequestHandler = (req, res, next) => {
-    const t = typeof req.query.token === 'string' ? req.query.token : null;
-    if (t) { const u = deps.verifyToken(t); if (!u) return res.status(401).json({ error: 'Invalid token' }); (req as any).user = u; return next(); }
-    return authenticateToken(req, res, next);
-  };
   const startDrive = (mode: 'admin' | 'setup'): express.RequestHandler => (_req, res) => {
     if (!deps.publicUrl) return res.status(503).json({ error: 'APP_PUBLIC_URL is not set — see Settings → Mail → Server setup guide' });
     const verifier = createVerifier();
