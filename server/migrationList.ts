@@ -1650,4 +1650,28 @@ export const migrations: Migration[] = [
       if (r.changes > 0) console.log(`[migration 35] locked the schedule of values on ${r.changes} project(s) that already have pay applications`);
     },
   },
+  {
+    version: 36,
+    name: 'backup-runs',
+    // ADDITIVE: run history for the app-managed backups (spec
+    // docs/superpowers/specs/2026-09-12-backup-restore-design.md).
+    up({ db }) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS backup_runs (
+          id            TEXT PRIMARY KEY,
+          target        TEXT NOT NULL,
+          trigger       TEXT NOT NULL,
+          startedAt     INTEGER NOT NULL,
+          finishedAt    INTEGER,
+          status        TEXT NOT NULL,
+          snapshotId    TEXT,
+          objectsAdded  INTEGER NOT NULL DEFAULT 0,
+          bytesWritten  INTEGER NOT NULL DEFAULT 0,
+          warningsJson  TEXT NOT NULL DEFAULT '[]',
+          error         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_backup_runs_started ON backup_runs (startedAt);
+      `);
+    },
+  },
 ];

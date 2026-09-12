@@ -472,7 +472,7 @@ async function startServer() {
   // nextInvoiceNumber) — internal bookkeeping, not a user setting. Withholding
   // it from GET keeps it out of the client's settings object, so the Settings
   // page can never round-trip a stale copy back and roll the counter backwards.
-  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber'];
+  const SETTINGS_PRIVATE_PREFIXES = ['jwt.', 'smtp.', 'mail.', 'invoiceNumber', 'backup.'];
   const isPrivateSettingKey = (key: string) => SETTINGS_PRIVATE_PREFIXES.some(p => key.startsWith(p));
   app.get("/api/settings", (req, res) => {
     try {

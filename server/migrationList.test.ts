@@ -1108,3 +1108,18 @@ describe('migration 35: sov-line-types-and-locks', () => {
     db.close();
   });
 });
+
+describe('migration 36: backup-runs', () => {
+  it('creates backup_runs with the expected columns and re-runs as a no-op', () => {
+    const dir = tmpDir();
+    const db = openDb(':memory:');
+    runMigrations(db, dir, migrations.filter(m => m.version <= 36));
+    expect(tableNames(db)).toContain('backup_runs');
+    for (const c of ['id', 'target', 'trigger', 'startedAt', 'finishedAt', 'status', 'snapshotId', 'objectsAdded', 'bytesWritten', 'warningsJson', 'error']) {
+      expect(columnNames(db, 'backup_runs'), `missing ${c}`).toContain(c);
+    }
+    const m36 = migrations.find(m => m.version === 36)!;
+    expect(() => m36.up({ db, dataDir: dir } as any)).not.toThrow();
+    db.close();
+  });
+});
