@@ -131,7 +131,8 @@ describe('AiaScheduleOfValues — lock, sections, line types, row actions', () =
     mount();
     expect(await screen.findByTestId('sov-lock-chip')).toHaveTextContent(/draft/i);
     await userEvent.click(screen.getByTestId('sov-finalize'));
-    await userEvent.click(await screen.findByRole('button', { name: /finalize/i })); // confirm dialog
+    const finalizeDialog = await screen.findByRole('dialog');
+    await userEvent.click(within(finalizeDialog).getByRole('button', { name: /finalize/i })); // confirm dialog
     await waitFor(() => expect(h.lockSov).toHaveBeenCalledWith('p1'));
   });
 
@@ -151,7 +152,7 @@ describe('AiaScheduleOfValues — lock, sections, line types, row actions', () =
     expect(screen.getByRole('button', { name: /sync approved change orders/i })).toBeInTheDocument();
     await userEvent.click(screen.getByTestId('sov-reopen'));
     expect(await screen.findByText(/3 pay applications will recompute/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /reopen/i }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^reopen$/i }));
     await waitFor(() => expect(h.unlockSov).toHaveBeenCalledWith('p1'));
   });
 
@@ -195,7 +196,7 @@ describe('AiaScheduleOfValues — lock, sections, line types, row actions', () =
     h.deleteSovLine.mockRejectedValueOnce(Object.assign(new Error('locked'), { name: 'SovLockedError' }));
     mount();
     await userEvent.click(await screen.findByTitle('Delete'));
-    await userEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^delete$/i }));
     expect(await screen.findByText(/schedule of values is finalized/i)).toBeInTheDocument();
     await waitFor(() => expect(h.getSovLock).toHaveBeenCalledTimes(2));
   });

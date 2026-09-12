@@ -451,13 +451,11 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
               )}
             </span>
             {lock !== null && (locked ? (
-              // Labelled "Unlock SOV" rather than "Reopen" so it can't be
-              // mistaken for the confirm dialog's own Reopen button.
               <Button size="sm" variant="secondary" data-testid="sov-reopen" onClick={reopen}
-                title="Reopen the schedule of values for editing"><Unlock size={14} />Unlock SOV</Button>
+                title="Reopen the schedule of values for editing"><Unlock size={14} />Reopen</Button>
             ) : (
               <Button size="sm" variant="secondary" data-testid="sov-finalize" onClick={finalize} disabled={busy}
-                title="Finalize the schedule of values"><Lock size={14} />Lock SOV</Button>
+                title="Finalize the schedule of values"><Lock size={14} />Finalize SOV</Button>
             ))}
             <Button size="sm" variant="secondary" onClick={handleDownloadSov}
               disabled={busy || downloading || !lines || lines.length === 0}>
