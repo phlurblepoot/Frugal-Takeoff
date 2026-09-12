@@ -1628,11 +1628,16 @@ export const removeTaskPhoto = async (taskId: string, fileId: string): Promise<v
 // ── Phase 7: AIA progress billing (G702/G703 — Schedule of Values) ─────────────
 // Money is INTEGER CENTS end-to-end; formatting/division happens in the UI.
 
+export type SovLineType = 'item' | 'header' | 'blank';
+// Absent = item: fixtures and payloads from before migration 35 carry no type.
+export const lineTypeOf = (l: { lineType?: SovLineType | null }): SovLineType => l.lineType ?? 'item';
+
 export interface AiaSovLine {
   id: string; projectId: string; itemNo: string | null; description: string;
   scheduledValueCents: number; retainagePercent: number | null;
   isChangeOrder: number; changeOrderId: string | null;
   sortOrder: number; version: number; createdAt: number;
+  lineType?: SovLineType;
 }
 export interface AiaPayApp {
   id: string; projectId: string; number: number;
@@ -1660,7 +1665,7 @@ export interface AiaPayAppLine {
 // Mirrors server/aiaStore.ts G703Row.
 export interface AiaG703Row {
   sovLineId: string; itemNo: string | null; description: string;
-  isChangeOrder: number; scheduledValueCents: number;
+  isChangeOrder: number; lineType?: SovLineType; scheduledValueCents: number;
   previousCents: number; thisPeriodCents: number; storedCents: number;
   totalToDateCents: number; percentComplete: number;
   balanceToFinishCents: number; retainageCents: number;
@@ -1710,6 +1715,22 @@ export const resolveRetainageMode = (
 ): 'uniform' | 'perLine' =>
   mode ?? (lines.some(l => l.retainagePercent != null) ? 'perLine' : 'uniform');
 
+export interface SovLockState {
+  locked: boolean; payAppCount: number;
+  lockedAt?: number; lockedByUserId?: string | null; lockedByName?: string | null;
+  reason?: 'manual' | 'pay-app';
+}
+export class SovLockedError extends Error { constructor() { super('Schedule of values is finalized'); this.name = 'SovLockedError'; } }
+// 409s on SOV routes carry a code: sov_locked (finalized) vs version_conflict.
+const handleSovResponse = async (res: Response, id: string) => {
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    if (body?.code === 'sov_locked') throw new SovLockedError();
+    throw new ConflictError(id);
+  }
+  await handleResponse(res);
+};
+
 const aiaJson = (method: string, url: string, body?: unknown) =>
   fetchWithRetry(url, {
     method,
@@ -1722,25 +1743,49 @@ export const getSov = async (projectId: string): Promise<AiaSovLine[]> => {
   const res = await fetchWithRetry(`/api/projects/${projectId}/aia/sov`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
 };
-export const createSovLine = async (projectId: string, input: { itemNo?: string | null; description: string; scheduledValueCents: number; retainagePercent?: number | null }): Promise<{ id: string }> => {
-  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov`, input);
+export const getSovLock = async (projectId: string): Promise<SovLockState> => {
+  const res = await fetchWithRetry(`/api/projects/${projectId}/aia/sov/lock`, { headers: { ...getAuthHeaders() } });
   await handleResponse(res); return res.json();
+};
+export const lockSov = async (projectId: string): Promise<SovLockState> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/lock`, {});
+  await handleResponse(res); return res.json();
+};
+export const unlockSov = async (projectId: string): Promise<SovLockState> => {
+  const res = await aiaJson('DELETE', `/api/projects/${projectId}/aia/sov/lock`);
+  await handleResponse(res); return res.json();
+};
+export interface SovLineCreateInput {
+  lineType?: SovLineType; itemNo?: string | null; description?: string;
+  scheduledValueCents?: number; retainagePercent?: number | null; insertBeforeId?: string | null;
+}
+export const createSovLine = async (projectId: string, input: SovLineCreateInput): Promise<{ id: string }> => {
+  const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov`, input);
+  await handleSovResponse(res, projectId); return res.json();
 };
 export const saveSovLine = async (id: string, line: AiaSovLine): Promise<{ version: number }> => {
   const res = await aiaJson('PUT', `/api/aia/sov/${id}`, {
-    itemNo: line.itemNo, description: line.description,
+    lineType: lineTypeOf(line), itemNo: line.itemNo, description: line.description,
     scheduledValueCents: line.scheduledValueCents, retainagePercent: line.retainagePercent,
     version: line.version,
   });
-  if (res.status === 409) throw new ConflictError(id);
-  await handleResponse(res); return res.json();
+  await handleSovResponse(res, id); return res.json();
 };
 export const deleteSovLine = async (id: string): Promise<void> => {
-  const res = await aiaJson('DELETE', `/api/aia/sov/${id}`); await handleResponse(res);
+  const res = await aiaJson('DELETE', `/api/aia/sov/${id}`); await handleSovResponse(res, id);
+};
+export const reorderSov = async (projectId: string, ids: string[]): Promise<void> => {
+  const res = await aiaJson('PUT', `/api/projects/${projectId}/aia/sov/order`, { ids });
+  await handleSovResponse(res, projectId);
+};
+export interface SovSplitPart { description: string; percent: number }
+export const splitSovLine = async (lineId: string, version: number, parts: SovSplitPart[]): Promise<{ header: AiaSovLine; children: AiaSovLine[] }> => {
+  const res = await aiaJson('POST', `/api/aia/sov/${lineId}/split`, { version, parts });
+  await handleSovResponse(res, lineId); return res.json();
 };
 export const seedSov = async (projectId: string, lines: { description: string; scheduledValueCents: number; itemNo?: string }[]): Promise<{ count: number }> => {
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/seed`, { lines });
-  await handleResponse(res); return res.json();
+  await handleSovResponse(res, projectId); return res.json();
 };
 export const syncChangeOrders = async (projectId: string): Promise<{ added: number }> => {
   const res = await aiaJson('POST', `/api/projects/${projectId}/aia/sov/sync-change-orders`);
