@@ -23,6 +23,18 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.1.1',
+    date: 'September 11, 2026',
+    changes: [
+      'Mail: saving several attachments from one Gmail message now saves all of them — previously only the first one landed because Gmail hands out new attachment ids on every read. Inline images in a message body load reliably for the same reason.',
+      'Documents saved from an email can now be deleted from the Documents page (they are copies; the email keeps the original).',
+      'Documents: a "Change type" button in the selection bar re-types several files at once. Files locked to a type by the record they belong to are left alone.',
+      'Documents: a very long file name no longer pushes the other columns off the screen — names truncate and show in full on hover.',
+      'Canvas: Backspace only removes the last point while drawing; Delete is the only key that deletes the selected measurement.',
+      'Online users: click a user to jump to the page they are on. Someone with several tabs open shows each one, and each has its own Follow.',
+    ],
+  },
+  {
     version: '3.1.0',
     date: 'September 9, 2026',
     changes: [
