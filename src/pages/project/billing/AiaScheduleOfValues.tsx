@@ -577,7 +577,7 @@ export const AiaScheduleOfValues: React.FC<{ projectId: string; aiaSettings?: Ai
           </div>
         )}
       </CardBody>
-      <SplitSovLineModal line={splitTarget} onClose={() => setSplitTarget(null)} onSplit={reload} />
+      <SplitSovLineModal line={splitTarget} onClose={() => setSplitTarget(null)} onSplit={reload} payAppCount={lock?.payAppCount ?? 0} />
     </Card>
   );
 };

@@ -77,7 +77,6 @@ describe('buildBlankSovContext', () => {
     expect(g702.retainage.mode).toBe('perLine');
     expect(g702.retainage.effectiveWorkPercent).toBeNull();
   });
-});
 
   it('buildBlankSovContext carries lineType through and sums only items into L1', () => {
     const lines: AiaSovLine[] = [
@@ -88,3 +87,4 @@ describe('buildBlankSovContext', () => {
     expect(blank.g703.map(r => r.lineType)).toEqual(['item', 'header']);
     expect(blank.g702.L1originalContractCents).toBe(1000);
   });
+});

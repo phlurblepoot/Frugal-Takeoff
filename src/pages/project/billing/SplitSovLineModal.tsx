@@ -34,7 +34,7 @@ const evenSplit = (n: number): string[] => {
   return parts.map(bp => (bp / 100).toFixed(2));
 };
 
-export const SplitSovLineModal: React.FC<{ line: AiaSovLine | null; onClose: () => void; onSplit: () => void }> = ({ line, onClose, onSplit }) => {
+export const SplitSovLineModal: React.FC<{ line: AiaSovLine | null; onClose: () => void; onSplit: () => void; payAppCount?: number }> = ({ line, onClose, onSplit, payAppCount = 0 }) => {
   const { toast } = useToast();
   const [parts, setParts] = useState<Part[]>([]);
   const [busy, setBusy] = useState(false);
@@ -79,6 +79,9 @@ export const SplitSovLineModal: React.FC<{ line: AiaSovLine | null; onClose: () 
             <div className="tabular-nums text-ink-soft">{formatMoney(line.scheduledValueCents)}</div>
           </div>
           <p className="text-xs text-ink-faint">The original becomes a header; each part below becomes an item line under it.</p>
+          {payAppCount > 0 && (
+            <p className="text-xs text-amber-600">This project has {payAppCount} pay application{payAppCount === 1 ? '' : 's'}. The new lines start with no billed progress; the original line's progress is not carried over.</p>
+          )}
           <div className="space-y-2">
             {parts.map((p, i) => (
               <div key={i} className="flex items-center gap-2">

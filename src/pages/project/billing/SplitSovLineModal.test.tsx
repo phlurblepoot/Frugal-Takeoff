@@ -14,8 +14,8 @@ import { SplitSovLineModal, allocateCents } from './SplitSovLineModal';
 
 const line: any = { id: 'l1', projectId: 'p1', itemNo: '5', description: 'Drywall', scheduledValueCents: 1000000, retainagePercent: null, isChangeOrder: 0, changeOrderId: null, sortOrder: 0, version: 3, createdAt: 0, lineType: 'item' };
 
-const mount = (onSplit = vi.fn(), onClose = vi.fn()) => {
-  render(<ToastProvider><SplitSovLineModal line={line} onClose={onClose} onSplit={onSplit} /></ToastProvider>);
+const mount = (onSplit = vi.fn(), onClose = vi.fn(), payAppCount?: number) => {
+  render(<ToastProvider><SplitSovLineModal line={line} onClose={onClose} onSplit={onSplit} payAppCount={payAppCount} /></ToastProvider>);
   return { onSplit, onClose };
 };
 
@@ -70,5 +70,17 @@ describe('SplitSovLineModal', () => {
     const [d1] = screen.getAllByTestId('split-part-description');
     await userEvent.clear(d1);
     expect(screen.getByTestId('split-submit')).toBeDisabled();
+  });
+
+  it('warns about lost billing progress only when the project has pay applications', () => {
+    const warning = /new lines start with no billed progress/i;
+    mount(vi.fn(), vi.fn(), 2);
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    expect(screen.getByText(warning)).toHaveTextContent('2 pay applications');
+  });
+
+  it('shows no warning when the project has no pay applications', () => {
+    mount(vi.fn(), vi.fn(), 0);
+    expect(screen.queryByText(/new lines start with no billed progress/i)).not.toBeInTheDocument();
   });
 });

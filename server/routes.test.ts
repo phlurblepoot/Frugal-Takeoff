@@ -898,6 +898,34 @@ describe('AIA billing routes (admin-gated)', () => {
     expect((await request(app).get('/api/projects/nope/aia/sov/lock')).status).toBe(404);
   });
 
+  it('creating the first pay app also broadcasts aiaSov so an open SOV tab sees the auto-lock', async () => {
+    await request(app).post('/api/projects/p1/aia/sov').send({ description: 'D', scheduledValueCents: 1000 });
+    const events: any[] = [];
+    const adminApp = express();
+    adminApp.use(express.json());
+    registerDataRoutes(adminApp, {
+      db, dataDir: dir, dbFile: path.join(dir, 'app.db'),
+      authenticateToken: (req: any, _res: any, next: any) => { req.user = { id: 'u1', role: 'admin' }; next(); },
+      requireAdmin: (_req: any, _res: any, next: any) => next(),
+      verifyToken: () => null,
+      broadcastChange: (e: any) => events.push(e),
+    });
+    await request(adminApp).post('/api/projects/p1/aia/pay-apps').send({}).expect(200);
+    const sovEvent = events.find(e => e.type === 'aiaSov' && e.action === 'updated' && e.projectId === 'p1');
+    expect(sovEvent).toBeTruthy();
+  });
+
+  it('DELETE change-order on a locked SOV with a synced SOV line is blocked 409 sov_locked', async () => {
+    const co = await request(app).post('/api/projects/p1/change-orders').send({ number: 'CO-1', lumpSumAmount: 300 });
+    await request(app).patch(`/api/change-orders/${co.body.id}`).send({ status: 'approved' });
+    await request(app).post('/api/projects/p1/aia/sov/sync-change-orders').send({});
+    await request(app).post('/api/projects/p1/aia/sov/lock').send({});
+    const del = await request(app).delete(`/api/change-orders/${co.body.id}`);
+    expect(del.status).toBe(409);
+    expect(del.body.code).toBe('sov_locked');
+    expect((await request(app).get(`/api/change-orders/${co.body.id}`)).status).toBe(200);
+  });
+
   it('PUT /aia/sov/order reorders contract lines; 400 on an incomplete list', async () => {
     const a = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 })).body.id;
     const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;

@@ -277,6 +277,7 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
 
   // ── Billing (admin only, spec §4.1/§4.3) ──────────────────────────────────
   const billingErr = (e: unknown, res: express.Response) => {
+    if (e instanceof SovLockedError) return res.status(409).json({ error: e.message, code: 'sov_locked' });
     if (e instanceof BillingNotFoundError) return res.status(404).json({ error: e.message });
     if (e instanceof BillingConflictError) return res.status(409).json({ error: e.message, code: 'version_conflict' });
     if (e instanceof BillingValidationError) return res.status(400).json({ error: e.message });
@@ -578,6 +579,10 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       const r = createPayApp(db, req.params.id, input);
       const row = getPayApp(db, r.id);
       deps.broadcastChange({ type: 'aiaPayApp', id: r.id, projectId: req.params.id, version: row?.version, action: 'created', ...requestMeta(req) });
+      // createPayApp auto-locks the SOV on the FIRST pay app — the SOV editor
+      // listens for 'aiaSov', not 'aiaPayApp', so an open tab would otherwise
+      // never see the lock without a manual refresh.
+      deps.broadcastChange({ type: 'aiaSov', id: req.params.id, projectId: req.params.id, action: 'updated', ...requestMeta(req) });
       res.json(r);
     } catch (e) { aiaErr(e, res); }
   });

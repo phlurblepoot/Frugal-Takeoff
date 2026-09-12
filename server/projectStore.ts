@@ -352,6 +352,7 @@ export function deleteProject(db: Database.Database, dataDir: string, id: string
     db.prepare('DELETE FROM aia_pay_app_lines WHERE payAppId IN (SELECT id FROM aia_pay_apps WHERE projectId = ?)').run(id);
     db.prepare('DELETE FROM aia_pay_apps WHERE projectId = ?').run(id);
     db.prepare('DELETE FROM aia_sov_lines WHERE projectId = ?').run(id);
+    db.prepare('DELETE FROM aia_sov_locks WHERE projectId = ?').run(id);
     // Drop editor drafts for this project's files before the files vanish, so
     // the subquery can still resolve their ids (prevents a slow drafts leak).
     db.prepare(`DELETE FROM drafts WHERE fileId IN (SELECT id FROM files WHERE ${OWNED})`).run(id);
