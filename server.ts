@@ -33,11 +33,13 @@ import { WEBHOOK_PATH, GOOGLE_WEBHOOK_PATH } from './server/mail/push';
 import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
 import { installInboundHooks } from './server/mail/inboundHooks';
+import { registerBackupRoutes } from './server/backup/routes';
 
 dotenv.config();
 
 const DATA_DIR = process.env.STORAGE_PATH || path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "app.db");
+const APP_VERSION = JSON.parse(fsSync.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')).version as string;
 
 let db: Database.Database;
 // Loaded (or generated) once in initDb, then shared by migration 31 and the
@@ -139,7 +141,7 @@ async function startServer() {
   //     internet, so each takes a 256 KB express.json() of its own instead of
   //     this 50 MB one.
   const jsonParser = express.json({ limit: "50mb" });
-  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
+  const ownParser = (p: string) => p.startsWith('/api/mail/uploads') || p === '/api/setup/restore/upload' || p === WEBHOOK_PATH || p === GOOGLE_WEBHOOK_PATH;
   app.use((req, res, next) => (ownParser(req.path) ? next() : jsonParser(req, res, next)));
 
   // JWT secret resolution order:
@@ -643,6 +645,15 @@ async function startServer() {
     requireAdmin,
     broadcastChange,
     mailCtx,
+  });
+
+  const BACKUP_PATH = process.env.BACKUP_PATH || path.join(DATA_DIR, 'backup-store');
+  registerBackupRoutes(app, {
+    db, dataDir: DATA_DIR, backupRoot: BACKUP_PATH, backupRootIsDefault: !process.env.BACKUP_PATH,
+    appVersion: APP_VERSION, env: process.env, publicUrl: process.env.APP_PUBLIC_URL || null, jwtSecret: JWT_SECRET,
+    mailCrypto, authenticateToken, requireAdmin, verifyToken, broadcastChange,
+    closeDb: () => db.close(), exit: code => process.exit(code),
+    driveStore: undefined,
   });
 
   // Before the first sync tick: a reply that lands in that tick must still be
