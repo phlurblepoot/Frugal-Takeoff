@@ -78,7 +78,47 @@ describe('selectionPolicy', () => {
     expect(selectionPolicy(rows).deletable.map(r => r.id)).toEqual(['print', 'xls']);
   });
 
+  // Attachments saved out of an email are copies (the message keeps the
+  // original), so they're deletable when their kind is one a person picked
+  // on save (direct-upload kinds + the 'email-attachment' default). Mirrors
+  // server/documents.ts isContainerCopy.
+  it('deletable includes mailMessage-sourced rows with a direct-upload or email-attachment kind', () => {
+    const mail = { type: 'mailMessage', id: 'mm-1', label: 'RE: Corridor', href: '/mail/acct-1/_/thr-9' };
+    const rows = [
+      row({ id: 'doc', kind: 'document', source: mail }),
+      row({ id: 'photo', kind: 'photo', source: mail }),
+      row({ id: 'custom', kind: 'custom:warranty', source: mail }),
+      row({ id: 'att', kind: 'email-attachment', source: mail }),
+      // orphaned message (href null) — still a mailMessage source, still a copy
+      row({ id: 'orphan', kind: 'document', source: { ...mail, href: null } }),
+    ];
+    expect(selectionPolicy(rows).deletable.map(r => r.id)).toEqual(['doc', 'photo', 'custom', 'att', 'orphan']);
+  });
+
+  it('deletable excludes system kinds under a mailMessage source, and email-attachment under any other source', () => {
+    const mail = { type: 'mailMessage', id: 'mm-1', label: 'RE: Corridor', href: null };
+    const rows = [
+      row({ id: 'rfi', kind: 'rfi', source: mail }),
+      row({ id: 'inv', kind: 'invoice', source: mail }),
+      row({ id: 'att-elsewhere', kind: 'email-attachment', source: { type: 'rfi', id: 'r1', label: 'RFI #1', href: null } }),
+      row({ id: 'att-loose', kind: 'email-attachment', source: null }),
+    ];
+    expect(selectionPolicy(rows).deletable).toEqual([]);
+  });
+
+  it('retypeable is exactly the direct-upload-kind rows (custom kinds included), regardless of source', () => {
+    const rows = [
+      row({ id: 'doc', kind: 'document' }),
+      row({ id: 'custom', kind: 'custom:warranty' }),
+      row({ id: 'mail-doc', kind: 'document', source: { type: 'mailMessage', id: 'mm-1', label: 'x', href: null } }),
+      row({ id: 'inv', kind: 'invoice', source: { type: 'invoice', id: 'i1', label: 'Invoice #1', href: null } }),
+      row({ id: 'att', kind: 'email-attachment' }),
+      row({ id: 'print', kind: 'takeoff-print', source: { type: 'takeoff-print', id: 'po-1', label: 'x', href: null } }),
+    ];
+    expect(selectionPolicy(rows).retypeable.map(r => r.id)).toEqual(['doc', 'custom', 'mail-doc']);
+  });
+
   it('returns empty arrays for an empty selection', () => {
-    expect(selectionPolicy([])).toEqual({ downloadable: [], archivable: [], deletable: [] });
+    expect(selectionPolicy([])).toEqual({ downloadable: [], archivable: [], deletable: [], retypeable: [] });
   });
 });

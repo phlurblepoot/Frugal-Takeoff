@@ -160,7 +160,14 @@ function upsertRow(
 // identity, so these never upsert-by-source no matter which kind was picked.
 // Contrast an invoice, whose (invoice, <id>, 'invoice') triple names exactly
 // one document that regenerating should version.
-const CONTAINER_SOURCE_TYPES = ['mailMessage'] as const;
+// Exported (with isContainerSourceType) for server/documents.ts's delete
+// guard: a document under a container source is a COPY of something the
+// container still holds, so deleting it here loses nothing.
+export const CONTAINER_SOURCE_TYPES = ['mailMessage'] as const;
+
+export function isContainerSourceType(sourceType: string | null | undefined): boolean {
+  return !!sourceType && (CONTAINER_SOURCE_TYPES as readonly string[]).includes(sourceType);
+}
 
 // The live document standing for (sourceType, sourceId, kind), if any. Only
 // live rows qualify: version history hangs off a parentFileId and must never
@@ -168,7 +175,7 @@ const CONTAINER_SOURCE_TYPES = ['mailMessage'] as const;
 // entity's second photo is another photo, not a new version of the first.
 function findLiveBySource(db: Database.Database, opts: PutOpts): string | null {
   if (!opts.sourceType || !opts.sourceId || !opts.kind) return null;
-  if ((CONTAINER_SOURCE_TYPES as readonly string[]).includes(opts.sourceType)) return null;
+  if (isContainerSourceType(opts.sourceType)) return null;
   if ((MULTI_INSTANCE_KINDS as readonly string[]).includes(opts.kind)) return null;
   const row = db.prepare(`
     SELECT id FROM files

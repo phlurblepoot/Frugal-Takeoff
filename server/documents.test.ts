@@ -328,13 +328,11 @@ describe('GET /api/documents — source label resolution', () => {
     expect(row.source).toEqual({ type: 'takeoff-print', id: 'po-2', label: 'Takeoff Print', href: '/project/p1/takeoff' });
   });
 
-  // Files saved out of an email attachment (sourceType 'mailMessage'). Beyond
-  // the label, resolving these is what stops the Documents page offering a
-  // Delete the server always refuses: the client keys `deletable` off `source`
-  // while deleteDocument() keys off the raw sourceType column, so an
-  // unresolved mail row read as "loose upload" — and a saved attachment
-  // re-typed to `document` is a direct-upload kind, so the button really did
-  // show, and really did 409.
+  // Files saved out of an email attachment (sourceType 'mailMessage'). The
+  // resolver gives them a label + deep link back to the thread; the client
+  // keys `deletable` off `source.type` (documentsPolicy.ts), so the resolved
+  // shape here is what decides whether the Documents page offers Delete on
+  // them — see the DELETE block below for the server-side rule it mirrors.
   const seedMailMessage = (over: { id?: string; subject?: string } = {}) => {
     const id = over.id ?? 'mm-1';
     db.prepare(`INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1','u1','x','admin')`).run();
@@ -402,10 +400,10 @@ describe('GET /api/documents — source label resolution', () => {
     expect(res.body.rows.find((r: any) => r.id === fid).source)
       .toEqual({ type: 'mailMessage', id: mid, label: 'Email message', href: null });
 
-    // And the server still refuses the delete — which is exactly why the row
-    // must not read as source-less to the client.
+    // A saved attachment is a COPY of what the email still holds, so the
+    // server lets it go even though the source row it points at is gone.
     const del = await request(app).delete(`/api/files/${fid}`);
-    expect(del.status).toBe(409);
+    expect(del.status).toBe(200);
   });
 
   it('files with no sourceType have source: null', async () => {
@@ -518,6 +516,63 @@ describe('DELETE /api/files/:id', () => {
   it('404s for an unknown file', async () => {
     const res = await request(app).delete('/api/files/nope');
     expect(res.status).toBe(404);
+  });
+
+  // Attachments saved out of an email are COPIES — the message still holds
+  // the original — so a mailMessage-sourced row with a person-picked (or the
+  // default 'email-attachment') kind is deletable here, unlike a generated
+  // document whose source record owns it. A system kind under the same
+  // source is still refused: nothing about the container source changes what
+  // an 'rfi' or 'invoice' row is.
+  describe('mailMessage-sourced copies', () => {
+    const seedMessage = (id: string) => {
+      db.prepare(`INSERT OR IGNORE INTO users (id, username, password, role) VALUES ('u1','u1','x','admin')`).run();
+      db.prepare(`INSERT OR IGNORE INTO mail_accounts (id, userId, provider, emailAddress, authBlob, indexedSince, createdAt, updatedAt)
+        VALUES ('acct-1','u1','imap','pm@bigbearplaster.com','{}','2026-08-01','2026-08-01','2026-08-01')`).run();
+      db.prepare(`INSERT INTO mail_messages (id, accountId, providerMessageId, threadKey, subject, date, createdAt, updatedAt)
+        VALUES (?, 'acct-1', ?, 'thr-9', 'Attachments', '2026-08-28', '2026-08-28', '2026-08-28')`).run(id, `p-${id}`);
+      return id;
+    };
+
+    it('deletes a mailMessage-sourced direct-upload kind row and wipes its bytes', async () => {
+      const mid = seedMessage('mm-del-1');
+      const fid = await upload('mm-del-doc', { projectId: 'p1', kind: 'document', sourceType: 'mailMessage', sourceId: mid, name: 'signed.pdf' }, 'bytes');
+      expect(fsSync.existsSync(pathFor(dir, fid))).toBe(true);
+
+      const res = await request(app).delete(`/api/files/${fid}`);
+      expect(res.status).toBe(200);
+      expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(404);
+      expect(fsSync.existsSync(pathFor(dir, fid))).toBe(false);
+    });
+
+    it('deletes the default email-attachment kind and a custom kind under a mailMessage source', async () => {
+      const mid = seedMessage('mm-del-2');
+      db.prepare(`INSERT INTO settings (key, value) VALUES ('documentTypes', ?)`).run(JSON.stringify([{ id: 'warranty', label: 'Warranty' }]));
+      const att = await upload('mm-del-att', { projectId: 'p1', kind: 'email-attachment', sourceType: 'mailMessage', sourceId: mid, name: 'a.pdf' });
+      const custom = await upload('mm-del-custom', { projectId: 'p1', kind: 'custom:warranty', sourceType: 'mailMessage', sourceId: mid, name: 'w.pdf' });
+
+      expect((await request(app).delete(`/api/files/${att}`)).status).toBe(200);
+      expect((await request(app).delete(`/api/files/${custom}`)).status).toBe(200);
+      expect((await request(app).get(`/api/files/${att}/meta`)).status).toBe(404);
+      expect((await request(app).get(`/api/files/${custom}/meta`)).status).toBe(404);
+    });
+
+    it('still 409s a system kind (rfi) even under a mailMessage source', async () => {
+      const mid = seedMessage('mm-del-3');
+      const fid = await upload('mm-del-rfi', { projectId: 'p1', kind: 'rfi', sourceType: 'mailMessage', sourceId: mid, name: 'rfi.pdf' });
+
+      const res = await request(app).delete(`/api/files/${fid}`);
+      expect(res.status).toBe(409);
+      expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(200); // untouched
+    });
+
+    it('a non-admin still gets 404 for a billing kind under a mailMessage source', async () => {
+      const mid = seedMessage('mm-del-4');
+      const fid = await upload('mm-del-inv', { projectId: 'p1', kind: 'invoice', sourceType: 'mailMessage', sourceId: mid, name: 'inv.pdf' });
+      const userApp = buildApp('user', 'u2');
+      expect((await request(userApp).delete(`/api/files/${fid}`)).status).toBe(404);
+      expect((await request(app).get(`/api/files/${fid}/meta`)).status).toBe(200); // untouched
+    });
   });
 
   // Takeoff prints/exports are generated (sourceType set) but no record owns
