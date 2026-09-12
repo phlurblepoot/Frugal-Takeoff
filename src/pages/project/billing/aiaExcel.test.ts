@@ -399,3 +399,45 @@ describe('buildAiaXlsxBlob / exportAiaXlsx', () => {
     expect(vi.mocked(downloadBlob).mock.calls[0][1]).toBe('Blank-SOV.xlsx');
   });
 });
+
+describe('header and blank rows (spec 2026-09-11)', () => {
+  // item, header, item, blank, then a CO — the header/blank sit INSIDE the
+  // contract block, so every anchor moves by 2 and every item formula must
+  // still point at its own row.
+  const header: AiaG703Row = { sovLineId: 'h1', itemNo: null, description: 'Interior', isChangeOrder: 0, lineType: 'header', scheduledValueCents: 0, previousCents: 0, thisPeriodCents: 0, storedCents: 0, totalToDateCents: 0, percentComplete: 0, balanceToFinishCents: 0, retainageCents: 0 };
+  const blank: AiaG703Row = { ...header, sovLineId: 'b1', description: '', lineType: 'blank' };
+  const mixed: AiaExportCtx = { ...ctx, g703: [g703[0], header, g703[1], blank, g703[2]] };
+
+  it('writes a header as a bold description with no money/formula cells, and a blank as an empty row', async () => {
+    const wb = await buildAiaWorkbook(mixed);
+    const ws = wb.getWorksheet('G703')!;
+    const headerRow = 12; // contractStart 11 + 1
+    expect(ws.getCell(`B${headerRow}`).value).toBe('Interior');
+    expect(ws.getCell(`B${headerRow}`).font?.bold).toBe(true);
+    for (const col of ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']) {
+      expect(formulaOf(ws.getCell(`${col}${headerRow}`).value)).toBeUndefined();
+      expect(ws.getCell(`${col}${headerRow}`).value ?? '').toBe('');
+    }
+    const blankRow = 14;
+    for (const col of ['A', 'B', 'C', 'G', 'J']) expect(ws.getCell(`${col}${blankRow}`).value ?? '').toBe('');
+  });
+
+  it('keeps item formulas on their own rows and moves the totals/CO/grand anchors by the two extra rows', async () => {
+    const wb = await buildAiaWorkbook(mixed);
+    const ws = wb.getWorksheet('G703')!;
+    expect(formulaOf(ws.getCell('G13').value)).toBe('D13+E13+F13'); // Framing now on row 13
+    const contractTotalRow = CONTRACT_TOTAL_ROW + 2;
+    expect(ws.getCell(`B${contractTotalRow}`).value).toBe('TOTALS');
+    expect(formulaOf(ws.getCell(`C${contractTotalRow}`).value)).toBe(`SUM(C11:C${contractTotalRow - 1})`);
+    expect(ws.getCell(`B${GRAND_ROW + 2}`).value).toBe('GRAND TOTAL');
+    // G702 line 5 ("TOTAL EARNED LESS RETAINAGE") is written by buildG702 as
+    // 'G703'!G<grand>-'G703'!J<grand> — it must point at the MOVED grand row.
+    const g702ws = wb.getWorksheet('G702')!;
+    let found = false;
+    g702ws.eachRow(row => row.eachCell(cell => {
+      const f = formulaOf(cell.value);
+      if (f === `'G703'!G${GRAND_ROW + 2}-'G703'!J${GRAND_ROW + 2}`) found = true;
+    }));
+    expect(found).toBe(true);
+  });
+});

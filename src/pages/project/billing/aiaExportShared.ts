@@ -5,7 +5,7 @@
 // before any pay application exists.
 import {
   AiaG702, AiaG703Row, AiaPayApp, AiaSettings, AiaSovLine,
-  getAiaSettings, getFile, getProject, getSettings, getSov, resolveRetainageMode,
+  getAiaSettings, getFile, getProject, getSettings, getSov, resolveRetainageMode, lineTypeOf,
 } from '../../../utils/store';
 import type { Project } from '../../../types';
 import type { AiaTemplateMapping } from './aiaExcel';
@@ -97,12 +97,12 @@ export function buildBlankSovContext(
     .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt)
     .map(l => ({
       sovLineId: l.id, itemNo: l.itemNo, description: l.description,
-      isChangeOrder: l.isChangeOrder, scheduledValueCents: l.scheduledValueCents,
+      isChangeOrder: l.isChangeOrder, lineType: lineTypeOf(l), scheduledValueCents: l.scheduledValueCents,
       previousCents: 0, thisPeriodCents: 0, storedCents: 0,
       totalToDateCents: 0, percentComplete: 0,
       balanceToFinishCents: l.scheduledValueCents, retainageCents: 0,
     }));
-  const L1 = g703.filter(r => !r.isChangeOrder).reduce((a, r) => a + r.scheduledValueCents, 0);
+  const L1 = g703.filter(r => !r.isChangeOrder && lineTypeOf(r) === 'item').reduce((a, r) => a + r.scheduledValueCents, 0);
   const co = g703.filter(r => r.isChangeOrder);
   const additions = co.filter(r => r.scheduledValueCents > 0).reduce((a, r) => a + r.scheduledValueCents, 0);
   const deductions = co.filter(r => r.scheduledValueCents < 0).reduce((a, r) => a + r.scheduledValueCents, 0);
