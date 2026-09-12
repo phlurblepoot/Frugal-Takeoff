@@ -8,6 +8,9 @@ services:
       - "3000:3000"
     volumes:
       - ./data:/app/data
+      # A second, separate volume for BACKUP_PATH below — swap the host path
+      # for wherever this deployment's other disk is mounted.
+      # - /mnt/user/frugal-backups:/backups
     environment:
       - NODE_ENV=production
       - STORAGE_PATH=/app/data
@@ -27,4 +30,9 @@ services:
       # - MS_OAUTH_CLIENT_SECRET=
       # Directory (tenant) ID for a single-tenant registration; default common.
       # - MS_OAUTH_TENANT=common
+      # ── Backups (Settings → Backup) ───────────────────────────────────────
+      # Point this at a second volume so a backup isn't on the same disk as
+      # the data it protects. Unset, backups still work but write under
+      # /app/data (the Backup tab flags this in amber).
+      # - BACKUP_PATH=/backups
     restart: unless-stopped

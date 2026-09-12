@@ -24,6 +24,15 @@ interface ChangelogEntry {
 
 const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.3.0',
+    date: 'September 12, 2026',
+    changes: [
+      'Backups, managed by the app: Settings → Backup takes a complete snapshot (database, every file and document, and the mail encryption key) into a backup folder, and after the first one only new or changed files are copied. Set BACKUP_PATH to a second volume; run on a daily schedule or on demand; keep as many snapshots as you like; download any snapshot as one zip.',
+      'Google Drive backup: connect a Google account once (Drive access only) and the same snapshots are pushed to a "Frugal Takeoff Backups" folder on Drive, incrementally.',
+      'Disaster recovery: on a fresh install the login page offers "Restore from backup" — pick a snapshot from the backup folder, upload a snapshot zip, or connect Google Drive, and the server rebuilds itself from it and restarts.',
+    ],
+  },
+  {
     version: '3.2.0',
     date: 'September 12, 2026',
     changes: [
