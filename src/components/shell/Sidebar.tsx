@@ -9,6 +9,7 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useMailUnread } from '../../pages/mail/useMailUnread';
 import { SidebarPresence } from './SidebarPresence';
+import { isBareRoute } from '../../utils/locationInfo';
 
 export type SidebarState = 'expanded' | 'collapsed' | 'hidden';
 
@@ -108,7 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ state, onChange, locked = fals
   const { mode, toggleMode } = useTheme();
   const mailUnread = useMailUnread();
 
-  if (location.pathname === '/login' || !localStorage.getItem('token')) return null;
+  if (isBareRoute(location.pathname) || !localStorage.getItem('token')) return null;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const expanded = state === 'expanded';

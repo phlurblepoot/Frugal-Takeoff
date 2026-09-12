@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { locationFromPath } from './locationInfo';
+import { isBareRoute, locationFromPath } from './locationInfo';
 
 describe('locationFromPath', () => {
   it('parses a project section route', () => {
@@ -21,5 +21,14 @@ describe('locationFromPath', () => {
   it('parses plain routes', () => {
     expect(locationFromPath('/dashboard', '')).toEqual(
       { path: '/dashboard', projectId: undefined, section: undefined, pageId: undefined, fileId: undefined, label: undefined });
+  });
+});
+
+describe('isBareRoute', () => {
+  it('is true for the sign-in and restore screens only', () => {
+    expect(isBareRoute('/login')).toBe(true);
+    expect(isBareRoute('/restore')).toBe(true);
+    expect(isBareRoute('/dashboard')).toBe(false);
+    expect(isBareRoute('/project/p1/billing')).toBe(false);
   });
 });

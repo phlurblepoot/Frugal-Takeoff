@@ -558,6 +558,17 @@ export const getSetupState = async (): Promise<{ fresh: boolean }> => {
   }
 };
 
+/** The same read, but honest about failure: it throws when the server cannot
+ *  be reached or answers badly, instead of folding that into `fresh: false`.
+ *  The restore screen needs that distinction — while the container restarts
+ *  onto the restored database the server is simply gone, and a swallowed
+ *  error would read as "the restore is finished". */
+export const getSetupStateStrict = async (): Promise<{ fresh: boolean }> => {
+  const r = await fetch('/api/setup/state');
+  if (!r.ok) throw new Error(`setup state ${r.status}`);
+  return r.json();
+};
+
 export const getBackupStatus = async (): Promise<BackupStatus> => {
   const res = await fetchWithRetry('/api/backup/status', { headers: getAuthHeaders() });
   await handleResponse(res);

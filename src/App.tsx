@@ -44,11 +44,12 @@ import { CommandPalette } from './components/CommandPalette';
 import { AppShell } from './components/shell/AppShell';
 import ProjectConflictListener from './components/ProjectConflictListener';
 import { getSettings } from './utils/store';
+import { isBareRoute } from './utils/locationInfo';
 
 const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoUrl }) => {
   const location = useLocation();
   // /restore is the fresh-install twin of /login: same chrome-free treatment.
-  const isLoginPage = location.pathname === '/login' || location.pathname === '/restore';
+  const isBare = isBareRoute(location.pathname);
 
   return (
     <ToastProvider>
@@ -57,7 +58,7 @@ const Layout: React.FC<{ appName: string; logoUrl: string }> = ({ appName, logoU
         <ShareProvider>
           <CollaborationProvider>
             <NotesProvider>
-              {!isLoginPage && <CommandPalette />}
+              {!isBare && <CommandPalette />}
               <AppShell appName={appName}>
                 <FollowPill />
                 <ThemeWipe />

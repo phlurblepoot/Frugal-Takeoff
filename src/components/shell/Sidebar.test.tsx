@@ -119,6 +119,13 @@ describe('Sidebar — company mode', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
+  // /restore signs the bootstrap admin in, so a token exists there — the
+  // chrome still has to stay away from a server with nothing to navigate to.
+  it('renders nothing on the bare routes, token or not', () => {
+    expect(renderAt('/login').container.querySelector('button')).toBeNull();
+    expect(renderAt('/restore').container.querySelector('button')).toBeNull();
+  });
+
   it('keeps the global workspace nav on project routes', () => {
     renderAt('/project/p1/billing');
     expect(screen.getByText('Dashboard')).toBeInTheDocument();

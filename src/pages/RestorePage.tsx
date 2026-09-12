@@ -21,7 +21,7 @@ import {
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
-  formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupState, restoreDriveStartUrl,
+  formatBytes, getRestoreDriveSnapshots, getRestoreSources, getSetupState, getSetupStateStrict, restoreDriveStartUrl,
   restoreSnapshot, uploadRestoreZip, type BackupSnapshot,
 } from '../utils/store';
 
@@ -186,7 +186,9 @@ export const RestorePage: React.FC = () => {
 
   // While the server is restarting onto the restored database it is simply
   // gone: a refused connection is the expected answer, not a failure. Only an
-  // answer of "this install is no longer fresh" means the restore landed.
+  // answer of "this install is no longer fresh" means the restore landed —
+  // which is why this polls getSetupStateStrict and not getSetupState, whose
+  // swallowed errors would read as a finished restore two seconds in.
   useEffect(() => {
     if (phase !== 'restarting') return;
     let cancelled = false;
@@ -196,7 +198,9 @@ export const RestorePage: React.FC = () => {
         if (cancelled) return;
         if (Date.now() - startedAt > GIVE_UP_MS) { clearInterval(timer); setPhase('gone'); return; }
         try {
-          const state = await getSetupState();
+          const state = await getSetupStateStrict();
+          // `fresh: true` means the server answered before it swapped the
+          // database in — not done yet, so keep waiting.
           if (cancelled || state.fresh) return;
           clearInterval(timer);
           // These were the fresh-install admin's, and that account no longer
