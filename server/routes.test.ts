@@ -906,6 +906,20 @@ describe('AIA billing routes (admin-gated)', () => {
     expect((await request(app).put('/api/projects/p1/aia/sov/order').send({ ids: [a] })).status).toBe(400);
   });
 
+  it('POST /aia/sov/:id/split returns the header and children; 400 on bad percents; 409 version_conflict on stale', async () => {
+    const id = (await request(app).post('/api/projects/p1/aia/sov').send({ itemNo: '1', description: 'Drywall', scheduledValueCents: 1000 })).body.id;
+    const bad = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 49 }] });
+    expect(bad.status).toBe(400);
+    const stale = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 3, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('version_conflict');
+    const ok = await request(app).post(`/api/aia/sov/${id}/split`).send({ version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(ok.status).toBe(200);
+    expect(ok.body.header.lineType).toBe('header');
+    expect(ok.body.children.map((c: any) => c.scheduledValueCents)).toEqual([500, 500]);
+    expect((await request(app).get('/api/projects/p1/aia/sov')).body.length).toBe(3);
+  });
+
   it('POST /aia/sov with insertBeforeId inserts in front of the target', async () => {
     await request(app).post('/api/projects/p1/aia/sov').send({ description: 'A', scheduledValueCents: 1 });
     const b = (await request(app).post('/api/projects/p1/aia/sov').send({ description: 'B', scheduledValueCents: 1 })).body.id;

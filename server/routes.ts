@@ -51,7 +51,7 @@ import {
   NotFoundError as TaskNotFoundError,
 } from './taskStore';
 import {
-  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders, reorderSovLines,
+  listSovLines, getSovLine, createSovLine, saveSovLine, deleteSovLine, seedSovLines, syncChangeOrders, reorderSovLines, splitSovLine,
   listPayApps, createPayApp, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702,
   getSovLock, lockSov, unlockSov, requireProject as requireAiaProject, SovLockedError,
@@ -491,6 +491,14 @@ export function registerDataRoutes(app: express.Express, deps: RouteDeps): void 
       deleteSovLine(db, req.params.lineId);
       if (before) deps.broadcastChange({ type: 'aiaSov', id: req.params.lineId, projectId: before.projectId, action: 'deleted', ...requestMeta(req) });
       res.json({ success: true });
+    } catch (e) { aiaErr(e, res); }
+  });
+  app.post('/api/aia/sov/:lineId/split', authenticateToken, requireAdmin, (req, res) => {
+    try {
+      const r = splitSovLine(db, req.params.lineId, req.body ?? {});
+      const header = getSovLine(db, r.headerId);
+      deps.broadcastChange({ type: 'aiaSov', id: header.projectId, projectId: header.projectId, action: 'updated', ...requestMeta(req) });
+      res.json({ header, children: r.childIds.map(cid => getSovLine(db, cid)) });
     } catch (e) { aiaErr(e, res); }
   });
   app.post('/api/projects/:id/aia/sov/seed', authenticateToken, requireAdmin, (req, res) => {

@@ -9,7 +9,7 @@ import { runMigrations } from './migrations';
 import { migrations } from './migrationList';
 import {
   getSovLine, listSovLines, createSovLine, saveSovLine, deleteSovLine,
-  seedSovLines, syncChangeOrders, reorderSovLines,
+  seedSovLines, syncChangeOrders, reorderSovLines, splitSovLine,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702, remainingReleasablePoints,
   getSovLock, lockSov, unlockSov, assertSovEditable,
@@ -1230,5 +1230,68 @@ describe('SOV line types (header / blank)', () => {
     savePayAppLines(db, appId, [{ sovLineId: headerId, percentComplete: 100, storedMaterialsCents: 5 }], 1);
     expect(db.prepare('SELECT COUNT(*) c FROM aia_pay_app_lines WHERE payAppId = ? AND sovLineId = ?').get(appId, headerId)).toEqual({ c: 0 });
     expect(computeG702(db, appId).L4totalCompletedStoredCents).toBe(0);
+  });
+});
+
+describe('splitSovLine', () => {
+  it('60/40 of $10,000.00 → header + $6,000.00 + $4,000.00, item numbers 5.1/5.2, retainage copied, later lines shifted', () => {
+    const { id } = createSovLine(db, 'p1', { itemNo: '5', description: 'Drywall', scheduledValueCents: 1000000, retainagePercent: 5 });
+    createSovLine(db, 'p1', { itemNo: '6', description: 'Paint', scheduledValueCents: 100 });
+    const r = splitSovLine(db, id, { version: 1, parts: [{ description: 'Level 1', percent: 60 }, { description: 'Level 2', percent: 40 }] });
+    expect(r.headerId).toBe(id);
+    expect(r.childIds.length).toBe(2);
+    const lines = listSovLines(db, 'p1');
+    expect(lines.map(l => [l.description, l.lineType, l.scheduledValueCents, l.itemNo])).toEqual([
+      ['Drywall', 'header', 0, '5'],
+      ['Level 1', 'item', 600000, '5.1'],
+      ['Level 2', 'item', 400000, '5.2'],
+      ['Paint', 'item', 100, '6'],
+    ]);
+    expect(lines.map(l => l.sortOrder)).toEqual([0, 1, 2, 3]);
+    expect(lines[0].retainagePercent).toBeNull();
+    expect(lines[1].retainagePercent).toBe(5);
+    expect(lines[2].retainagePercent).toBe(5);
+    expect(lines[0].version).toBe(2);
+  });
+
+  it('three-way split of $100.01 gives 33.34 / 33.33 / 33.34 — the last child absorbs the remainder', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Odd', scheduledValueCents: 10001 });
+    splitSovLine(db, id, { version: 1, parts: [
+      { description: 'a', percent: 33.34 }, { description: 'b', percent: 33.33 }, { description: 'c', percent: 33.33 },
+    ] });
+    const cents = listSovLines(db, 'p1').filter(l => l.lineType === 'item').map(l => l.scheduledValueCents);
+    expect(cents).toEqual([3334, 3333, 3334]);
+    expect(cents.reduce((a, b) => a + b, 0)).toBe(10001);
+  });
+
+  it('no item number on the parent → children have none', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'NoNo', scheduledValueCents: 100 });
+    splitSovLine(db, id, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] });
+    expect(listSovLines(db, 'p1').map(l => l.itemNo)).toEqual([null, null, null]);
+  });
+
+  it('rejects: percents not 100, one part, empty description, non-positive percent', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 100 });
+    const bad = (parts: any[]) => expect(() => splitSovLine(db, id, { version: 1, parts })).toThrow(ValidationError);
+    bad([{ description: 'a', percent: 60 }, { description: 'b', percent: 39.99 }]);
+    bad([{ description: 'a', percent: 60 }, { description: 'b', percent: 40.01 }]);
+    bad([{ description: 'a', percent: 100 }]);
+    bad([{ description: '', percent: 50 }, { description: 'b', percent: 50 }]);
+    bad([{ description: 'a', percent: 0 }, { description: 'b', percent: 100 }]);
+    expect(listSovLines(db, 'p1').length).toBe(1);
+  });
+
+  it('rejects: header target, CO target, stale version, locked SOV', () => {
+    const { id: h } = createSovLine(db, 'p1', { lineType: 'header', description: 'H' });
+    expect(() => splitSovLine(db, h, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ValidationError);
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 10, 'approved');
+    syncChangeOrders(db, 'p1');
+    const co = listSovLines(db, 'p1').find(l => l.isChangeOrder)!.id;
+    expect(() => splitSovLine(db, co, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ValidationError);
+    const { id } = createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 100 });
+    expect(() => splitSovLine(db, id, { version: 7, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(ConflictError);
+    lockSov(db, 'p1', { userId: null, reason: 'manual' });
+    expect(() => splitSovLine(db, id, { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(SovLockedError);
+    expect(() => splitSovLine(db, 'missing', { version: 1, parts: [{ description: 'a', percent: 50 }, { description: 'b', percent: 50 }] })).toThrow(NotFoundError);
   });
 });

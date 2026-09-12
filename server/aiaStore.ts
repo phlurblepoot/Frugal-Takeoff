@@ -278,6 +278,61 @@ function contractIdsInOrder(db: Database.Database, projectId: string): string[] 
   return (db.prepare('SELECT id FROM aia_sov_lines WHERE projectId = ? AND isChangeOrder = 0 ORDER BY sortOrder ASC, createdAt ASC, rowid ASC').all(projectId) as { id: string }[]).map(r => r.id);
 }
 
+export interface SovSplitPart { description: string; percent: number }
+
+// Turn one item line into a header with N item children whose values are
+// percentages of the original. Percents are compared in basis points (2 dp)
+// and must total exactly 100.00; cents are rounded per child with the LAST
+// child taking the remainder so the children always sum to the original.
+export function splitSovLine(db: Database.Database, id: string, input: { version?: number; parts?: unknown }): { headerId: string; childIds: string[] } {
+  if (!Number.isInteger(input.version) || (input.version as number) < 1) throw new ValidationError('Missing or invalid version — reload the line');
+  if (!Array.isArray(input.parts) || input.parts.length < 2 || input.parts.length > 50) throw new ValidationError('Provide between 2 and 50 parts');
+  const parts = (input.parts as any[]).map((p, i) => {
+    const description = typeof p?.description === 'string' ? p.description.trim() : '';
+    if (!description) throw new ValidationError(`Part ${i + 1} needs a description`);
+    const percent = Number(p?.percent);
+    if (!Number.isFinite(percent) || percent <= 0) throw new ValidationError(`Part ${i + 1} needs a percentage above 0`);
+    return { description, bp: Math.round(percent * 100) };
+  });
+  const totalBp = parts.reduce((a, p) => a + p.bp, 0);
+  if (totalBp !== 10000) throw new ValidationError('Percentages must add up to exactly 100');
+
+  const childIds: string[] = [];
+  const now = Date.now();
+  const tx = db.transaction(() => {
+    const row = db.prepare('SELECT * FROM aia_sov_lines WHERE id = ?').get(id) as any;
+    if (!row) throw new NotFoundError('SOV line not found');
+    assertSovEditable(db, row.projectId);
+    if (row.version !== input.version) throw new ConflictError(`SOV line changed since it was loaded (server v${row.version}, payload v${input.version})`);
+    if (row.isChangeOrder) throw new ValidationError('Change-order lines cannot be split');
+    if ((row.lineType ?? 'item') !== 'item') throw new ValidationError('Only item lines can be split');
+
+    const original: number = row.scheduledValueCents;
+    let allocated = 0;
+    const ins = db.prepare(
+      'INSERT INTO aia_sov_lines (id, projectId, itemNo, description, scheduledValueCents, retainagePercent, isChangeOrder, changeOrderId, sortOrder, version, createdAt, lineType) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, 0, 1, ?, ?)'
+    );
+    parts.forEach((p, i) => {
+      const last = i === parts.length - 1;
+      const cents = last ? original - allocated : Math.round(original * p.bp / 10000);
+      allocated += cents;
+      const childId = crypto.randomUUID();
+      childIds.push(childId);
+      ins.run(childId, row.projectId, row.itemNo ? `${row.itemNo}.${i + 1}` : null, p.description, cents, row.retainagePercent, now + i, 'item');
+    });
+    db.prepare("UPDATE aia_sov_lines SET lineType = 'header', scheduledValueCents = 0, retainagePercent = NULL, version = ? WHERE id = ?")
+      .run(row.version + 1, id);
+
+    // Children directly after the parent; everything else keeps its order.
+    const ids = contractIdsInOrder(db, row.projectId).filter(x => !childIds.includes(x));
+    ids.splice(ids.indexOf(id) + 1, 0, ...childIds);
+    renumberContract(db, row.projectId, ids);
+    touchProjectPayApps(db, row.projectId, now);
+  });
+  tx();
+  return { headerId: id, childIds };
+}
+
 // Append a SOV line for every approved change_order that isn't already mirrored
 // in the schedule of values. Idempotent — re-running adds 0.
 export function syncChangeOrders(db: Database.Database, projectId: string): { added: number } {
