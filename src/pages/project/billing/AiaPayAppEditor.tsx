@@ -164,8 +164,9 @@ export const AiaPayAppEditor: React.FC<{
         ({ version } = await setPayApp(payAppId, patch));
       }
 
-      // Persist line edits (version-checked).
-      const lines = data.g703.map(row => {
+      // Persist line edits (version-checked). Header/blank rows carry no
+      // edits (seed skips them) and no inputs, so they're excluded here too.
+      const lines = data.g703.filter(row => lineTypeOf(row) === 'item').map(row => {
         const e = edits[row.sovLineId];
         const pct = e ? parseFloat(e.percentComplete) : row.percentComplete;
         return {

@@ -254,4 +254,23 @@ describe('AiaPayAppEditor — header and blank SOV rows', () => {
     expect(screen.queryByTestId('pa-pct-h1')).toBeNull();
     expect(screen.queryByTestId('pa-pct-b1')).toBeNull();
   });
+
+  it('excludes header/blank rows from the saved line payload', async () => {
+    getPayApp.mockResolvedValue({
+      ...load(),
+      g703: [
+        g703Row(),
+        g703Row({ sovLineId: 'h1', itemNo: null, description: 'Interior', lineType: 'header', scheduledValueCents: 0, balanceToFinishCents: 0 }),
+        g703Row({ sovLineId: 'b1', itemNo: null, description: '', lineType: 'blank', scheduledValueCents: 0, balanceToFinishCents: 0 }),
+      ],
+    });
+    renderEditor();
+    await screen.findByTestId('g703-header-row-h1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(savePayAppLines).toHaveBeenCalledTimes(1));
+    const lines = savePayAppLines.mock.calls[0][1];
+    expect(lines.map((l: { sovLineId: string }) => l.sovLineId)).toEqual(['sov1']);
+  });
 });
