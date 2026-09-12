@@ -11,6 +11,15 @@ export class ValidationError extends Error {}
 export class ConflictError extends Error {}
 export class NotFoundError extends Error {}
 
+// Thrown by every SOV mutator once the schedule of values is finalized.
+// Routes map it to 409 { code: 'sov_locked' }.
+export class SovLockedError extends Error {
+  constructor() { super('Schedule of values is finalized — reopen it to make changes'); }
+}
+
+export type SovLockReason = 'manual' | 'pay-app';
+export interface SovLock { projectId: string; lockedAt: number; lockedByUserId: string | null; reason: SovLockReason }
+
 export function requireProject(db: Database.Database, projectId: string): void {
   if (!db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId)) throw new NotFoundError('Project not found');
 }
@@ -62,8 +71,46 @@ function touchProjectPayApps(db: Database.Database, projectId: string, now: numb
   db.prepare('UPDATE aia_pay_apps SET updatedAt = ? WHERE projectId = ?').run(now, projectId);
 }
 
+// ---------------------------------------------------------------------------
+// SOV lock (spec 2026-09-11 §Lock). A row in aia_sov_locks = finalized. Every
+// mutator below calls assertSovEditable first; syncChangeOrders deliberately
+// does NOT (an approved change order appends a CO line — that is how a G703
+// grows — and it never touches existing lines).
+// ---------------------------------------------------------------------------
+export function getSovLock(db: Database.Database, projectId: string): SovLock | null {
+  const row = db.prepare('SELECT projectId, lockedAt, lockedByUserId, reason FROM aia_sov_locks WHERE projectId = ?').get(projectId) as SovLock | undefined;
+  return row ?? null;
+}
+
+// Idempotent: an existing lock is returned untouched so the FIRST cause
+// (manual vs pay-app) is what the UI reports.
+export function lockSov(db: Database.Database, projectId: string, opts: { userId: string | null; reason: SovLockReason }): SovLock {
+  requireProject(db, projectId);
+  const existing = getSovLock(db, projectId);
+  if (existing) return existing;
+  const lock: SovLock = { projectId, lockedAt: Date.now(), lockedByUserId: opts.userId ?? null, reason: opts.reason };
+  db.prepare('INSERT INTO aia_sov_locks (projectId, lockedAt, lockedByUserId, reason) VALUES (?, ?, ?, ?)')
+    .run(lock.projectId, lock.lockedAt, lock.lockedByUserId, lock.reason);
+  return lock;
+}
+
+// Reopening makes every stored export potentially stale — the admin was warned.
+export function unlockSov(db: Database.Database, projectId: string): void {
+  requireProject(db, projectId);
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM aia_sov_locks WHERE projectId = ?').run(projectId);
+    touchProjectPayApps(db, projectId, Date.now());
+  });
+  tx();
+}
+
+export function assertSovEditable(db: Database.Database, projectId: string): void {
+  if (getSovLock(db, projectId)) throw new SovLockedError();
+}
+
 export function createSovLine(db: Database.Database, projectId: string, input: SovLineInput): { id: string } {
   requireProject(db, projectId);
+  assertSovEditable(db, projectId);
   if (typeof input.description !== 'string') throw new ValidationError('description is required');
   const cents = validateScheduledValueCents(input.scheduledValueCents);
   const retainage = validateRetainagePercent(input.retainagePercent);
@@ -92,6 +139,7 @@ export function saveSovLine(db: Database.Database, id: string, input: SovLineInp
   const tx = db.transaction(() => {
     const row = db.prepare('SELECT version, projectId FROM aia_sov_lines WHERE id = ?').get(id) as { version: number; projectId: string } | undefined;
     if (!row) throw new NotFoundError('SOV line not found');
+    assertSovEditable(db, row.projectId);
     if (row.version !== input.version) throw new ConflictError(`SOV line changed since it was loaded (server v${row.version}, payload v${input.version})`);
     newVersion = row.version + 1;
     db.prepare('UPDATE aia_sov_lines SET itemNo = ?, description = ?, scheduledValueCents = ?, retainagePercent = ?, version = ? WHERE id = ?')
@@ -107,6 +155,7 @@ export function deleteSovLine(db: Database.Database, id: string): void {
     // Read the owning project before the row goes: the delete reshapes every
     // pay app's G703 just as much as an edit does.
     const row = db.prepare('SELECT projectId FROM aia_sov_lines WHERE id = ?').get(id) as { projectId: string } | undefined;
+    if (row) assertSovEditable(db, row.projectId);
     db.prepare('DELETE FROM aia_sov_lines WHERE id = ?').run(id);
     if (row) touchProjectPayApps(db, row.projectId, Date.now());
   });
@@ -120,6 +169,7 @@ interface SeedLine { description?: string; scheduledValueCents?: number; itemNo?
 // (isChangeOrder=1) are KEPT and re-sorted to follow the new estimate lines.
 export function seedSovLines(db: Database.Database, projectId: string, lines: SeedLine[]): { count: number } {
   requireProject(db, projectId);
+  assertSovEditable(db, projectId);
   if (!Array.isArray(lines)) throw new ValidationError('lines must be an array');
   // Validate up front so a bad line aborts before any write.
   const prepared = lines.map((l, i) => {
@@ -259,6 +309,9 @@ export function createPayApp(db: Database.Database, projectId: string, input: Pa
   let number = 0;
   const now = Date.now();
   const tx = db.transaction(() => {
+    // Spec: the first application finalizes the SOV. Idempotent, so a manual
+    // lock keeps its cause.
+    lockSov(db, projectId, { userId: null, reason: 'pay-app' });
     number = (db.prepare('SELECT COALESCE(MAX(number), 0) m FROM aia_pay_apps WHERE projectId = ?').get(projectId) as any).m + 1;
     db.prepare(
       'INSERT INTO aia_pay_apps (id, projectId, number, periodTo, applicationDate, retainagePercent, storedRetainagePercent, status, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'

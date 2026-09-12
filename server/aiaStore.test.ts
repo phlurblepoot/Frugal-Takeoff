@@ -12,7 +12,8 @@ import {
   seedSovLines, syncChangeOrders,
   createPayApp, listPayApps, getPayApp, savePayAppLines, setPayApp, deletePayApp,
   computeG703, computeG702, remainingReleasablePoints,
-  ValidationError, ConflictError, NotFoundError,
+  getSovLock, lockSov, unlockSov, assertSovEditable,
+  ValidationError, ConflictError, NotFoundError, SovLockedError,
 } from './aiaStore';
 import { recordPayment, listBilledDocuments } from './billingStore';
 
@@ -390,6 +391,7 @@ describe('savePayAppLines', () => {
   it('inserts a pay_app_line that did not exist yet', () => {
     setupTwoLines();
     const a = createPayApp(db, 'p1', {});
+    unlockSov(db, 'p1');
     // a SOV line added AFTER the app was created has no seeded pay_app_line
     const { id: line3 } = createSovLine(db, 'p1', { description: 'Late', scheduledValueCents: 1000 });
     savePayAppLines(db, a.id, [{ sovLineId: line3, percentComplete: 10, storedMaterialsCents: 0 }], 1);
@@ -1000,6 +1002,7 @@ describe('SOV edits stamp the project pay apps', () => {
   it('createSovLine, saveSovLine, deleteSovLine and seedSovLines each stamp them', () => {
     const app = createPayApp(db, 'p1', {});
     const other = createPayApp(db, 'p2', {});
+    unlockSov(db, 'p1');
 
     reset(app.id); reset(other.id);
     const { id: lineId } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 100000 });
@@ -1048,5 +1051,62 @@ describe('SOV edits stamp the project pay apps', () => {
     // Earlier applications are already certified against their own period —
     // nothing about #1 changed.
     expect(stampOf(a1.id)).toBe(1);
+  });
+});
+
+describe('SOV lock', () => {
+  it('lockSov / getSovLock / unlockSov round-trip; lock is idempotent and keeps the first cause', () => {
+    expect(getSovLock(db, 'p1')).toBeNull();
+    const first = lockSov(db, 'p1', { userId: 'u1', reason: 'manual' });
+    expect(first.reason).toBe('manual');
+    expect(first.lockedByUserId).toBe('u1');
+    const again = lockSov(db, 'p1', { userId: null, reason: 'pay-app' });
+    expect(again.reason).toBe('manual'); // untouched
+    expect(getSovLock(db, 'p1')!.lockedAt).toBe(first.lockedAt);
+    unlockSov(db, 'p1');
+    expect(getSovLock(db, 'p1')).toBeNull();
+  });
+
+  it('lockSov rejects an unknown project', () => {
+    expect(() => lockSov(db, 'nope', { userId: null, reason: 'manual' })).toThrow(NotFoundError);
+  });
+
+  it('every SOV mutator throws SovLockedError while locked; sync of approved COs still appends', () => {
+    const { id } = createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    lockSov(db, 'p1', { userId: 'u1', reason: 'manual' });
+    expect(() => assertSovEditable(db, 'p1')).toThrow(SovLockedError);
+    expect(() => createSovLine(db, 'p1', { description: 'X', scheduledValueCents: 1 })).toThrow(SovLockedError);
+    expect(() => saveSovLine(db, id, { description: 'Y', scheduledValueCents: 2, version: 1 })).toThrow(SovLockedError);
+    expect(() => deleteSovLine(db, id)).toThrow(SovLockedError);
+    expect(() => seedSovLines(db, 'p1', [{ description: 'Z', scheduledValueCents: 3 }])).toThrow(SovLockedError);
+    // nothing changed
+    expect(listSovLines(db, 'p1').map(l => l.description)).toEqual(['Framing']);
+    insertChangeOrder('co1', 'p1', '1', 'Extra', 250, 'approved');
+    expect(syncChangeOrders(db, 'p1').added).toBe(1);
+    expect(listSovLines(db, 'p1').length).toBe(2);
+  });
+
+  it('unlock stamps the project pay apps so exports read out of date', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    const { id: appId } = createPayApp(db, 'p1', {});
+    const before = (db.prepare('SELECT updatedAt FROM aia_pay_apps WHERE id = ?').get(appId) as any).updatedAt;
+    db.prepare('UPDATE aia_pay_apps SET updatedAt = ? WHERE id = ?').run(before - 10_000, appId);
+    unlockSov(db, 'p1');
+    const after = (db.prepare('SELECT updatedAt FROM aia_pay_apps WHERE id = ?').get(appId) as any).updatedAt;
+    expect(after).toBeGreaterThan(before - 10_000);
+  });
+
+  it('creating the first pay application locks the SOV with reason pay-app, and does not overwrite a manual lock', () => {
+    createSovLine(db, 'p1', { description: 'Framing', scheduledValueCents: 1000 });
+    expect(getSovLock(db, 'p1')).toBeNull();
+    createPayApp(db, 'p1', {});
+    expect(getSovLock(db, 'p1')!.reason).toBe('pay-app');
+    expect(getSovLock(db, 'p1')!.lockedByUserId).toBeNull();
+
+    createSovLine(db, 'p2', { description: 'Roof', scheduledValueCents: 500 });
+    lockSov(db, 'p2', { userId: 'u9', reason: 'manual' });
+    createPayApp(db, 'p2', {});
+    expect(getSovLock(db, 'p2')!.reason).toBe('manual');
+    expect(getSovLock(db, 'p2')!.lockedByUserId).toBe('u9');
   });
 });
