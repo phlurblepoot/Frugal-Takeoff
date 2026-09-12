@@ -165,7 +165,16 @@ export const RestorePage: React.FC = () => {
     }
     if (!alive.current) return;
     if (!state.fresh) { setPhase('not-fresh'); return; }
-    if (!isSetupAdmin()) { setAuthed(false); setPhase('pick'); return; }
+    // Re-derive from localStorage every time this runs, not just at mount:
+    // PageTransition's route-level AnimatePresence (mode="wait") can remount
+    // this page shortly after it enters (its own animation lifecycle, not
+    // triggered by anything this screen does), which would otherwise land a
+    // fresh instance back on `authed`'s stale initial value. Syncing here
+    // means a remount lands directly in the authed `pick` phase whenever a
+    // valid session already exists, instead of an empty sign-in form.
+    const admin = isSetupAdmin();
+    setAuthed(admin);
+    if (!admin) { setPhase('pick'); return; }
     await loadSources();
   }, [loadSources]);
 
@@ -549,9 +558,13 @@ const SetupLogin: React.FC<{ onSignedIn: () => void }> = ({ onSignedIn }) => {
       // Checked before anything is stored: a session that cannot restore has
       // no business being left behind on this screen.
       if (data.user?.id !== SETUP_ADMIN_ID) throw new Error('Only the initial admin account can restore');
+      // This is the throwaway fresh-install admin, not a real session — no
+      // need to sync theme/mail/collab prefs from the server or open a
+      // realtime socket for it, so unlike the real Login screen this does
+      // not dispatch 'app:prefs-sync'. Storing token/user and flipping local
+      // state is all this screen itself needs.
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      window.dispatchEvent(new Event('app:prefs-sync'));
       onSignedIn();
     } catch (err) {
       setError(errText(err));

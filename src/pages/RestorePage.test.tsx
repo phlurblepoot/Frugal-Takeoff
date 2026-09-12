@@ -140,4 +140,43 @@ describe('RestorePage', () => {
     expect(await screen.findByText(/7 files/)).toBeInTheDocument();
     expect(screen.getByText(/1 warning/)).toBeInTheDocument();
   });
+
+  // Regression test for the AnimatePresence route-transition remount: shortly
+  // after this screen enters, PageTransition's mode="wait" AnimatePresence
+  // can tear the whole page down and mount a fresh instance (its own
+  // animation lifecycle, unrelated to anything below). A fresh instance must
+  // still land on the authed source-picker, not an empty sign-in form, as
+  // long as a valid setup-admin session is already in localStorage — this is
+  // what checkFresh's re-derived `authed` (not just its useState initializer)
+  // guarantees. Simulated here as a real unmount + fresh mount in the same
+  // jsdom, standing in for that remount.
+  it('signs in via the inline form, then survives a remount landing directly on the source picker', async () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ token: 'setup-token', user: { id: 'admin-id-123', username: 'admin', role: 'admin' } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const first = mount();
+    expect(await screen.findByLabelText('Username')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'admin' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/auth/login', expect.anything()));
+    expect(await screen.findByTestId('restore-source-local')).toBeInTheDocument();
+    expect(localStorage.getItem('token')).toBe('setup-token');
+    // The setup sign-in does not need the real Login screen's app-wide prefs
+    // sync (no theme/mail/collab session to restore for this throwaway admin).
+    expect(fetchSpy).not.toHaveBeenCalledWith('/api/user-preferences', expect.anything());
+
+    first.unmount();
+    mount(); // a fresh instance, token/user already in localStorage from above
+    expect(await screen.findByTestId('restore-source-local')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Username')).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
 });
