@@ -147,3 +147,20 @@ describe('setup mode + restore', () => {
     expect(r.status).toBe(400); expect(r.body.error).toMatch(/999/);
   });
 });
+
+describe('drive routes', () => {
+  it('start redirects to Google with the drive.file scope; disconnect clears the connection; setup start requires fresh', async () => {
+    const a = mkApp({ publicUrl: 'https://app.example', env: { GOOGLE_OAUTH_CLIENT_ID: 'cid', GOOGLE_OAUTH_CLIENT_SECRET: 's' } });
+    const r = await request(a).get('/api/backup/drive/start');
+    expect(r.status).toBe(302); expect(r.headers.location).toMatch(/drive\.file/); expect(r.headers.location).toMatch(/backup%2Fdrive%2Fcallback/);
+    expect((await request(a).delete('/api/backup/drive')).status).toBe(200);
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p', 'x', 1);
+    expect((await request(mkApp({ publicUrl: 'https://app.example', env: { GOOGLE_OAUTH_CLIENT_ID: 'cid', GOOGLE_OAUTH_CLIENT_SECRET: 's' } }, { id: 'admin-id-123', role: 'admin' })).get('/api/setup/restore/drive/start')).status).toBe(409);
+  });
+  it('callback with a mail-oauth state is refused (redirects with error)', async () => {
+    const { signState } = await import('../mail/oauth');
+    const a = mkApp({ publicUrl: 'https://app.example' });
+    const r = await request(a).get(`/api/backup/drive/callback?code=c&state=${signState('s', { userId: 'u', provider: 'google', verifier: 'v' })}`);
+    expect(r.status).toBe(302); expect(r.headers.location).toMatch(/tab=backup&error=/);
+  });
+});

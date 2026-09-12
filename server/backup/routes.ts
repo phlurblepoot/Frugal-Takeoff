@@ -13,7 +13,11 @@ import { LocalStore } from './store';
 import { takeSnapshot, listRuns, isRunActive, BackupRunningError } from './snapshot';
 import { streamSnapshotZip, unpackSnapshotZip } from './zip';
 import { isFreshInstall, restoreSnapshot, RestoreRefusedError, DEFAULT_ADMIN_ID } from './restore';
-import { readSchedule, writeSchedule, readKeep, writeKeep, readDrive, type DriveConnection } from './settings';
+import { readSchedule, writeSchedule, readKeep, writeKeep, readDrive, writeDrive, type DriveConnection } from './settings';
+import { driveAuthUrl, signDriveState, verifyDriveState, driveExchange, ensureDriveFolders } from './drive';
+import { createVerifier, challengeOf } from '../mail/oauth';
+import { TokenSource } from '../mail/providers/tokenSource';
+import { googleRefresh } from '../mail/providers/google';
 import type { BackupSource, BackupTarget } from './types';
 import { isSnapshotId } from './types';
 
@@ -180,4 +184,49 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
     }
   });
   (app as any).__setupDrive = setupDrive; // Task 8 attaches the setup-mode Drive grant here
+
+  // ── Google Drive connect (admin) and setup-mode connect ─────────────────
+  const fetchFn = deps.fetch ?? globalThis.fetch;
+  const authOrQueryToken: express.RequestHandler = (req, res, next) => {
+    const t = typeof req.query.token === 'string' ? req.query.token : null;
+    if (t) { const u = deps.verifyToken(t); if (!u) return res.status(401).json({ error: 'Invalid token' }); (req as any).user = u; return next(); }
+    return authenticateToken(req, res, next);
+  };
+  const startDrive = (mode: 'admin' | 'setup'): express.RequestHandler => (_req, res) => {
+    if (!deps.publicUrl) return res.status(503).json({ error: 'APP_PUBLIC_URL is not set — see Settings → Mail → Server setup guide' });
+    const verifier = createVerifier();
+    try {
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.redirect(driveAuthUrl(deps.env, deps.publicUrl, mode, signDriveState(deps.jwtSecret, { mode, verifier }), challengeOf(verifier)));
+    } catch (e: any) { res.status(503).json({ error: e?.message || 'Google Drive is not configured' }); }
+  };
+  const callbackDrive = (mode: 'admin' | 'setup'): express.RequestHandler => async (req, res) => {
+    const back = (params: string) => res.redirect(mode === 'admin' ? `/settings?tab=backup&${params}` : `/restore?${params}`);
+    const failed = (m: string) => back(`error=${encodeURIComponent(m.slice(0, 300))}`);
+    if (!deps.publicUrl) return failed('APP_PUBLIC_URL is not set on this server');
+    if (req.query.error) return failed('Google did not complete the sign-in — please try again');
+    const code = typeof req.query.code === 'string' ? req.query.code : ''; const raw = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!code || !raw) return failed('That sign-in did not come back with everything we need — please try again');
+    let st: { mode: 'admin' | 'setup'; verifier: string };
+    try { st = verifyDriveState(deps.jwtSecret, raw); } catch { return failed('That sign-in link expired or was not issued by this app'); }
+    if (st.mode !== mode) return failed('That sign-in was started from a different screen');
+    if (mode === 'setup' && !isFreshInstall(db)) return failed('This server already has data');
+    try {
+      const { refreshToken, email } = await driveExchange(deps.env, deps.publicUrl, mode, code, st.verifier, fetchFn);
+      const tokens = new TokenSource({ refreshToken, refresh: t => googleRefresh(deps.env, t, fetchFn) });
+      const folders = await ensureDriveFolders(() => tokens.get(), fetchFn);
+      const conn: DriveConnection = { refreshToken, email, ...folders };
+      if (mode === 'admin') writeDrive(db, deps.mailCrypto, conn); else setupDrive.conn = conn;
+      back('drive=connected');
+    } catch (e) { console.error('[backup] drive connect failed', e); failed((e as Error).message); }
+  };
+  app.get('/api/backup/drive/start', authOrQueryToken, requireAdmin, startDrive('admin'));
+  app.get('/api/backup/drive/callback', callbackDrive('admin'));
+  app.delete('/api/backup/drive', authenticateToken, requireAdmin, (_req, res) => { writeDrive(db, deps.mailCrypto, null); res.json({ ok: true }); });
+  app.get('/api/setup/restore/drive/start', authOrQueryToken, ...setupOnly.slice(1), startDrive('setup'));
+  app.get('/api/setup/restore/drive/callback', callbackDrive('setup'));
+  app.get('/api/setup/restore/drive/snapshots', ...setupOnly, async (_req, res) => {
+    if (!setupDrive.conn || !deps.driveStore) return res.status(400).json({ error: 'Google Drive is not connected' });
+    try { res.json(await deps.driveStore(setupDrive.conn).listSnapshots()); } catch (e) { res.status(502).json({ error: (e as Error).message }); }
+  });
 }

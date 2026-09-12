@@ -34,6 +34,7 @@ import { BodyCache } from './server/mail/sync/bodyCache';
 import { sweepUploads } from './server/mail/uploads';
 import { installInboundHooks } from './server/mail/inboundHooks';
 import { registerBackupRoutes } from './server/backup/routes';
+import { createDriveStore } from './server/backup/drive';
 
 dotenv.config();
 
@@ -653,7 +654,7 @@ async function startServer() {
     appVersion: APP_VERSION, env: process.env, publicUrl: process.env.APP_PUBLIC_URL || null, jwtSecret: JWT_SECRET,
     mailCrypto, authenticateToken, requireAdmin, verifyToken, broadcastChange,
     closeDb: () => db.close(), exit: code => process.exit(code),
-    driveStore: undefined,
+    driveStore: conn => createDriveStore(conn, { db, env: process.env, mailCrypto, fetch: globalThis.fetch }),
   });
 
   // Before the first sync tick: a reply that lands in that tick must still be
