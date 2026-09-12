@@ -1,12 +1,18 @@
 // server/backup/routes.ts — admin backup routes + fresh-install restore routes
 // (spec §Backup routes, §Setup mode and restore).
 import express from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pipeline } from 'stream/promises';
+import { v4 as uuidv4 } from 'uuid';
 import type Database from 'better-sqlite3';
 import type { MailCrypto } from '../mail/crypto';
 import type { EntityChangedEvent } from '../realtime/changeFeed';
 import { LocalStore } from './store';
 import { takeSnapshot, listRuns, isRunActive, BackupRunningError } from './snapshot';
-import { streamSnapshotZip } from './zip';
+import { streamSnapshotZip, unpackSnapshotZip } from './zip';
+import { isFreshInstall, restoreSnapshot, RestoreRefusedError, DEFAULT_ADMIN_ID } from './restore';
 import { readSchedule, writeSchedule, readKeep, writeKeep, readDrive, type DriveConnection } from './settings';
 import type { BackupSource, BackupTarget } from './types';
 import { isSnapshotId } from './types';
@@ -110,4 +116,68 @@ export function registerBackupRoutes(app: express.Express, deps: BackupRouteDeps
 
   // Exposed for the scheduler (Task 9) and tests.
   (app as any).__backupStartRun = startRun;
+
+  // ── Fresh-install restore (spec §Setup mode and restore) ─────────────────
+  app.get('/api/setup/state', (_req, res) => res.json({ fresh: isFreshInstall(db) }));
+
+  // Fresh + signed in as the bootstrap admin: the only identity a fresh
+  // install can have, and it stops a LAN stranger restoring over an empty box.
+  const setupOnly: express.RequestHandler[] = [authenticateToken, (req, res, next) => {
+    if ((req as any).user?.id !== DEFAULT_ADMIN_ID) return res.status(403).json({ error: 'Only the initial admin account can restore' });
+    if (!isFreshInstall(db)) return res.status(409).json({ error: 'This server already has data — restore is only offered on a fresh install', code: 'not_fresh' });
+    next();
+  }];
+
+  const uploadsDir = path.join(os.tmpdir(), 'ft-restore-uploads');
+  const uploadStore = (uploadId: string): LocalStore => {
+    if (!/^[0-9a-f-]{36}$/.test(uploadId)) throw new RestoreRefusedError('bad upload id');
+    return new LocalStore(path.join(uploadsDir, uploadId));
+  };
+  // Setup-mode Drive grant lives here in memory only (Task 8 fills it).
+  const setupDrive: { conn: DriveConnection | null } = { conn: null };
+
+  app.get('/api/setup/restore/sources', ...setupOnly, async (_req, res) => {
+    res.json({
+      root: deps.backupRoot, local: await local.listSnapshots(),
+      drive: { configurable: !!deps.env.GOOGLE_OAUTH_CLIENT_ID && !!deps.publicUrl, connected: !!setupDrive.conn, email: setupDrive.conn?.email ?? null },
+    });
+  });
+
+  // Raw body streamed to disk (server.ts skips the JSON parser for this path).
+  app.post('/api/setup/restore/upload', ...setupOnly, async (req, res) => {
+    const uploadId = uuidv4();
+    const dir = path.join(uploadsDir, uploadId); fs.mkdirSync(dir, { recursive: true });
+    const zipPath = path.join(dir, 'upload.zip');
+    try {
+      await pipeline(req, fs.createWriteStream(zipPath));
+      const { snapshotId } = await unpackSnapshotZip(zipPath, dir);
+      fs.unlinkSync(zipPath);
+      const summary = (await uploadStore(uploadId).listSnapshots())[0];
+      res.json({ uploadId, snapshotId, summary });
+    } catch (e) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      res.status(400).json({ error: `That file is not a snapshot zip: ${(e as Error).message}` });
+    }
+  });
+
+  app.post('/api/setup/restore', ...setupOnly, async (req, res) => {
+    const { source, snapshotId, uploadId } = req.body ?? {};
+    if (!isSnapshotId(String(snapshotId))) return res.status(400).json({ error: 'bad snapshot id' });
+    let src: BackupSource;
+    try {
+      if (source === 'local') src = local;
+      else if (source === 'upload') src = uploadStore(String(uploadId));
+      else if (source === 'drive') { if (!setupDrive.conn || !deps.driveStore) return res.status(400).json({ error: 'Google Drive is not connected' }); src = deps.driveStore(setupDrive.conn); }
+      else return res.status(400).json({ error: 'source must be local, upload or drive' });
+      const r = await restoreSnapshot(src, snapshotId, { dataDir: deps.dataDir, closeDb: deps.closeDb, exit: deps.exit });
+      res.json({ restarting: true, files: r.files, bytes: r.bytes });
+      // After the response is flushed: swap the db and exit for the restart.
+      res.on('finish', () => setImmediate(() => { try { r.finish(); } catch (e) { console.error('[backup] restore finish failed', e); } }));
+    } catch (e) {
+      if (e instanceof RestoreRefusedError) return res.status(400).json({ error: e.message });
+      console.error('[backup] restore failed', e);
+      res.status(500).json({ error: 'Restore failed — the server was left as it was. See the server log.' });
+    }
+  });
+  (app as any).__setupDrive = setupDrive; // Task 8 attaches the setup-mode Drive grant here
 }

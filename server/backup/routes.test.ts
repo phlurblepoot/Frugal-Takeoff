@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import fs from 'fs';
@@ -9,6 +9,7 @@ import { openDb } from '../db';
 import { runMigrations } from '../migrations';
 import { migrations } from '../migrationList';
 import { putBuffer } from '../files';
+import { pathFor } from '../fileStore';
 import { MailCrypto } from '../mail/crypto';
 import { registerBackupRoutes, type BackupRouteDeps } from './routes';
 import { unpackSnapshotZip } from './zip';
@@ -22,7 +23,7 @@ const mkApp = (over: Partial<BackupRouteDeps> = {}, user: any = { id: 'u1', role
   registerBackupRoutes(a, {
     db, dataDir, backupRoot: root, backupRootIsDefault: false, appVersion: '3.2.0', env: {}, publicUrl: null, jwtSecret: 's',
     mailCrypto: crypto,
-    authenticateToken: (req: any, _res: any, next: any) => { req.user = user; next(); },
+    authenticateToken: (req: any, res: any, next: any) => { if (!user) return res.status(401).json({ error: 'Authentication required' }); req.user = user; next(); },
     requireAdmin: (req: any, res: any, next: any) => req.user?.role === 'admin' ? next() : res.status(403).json({ error: 'Admin access required' }),
     verifyToken: () => user, broadcastChange: e => events.push(e), closeDb: () => {}, exit: () => {}, ...over,
   });
@@ -84,5 +85,65 @@ describe('backup admin routes', () => {
     for (const [m, p] of [['get', '/api/backup/status'], ['post', '/api/backup/run'], ['get', '/api/backup/runs'], ['put', '/api/backup/settings']] as const) {
       expect((await (request(member) as any)[m](p).send({})).status).toBe(403);
     }
+  });
+});
+
+describe('setup mode + restore', () => {
+  const asDefaultAdmin = () => mkApp({}, { id: 'admin-id-123', role: 'admin' });
+
+  it('GET /api/setup/state is public and flips once data exists', async () => {
+    const pub = mkApp({}, null);
+    expect((await request(pub).get('/api/setup/state')).body).toEqual({ fresh: true });
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p', 'x', 1);
+    expect((await request(pub).get('/api/setup/state')).body).toEqual({ fresh: false });
+  });
+
+  it('restore routes 409 not_fresh once data exists, and 403 for a non-default user even when fresh', async () => {
+    const a = asDefaultAdmin();
+    expect((await request(a).get('/api/setup/restore/sources')).status).toBe(200);
+    expect((await request(mkApp({}, { id: 'u9', role: 'admin' })).get('/api/setup/restore/sources')).status).toBe(403);
+    db.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p', 'x', 1);
+    const r = await request(a).get('/api/setup/restore/sources');
+    expect(r.status).toBe(409); expect(r.body.code).toBe('not_fresh');
+  });
+
+  it('sources lists local snapshots; upload unpacks a zip; restore rebuilds and calls finish (closeDb + exit) after responding', async () => {
+    // Build a snapshot from a populated source db in another dir, then restore it into this fresh one.
+    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-src-')); const srcDb = openDb(path.join(srcDir, 'app.db')); runMigrations(srcDb, srcDir, migrations);
+    fs.writeFileSync(path.join(srcDir, 'mail.key'), 'k'.repeat(64) + '\n');
+    srcDb.prepare('INSERT INTO projects (id, name, createdAt) VALUES (?, ?, ?)').run('p1', 'Job', 1);
+    putBuffer(srcDb, srcDir, 'f-1', Buffer.from('plan'), 'application/pdf', { kind: 'document', name: 'plan.pdf', projectId: 'p1' });
+    const { takeSnapshot } = await import('./snapshot');
+    const snap = await takeSnapshot(srcDb, srcDir, new LocalStore(root), { trigger: 'manual', keep: 5, appVersion: '3.2.0', env: {} });
+
+    const closeDb = vi.fn(); const exit = vi.fn();
+    const a = mkApp({ closeDb, exit }, { id: 'admin-id-123', role: 'admin' });
+    const sources = await request(a).get('/api/setup/restore/sources');
+    expect(sources.body.local.map((s: any) => s.id)).toEqual([snap.snapshotId]);
+    expect(sources.body.root).toBe(root);
+
+    // upload path
+    const zipPath = path.join(root, 'u.zip');
+    const { streamSnapshotZip } = await import('./zip');
+    await streamSnapshotZip(new LocalStore(root), snap.snapshotId, fs.createWriteStream(zipPath));
+    await new Promise(r => setTimeout(r, 100));
+    const up = await request(a).post('/api/setup/restore/upload').set('Content-Type', 'application/octet-stream').send(fs.readFileSync(zipPath));
+    expect(up.status).toBe(200); expect(up.body.snapshotId).toBe(snap.snapshotId); expect(up.body.summary.counts.files).toBe(1);
+
+    const r = await request(a).post('/api/setup/restore').send({ source: 'upload', uploadId: up.body.uploadId, snapshotId: snap.snapshotId });
+    expect(r.status).toBe(200); expect(r.body).toMatchObject({ restarting: true, files: 1 });
+    await new Promise(res => setTimeout(res, 50));
+    expect(closeDb).toHaveBeenCalledTimes(1); expect(exit).toHaveBeenCalledWith(0);
+    expect(fs.existsSync(pathFor(dataDir, 'f-1'))).toBe(true);
+    expect(fs.readFileSync(path.join(dataDir, 'mail.key'), 'utf8')).toBe('k'.repeat(64) + '\n');
+  });
+
+  it('restore of a newer-schema snapshot → 400 with both versions named', async () => {
+    const st = new LocalStore(root);
+    const dir = st.snapshotDir('20260901-000000'); fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'app.db'), 'x');
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ format: 1, createdAt: 1, appVersion: '9', schemaVersion: 999, db: { size: 1, sha256: 'x' }, mailKey: { source: 'env' }, files: [], counts: { files: 0, bytes: 0 }, warnings: [] }));
+    const r = await request(asDefaultAdmin()).post('/api/setup/restore').send({ source: 'local', snapshotId: '20260901-000000' });
+    expect(r.status).toBe(400); expect(r.body.error).toMatch(/999/);
   });
 });
